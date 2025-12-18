@@ -1,0 +1,9 @@
+build/
+cmake-build-*/
+.vs/
+*.exe
+*.pdb
+*.obj
+*.lib
+*.ilk
+imgui.ini
