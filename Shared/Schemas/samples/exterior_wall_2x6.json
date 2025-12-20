@@ -1,0 +1,168 @@
+{
+  "id": "exterior_wall_2x6_r24",
+  "name": "2x6 Exterior Wall (R-24)",
+  "intent": {
+    "r_value_target": 24,
+    "structural_role": "load_bearing",
+    "climate_zone": "zone_6"
+  },
+  "layers": [
+    {
+      "name": "Vinyl Siding",
+      "material": "vinyl",
+      "function": "exterior_finish",
+      "thickness": 0.0417,
+      "color": [0.6, 0.5, 0.4],
+      "r_value": 0.6,
+      "fasteners": [
+        {
+          "name": "Siding Nail",
+          "type": "nail",
+          "material": "galvanized",
+          "diameter": 0.113,
+          "length": 2.0,
+          "field_spacing": 16,
+          "edge_spacing": 6,
+          "code_reference": "OBC 9.27.5"
+        }
+      ]
+    },
+    {
+      "name": "House Wrap",
+      "material": "tyvek",
+      "function": "membrane",
+      "thickness": 0.005,
+      "color": [0.9, 0.9, 0.9],
+      "r_value": 0.0,
+      "fasteners": [
+        {
+          "name": "Cap Staple",
+          "type": "staple",
+          "material": "galvanized",
+          "diameter": 0.05,
+          "length": 1.0,
+          "field_spacing": 12,
+          "edge_spacing": 6,
+          "code_reference": "OBC 9.25.3"
+        }
+      ]
+    },
+    {
+      "name": "OSB Sheathing",
+      "material": "osb",
+      "function": "sheathing",
+      "thickness": 0.0365,
+      "color": [0.8, 0.7, 0.5],
+      "r_value": 0.5,
+      "fasteners": [
+        {
+          "name": "8d Common Nail",
+          "type": "nail",
+          "material": "galvanized",
+          "diameter": 0.131,
+          "length": 2.5,
+          "field_spacing": 12,
+          "edge_spacing": 6,
+          "code_reference": "OBC 9.23.3.4",
+          "shear_capacity": 78,
+          "withdrawal_capacity": 34
+        }
+      ]
+    },
+    {
+      "name": "R-22 Batt Insulation",
+      "material": "fiberglass",
+      "function": "insulation",
+      "thickness": 0.458,
+      "color": [0.95, 0.8, 0.9],
+      "r_value": 22.0,
+      "fasteners": []
+    },
+    {
+      "name": "2x6 Stud @ 16\" O.C.",
+      "material": "spf",
+      "function": "structure",
+      "thickness": 0.458,
+      "color": [0.9, 0.8, 0.6],
+      "r_value": 1.0,
+      "fasteners": [
+        {
+          "name": "16d Common Nail",
+          "type": "nail",
+          "material": "steel",
+          "diameter": 0.162,
+          "length": 3.5,
+          "field_spacing": 16,
+          "edge_spacing": 16,
+          "code_reference": "OBC 9.23.3.1",
+          "shear_capacity": 118,
+          "withdrawal_capacity": 42
+        }
+      ]
+    },
+    {
+      "name": "1/2\" Drywall",
+      "material": "gypsum",
+      "function": "interior_finish",
+      "thickness": 0.0417,
+      "color": [0.95, 0.95, 0.92],
+      "r_value": 0.5,
+      "fasteners": [
+        {
+          "name": "Drywall Screw",
+          "type": "screw",
+          "material": "steel",
+          "diameter": 0.138,
+          "length": 1.25,
+          "field_spacing": 12,
+          "edge_spacing": 8,
+          "code_reference": "OBC 9.29.5"
+        }
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "type": "thermal_performance",
+      "name": "Minimum Wall R-Value",
+      "value": "R-24",
+      "code_section": "OBC 9.36.2.6",
+      "description": "Minimum effective R-value for walls in Climate Zone 6",
+      "is_met": true
+    },
+    {
+      "type": "structural_bearing",
+      "name": "Load-Bearing Wall",
+      "value": "2-story max",
+      "code_section": "OBC 9.23.10",
+      "description": "2x6 studs at 16\" O.C. supporting max 2 stories",
+      "is_met": true
+    },
+    {
+      "type": "moisture_control",
+      "name": "Vapour Barrier",
+      "value": "60 ng max",
+      "code_section": "OBC 9.25.4",
+      "description": "Vapour barrier required on warm side of insulation",
+      "is_met": false
+    }
+  ],
+  "intents": [
+    {
+      "category": "performance",
+      "title": "High-Performance Envelope",
+      "description": "Designed for Zone 6 climate with emphasis on thermal performance and air sealing",
+      "target": "R-24 effective, ACH50 < 3.0",
+      "related_codes": ["OBC 9.36.2", "OBC 9.25"],
+      "validated": false
+    },
+    {
+      "category": "constructability",
+      "title": "Standard Framing",
+      "description": "Uses conventional platform framing techniques familiar to local trades",
+      "target": "Standard 2x6 @ 16\" O.C.",
+      "related_codes": ["OBC 9.23"],
+      "validated": true
+    }
+  ]
+}

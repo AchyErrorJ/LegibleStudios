@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://archengine.dev/schemas/building.schema.json",
+  "title": "ArchEngine Building Schema",
+  "description": "Complete building model schema for ArchEngine Suite",
+  "type": "object",
+  "definitions": {
+    "vec3": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 3,
+      "maxItems": 3,
+      "description": "3D vector [x, y, z]"
+    },
+    "vec2": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 2,
+      "maxItems": 2,
+      "description": "2D vector [x, z]"
+    },
+    "element_type": {
+      "type": "integer",
+      "enum": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+      "description": "0=Beam, 1=Column, 2=Floor, 3=Wall, 4=Foundation, 5=Connection, 6=Door, 7=Window, 8=Roof"
+    },
+    "mesh_data": {
+      "type": "object",
+      "properties": {
+        "vertices": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/vec3" }
+        },
+        "faces": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "integer" },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        }
+      }
+    },
+    "structural_element": {
+      "type": "object",
+      "properties": {
+        "type": { "$ref": "#/definitions/element_type" },
+        "start": { "$ref": "#/definitions/vec3" },
+        "end": { "$ref": "#/definitions/vec3" },
+        "width": { "type": "number", "description": "Width in feet" },
+        "depth": { "type": "number", "description": "Depth in feet" },
+        "material": { "type": "string" },
+        "stress": { "type": "number", "description": "Stress ratio (0-1+)" },
+        "deflection": { "type": "number", "description": "Deflection amount" },
+        "failed": { "type": "boolean", "description": "Code compliance failure" },
+        "mesh": { "$ref": "#/definitions/mesh_data" }
+      },
+      "required": ["type", "start", "end"]
+    },
+    "parametric_wall": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "start_point": { "$ref": "#/definitions/vec2" },
+        "end_point": { "$ref": "#/definitions/vec2" },
+        "base_height": { "type": "number", "description": "Base height (Y) in feet" },
+        "top_height": { "type": "number", "description": "Top height (Y) in feet" },
+        "wall_type_index": { "type": "integer", "description": "Index into wallTypes array" }
+      },
+      "required": ["start_point", "end_point", "wall_type_index"]
+    }
+  },
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Building name"
+    },
+    "elements": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/structural_element" },
+      "description": "Structural elements (beams, columns, etc.)"
+    },
+    "wallTypes": {
+      "type": "array",
+      "items": { "$ref": "assembly.schema.json#/definitions/wall_type" },
+      "description": "Wall assembly definitions"
+    },
+    "parametricWalls": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/parametric_wall" },
+      "description": "Parametric wall instances"
+    }
+  },
+  "required": ["name"]
+}

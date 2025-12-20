@@ -1,0 +1,141 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://archengine.dev/schemas/assembly.schema.json",
+  "title": "ArchEngine Assembly Schema",
+  "description": "Universal Assembly Schema for wall and building assemblies",
+  "type": "object",
+  "definitions": {
+    "fastener": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Human-readable fastener name" },
+        "type": {
+          "type": "string",
+          "enum": ["nail", "screw", "bolt", "staple", "anchor", "strap", "hanger", "clip", "adhesive"]
+        },
+        "material": { "type": "string", "description": "Fastener material (steel, galvanized, stainless)" },
+        "diameter": { "type": "number", "description": "Diameter in inches" },
+        "length": { "type": "number", "description": "Length in inches" },
+        "field_spacing": { "type": "number", "description": "On-center spacing in field (inches)" },
+        "edge_spacing": { "type": "number", "description": "On-center spacing at edges (inches)" },
+        "code_reference": { "type": "string", "description": "OBC/code section reference" },
+        "shear_capacity": { "type": "number", "description": "Allowable shear load (lbs)" },
+        "withdrawal_capacity": { "type": "number", "description": "Allowable withdrawal load (lbs)" }
+      },
+      "required": ["name", "type"]
+    },
+    "constraint": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "structural_bearing", "fire_rating", "thermal_performance",
+            "sound_transmission", "moisture_control", "air_barrier",
+            "wind_resistance", "seismic_category", "max_span",
+            "min_thickness", "code_section"
+          ]
+        },
+        "name": { "type": "string", "description": "Human-readable constraint name" },
+        "value": { "type": "string", "description": "Target value (e.g., 'R-24', '1-hour')" },
+        "code_section": { "type": "string", "description": "OBC section reference" },
+        "description": { "type": "string", "description": "Detailed explanation" },
+        "is_met": { "type": "boolean", "description": "Whether constraint is satisfied" }
+      },
+      "required": ["type", "name", "value"]
+    },
+    "intent_block": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": ["performance", "constructability", "cost", "sustainability", "durability", "aesthetic", "code_compliance"]
+        },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "target": { "type": "string", "description": "Target metric" },
+        "related_codes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "validated": { "type": "boolean" }
+      },
+      "required": ["category", "title"]
+    },
+    "layer": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Layer name (e.g., '2x6 Stud')" },
+        "material": { "type": "string", "description": "Material type" },
+        "function": {
+          "type": "string",
+          "enum": ["exterior_finish", "sheathing", "insulation", "structure", "interior_finish", "air_gap", "membrane"]
+        },
+        "thickness": { "type": "number", "description": "Thickness in feet" },
+        "color": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "RGB color values (0-1)"
+        },
+        "r_value": { "type": "number", "description": "R-value for thermal calculations" },
+        "fasteners": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/fastener" }
+        }
+      },
+      "required": ["name", "material", "function", "thickness"]
+    },
+    "wall_type": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique assembly identifier" },
+        "name": { "type": "string", "description": "Human-readable name" },
+        "intent": {
+          "type": "object",
+          "properties": {
+            "r_value_target": { "type": "number", "description": "Target R-value" },
+            "structural_role": {
+              "type": "string",
+              "enum": ["load_bearing", "non_bearing", "shear"]
+            },
+            "climate_zone": { "type": "string", "description": "OBC climate zone" }
+          }
+        },
+        "layers": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/layer" },
+          "description": "Layers ordered exterior to interior"
+        },
+        "constraints": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/constraint" }
+        },
+        "intents": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/intent_block" }
+        }
+      },
+      "required": ["id", "name", "layers"]
+    }
+  },
+  "properties": {
+    "assembly_id": { "$ref": "#/definitions/wall_type/properties/id" },
+    "intent": { "$ref": "#/definitions/wall_type/properties/intent" },
+    "recipe": {
+      "type": "object",
+      "properties": {
+        "layers": { "$ref": "#/definitions/wall_type/properties/layers" },
+        "fasteners": {
+          "type": "object",
+          "properties": {
+            "field_spacing": { "type": "number" },
+            "edge_spacing": { "type": "number" }
+          }
+        }
+      }
+    },
+    "constraints": { "$ref": "#/definitions/wall_type/properties/constraints" }
+  }
+}
