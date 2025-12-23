@@ -81,7 +81,7 @@ def extract_door_schedule(data: Dict) -> List[DoorEntry]:
 
         # Find associated room
         wall_idx = door.get('wall_index', -1)
-        room_name = "—"
+        room_name = "-"
         if wall_idx >= 0 and wall_idx < len(walls):
             wall = walls[wall_idx]
             # Try to find room from wall position
@@ -146,7 +146,7 @@ def extract_window_schedule(data: Dict) -> List[WindowEntry]:
 
         # Find associated room
         wall_idx = window.get('wall_index', -1)
-        room_name = "—"
+        room_name = "-"
 
         # Determine window type based on size
         if width >= 1800:
@@ -344,7 +344,7 @@ def render_schedules_svg(
     # Window Schedule
     window_headers = ['MARK', 'WIDTH', 'HEIGHT', 'SILL HT', 'TYPE', 'GLAZING', 'REMARKS']
     window_widths = [400, 600, 600, 600, 1000, 800, 800]
-    window_rows = [[w.mark, f"{w.width}mm", f"{w.height}mm", f"{w.sill_height}mm", w.window_type, w.glazing, w.remarks or "—"] for w in window_schedule]
+    window_rows = [[w.mark, f"{w.width}mm", f"{w.height}mm", f"{w.sill_height}mm", w.window_type, w.glazing, w.remarks if w.remarks else "-"] for w in window_schedule]
 
     if window_rows:
         # Position window schedule to the right of door schedule
