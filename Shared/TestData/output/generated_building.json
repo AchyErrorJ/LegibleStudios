@@ -1,0 +1,923 @@
+{
+  "success": true,
+  "building_id": "263b5fd8",
+  "width": 14482.165722668635,
+  "depth": 16895.860009780074,
+  "sqm": 167.0,
+  "sqft": 1798,
+  "unit": "mm",
+  "output_format": "archengine",
+  "walls_batch": [
+    {
+      "start": [
+        0,
+        0,
+        0
+      ],
+      "end": [
+        14482.165722668635,
+        0,
+        0
+      ],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "category": "exterior",
+      "level_name": "Level 1",
+      "rooms": [
+        "exterior",
+        "living"
+      ]
+    },
+    {
+      "start": [
+        14482.165722668635,
+        0,
+        0
+      ],
+      "end": [
+        14482.165722668635,
+        0,
+        16895.860009780074
+      ],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "category": "exterior",
+      "level_name": "Level 1",
+      "rooms": [
+        "exterior",
+        null
+      ]
+    },
+    {
+      "start": [
+        14482.165722668635,
+        0,
+        16895.860009780074
+      ],
+      "end": [
+        0,
+        0,
+        16895.860009780074
+      ],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "category": "exterior",
+      "level_name": "Level 1",
+      "rooms": [
+        "exterior",
+        "master_bath"
+      ]
+    },
+    {
+      "start": [
+        0,
+        0,
+        16895.860009780074
+      ],
+      "end": [
+        0,
+        0,
+        0
+      ],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "category": "exterior",
+      "level_name": "Level 1",
+      "rooms": [
+        "exterior",
+        "living"
+      ]
+    },
+    {
+      "start": [
+        5430.812146000738,
+        0,
+        0
+      ],
+      "end": [
+        5430.812146000738,
+        0,
+        6034.235717778598
+      ],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "category": "interior",
+      "level_name": "Level 1",
+      "rooms": [
+        "living",
+        "bathroom_1"
+      ]
+    },
+    {
+      "start": [
+        0,
+        0,
+        6034.235717778598
+      ],
+      "end": [
+        5430.812146000738,
+        0,
+        6034.235717778598
+      ],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "category": "interior",
+      "level_name": "Level 1",
+      "rooms": [
+        "living",
+        "master_bedroom"
+      ]
+    },
+    {
+      "start": [
+        8327.245290534465,
+        0,
+        0
+      ],
+      "end": [
+        8327.245290534465,
+        0,
+        3620.5414306671587
+      ],
+      "height": 2700,
+      "wall_type": "wet_2x6",
+      "category": "wet_wall",
+      "level_name": "Level 1",
+      "rooms": [
+        "bathroom_1",
+        "kitchen"
+      ]
+    },
+    {
+      "start": [
+        5792.866289067454,
+        0,
+        6034.235717778598
+      ],
+      "end": [
+        5792.866289067454,
+        0,
+        12551.210292979484
+      ],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "category": "interior",
+      "level_name": "Level 1",
+      "rooms": [
+        "master_bedroom",
+        "bedroom_4"
+      ]
+    },
+    {
+      "start": [
+        0,
+        0,
+        12551.210292979484
+      ],
+      "end": [
+        5792.866289067454,
+        0,
+        12551.210292979484
+      ],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "category": "interior",
+      "level_name": "Level 1",
+      "rooms": [
+        "master_bedroom",
+        "master_bath"
+      ]
+    },
+    {
+      "start": [
+        10137.516005868045,
+        0,
+        6034.235717778598
+      ],
+      "end": [
+        10137.516005868045,
+        0,
+        10861.624292001477
+      ],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "category": "interior",
+      "level_name": "Level 1",
+      "rooms": [
+        "bedroom_4",
+        "bedroom_5"
+      ]
+    },
+    {
+      "start": [
+        3620.5414306671587,
+        0,
+        12551.210292979484
+      ],
+      "end": [
+        3620.5414306671587,
+        0,
+        16895.860009780074
+      ],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "category": "interior",
+      "level_name": "Level 1",
+      "rooms": [
+        "master_bath",
+        "hallway_7"
+      ]
+    }
+  ],
+  "doors": [
+    {
+      "wall_index": 0,
+      "offset": 2000,
+      "width": 914,
+      "height": 2134,
+      "type": "entry",
+      "swing": "left_in",
+      "room1": "exterior",
+      "room2": "living"
+    },
+    {
+      "wall_index": 4,
+      "offset": 3017.117858889299,
+      "width": 812,
+      "height": 2134,
+      "type": "pocket",
+      "swing": "left_in",
+      "room1": "living",
+      "room2": "bathroom_1"
+    },
+    {
+      "wall_index": 5,
+      "offset": 2715.406073000369,
+      "width": 914,
+      "height": 2134,
+      "type": "swing",
+      "swing": "left_in",
+      "room1": "living",
+      "room2": "master_bedroom"
+    },
+    {
+      "wall_index": 6,
+      "offset": 1810.2707153335793,
+      "width": 812,
+      "height": 2134,
+      "type": "pocket",
+      "swing": "left_in",
+      "room1": "bathroom_1",
+      "room2": "kitchen"
+    },
+    {
+      "wall_index": 7,
+      "offset": 3258.487287600443,
+      "width": 914,
+      "height": 2134,
+      "type": "swing",
+      "swing": "left_in",
+      "room1": "master_bedroom",
+      "room2": "bedroom_4"
+    },
+    {
+      "wall_index": 8,
+      "offset": 2896.433144533727,
+      "width": 812,
+      "height": 2134,
+      "type": "pocket",
+      "swing": "left_in",
+      "room1": "master_bedroom",
+      "room2": "master_bath"
+    },
+    {
+      "wall_index": 9,
+      "offset": 2413.6942871114397,
+      "width": 914,
+      "height": 2134,
+      "type": "swing",
+      "swing": "left_in",
+      "room1": "bedroom_4",
+      "room2": "bedroom_5"
+    },
+    {
+      "wall_index": 10,
+      "offset": 2172.324858400295,
+      "width": 812,
+      "height": 2134,
+      "type": "pocket",
+      "swing": "left_in",
+      "room1": "master_bath",
+      "room2": "hallway_7"
+    }
+  ],
+  "windows": [
+    {
+      "wall_index": 0,
+      "offset": 2896.433144533727,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "type": "double_hung",
+      "room": "living"
+    },
+    {
+      "wall_index": 0,
+      "offset": 5792.866289067454,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "type": "double_hung",
+      "room": "living"
+    },
+    {
+      "wall_index": 0,
+      "offset": 8689.299433601182,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "type": "double_hung",
+      "room": "living"
+    },
+    {
+      "wall_index": 0,
+      "offset": 11585.732578134908,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "type": "double_hung",
+      "room": "living"
+    },
+    {
+      "wall_index": 2,
+      "offset": 2896.433144533727,
+      "width": 600,
+      "height": 600,
+      "sill_height": 1500,
+      "type": "casement",
+      "room": "master_bath"
+    },
+    {
+      "wall_index": 2,
+      "offset": 5792.866289067454,
+      "width": 600,
+      "height": 600,
+      "sill_height": 1500,
+      "type": "casement",
+      "room": "master_bath"
+    },
+    {
+      "wall_index": 2,
+      "offset": 8689.299433601182,
+      "width": 600,
+      "height": 600,
+      "sill_height": 1500,
+      "type": "casement",
+      "room": "master_bath"
+    },
+    {
+      "wall_index": 2,
+      "offset": 11585.732578134908,
+      "width": 600,
+      "height": 600,
+      "sill_height": 1500,
+      "type": "casement",
+      "room": "master_bath"
+    },
+    {
+      "wall_index": 3,
+      "offset": 2815.976668296679,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "type": "double_hung",
+      "room": "living"
+    },
+    {
+      "wall_index": 3,
+      "offset": 5631.953336593358,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "type": "double_hung",
+      "room": "living"
+    },
+    {
+      "wall_index": 3,
+      "offset": 8447.930004890037,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "type": "double_hung",
+      "room": "living"
+    },
+    {
+      "wall_index": 3,
+      "offset": 11263.906673186715,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "type": "double_hung",
+      "room": "living"
+    },
+    {
+      "wall_index": 3,
+      "offset": 14079.883341483393,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "type": "double_hung",
+      "room": "living"
+    }
+  ],
+  "rooms": {
+    "living": {
+      "name": "Living Room",
+      "room_type": "living",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 5430.812146000738,
+        "height": 6034.235717778598
+      },
+      "area": 32770800.62794349,
+      "center": {
+        "x": 2715.406073000369,
+        "y": 3017.117858889299
+      },
+      "zone": "public",
+      "level": "Level 1"
+    },
+    "bathroom_1": {
+      "name": "Bathroom",
+      "room_type": "bathroom",
+      "bounds": {
+        "x": 5430.812146000738,
+        "y": 0,
+        "width": 2896.433144533727,
+        "height": 3620.5414306671587
+      },
+      "area": 10486656.200941917,
+      "center": {
+        "x": 6879.028718267601,
+        "y": 1810.2707153335793
+      },
+      "zone": "service",
+      "level": "Level 1"
+    },
+    "kitchen": {
+      "name": "Kitchen",
+      "room_type": "kitchen",
+      "bounds": {
+        "x": 8327.245290534465,
+        "y": 0,
+        "width": 4344.64971680059,
+        "height": 5068.758002934022
+      },
+      "area": 22021978.021978024,
+      "center": {
+        "x": 10499.57014893476,
+        "y": 2534.379001467011
+      },
+      "zone": "service",
+      "level": "Level 1"
+    },
+    "master_bedroom": {
+      "name": "Primary Bedroom",
+      "room_type": "master_bedroom",
+      "bounds": {
+        "x": 0,
+        "y": 6034.235717778598,
+        "width": 5792.866289067454,
+        "height": 6516.974575200886
+      },
+      "area": 37751962.3233909,
+      "center": {
+        "x": 2896.433144533727,
+        "y": 9292.72300537904
+      },
+      "zone": "private",
+      "level": "Level 1"
+    },
+    "bedroom_4": {
+      "name": "Bedroom 2",
+      "room_type": "bedroom",
+      "bounds": {
+        "x": 5792.866289067454,
+        "y": 6034.235717778598,
+        "width": 4344.64971680059,
+        "height": 4827.388574222879
+      },
+      "area": 20973312.401883833,
+      "center": {
+        "x": 7965.191147467749,
+        "y": 8447.930004890037
+      },
+      "zone": "private",
+      "level": "Level 1"
+    },
+    "bedroom_5": {
+      "name": "Bedroom 3",
+      "room_type": "bedroom",
+      "bounds": {
+        "x": 10137.516005868045,
+        "y": 6034.235717778598,
+        "width": 4344.64971680059,
+        "height": 4827.388574222879
+      },
+      "area": 20973312.401883833,
+      "center": {
+        "x": 12309.840864268339,
+        "y": 8447.930004890037
+      },
+      "zone": "private",
+      "level": "Level 1"
+    },
+    "master_bath": {
+      "name": "Primary Bath",
+      "room_type": "master_bath",
+      "bounds": {
+        "x": 0,
+        "y": 12551.210292979484,
+        "width": 3620.5414306671587,
+        "height": 4344.64971680059
+      },
+      "area": 15729984.301412873,
+      "center": {
+        "x": 1810.2707153335793,
+        "y": 14723.53515137978
+      },
+      "zone": "private",
+      "level": "Level 1"
+    },
+    "hallway_7": {
+      "name": "Hallway",
+      "room_type": "hallway",
+      "bounds": {
+        "x": 3620.5414306671587,
+        "y": 12551.210292979484,
+        "width": 1448.2165722668635,
+        "height": 4344.64971680059
+      },
+      "area": 6291993.72056515,
+      "center": {
+        "x": 4344.649716800591,
+        "y": 14723.53515137978
+      },
+      "zone": "circulation",
+      "level": "Level 1"
+    }
+  },
+  "roofs": [
+    {
+      "id": "roof_1",
+      "type": "hip",
+      "pitch": 6,
+      "overhang": 600,
+      "material": "asphalt_shingle",
+      "level_name": "Roof Level",
+      "ridges": [
+        {
+          "id": "ridge_1",
+          "start_point": [
+            7241.082861334317,
+            6923.9650024450175,
+            7241.082861334317
+          ],
+          "end_point": [
+            7241.082861334317,
+            6923.9650024450175,
+            9654.777148445755
+          ],
+          "height": 4223.9650024450175
+        }
+      ],
+      "surfaces": [
+        {
+          "id": "surface_west",
+          "vertices": [
+            [
+              -600,
+              2700,
+              -600
+            ],
+            [
+              7241.082861334317,
+              6923.9650024450175,
+              7241.082861334317
+            ],
+            [
+              7241.082861334317,
+              6923.9650024450175,
+              9654.777148445755
+            ],
+            [
+              -600,
+              2700,
+              17495.860009780074
+            ]
+          ],
+          "pitch": 6,
+          "orientation": "west"
+        },
+        {
+          "id": "surface_east",
+          "vertices": [
+            [
+              15082.165722668635,
+              2700,
+              -600
+            ],
+            [
+              15082.165722668635,
+              2700,
+              17495.860009780074
+            ],
+            [
+              7241.082861334317,
+              6923.9650024450175,
+              9654.777148445755
+            ],
+            [
+              7241.082861334317,
+              6923.9650024450175,
+              7241.082861334317
+            ]
+          ],
+          "pitch": 6,
+          "orientation": "east"
+        },
+        {
+          "id": "surface_south",
+          "vertices": [
+            [
+              -600,
+              2700,
+              -600
+            ],
+            [
+              15082.165722668635,
+              2700,
+              -600
+            ],
+            [
+              7241.082861334317,
+              6923.9650024450175,
+              7241.082861334317
+            ]
+          ],
+          "pitch": 6,
+          "orientation": "south"
+        },
+        {
+          "id": "surface_north",
+          "vertices": [
+            [
+              15082.165722668635,
+              2700,
+              17495.860009780074
+            ],
+            [
+              -600,
+              2700,
+              17495.860009780074
+            ],
+            [
+              7241.082861334317,
+              6923.9650024450175,
+              9654.777148445755
+            ]
+          ],
+          "pitch": 6,
+          "orientation": "north"
+        }
+      ],
+      "dormers": [],
+      "skylights": []
+    }
+  ],
+  "wall_types": [
+    {
+      "id": "ext_2x6_r21",
+      "name": "Exterior 2x6 R-21",
+      "layers": [
+        {
+          "name": "Siding",
+          "material": "vinyl_siding",
+          "thickness": 6,
+          "function": "exterior_finish",
+          "color": [
+            0.85,
+            0.85,
+            0.8,
+            1.0
+          ],
+          "r_value": 0.6
+        },
+        {
+          "name": "House Wrap",
+          "material": "tyvek",
+          "thickness": 1,
+          "function": "membrane",
+          "color": [
+            0.95,
+            0.95,
+            0.95,
+            1.0
+          ],
+          "r_value": 0.0
+        },
+        {
+          "name": "OSB Sheathing",
+          "material": "osb",
+          "thickness": 11,
+          "function": "sheathing",
+          "color": [
+            0.76,
+            0.6,
+            0.42,
+            1.0
+          ],
+          "r_value": 0.6
+        },
+        {
+          "name": "2x6 Stud + R-21",
+          "material": "wood_insulation",
+          "thickness": 140,
+          "function": "structure",
+          "color": [
+            1.0,
+            0.85,
+            0.4,
+            1.0
+          ],
+          "r_value": 21.0
+        },
+        {
+          "name": "Vapor Barrier",
+          "material": "poly",
+          "thickness": 0.15,
+          "function": "membrane",
+          "color": [
+            0.8,
+            0.8,
+            0.9,
+            1.0
+          ],
+          "r_value": 0.0
+        },
+        {
+          "name": "Drywall",
+          "material": "gypsum",
+          "thickness": 13,
+          "function": "interior_finish",
+          "color": [
+            0.95,
+            0.95,
+            0.92,
+            1.0
+          ],
+          "r_value": 0.5
+        }
+      ]
+    },
+    {
+      "id": "int_2x4",
+      "name": "Interior 2x4 Partition",
+      "layers": [
+        {
+          "name": "Drywall",
+          "material": "gypsum",
+          "thickness": 13,
+          "function": "interior_finish",
+          "color": [
+            0.95,
+            0.95,
+            0.92,
+            1.0
+          ],
+          "r_value": 0.5
+        },
+        {
+          "name": "2x4 Stud",
+          "material": "wood",
+          "thickness": 89,
+          "function": "structure",
+          "color": [
+            0.9,
+            0.75,
+            0.5,
+            1.0
+          ],
+          "r_value": 3.5
+        },
+        {
+          "name": "Drywall",
+          "material": "gypsum",
+          "thickness": 13,
+          "function": "interior_finish",
+          "color": [
+            0.95,
+            0.95,
+            0.92,
+            1.0
+          ],
+          "r_value": 0.5
+        }
+      ]
+    },
+    {
+      "id": "wet_2x6",
+      "name": "Wet Wall 2x6 (Plumbing)",
+      "layers": [
+        {
+          "name": "Tile",
+          "material": "ceramic_tile",
+          "thickness": 10,
+          "function": "exterior_finish",
+          "color": [
+            0.9,
+            0.9,
+            0.95,
+            1.0
+          ],
+          "r_value": 0.1
+        },
+        {
+          "name": "Cement Board",
+          "material": "cement_board",
+          "thickness": 13,
+          "function": "sheathing",
+          "color": [
+            0.7,
+            0.7,
+            0.7,
+            1.0
+          ],
+          "r_value": 0.2
+        },
+        {
+          "name": "2x6 Stud (Plumbing)",
+          "material": "wood",
+          "thickness": 140,
+          "function": "structure",
+          "color": [
+            0.9,
+            0.75,
+            0.5,
+            1.0
+          ],
+          "r_value": 4.4
+        },
+        {
+          "name": "Drywall",
+          "material": "gypsum",
+          "thickness": 13,
+          "function": "interior_finish",
+          "color": [
+            0.95,
+            0.95,
+            0.92,
+            1.0
+          ],
+          "r_value": 0.5
+        }
+      ]
+    }
+  ],
+  "levels": [
+    {
+      "name": "Level 1",
+      "elevation": 0,
+      "height": 2700
+    },
+    {
+      "name": "Roof Level",
+      "elevation": 2700,
+      "height": 0
+    }
+  ],
+  "summary": {
+    "total_walls": 11,
+    "exterior_walls": 4,
+    "interior_walls": 6,
+    "wet_walls": 1,
+    "doors": 8,
+    "windows": 13,
+    "rooms_placed": 8,
+    "roofs": 1
+  },
+  "qbd_answers": {
+    "description": "3 bedroom 2 bath traditional house with hip roof 1800 sqft",
+    "building_type": "residential",
+    "style": "traditional",
+    "stories": 1,
+    "garage": "none",
+    "roof_type": "hip",
+    "roof_pitch": 6,
+    "roof_material": "asphalt_shingle",
+    "sqft": 1800,
+    "bedrooms": 3,
+    "bathrooms": 2
+  }
+}

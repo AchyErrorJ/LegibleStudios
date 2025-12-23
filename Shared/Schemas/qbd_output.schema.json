@@ -1,0 +1,934 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "qbd_output.schema.json",
+  "title": "QBD Output Schema",
+  "description": "Schema for Question-Based Design output from Python QBD system",
+  "type": "object",
+  "required": ["success", "width", "depth", "sqft"],
+  "properties": {
+    "success": {
+      "type": "boolean",
+      "description": "Whether layout generation succeeded"
+    },
+    "width": {
+      "type": "number",
+      "description": "Building width in feet"
+    },
+    "depth": {
+      "type": "number",
+      "description": "Building depth in feet"
+    },
+    "sqft": {
+      "type": "number",
+      "description": "Total square footage"
+    },
+    "building_id": {
+      "type": "string",
+      "description": "Unique building identifier"
+    },
+    "output_format": {
+      "type": "string",
+      "enum": ["revit", "archengine"],
+      "description": "Output format (revit=feet, archengine=mm)"
+    },
+    "unit": {
+      "type": "string",
+      "enum": ["feet", "mm"],
+      "description": "Unit of measurement for all dimensions"
+    },
+    "is_complete": {
+      "type": "boolean",
+      "description": "Whether all rooms were placed"
+    },
+    "score": {
+      "type": "number",
+      "description": "Layout quality score"
+    },
+    "walls_batch": {
+      "type": "array",
+      "description": "Array of wall definitions",
+      "items": {
+        "$ref": "#/definitions/wall"
+      }
+    },
+    "doors": {
+      "type": "array",
+      "description": "Array of door placements",
+      "items": {
+        "$ref": "#/definitions/door"
+      }
+    },
+    "windows": {
+      "type": "array",
+      "description": "Array of window placements",
+      "items": {
+        "$ref": "#/definitions/window"
+      }
+    },
+    "levels": {
+      "type": "array",
+      "description": "Building levels/floors",
+      "items": {
+        "$ref": "#/definitions/level"
+      }
+    },
+    "dimensions": {
+      "type": "array",
+      "description": "Dimension annotations",
+      "items": {
+        "$ref": "#/definitions/dimension"
+      }
+    },
+    "rooms": {
+      "type": "object",
+      "description": "Map of room_id to room data",
+      "additionalProperties": {
+        "$ref": "#/definitions/room"
+      }
+    },
+    "unplaced_rooms": {
+      "type": "array",
+      "description": "List of rooms that couldn't be placed",
+      "items": {
+        "type": "string"
+      }
+    },
+    "summary": {
+      "$ref": "#/definitions/summary"
+    },
+    "qbd_answers": {
+      "$ref": "#/definitions/qbd_answers"
+    },
+    "roofs": {
+      "type": "array",
+      "description": "Roof definitions",
+      "items": {
+        "$ref": "#/definitions/roof"
+      }
+    },
+    "stairs": {
+      "type": "array",
+      "description": "Stair definitions",
+      "items": {
+        "$ref": "#/definitions/stair"
+      }
+    },
+    "elevators": {
+      "type": "array",
+      "description": "Elevator definitions",
+      "items": {
+        "$ref": "#/definitions/elevator"
+      }
+    },
+    "mep": {
+      "$ref": "#/definitions/mep"
+    },
+    "materials": {
+      "$ref": "#/definitions/materials"
+    },
+    "annotation_sets": {
+      "type": "array",
+      "description": "Annotation sets for different plan types",
+      "items": {
+        "$ref": "#/definitions/annotation_set"
+      }
+    },
+    "grid_lines": {
+      "type": "array",
+      "description": "Structural grid lines",
+      "items": {
+        "$ref": "#/definitions/grid_line"
+      }
+    }
+  },
+  "definitions": {
+    "wall": {
+      "type": "object",
+      "required": ["start", "end", "height", "wall_type", "category", "level_name"],
+      "properties": {
+        "start": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "[x, y, z] start point in feet"
+        },
+        "end": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "[x, y, z] end point in feet"
+        },
+        "height": {
+          "type": "number",
+          "description": "Wall height in feet"
+        },
+        "wall_type": {
+          "type": "string",
+          "description": "Wall type identifier or variable reference"
+        },
+        "level_name": {
+          "type": "string",
+          "description": "Level/floor name"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["exterior", "interior", "wet_wall"],
+          "description": "Wall category for assembly selection"
+        },
+        "rooms": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[room1_id, room2_id] rooms on each side"
+        }
+      }
+    },
+    "door": {
+      "type": "object",
+      "required": ["x", "y", "width", "type"],
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "Door center X coordinate"
+        },
+        "y": {
+          "type": "number",
+          "description": "Door center Y coordinate"
+        },
+        "width": {
+          "type": "number",
+          "description": "Door width in feet"
+        },
+        "height": {
+          "type": "number",
+          "description": "Door height"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["door", "double_door", "pocket_door", "barn_door", "french_door", "sliding_door"],
+          "description": "Door type"
+        },
+        "wall_index": {
+          "type": "integer",
+          "description": "Index of wall containing this door"
+        },
+        "offset": {
+          "type": "number",
+          "description": "Offset along wall from start point"
+        },
+        "swing": {
+          "type": "string",
+          "enum": ["left_in", "left_out", "right_in", "right_out", "double", "sliding", "none"],
+          "description": "Door swing direction"
+        },
+        "room1": {
+          "type": "string",
+          "description": "Room on one side"
+        },
+        "room2": {
+          "type": "string",
+          "description": "Room on other side"
+        },
+        "level_name": {
+          "type": "string"
+        }
+      }
+    },
+    "window": {
+      "type": "object",
+      "required": ["wall_index", "offset", "width", "height"],
+      "properties": {
+        "wall_index": {
+          "type": "integer",
+          "description": "Index of wall containing this window"
+        },
+        "offset": {
+          "type": "number",
+          "description": "Offset along wall from start point"
+        },
+        "width": {
+          "type": "number",
+          "description": "Window width"
+        },
+        "height": {
+          "type": "number",
+          "description": "Window height"
+        },
+        "sill_height": {
+          "type": "number",
+          "description": "Height from floor to window sill"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["fixed", "casement", "double_hung", "sliding", "awning"],
+          "description": "Window type"
+        },
+        "room": {
+          "type": "string",
+          "description": "Room this window belongs to"
+        },
+        "level_name": {
+          "type": "string"
+        }
+      }
+    },
+    "level": {
+      "type": "object",
+      "required": ["id", "name", "elevation"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Level identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Level display name"
+        },
+        "elevation": {
+          "type": "number",
+          "description": "Level elevation from ground"
+        },
+        "floor_to_floor_height": {
+          "type": "number",
+          "description": "Height to next level"
+        }
+      }
+    },
+    "dimension": {
+      "type": "object",
+      "required": ["type", "value"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Dimension identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["linear", "angular", "radial"],
+          "description": "Dimension type"
+        },
+        "start_point": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "[x, y, z] start point"
+        },
+        "end_point": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "[x, y, z] end point"
+        },
+        "value": {
+          "type": "number",
+          "description": "Dimension value"
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["feet", "mm"],
+          "description": "Unit of measurement (must match building unit)"
+        },
+        "label": {
+          "type": "string",
+          "description": "Display label (e.g., room name)"
+        },
+        "level": {
+          "type": "string",
+          "description": "Level this dimension belongs to"
+        }
+      }
+    },
+    "room": {
+      "type": "object",
+      "required": ["name", "bounds", "area", "center", "level"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Room display name"
+        },
+        "level": {
+          "type": "string",
+          "description": "Level this room is on (e.g., 'Level 1')"
+        },
+        "bounds": {
+          "type": "object",
+          "required": ["x", "y", "width", "height"],
+          "properties": {
+            "x": {"type": "number"},
+            "y": {"type": "number"},
+            "width": {"type": "number"},
+            "height": {"type": "number"}
+          }
+        },
+        "area": {
+          "type": "number",
+          "description": "Room area in sqft"
+        },
+        "center": {
+          "type": "object",
+          "required": ["x", "y"],
+          "properties": {
+            "x": {"type": "number"},
+            "y": {"type": "number"}
+          }
+        },
+        "room_type": {
+          "type": "string",
+          "description": "Room type (kitchen, bedroom, etc.)"
+        },
+        "zone": {
+          "type": "string",
+          "enum": ["public", "private", "service", "circulation"],
+          "description": "Functional zone"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "total_walls": {"type": "integer"},
+        "exterior_walls": {"type": "integer"},
+        "interior_walls": {"type": "integer"},
+        "wet_walls": {"type": "integer"},
+        "doors": {"type": "integer"},
+        "windows": {"type": "integer"},
+        "rooms_placed": {"type": "integer"},
+        "rooms_requested": {"type": "integer"}
+      }
+    },
+    "qbd_answers": {
+      "type": "object",
+      "description": "Original QBD session answers",
+      "properties": {
+        "start": {"type": "string"},
+        "res_type": {"type": "string"},
+        "bedrooms": {"type": "string"},
+        "bathrooms": {"type": "string"},
+        "sqft": {"type": "string"},
+        "garage": {"type": "string"},
+        "special_rooms": {
+          "oneOf": [
+            {"type": "string"},
+            {"type": "array", "items": {"type": "string"}}
+          ]
+        },
+        "style": {"type": "string"}
+      }
+    },
+    "roof": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {
+          "type": "string",
+          "enum": ["gable", "hip", "flat", "shed", "mansard", "gambrel"]
+        },
+        "pitch": {"type": "number", "description": "Rise over 12\" run (e.g., 6 for 6:12)"},
+        "overhang": {"type": "number", "description": "Eave overhang distance"},
+        "material": {"type": "string", "description": "asphalt_shingle, metal, tile, slate"},
+        "level_name": {"type": "string"},
+        "ridges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {"type": "string"},
+              "start_point": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+              "end_point": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+              "height": {"type": "number"}
+            }
+          }
+        },
+        "surfaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {"type": "string"},
+              "vertices": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}},
+              "pitch": {"type": "number"},
+              "orientation": {"type": "string", "enum": ["north", "south", "east", "west"]}
+            }
+          }
+        },
+        "dormers": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/dormer"}
+        },
+        "skylights": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/skylight"}
+        }
+      }
+    },
+    "dormer": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string", "enum": ["gable", "shed", "hip"]},
+        "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "width": {"type": "number"},
+        "height": {"type": "number"},
+        "depth": {"type": "number"},
+        "roof_surface_id": {"type": "string"}
+      }
+    },
+    "skylight": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string", "enum": ["fixed", "venting", "tubular"]},
+        "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "width": {"type": "number"},
+        "height": {"type": "number"},
+        "roof_surface_id": {"type": "string"}
+      }
+    },
+    "stair": {
+      "type": "object",
+      "required": ["id", "type", "from_level", "to_level"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string", "enum": ["straight", "l_shaped", "u_shaped", "winder", "spiral"]},
+        "from_level": {"type": "string"},
+        "to_level": {"type": "string"},
+        "start_point": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "direction": {"type": "number", "description": "Rotation in degrees"},
+        "width": {"type": "number", "description": "Stair width (36\" min per code)"},
+        "total_rise": {"type": "number", "description": "Floor to floor height"},
+        "tread_depth": {"type": "number", "description": "Tread depth (10\" min per code)"},
+        "riser_height": {"type": "number", "description": "Riser height (7\" max per code)"},
+        "num_treads": {"type": "integer"},
+        "stringer_material": {"type": "string"},
+        "tread_material": {"type": "string"},
+        "treads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "index": {"type": "integer"},
+              "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+              "width": {"type": "number"},
+              "depth": {"type": "number"},
+              "thickness": {"type": "number"},
+              "nosing": {"type": "number"},
+              "rotation": {"type": "number"}
+            }
+          }
+        },
+        "risers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "index": {"type": "integer"},
+              "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+              "width": {"type": "number"},
+              "height": {"type": "number"},
+              "thickness": {"type": "number"}
+            }
+          }
+        },
+        "landings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {"type": "string"},
+              "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+              "width": {"type": "number"},
+              "depth": {"type": "number"},
+              "thickness": {"type": "number"},
+              "elevation": {"type": "number"}
+            }
+          }
+        },
+        "guardrails": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/guardrail"}
+        }
+      }
+    },
+    "guardrail": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "start_point": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "end_point": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "height": {"type": "number", "description": "42\" per code for guards"},
+        "side": {"type": "string", "enum": ["left", "right", "both"]},
+        "handrail": {
+          "type": "object",
+          "properties": {
+            "profile": {"type": "string", "enum": ["round", "rectangular", "custom"]},
+            "diameter": {"type": "number"},
+            "height": {"type": "number", "description": "34\" from tread nosing"},
+            "material": {"type": "string"}
+          }
+        },
+        "baluster": {
+          "type": "object",
+          "properties": {
+            "style": {"type": "string", "enum": ["square", "turned", "metal"]},
+            "width": {"type": "number"},
+            "depth": {"type": "number"},
+            "spacing": {"type": "number", "description": "4\" max per code"},
+            "material": {"type": "string"}
+          }
+        },
+        "newel_posts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+              "width": {"type": "number"},
+              "depth": {"type": "number"},
+              "height": {"type": "number"},
+              "style": {"type": "string", "enum": ["box", "turned", "craftsman"]},
+              "material": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "elevator": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string", "enum": ["passenger", "freight", "residential", "dumbwaiter"]},
+        "shaft_position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "shaft_width": {"type": "number"},
+        "shaft_depth": {"type": "number"},
+        "cab_width": {"type": "number"},
+        "cab_depth": {"type": "number"},
+        "cab_height": {"type": "number"},
+        "served_levels": {"type": "array", "items": {"type": "string"}},
+        "capacity": {"type": "integer", "description": "Capacity in lbs"},
+        "door_width": {"type": "number"},
+        "door_side": {"type": "string", "enum": ["front", "rear", "side", "through"]}
+      }
+    },
+    "mep": {
+      "type": "object",
+      "description": "MEP (Mechanical, Electrical, Plumbing) fixtures",
+      "properties": {
+        "plumbing_fixtures": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/plumbing_fixture"}
+        },
+        "electrical_fixtures": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/electrical_fixture"}
+        },
+        "hvac_fixtures": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/hvac_fixture"}
+        }
+      }
+    },
+    "plumbing_fixture": {
+      "type": "object",
+      "required": ["id", "type", "position"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string", "enum": ["toilet", "sink", "shower", "tub", "water_heater", "washer", "dishwasher"]},
+        "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "rotation": {"type": "number"},
+        "room": {"type": "string"},
+        "level_name": {"type": "string"},
+        "wall_id": {"type": "string", "description": "For wall-mounted fixtures"},
+        "rough_ins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "connection_type": {"type": "string", "enum": ["hot", "cold", "drain", "vent", "gas"]},
+              "offset": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+              "size": {"type": "number", "description": "Pipe size in mm"}
+            }
+          }
+        }
+      }
+    },
+    "electrical_fixture": {
+      "type": "object",
+      "required": ["id", "type", "position"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string", "enum": ["outlet", "switch", "panel", "light", "smoke_detector", "thermostat", "gfci"]},
+        "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "rotation": {"type": "number"},
+        "room": {"type": "string"},
+        "level_name": {"type": "string"},
+        "mount_height": {"type": "number", "description": "Height from floor (0 = ceiling mount)"},
+        "circuit": {"type": "integer"},
+        "amperage": {"type": "integer"},
+        "wall_id": {"type": "string"}
+      }
+    },
+    "hvac_fixture": {
+      "type": "object",
+      "required": ["id", "type", "position"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string", "enum": ["supply_register", "return_grille", "thermostat", "exhaust_fan", "range_hood"]},
+        "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "rotation": {"type": "number"},
+        "room": {"type": "string"},
+        "level_name": {"type": "string"},
+        "width": {"type": "number"},
+        "height": {"type": "number"},
+        "cfm": {"type": "integer", "description": "Cubic feet per minute"}
+      }
+    },
+    "materials": {
+      "type": "object",
+      "description": "Material assemblies for walls, floors, and roofs",
+      "properties": {
+        "wall_assemblies": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/assembly"}
+        },
+        "floor_assemblies": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/assembly"}
+        },
+        "roof_assemblies": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/assembly"}
+        }
+      }
+    },
+    "assembly": {
+      "type": "object",
+      "required": ["id", "name", "layers"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "assembly_type": {"type": "string", "enum": ["wall", "floor", "roof", "ceiling"]},
+        "layers": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/material_layer"}
+        },
+        "total_r_value": {"type": "number"},
+        "total_cost_per_sqft": {"type": "number"},
+        "fire_rating": {"type": "string"},
+        "code_reference": {"type": "string", "description": "IRC/IBC section reference"}
+      }
+    },
+    "material_layer": {
+      "type": "object",
+      "required": ["name", "material", "thickness"],
+      "properties": {
+        "name": {"type": "string"},
+        "material": {"type": "string"},
+        "thickness": {"type": "number", "description": "Thickness in mm"},
+        "r_value": {"type": "number"},
+        "cost_per_sqft": {"type": "number"},
+        "fire_rating": {"type": "string"},
+        "visualization_color": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "[r, g, b] values 0-1"
+        }
+      }
+    },
+    "annotation_set": {
+      "type": "object",
+      "required": ["id", "name", "plan_type"],
+      "description": "Collection of annotations for a specific plan view",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "plan_type": {
+          "type": "string",
+          "enum": ["floor_plan", "roof_plan", "reflected_ceiling_plan", "site_plan", "foundation_plan", "framing_plan", "electrical_plan", "plumbing_plan", "mechanical_plan", "elevation", "section", "detail"]
+        },
+        "level": {"type": "string"},
+        "scale": {"type": "number", "description": "Drawing scale (e.g., 48 = 1/4 inch = 1 foot)"},
+        "dimensions": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/dimension"}
+        },
+        "labels": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/text_label"}
+        },
+        "leaders": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/leader"}
+        },
+        "symbols": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/symbol"}
+        },
+        "roof_annotations": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/roof_annotation"}
+        },
+        "grid_lines": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/grid_line"}
+        },
+        "viewport_center": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 2,
+          "maxItems": 3
+        },
+        "viewport_width": {"type": "number"},
+        "viewport_height": {"type": "number"}
+      }
+    },
+    "text_label": {
+      "type": "object",
+      "required": ["id", "text", "position"],
+      "properties": {
+        "id": {"type": "string"},
+        "text": {"type": "string"},
+        "position": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 2,
+          "maxItems": 3
+        },
+        "rotation": {"type": "number", "description": "Rotation in degrees"},
+        "text_height": {"type": "number"},
+        "font_style": {"type": "string", "enum": ["regular", "bold", "italic"]},
+        "justification": {"type": "string", "enum": ["left", "center", "right"]},
+        "level": {"type": "string"},
+        "show_border": {"type": "boolean"},
+        "show_background": {"type": "boolean"}
+      }
+    },
+    "leader": {
+      "type": "object",
+      "required": ["id", "arrow_point", "text_position", "text"],
+      "description": "Leader line with text callout",
+      "properties": {
+        "id": {"type": "string"},
+        "arrow_point": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 2,
+          "maxItems": 3,
+          "description": "Point being called out"
+        },
+        "text_position": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 2,
+          "maxItems": 3,
+          "description": "Where text appears"
+        },
+        "bend_points": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {"type": "number"},
+            "minItems": 2,
+            "maxItems": 3
+          },
+          "description": "Intermediate points for multi-segment leaders"
+        },
+        "text": {"type": "string"},
+        "text_height": {"type": "number"},
+        "arrow_style": {"type": "string", "enum": ["closed", "open", "dot", "none"]},
+        "level": {"type": "string"}
+      }
+    },
+    "symbol": {
+      "type": "object",
+      "required": ["id", "type", "position"],
+      "description": "Plan symbol (section marker, north arrow, etc.)",
+      "properties": {
+        "id": {"type": "string"},
+        "type": {
+          "type": "string",
+          "enum": ["north_arrow", "section_marker", "detail_marker", "elevation_marker", "door_tag", "window_tag", "room_tag", "column_grid", "level_marker", "break_line", "center_line", "match_line", "revision_cloud"]
+        },
+        "position": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 2,
+          "maxItems": 3
+        },
+        "rotation": {"type": "number"},
+        "scale": {"type": "number"},
+        "label": {"type": "string", "description": "e.g., 'A' for section A"},
+        "sheet_reference": {"type": "string", "description": "e.g., 'A3.1' for sheet reference"},
+        "direction": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 2,
+          "maxItems": 3,
+          "description": "View direction for section/elevation"
+        },
+        "level": {"type": "string"}
+      }
+    },
+    "roof_annotation": {
+      "type": "object",
+      "required": ["id", "type", "position"],
+      "description": "Roof-specific annotation (pitch, drainage, ridges)",
+      "properties": {
+        "id": {"type": "string"},
+        "type": {
+          "type": "string",
+          "enum": ["pitch_indicator", "drainage_arrow", "ridge_line", "valley_line", "hip_line", "eave_line", "rake_line", "cricket_arrow", "roof_drain", "scupper", "overflow", "slope_arrow"]
+        },
+        "position": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 2,
+          "maxItems": 3
+        },
+        "end_position": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 2,
+          "maxItems": 3,
+          "description": "For lines (ridge, valley, etc.)"
+        },
+        "rotation": {"type": "number", "description": "Arrow direction in degrees"},
+        "pitch": {"type": "number", "description": "Rise per 12 run (e.g., 4 for 4:12)"},
+        "slope_percent": {"type": "number", "description": "Slope as percentage"},
+        "label": {"type": "string"},
+        "roof_surface_id": {"type": "string"}
+      }
+    },
+    "grid_line": {
+      "type": "object",
+      "required": ["id", "label", "start_point", "end_point"],
+      "description": "Structural grid line",
+      "properties": {
+        "id": {"type": "string"},
+        "label": {"type": "string", "description": "Grid label (A, B, 1, 2, etc.)"},
+        "start_point": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 2,
+          "maxItems": 3
+        },
+        "end_point": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 2,
+          "maxItems": 3
+        },
+        "is_primary": {"type": "boolean", "description": "Primary grid vs secondary"},
+        "show_bubble": {"type": "boolean", "description": "Show grid bubble at ends"}
+      }
+    }
+  }
+}

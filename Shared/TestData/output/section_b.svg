@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 984 581">
+  <title>Section B</title>
+  <rect width="100%" height="100%" fill="white"/>
+  <defs>
+    <!-- Wood hatching (diagonal lines) -->
+    <pattern id="hatch-wood" patternUnits="userSpaceOnUse" width="8" height="8">
+      <path d="M0,8 L8,0 M-2,2 L2,-2 M6,10 L10,6" stroke="#8B4513" stroke-width="0.5" fill="none"/>
+    </pattern>
+    <!-- Insulation hatching (wavy lines) -->
+    <pattern id="hatch-insulation" patternUnits="userSpaceOnUse" width="12" height="6">
+      <path d="M0,3 Q3,0 6,3 Q9,6 12,3" stroke="#FFB6C1" stroke-width="1" fill="none"/>
+    </pattern>
+    <!-- Plywood/Sheathing (cross-hatch) -->
+    <pattern id="hatch-plywood" patternUnits="userSpaceOnUse" width="6" height="6">
+      <path d="M0,0 L6,6 M6,0 L0,6" stroke="#DEB887" stroke-width="0.5" fill="none"/>
+    </pattern>
+    <!-- Solid fill -->
+    <pattern id="hatch-solid" patternUnits="userSpaceOnUse" width="4" height="4">
+      <rect width="4" height="4" fill="#E0E0E0"/>
+    </pattern>
+    <!-- Gypsum (dots) -->
+    <pattern id="hatch-gypsum" patternUnits="userSpaceOnUse" width="4" height="4">
+      <circle cx="2" cy="2" r="0.5" fill="#999"/>
+    </pattern>
+    <!-- Concrete hatching -->
+    <pattern id="hatch-concrete" patternUnits="userSpaceOnUse" width="10" height="10">
+      <circle cx="2" cy="2" r="1" fill="#888"/>
+      <circle cx="7" cy="6" r="1.5" fill="#888"/>
+      <circle cx="4" cy="8" r="0.8" fill="#888"/>
+    </pattern>
+  </defs>
+  <style>
+    .cut-wall { stroke: #000; stroke-width: 2; }
+    .beyond-wall { fill: #f5f5f5; stroke: #666; stroke-width: 1; }
+    .opening { fill: white; stroke: #333; stroke-width: 1; }
+    .floor-line { stroke: #000; stroke-width: 2; }
+    .level-line { stroke: #999; stroke-width: 0.5; stroke-dasharray: 5,5; }
+    .roof-line { stroke: #000; stroke-width: 2; fill: none; }
+    .room-label { font-family: Arial, sans-serif; font-size: 11px; fill: #333; text-anchor: middle; }
+    .title { font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; fill: #333; }
+    .dimension { font-family: Arial, sans-serif; font-size: 9px; fill: #333; }
+    .level-marker { font-family: Arial, sans-serif; font-size: 10px; fill: #666; }
+    .ground { fill: #e8e8e8; }
+    .grade-hatch { fill: url(#hatch-concrete); }
+  </style>
+  <rect x="110.0" y="501.198250122251" width="784.1082861334318" height="30" class="ground"/>
+  <rect x="110.0" y="501.198250122251" width="784.1082861334318" height="30" class="grade-hatch"/>
+  <line x1="140.0" y1="501.2" x2="864.1" y2="501.2" class="floor-line"/>
+  <text x="40.0" y="504.2" class="level-marker">Floor</text>
+  <line x1="140.0" y1="366.2" x2="864.1" y2="366.2" class="level-line"/>
+  <text x="40.0" y="369.2" class="level-marker">Ceiling/Plate</text>
+  <rect x="140.0" y="366.2" width="724.1" height="135.0" fill="rgb(250,250,250)" stroke="#888" stroke-width="0.5"/>
+  <rect x="140.0" y="366.2" width="289.6" height="135.0" fill="rgb(234,234,234)" stroke="#888" stroke-width="0.5"/>
+  <rect x="318.2" y="366.2" width="5.8" height="135.0" fill="rgb(234,234,234)" stroke="#888" stroke-width="0.5"/>
+  <rect x="859.8" y="366.2" width="8.6" height="135.0" fill="rgb(220,220,220)" stroke="#666" stroke-width="1"/>
+  <rect x="135.7" y="366.2" width="8.6" height="135.0" fill="rgb(220,220,220)" stroke="#666" stroke-width="1"/>
+  <rect x="426.8" y="366.2" width="5.8" height="135.0" fill="rgb(220,220,220)" stroke="#666" stroke-width="1"/>
+  <rect x="644.0" y="366.2" width="5.8" height="135.0" fill="rgb(220,220,220)" stroke="#666" stroke-width="1"/>
+  <rect x="704.3" y="396.2" width="30.0" height="30.0" fill="#e8f4fc" stroke="#666" stroke-width="1"/>
+  <line x1="704.3" y1="411.2" x2="734.3" y2="411.2" stroke="#666" stroke-width="0.5"/>
+  <line x1="719.3" y1="396.2" x2="719.3" y2="426.2" stroke="#666" stroke-width="0.5"/>
+  <rect x="559.5" y="396.2" width="30.0" height="30.0" fill="#e8f4fc" stroke="#666" stroke-width="1"/>
+  <line x1="559.5" y1="411.2" x2="589.5" y2="411.2" stroke="#666" stroke-width="0.5"/>
+  <line x1="574.5" y1="396.2" x2="574.5" y2="426.2" stroke="#666" stroke-width="0.5"/>
+  <rect x="414.6" y="396.2" width="30.0" height="30.0" fill="#e8f4fc" stroke="#666" stroke-width="1"/>
+  <line x1="414.6" y1="411.2" x2="444.6" y2="411.2" stroke="#666" stroke-width="0.5"/>
+  <line x1="429.6" y1="396.2" x2="429.6" y2="426.2" stroke="#666" stroke-width="0.5"/>
+  <rect x="269.8" y="396.2" width="30.0" height="30.0" fill="#e8f4fc" stroke="#666" stroke-width="1"/>
+  <line x1="269.8" y1="411.2" x2="299.8" y2="411.2" stroke="#666" stroke-width="0.5"/>
+  <line x1="284.8" y1="396.2" x2="284.8" y2="426.2" stroke="#666" stroke-width="0.5"/>
+  <rect x="264.5" y="394.5" width="40.6" height="106.7" fill="white" stroke="#666" stroke-width="1"/>
+  <path d="M 110.0 366.2 L 140.0 366.2 L 502.1 155.0 L 864.1 366.2 L 894.1 366.2 L 894.1 369.2 L 864.1 371.2 L 502.1 165.0 L 140.0 371.2 L 110.0 369.2 Z" fill="url(#hatch-wood)" stroke="#000" stroke-width="1.5"/>
+  <path d="M 110.0 366.2 L 140.0 366.2 L 502.1 155.0 L 864.1 366.2 L 894.1 366.2" fill="none" stroke="#000" stroke-width="2"/>
+  <text x="284.8" y="433.7" class="room-label">PRIMARY BEDROOM</text>
+  <text x="538.3" y="433.7" class="room-label">BEDROOM 2</text>
+  <text x="755.5" y="433.7" class="room-label">BEDROOM 3</text>
+  <text x="492.0541430667159" y="25" text-anchor="middle" class="title">SECTION B - LONGITUDINAL</text>
+  <text x="492.0541430667159" y="40" text-anchor="middle" class="dimension">Cut @ 8448mm</text>
+  <line x1="442.0541430667159" y1="561.198250122251" x2="492.0541430667159" y2="561.198250122251" stroke="#333" stroke-width="2"/>
+  <text x="467.0541430667159" y="553.198250122251" text-anchor="middle" class="dimension">1m</text>
+<!-- Title Block -->
+<g id="title-block">
+  <!-- Drawing Border -->
+  <rect x="220" y="220" width="14042.165722668635" height="6983.965002445018"
+        fill="none" stroke="#000" stroke-width="8"/>
+
+  <!-- Inner Border -->
+  <rect x="270" y="270" width="13942.165722668635" height="6883.965002445018"
+        fill="none" stroke="#000" stroke-width="2"/>
+
+  <!-- Title Block Box -->
+  <rect x="10162.165722668635" y="5903.965002445018" width="4000" height="1200"
+        fill="white" stroke="#000" stroke-width="4"/>
+
+  <!-- Title Block Grid Lines -->
+  <!-- Horizontal dividers -->
+  <line x1="10162.165722668635" y1="6203.965002445018" x2="14162.165722668635" y2="6203.965002445018" stroke="#000" stroke-width="2"/>
+  <line x1="10162.165722668635" y1="6503.965002445018" x2="14162.165722668635" y2="6503.965002445018" stroke="#000" stroke-width="2"/>
+  <line x1="10162.165722668635" y1="6803.965002445018" x2="14162.165722668635" y2="6803.965002445018" stroke="#000" stroke-width="2"/>
+
+  <!-- Vertical dividers -->
+  <line x1="12162.165722668635" y1="6503.965002445018" x2="12162.165722668635" y2="7103.965002445018" stroke="#000" stroke-width="2"/>
+  <line x1="13162.165722668635" y1="6503.965002445018" x2="13162.165722668635" y2="7103.965002445018" stroke="#000" stroke-width="2"/>
+
+  <!-- Project Name (large, top row) -->
+  <text x="12162.165722668635" y="6103.965002445018"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">3 BEDROOM 2 BATH TRADITIONAL HOUSE WITH </text>
+
+  <!-- Project Address -->
+  <text x="12162.165722668635" y="6353.965002445018"
+        font-family="Arial" font-size="120" text-anchor="middle" fill="#333"></text>
+
+  <!-- Client Name -->
+  <text x="12162.165722668635" y="6453.965002445018"
+        font-family="Arial" font-size="100" text-anchor="middle" fill="#666"></text>
+
+  <!-- Drawing Title (large) -->
+  <text x="11162.165722668635" y="6703.965002445018"
+        font-family="Arial" font-size="180" font-weight="bold" text-anchor="middle">SECTION B-B</text>
+
+  <!-- Labels and Values Row -->
+  <!-- Scale -->
+  <text x="10262.165722668635" y="6873.965002445018"
+        font-family="Arial" font-size="80" fill="#666">SCALE</text>
+  <text x="10262.165722668635" y="7003.965002445018"
+        font-family="Arial" font-size="120" font-weight="bold">1:100</text>
+
+  <!-- Date -->
+  <text x="10862.165722668635" y="6873.965002445018"
+        font-family="Arial" font-size="80" fill="#666">DATE</text>
+  <text x="10862.165722668635" y="7003.965002445018"
+        font-family="Arial" font-size="120">2025-12-22</text>
+
+  <!-- Drawn By -->
+  <text x="11562.165722668635" y="6873.965002445018"
+        font-family="Arial" font-size="80" fill="#666">DRAWN</text>
+  <text x="11562.165722668635" y="7003.965002445018"
+        font-family="Arial" font-size="120">AE</text>
+
+  <!-- Drawing Number -->
+  <text x="12262.165722668635" y="6603.965002445018"
+        font-family="Arial" font-size="80" fill="#666">DWG NO.</text>
+  <text x="12662.165722668635" y="6753.965002445018"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">A-302</text>
+
+  <!-- Project Number -->
+  <text x="12262.165722668635" y="6873.965002445018"
+        font-family="Arial" font-size="80" fill="#666">PROJECT</text>
+  <text x="12262.165722668635" y="7003.965002445018"
+        font-family="Arial" font-size="100">263b5fd8</text>
+
+  <!-- Revision -->
+  <text x="13262.165722668635" y="6603.965002445018"
+        font-family="Arial" font-size="80" fill="#666">REV</text>
+  <text x="13662.165722668635" y="6753.965002445018"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">-</text>
+
+  <!-- Sheet Info -->
+  <text x="13262.165722668635" y="6873.965002445018"
+        font-family="Arial" font-size="80" fill="#666">SHEET</text>
+  <text x="13262.165722668635" y="7003.965002445018"
+        font-family="Arial" font-size="100">8 OF 8</text>
+
+</g>
+</svg>

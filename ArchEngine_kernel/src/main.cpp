@@ -6,9 +6,12 @@
 #include "geometry_loader.hpp"
 #include "imgui_layer.hpp"
 #include "mesh.hpp"
+#include "qbd_interface.hpp"
 #include <iostream>
 #include <algorithm>
 #include <chrono>
+#include <fstream>
+#include <filesystem>
 
 using namespace arch;
 
@@ -61,8 +64,168 @@ void getElementBounds(const StructuralElement& elem, vec3& minB, vec3& maxB) {
     maxB += vec3(hw, 0, hd);
 }
 
+// ============================================================================
+// QBD END-TO-END TEST
+// ============================================================================
+bool runQBDTest(const std::string& jsonPath, const std::string& outputDir) {
+    std::cout << "\n========================================\n";
+    std::cout << "QBD END-TO-END TEST\n";
+    std::cout << "========================================\n";
+
+    // Step 1: Load QBD JSON
+    std::cout << "\n[1] Loading QBD JSON: " << jsonPath << "\n";
+    auto& qbd = qbd::getQBDInterface();
+    auto layoutOpt = qbd.loadFromFile(jsonPath);
+
+    if (!layoutOpt.has_value()) {
+        std::cerr << "ERROR: Failed to load QBD JSON\n";
+        return false;
+    }
+
+    auto& layout = layoutOpt.value();
+    std::cout << "    SUCCESS: Loaded layout\n";
+    std::cout << "    - Dimensions: " << layout.width << " x " << layout.depth << " ft\n";
+    std::cout << "    - Square footage: " << layout.sqft << " sqft\n";
+    std::cout << "    - Walls: " << layout.walls.size() << "\n";
+    std::cout << "    - Doors: " << layout.doors.size() << "\n";
+    std::cout << "    - Rooms: " << layout.rooms.size() << "\n";
+
+    // Step 2: Run OBC Validation
+    std::cout << "\n[2] Running OBC Validation (Zone 6)...\n";
+    auto validation = qbd.validateLayout(layout, "Zone 6");
+
+    std::cout << "    Overall Pass: " << (validation.overallPass ? "YES" : "NO") << "\n";
+    std::cout << "    Walls Checked: " << validation.wallsChecked << "\n";
+    std::cout << "    Walls Passed: " << validation.wallsPassed << "\n";
+    std::cout << "    Walls Failed: " << validation.wallsFailed << "\n";
+    std::cout << "    Thermal Compliance: " << (validation.thermalCompliance ? "YES" : "NO") << "\n";
+    std::cout << "    Average R-Value: " << validation.averageRValue << "\n";
+    std::cout << "    Exterior Wall Area: " << validation.totalExteriorWallArea << " sqft\n";
+
+    // Print wall reports
+    std::cout << "\n    Wall Reports:\n";
+    for (const auto& report : validation.wallReports) {
+        std::cout << "      - " << (report.passes() ? "[PASS]" : "[FAIL]") << " "
+                  << report.elementType << " (" << report.elementId << ")\n";
+        for (const auto& check : report.checks) {
+            if (check.status != obc::ComplianceStatus::Pass) {
+                std::cout << "        " << check.ruleName << ": " << check.message << "\n";
+            }
+        }
+    }
+
+    // Step 3: Generate Documentation
+    std::cout << "\n[3] Generating Documentation...\n";
+    auto docs = qbd.generateDocumentation(layout, "QBD Test Project");
+
+    std::cout << "    Floor Plan: " << docs.floorPlan.lines.size() << " lines, "
+              << docs.floorPlan.arcs.size() << " arcs\n";
+    std::cout << "    Wall Details: " << docs.wallDetails.size() << "\n";
+
+    // Step 4: Export to files
+    std::cout << "\n[4] Exporting to: " << outputDir << "\n";
+
+    // Create output directory if needed
+    std::filesystem::create_directories(outputDir);
+
+    // Export floor plan SVG
+    std::string svgPath = outputDir + "/floor_plan.svg";
+    auto& slicerEngine = slicer::getSlicer();
+    std::string svg = slicerEngine.exportToSVG(docs.floorPlan, 0.1f);  // 0.1 pixels per mm = 100 pixels per meter
+
+    std::ofstream svgFile(svgPath);
+    if (svgFile.is_open()) {
+        svgFile << svg;
+        svgFile.close();
+        std::cout << "    Wrote: " << svgPath << " (" << svg.size() << " bytes)\n";
+    } else {
+        std::cerr << "    ERROR: Could not write " << svgPath << "\n";
+    }
+
+    // Export floor plan DXF
+    std::string dxfPath = outputDir + "/floor_plan.dxf";
+    std::string dxf = slicerEngine.exportToDXF(docs.floorPlan);
+
+    std::ofstream dxfFile(dxfPath);
+    if (dxfFile.is_open()) {
+        dxfFile << dxf;
+        dxfFile.close();
+        std::cout << "    Wrote: " << dxfPath << " (" << dxf.size() << " bytes)\n";
+    } else {
+        std::cerr << "    ERROR: Could not write " << dxfPath << "\n";
+    }
+
+    // Write validation report
+    std::string reportPath = outputDir + "/validation_report.txt";
+    std::ofstream reportFile(reportPath);
+    if (reportFile.is_open()) {
+        reportFile << "QBD VALIDATION REPORT\n";
+        reportFile << "=====================\n\n";
+        reportFile << "Project: QBD Test Project\n";
+        reportFile << "Generated: " << docs.generatedDate << "\n\n";
+        reportFile << "LAYOUT SUMMARY\n";
+        reportFile << "--------------\n";
+        reportFile << "Dimensions: " << layout.width << " x " << layout.depth << " ft\n";
+        reportFile << "Square Footage: " << layout.sqft << " sqft\n";
+        reportFile << "Walls: " << layout.summary.totalWalls << " (Ext: " << layout.summary.exteriorWalls
+                   << ", Int: " << layout.summary.interiorWalls << ", Wet: " << layout.summary.wetWalls << ")\n";
+        reportFile << "Doors: " << layout.summary.doors << "\n";
+        reportFile << "Rooms: " << layout.summary.roomsPlaced << "/" << layout.summary.roomsRequested << " placed\n\n";
+        reportFile << "OBC COMPLIANCE (Zone 6)\n";
+        reportFile << "-----------------------\n";
+        reportFile << "Overall: " << (validation.overallPass ? "PASS" : "FAIL") << "\n";
+        reportFile << "Thermal: " << (validation.thermalCompliance ? "PASS" : "FAIL") << "\n";
+        reportFile << "Avg R-Value: " << validation.averageRValue << "\n\n";
+        reportFile << "WALL DETAILS\n";
+        reportFile << "------------\n";
+        for (const auto& report : validation.wallReports) {
+            reportFile << (report.passes() ? "[PASS] " : "[FAIL] ")
+                       << report.elementType << " (" << report.elementId << ")\n";
+            for (const auto& check : report.checks) {
+                reportFile << "  " << check.ruleName << " [" << check.codeSection << "]: "
+                           << (check.status == obc::ComplianceStatus::Pass ? "PASS" : "FAIL")
+                           << " - " << check.message << "\n";
+            }
+        }
+        reportFile.close();
+        std::cout << "    Wrote: " << reportPath << "\n";
+    }
+
+    // Step 5: Convert to Building for visualization
+    std::cout << "\n[5] Converting to Building...\n";
+    Building building = qbd.toBuilding(layout);
+    std::cout << "    Elements: " << building.elements.size() << "\n";
+    std::cout << "    Parametric Walls: " << building.parametricWalls.size() << "\n";
+
+    std::cout << "\n========================================\n";
+    std::cout << "QBD TEST COMPLETE\n";
+    std::cout << "========================================\n\n";
+
+    return validation.overallPass;
+}
+
 int main(int argc, char* argv[]) {
-    (void)argc; (void)argv;
+    // Check for --qbd-test argument
+    bool runTest = false;
+    std::string testJsonPath = "../Shared/TestData/sample_qbd_output.json";
+    std::string testOutputDir = "../Shared/TestData/output";
+
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--qbd-test") {
+            runTest = true;
+        } else if (arg == "--qbd-json" && i + 1 < argc) {
+            testJsonPath = argv[++i];
+        } else if (arg == "--qbd-output" && i + 1 < argc) {
+            testOutputDir = argv[++i];
+        }
+    }
+
+    if (runTest) {
+        bool success = runQBDTest(testJsonPath, testOutputDir);
+        return success ? 0 : 1;
+    }
+
     try {
         // Create window
         WindowConfig windowConfig{};
@@ -102,6 +265,57 @@ int main(int argc, char* argv[]) {
             GeometryLoader::createWarehouse(100.0f, 80.0f, 30.0f),
             GeometryLoader::createResidential(40.0f, 30.0f, 2)
         };
+
+        // Try to load QBD JSON from generated_building.json
+        {
+            auto& qbd = qbd::getQBDInterface();
+            // Try multiple paths - works from build/, build/Release/, or build/Debug/
+            std::vector<std::string> jsonPaths = {
+                "../../Shared/TestData/output/generated_building.json",  // From build/Release/ or build/Debug/
+                "../Shared/TestData/output/generated_building.json",     // From build/
+                "X:/ARCH/Software/ArchEngine_Suite/Shared/TestData/output/generated_building.json"  // Absolute path
+            };
+
+            std::optional<qbd::QBDLayout> layoutOpt;
+            std::string usedPath;
+            for (const auto& path : jsonPaths) {
+                layoutOpt = qbd.loadFromFile(path);
+                if (layoutOpt.has_value()) {
+                    usedPath = path;
+                    break;
+                }
+            }
+
+            if (layoutOpt.has_value()) {
+                Building qbdBuilding = qbd.toBuilding(*layoutOpt);
+                qbdBuilding.name = "QBD Generated House";
+
+                // Scale from mm to visualization units (mm / 1000 = meters, then * 3.28 = feet approx)
+                // For now, scale down by 304.8 to convert mm to feet (1 foot = 304.8 mm)
+                const float mmToFeet = 1.0f / 304.8f;
+                for (auto& elem : qbdBuilding.elements) {
+                    elem.start *= mmToFeet;
+                    elem.end *= mmToFeet;
+                    elem.width *= mmToFeet;
+                    elem.depth *= mmToFeet;
+
+                    // Scale mesh vertices if present
+                    for (auto& v : elem.mesh.vertices) {
+                        v *= mmToFeet;
+                    }
+                }
+
+                buildings.push_back(qbdBuilding);
+                std::cout << "[Main] Loaded QBD building from " << usedPath << " with " << qbdBuilding.elements.size() << " elements\n";
+            } else {
+                std::cout << "[Main] No QBD JSON found. Tried paths:\n";
+                for (const auto& p : jsonPaths) {
+                    std::cout << "  - " << p << "\n";
+                }
+                std::cout << "[Main] Using sample buildings only\n";
+            }
+        }
+
         size_t currentBuilding = 0;
         VisualizationMode vizMode = VisualizationMode::Structural;
         FrameAnalysis lastAnalysis{};

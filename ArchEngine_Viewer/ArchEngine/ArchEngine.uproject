@@ -5,7 +5,7 @@
 	"Description": "High-Fidelity Viewer for ArchEngine Custom Kernel",
 	"Modules": [
 		{
-			"Name": "ArchEngineViewer",
+			"Name": "ArchEngine",
 			"Type": "Runtime",
 			"LoadingPhase": "Default",
 			"AdditionalDependencies": [
@@ -20,6 +20,10 @@
 			"TargetAllowList": [
 				"Editor"
 			]
+		},
+		{
+			"Name": "ProceduralMeshComponent",
+			"Enabled": true
 		}
 	]
 }

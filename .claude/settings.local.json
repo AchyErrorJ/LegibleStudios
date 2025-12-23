@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(dir:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(powershell.exe -Command \"Get-Content ''X:\\\\ARCH\\\\Software\\\\ArchEngine_Suite\\\\Shared\\\\TestData\\\\output\\\\floor_plan.svg''\")",
+      "Bash(\"A:/Applications/Epic Games/UE_5.3/Engine/Build/BatchFiles/Build.bat\" ArchEngineEditor Win64 Development \"X:/ARCH/Software/ArchEngine_Suite/ArchEngine_Viewer/ArchEngine/ArchEngine.uproject\" -WaitMutex -FromMsBuild)",
+      "Bash(powershell -Command \"cd ''X:\\\\ARCH\\\\Software\\\\ArchEngine_Suite\\\\ArchEngine_kernel\\\\scripts''; python -c \"\"from text_to_json import text_to_json; import json; result = text_to_json\\(''3 bedroom 2 bath modern house 1800 sqft''\\); print\\(''Roof type:'', result.get\\(''roofs'', [{}]\\)[0].get\\(''type''\\)\\); print\\(''Surfaces count:'', len\\(result.get\\(''roofs'', [{}]\\)[0].get\\(''surfaces'', []\\)\\)\\)\"\"\")",
+      "Bash(powershell -Command \"cd ''X:\\\\ARCH\\\\Software\\\\ArchEngine_Suite\\\\ArchEngine_kernel\\\\scripts''; python -c \"\"\nfrom text_to_json import text_to_json\nimport json\nresult = text_to_json\\(''3 bedroom 2 bath traditional house with hip roof 1800 sqft''\\)\n\n# Get wall bounds\nwalls = result[''walls_batch'']\nmin_x = min\\(min\\(w[''start''][0], w[''end''][0]\\) for w in walls\\)\nmax_x = max\\(max\\(w[''start''][0], w[''end''][0]\\) for w in walls\\)\nmin_z = min\\(min\\(w[''start''][2], w[''end''][2]\\) for w in walls\\)\nmax_z = max\\(max\\(w[''start''][2], w[''end''][2]\\) for w in walls\\)\n\nprint\\(''WALLS \\(centerlines\\):''\\)\nprint\\(f''  X: {min_x:.0f} to {max_x:.0f}''\\)\nprint\\(f''  Z: {min_z:.0f} to {max_z:.0f}''\\)\n\n# Get roof eave bounds\nroof = result[''roofs''][0]\nall_verts = []\nfor surf in roof[''surfaces'']:\n    all_verts.extend\\(surf[''vertices'']\\)\nroof_min_x = min\\(v[0] for v in all_verts\\)\nroof_max_x = max\\(v[0] for v in all_verts\\)\nroof_min_z = min\\(v[2] for v in all_verts\\)\nroof_max_z = max\\(v[2] for v in all_verts\\)\n\nprint\\(''ROOF \\(eaves\\):''\\)\nprint\\(f''  X: {roof_min_x:.0f} to {roof_max_x:.0f}''\\)\nprint\\(f''  Z: {roof_min_z:.0f} to {roof_max_z:.0f}''\\)\n\nprint\\(''OVERHANG from wall centerlines:''\\)\nprint\\(f''  West \\(X-\\): {min_x - roof_min_x:.0f}mm''\\)\nprint\\(f''  East \\(X+\\): {roof_max_x - max_x:.0f}mm''\\)\nprint\\(f''  South \\(Z-\\): {min_z - roof_min_z:.0f}mm''\\)\nprint\\(f''  North \\(Z+\\): {roof_max_z - max_z:.0f}mm''\\)\n\"\"\")",
+      "Bash(findstr:*)",
+      "Bash(powershell -Command \"Get-Content ''X:\\\\ARCH\\\\Software\\\\ArchEngine_Suite\\\\Shared\\\\TestData\\\\output\\\\generated_building.json'' | Select-Object -First 100\")"
     ]
   }
 }

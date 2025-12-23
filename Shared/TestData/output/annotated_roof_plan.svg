@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1400" viewBox="-2000 -2000 16000 14000">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="black"/>
+    </marker>
+    <marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2196F3"/>
+    </marker>
+    <style>
+      .roof-outline { stroke: #333; stroke-width: 4; fill: #f5f5f5; }
+      .ridge { stroke: #000; stroke-width: 6; }
+      .hip { stroke: #000; stroke-width: 4; stroke-dasharray: 40,20; }
+      .valley { stroke: #000; stroke-width: 4; stroke-dasharray: 20,10; }
+      .eave { stroke: #666; stroke-width: 3; }
+      .rake { stroke: #666; stroke-width: 3; stroke-dasharray: 30,15; }
+      .grid-line { stroke: #ddd; stroke-width: 1; stroke-dasharray: 50,30; }
+      .drainage { stroke: #2196F3; stroke-width: 3; }
+      .gutter { stroke: #795548; stroke-width: 8; }
+      .downspout { fill: #795548; }
+      .grid-bubble { fill: white; stroke: black; stroke-width: 3; }
+      .grid-label { font-family: Arial, sans-serif; font-size: 300px; text-anchor: middle; font-weight: bold; }
+      .title { font-family: Arial, sans-serif; font-size: 500px; font-weight: bold; }
+      .subtitle { font-family: Arial, sans-serif; font-size: 300px; fill: #666; }
+      .pitch-label { font-family: Arial, sans-serif; font-size: 280px; font-weight: bold; }
+      .annotation { font-family: Arial, sans-serif; font-size: 200px; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect x="-2000" y="-2000" width="16000" height="14000" fill="white"/>
+
+  <!-- Title Block -->
+  <text x="6000" y="-1200" class="title">ROOF PLAN</text>
+  <text x="6000" y="-800" class="subtitle">Scale: 1:100 | Gable Roof - 4:12 Pitch</text>
+
+  <!-- Grid Lines -->
+  <line x1="0" y1="-500" x2="0" y2="10000" class="grid-line"/>
+  <line x1="6000" y1="-500" x2="6000" y2="10000" class="grid-line"/>
+  <line x1="12000" y1="-500" x2="12000" y2="10000" class="grid-line"/>
+  <line x1="-500" y1="0" x2="13000" y2="0" class="grid-line"/>
+  <line x1="-500" y1="4500" x2="13000" y2="4500" class="grid-line"/>
+  <line x1="-500" y1="9000" x2="13000" y2="9000" class="grid-line"/>
+
+  <!-- Grid Bubbles -->
+  <circle cx="0" cy="-800" r="250" class="grid-bubble"/>
+  <text x="0" y="-700" class="grid-label">A</text>
+  <circle cx="6000" cy="-800" r="250" class="grid-bubble"/>
+  <text x="6000" y="-700" class="grid-label">B</text>
+  <circle cx="12000" cy="-800" r="250" class="grid-bubble"/>
+  <text x="12000" y="-700" class="grid-label">C</text>
+  <circle cx="-800" cy="0" r="250" class="grid-bubble"/>
+  <text x="-800" y="100" class="grid-label">1</text>
+  <circle cx="-800" cy="4500" r="250" class="grid-bubble"/>
+  <text x="-800" y="4600" class="grid-label">2</text>
+  <circle cx="-800" cy="9000" r="250" class="grid-bubble"/>
+  <text x="-800" y="9100" class="grid-label">3</text>
+
+  <!-- Roof Outline with Overhang -->
+  <polygon points="-600,-600 12600,-600 12600,9600 -600,9600" class="roof-outline"/>
+
+  <!-- Building Outline (dashed) -->
+  <rect x="0" y="0" width="12000" height="9000" fill="none" stroke="#999" stroke-width="2" stroke-dasharray="20,10"/>
+
+  <!-- Ridge Line (center of building, running E-W) -->
+  <line x1="-600" y1="4500" x2="12600" y2="4500" class="ridge"/>
+
+  <!-- Eave Lines -->
+  <line x1="-600" y1="-600" x2="12600" y2="-600" class="eave"/>
+  <line x1="-600" y1="9600" x2="12600" y2="9600" class="eave"/>
+
+  <!-- Rake Lines (gable ends) -->
+  <line x1="-600" y1="-600" x2="-600" y2="9600" class="rake"/>
+  <line x1="12600" y1="-600" x2="12600" y2="9600" class="rake"/>
+
+  <!-- Drainage Arrows - North Slope -->
+  <g class="drainage">
+    <line x1="3000" y1="2000" x2="3000" y2="-200" marker-end="url(#arrowhead-blue)"/>
+    <line x1="6000" y1="2000" x2="6000" y2="-200" marker-end="url(#arrowhead-blue)"/>
+    <line x1="9000" y1="2000" x2="9000" y2="-200" marker-end="url(#arrowhead-blue)"/>
+  </g>
+
+  <!-- Drainage Arrows - South Slope -->
+  <g class="drainage">
+    <line x1="3000" y1="7000" x2="3000" y2="9200" marker-end="url(#arrowhead-blue)"/>
+    <line x1="6000" y1="7000" x2="6000" y2="9200" marker-end="url(#arrowhead-blue)"/>
+    <line x1="9000" y1="7000" x2="9000" y2="9200" marker-end="url(#arrowhead-blue)"/>
+  </g>
+
+  <!-- Pitch Indicators -->
+  <!-- North slope pitch indicator -->
+  <g transform="translate(1500, 1500)">
+    <path d="M 0 500 L 720 500 L 720 260 Z" fill="none" stroke="black" stroke-width="4"/>
+    <text x="360" y="700" class="pitch-label" text-anchor="middle">4:12</text>
+  </g>
+
+  <!-- South slope pitch indicator -->
+  <g transform="translate(10000, 7000)">
+    <path d="M 0 0 L 720 0 L 720 240 Z" fill="none" stroke="black" stroke-width="4"/>
+    <text x="360" y="400" class="pitch-label" text-anchor="middle">4:12</text>
+  </g>
+
+  <!-- Gutters -->
+  <line x1="-600" y1="-600" x2="12600" y2="-600" class="gutter"/>
+  <line x1="-600" y1="9600" x2="12600" y2="9600" class="gutter"/>
+
+  <!-- Downspouts -->
+  <circle cx="-400" cy="-600" r="120" class="downspout"/>
+  <circle cx="12400" cy="-600" r="120" class="downspout"/>
+  <circle cx="-400" cy="9600" r="120" class="downspout"/>
+  <circle cx="12400" cy="9600" r="120" class="downspout"/>
+
+  <!-- Downspout Labels -->
+  <text x="-400" y="-900" class="annotation" text-anchor="middle">DS</text>
+  <text x="12400" y="-900" class="annotation" text-anchor="middle">DS</text>
+  <text x="-400" y="9900" class="annotation" text-anchor="middle">DS</text>
+  <text x="12400" y="9900" class="annotation" text-anchor="middle">DS</text>
+
+  <!-- Skylight -->
+  <rect x="7500" y="5500" width="1500" height="1000" fill="none" stroke="#00BCD4" stroke-width="6"/>
+  <line x1="7500" y1="5500" x2="9000" y2="6500" stroke="#00BCD4" stroke-width="2"/>
+  <line x1="9000" y1="5500" x2="7500" y2="6500" stroke="#00BCD4" stroke-width="2"/>
+  <text x="8250" y="6900" class="annotation" text-anchor="middle">SKYLIGHT</text>
+  <text x="8250" y="7150" class="annotation" text-anchor="middle">1500 x 1000</text>
+
+  <!-- Roof Dimensions -->
+  <!-- Overall width -->
+  <line x1="-600" y1="-1200" x2="12600" y2="-1200" stroke="black" stroke-width="2"/>
+  <line x1="-600" y1="-1000" x2="-600" y2="-1300" stroke="black" stroke-width="1"/>
+  <line x1="12600" y1="-1000" x2="12600" y2="-1300" stroke="black" stroke-width="1"/>
+  <text x="6000" y="-1400" class="annotation" text-anchor="middle">13200 (w/ 600mm overhang)</text>
+
+  <!-- Overall depth -->
+  <line x1="13200" y1="-600" x2="13200" y2="9600" stroke="black" stroke-width="2"/>
+  <line x1="13000" y1="-600" x2="13300" y2="-600" stroke="black" stroke-width="1"/>
+  <line x1="13000" y1="9600" x2="13300" y2="9600" stroke="black" stroke-width="1"/>
+  <text x="13500" y="4500" class="annotation" text-anchor="middle" transform="rotate(90 13500 4500)">10200 (w/ 600mm overhang)</text>
+
+  <!-- North Arrow -->
+  <g transform="translate(13500, 1500)">
+    <polygon points="0,-400 -120,300 0,150 120,300" fill="black"/>
+    <text x="0" y="-550" class="grid-label">N</text>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(-1500, 10200)">
+    <text x="0" y="0" font-family="Arial" font-size="300" font-weight="bold">LEGEND:</text>
+
+    <line x1="0" y1="400" x2="500" y2="400" class="ridge"/>
+    <text x="600" y="450" class="annotation">Ridge</text>
+
+    <line x1="0" y1="700" x2="500" y2="700" class="eave"/>
+    <text x="600" y="750" class="annotation">Eave</text>
+
+    <line x1="0" y1="1000" x2="500" y2="1000" class="rake"/>
+    <text x="600" y="1050" class="annotation">Rake</text>
+
+    <line x1="0" y1="1300" x2="500" y2="1300" class="gutter"/>
+    <text x="600" y="1350" class="annotation">Gutter</text>
+
+    <line x1="0" y1="1600" x2="500" y2="1600" class="drainage" marker-end="url(#arrowhead-blue)"/>
+    <text x="600" y="1650" class="annotation">Drainage</text>
+
+    <circle cx="100" cy="1900" r="80" class="downspout"/>
+    <text x="600" y="1950" class="annotation">Downspout</text>
+  </g>
+
+  <!-- Roof Area Calculation -->
+  <g transform="translate(5000, 10200)">
+    <text x="0" y="0" font-family="Arial" font-size="300" font-weight="bold">ROOF AREAS:</text>
+    <text x="0" y="400" class="annotation">North Slope: 59.4 m² (4:12 pitch)</text>
+    <text x="0" y="700" class="annotation">South Slope: 59.4 m² (4:12 pitch)</text>
+    <text x="0" y="1000" class="annotation">Total Roof Area: 118.8 m²</text>
+    <text x="0" y="1300" class="annotation">Skylight: 1.5 m²</text>
+  </g>
+
+  <!-- Scale Bar -->
+  <g transform="translate(10000, 10200)">
+    <rect x="0" y="400" width="1000" height="100" fill="black"/>
+    <rect x="1000" y="400" width="1000" height="100" fill="white" stroke="black"/>
+    <text x="0" y="650" font-family="Arial" font-size="150">0</text>
+    <text x="1000" y="650" font-family="Arial" font-size="150">1m</text>
+    <text x="2000" y="650" font-family="Arial" font-size="150">2m</text>
+  </g>
+
+</svg>

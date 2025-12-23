@@ -1,0 +1,73 @@
+{
+  "name": "Test Building",
+  "elements": [
+    {
+      "type": 1,
+      "start": [0, 0, 0],
+      "end": [0, 10, 0],
+      "width": 0.83,
+      "depth": 0.83,
+      "material": "steel",
+      "stress": 0.3,
+      "deflection": 0,
+      "failed": false
+    },
+    {
+      "type": 1,
+      "start": [20, 0, 0],
+      "end": [20, 10, 0],
+      "width": 0.83,
+      "depth": 0.83,
+      "material": "steel",
+      "stress": 0.5,
+      "deflection": 0,
+      "failed": false
+    },
+    {
+      "type": 1,
+      "start": [0, 0, 15],
+      "end": [0, 10, 15],
+      "width": 0.83,
+      "depth": 0.83,
+      "material": "steel",
+      "stress": 0.8,
+      "deflection": 0,
+      "failed": false
+    },
+    {
+      "type": 1,
+      "start": [20, 0, 15],
+      "end": [20, 10, 15],
+      "width": 0.83,
+      "depth": 0.83,
+      "material": "steel",
+      "stress": 1.1,
+      "deflection": 0,
+      "failed": true
+    },
+    {
+      "type": 0,
+      "start": [0, 10, 0],
+      "end": [20, 10, 0],
+      "width": 0.5,
+      "depth": 1.0,
+      "material": "steel",
+      "stress": 0.6,
+      "deflection": 0.002,
+      "failed": false
+    },
+    {
+      "type": 0,
+      "start": [0, 10, 15],
+      "end": [20, 10, 15],
+      "width": 0.5,
+      "depth": 1.0,
+      "material": "steel",
+      "stress": 0.95,
+      "deflection": 0.005,
+      "failed": false
+    }
+  ],
+  "wallTypes": [],
+  "parametricWalls": []
+}

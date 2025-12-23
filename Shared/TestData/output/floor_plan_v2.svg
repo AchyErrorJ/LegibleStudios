@@ -1,0 +1,302 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1500" viewBox="-3500 -3500 18000 15000">
+  <defs>
+    <style>
+      .wall-ext { stroke: #000; stroke-width: 175; stroke-linecap: butt; fill: none; }
+      .wall-int { stroke: #000; stroke-width: 115; stroke-linecap: butt; fill: none; }
+      .wall-wet { stroke: #000; stroke-width: 140; stroke-linecap: butt; fill: none; }
+      .grid-line { stroke: #bbb; stroke-width: 2; stroke-dasharray: 80,40; }
+      .dim-line { stroke: #000; stroke-width: 3; }
+      .dim-ext { stroke: #000; stroke-width: 2; }
+      .dim-tick { stroke: #000; stroke-width: 3; }
+      .door-leaf { stroke: #000; stroke-width: 3; fill: none; }
+      .door-swing { stroke: #000; stroke-width: 2; fill: none; stroke-dasharray: none; }
+      .window-frame { stroke: #000; stroke-width: 6; fill: white; }
+      .window-glass { stroke: #000; stroke-width: 2; fill: none; }
+      .room-label { font-family: Arial, sans-serif; font-size: 350px; text-anchor: middle; font-weight: 500; }
+      .room-area { font-family: Arial, sans-serif; font-size: 240px; text-anchor: middle; fill: #444; }
+      .dim-text { font-family: Arial, sans-serif; font-size: 180px; text-anchor: middle; fill: #000; }
+      .grid-bubble { fill: white; stroke: #000; stroke-width: 4; }
+      .grid-label { font-family: Arial, sans-serif; font-size: 280px; text-anchor: middle; dominant-baseline: central; font-weight: bold; }
+      .title { font-family: Arial, sans-serif; font-size: 400px; font-weight: bold; }
+      .scale-text { font-family: Arial, sans-serif; font-size: 200px; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect x="-3500" y="-3500" width="18000" height="15000" fill="white"/>
+
+  <!-- Title -->
+  <text x="6000" y="-2800" class="title">FLOOR PLAN - LEVEL 1</text>
+  <text x="6000" y="-2400" class="scale-text" text-anchor="middle">Scale: 1:100</text>
+
+  <!-- Grid Lines -->
+  <line x1="0" y1="-1500" x2="0" y2="10500" class="grid-line"/>
+  <line x1="6000" y1="-1500" x2="6000" y2="10500" class="grid-line"/>
+  <line x1="9000" y1="-1500" x2="9000" y2="10500" class="grid-line"/>
+  <line x1="12000" y1="-1500" x2="12000" y2="10500" class="grid-line"/>
+  <line x1="-1500" y1="0" x2="13500" y2="0" class="grid-line"/>
+  <line x1="-1500" y1="4500" x2="13500" y2="4500" class="grid-line"/>
+  <line x1="-1500" y1="9000" x2="13500" y2="9000" class="grid-line"/>
+
+  <!-- Grid Bubbles - Top -->
+  <circle cx="0" cy="-1800" r="280" class="grid-bubble"/>
+  <text x="0" y="-1800" class="grid-label">A</text>
+  <circle cx="6000" cy="-1800" r="280" class="grid-bubble"/>
+  <text x="6000" y="-1800" class="grid-label">B</text>
+  <circle cx="9000" cy="-1800" r="280" class="grid-bubble"/>
+  <text x="9000" y="-1800" class="grid-label">C</text>
+  <circle cx="12000" cy="-1800" r="280" class="grid-bubble"/>
+  <text x="12000" y="-1800" class="grid-label">D</text>
+
+  <!-- Grid Bubbles - Left -->
+  <circle cx="-1800" cy="0" r="280" class="grid-bubble"/>
+  <text x="-1800" y="0" class="grid-label">1</text>
+  <circle cx="-1800" cy="4500" r="280" class="grid-bubble"/>
+  <text x="-1800" y="4500" class="grid-label">2</text>
+  <circle cx="-1800" cy="9000" r="280" class="grid-bubble"/>
+  <text x="-1800" y="9000" class="grid-label">3</text>
+
+  <!-- WALLS - Draw as paths for proper corners -->
+  <!-- Exterior walls - outer face -->
+  <path d="M -87.5,0 L -87.5,9000 L 12087.5,9000 L 12087.5,0 L -87.5,0" class="wall-ext" stroke-width="175" fill="#e8e8e8"/>
+
+  <!-- Interior wall fills (white to cut openings) -->
+  <rect x="87.5" y="87.5" width="11825" height="8825" fill="white"/>
+
+  <!-- Exterior walls - lines only -->
+  <line x1="0" y1="0" x2="12000" y2="0" stroke="#000" stroke-width="6"/>
+  <line x1="0" y1="0" x2="0" y2="9000" stroke="#000" stroke-width="6"/>
+  <line x1="12000" y1="0" x2="12000" y2="9000" stroke="#000" stroke-width="6"/>
+  <line x1="0" y1="9000" x2="12000" y2="9000" stroke="#000" stroke-width="6"/>
+
+  <!-- Wall hatch fill -->
+  <rect x="-87.5" y="-87.5" width="175" height="9175" fill="#888"/>
+  <rect x="-87.5" y="-87.5" width="12175" height="175" fill="#888"/>
+  <rect x="11912.5" y="-87.5" width="175" height="9175" fill="#888"/>
+  <rect x="-87.5" y="8912.5" width="12175" height="175" fill="#888"/>
+
+  <!-- Interior walls -->
+  <rect x="5942.5" y="0" width="115" height="4500" fill="#888"/>
+  <rect x="0" y="4442.5" width="6000" height="115" fill="#888"/>
+  <rect x="6000" y="4442.5" width="6000" height="115" fill="#888"/>
+  <rect x="8942.5" y="4500" width="115" height="4500" fill="#888"/>
+
+  <!-- DOOR OPENINGS (cut through walls) -->
+  <!-- Entry door - south wall at x=2000, width=900 -->
+  <rect x="1550" y="-100" width="900" height="200" fill="white"/>
+  <!-- Living-Kitchen door - interior wall at offset 3000 -->
+  <rect x="2550" y="4392" width="900" height="230" fill="white"/>
+  <!-- Living-Bedroom door - interior wall -->
+  <rect x="5892" y="1800" width="230" height="900" fill="white"/>
+  <!-- Bedroom-Bath door - interior wall -->
+  <rect x="7240" y="4392" width="760" height="230" fill="white"/>
+
+  <!-- DOOR SYMBOLS - Correct architectural convention -->
+  <!-- Entry door: hinge at left (x=1550), swings in (north), 90° arc -->
+  <g id="door-entry">
+    <!-- Door leaf in open position (perpendicular to wall) -->
+    <line x1="1550" y1="0" x2="1550" y2="900" class="door-leaf"/>
+    <!-- Swing arc - 90 degrees from closed to open -->
+    <path d="M 2450,0 A 900,900 0 0 1 1550,900" class="door-swing"/>
+  </g>
+
+  <!-- Living-Kitchen door: hinge at left, swings into kitchen -->
+  <g id="door-living-kitchen">
+    <line x1="2550" y1="4500" x2="2550" y2="5400" class="door-leaf"/>
+    <path d="M 3450,4500 A 900,900 0 0 0 2550,5400" class="door-swing"/>
+  </g>
+
+  <!-- Living-Bedroom door: hinge at top, swings into bedroom -->
+  <g id="door-living-bedroom">
+    <line x1="6000" y1="1800" x2="6900" y2="1800" class="door-leaf"/>
+    <path d="M 6000,2700 A 900,900 0 0 1 6900,1800" class="door-swing"/>
+  </g>
+
+  <!-- Bedroom-Bath door: pocket door (no swing) -->
+  <g id="door-pocket">
+    <line x1="7240" y1="4500" x2="8000" y2="4500" stroke="#000" stroke-width="3" stroke-dasharray="40,20"/>
+    <rect x="7240" y="4460" width="380" height="80" fill="white" stroke="#000" stroke-width="2"/>
+  </g>
+
+  <!-- WINDOW SYMBOLS -->
+  <!-- South wall window - Living room (1800 wide) -->
+  <g id="window-south">
+    <rect x="7100" y="-70" width="1800" height="140" class="window-frame"/>
+    <line x1="7100" y1="0" x2="8900" y2="0" class="window-glass"/>
+    <line x1="8000" y1="-50" x2="8000" y2="50" stroke="#000" stroke-width="2"/>
+  </g>
+
+  <!-- East wall window - Bedroom (1200 wide) -->
+  <g id="window-east-bed">
+    <rect x="11930" y="1650" width="140" height="1200" class="window-frame"/>
+    <line x1="12000" y1="1650" x2="12000" y2="2850" class="window-glass"/>
+    <line x1="11950" y1="2250" x2="12050" y2="2250" stroke="#000" stroke-width="2"/>
+  </g>
+
+  <!-- East wall window - Bathroom (600 wide) -->
+  <g id="window-east-bath">
+    <rect x="11930" y="6450" width="140" height="600" class="window-frame"/>
+    <line x1="12000" y1="6450" x2="12000" y2="7050" class="window-glass"/>
+  </g>
+
+  <!-- North wall window - Kitchen (1500 wide) -->
+  <g id="window-north">
+    <rect x="3750" y="8930" width="1500" height="140" class="window-frame"/>
+    <line x1="3750" y1="9000" x2="5250" y2="9000" class="window-glass"/>
+    <line x1="4500" y1="8950" x2="4500" y2="9050" stroke="#000" stroke-width="2"/>
+  </g>
+
+  <!-- ROOM LABELS -->
+  <text x="3000" y="2000" class="room-label">LIVING</text>
+  <text x="3000" y="2400" class="room-area">27.0 m²</text>
+
+  <text x="4000" y="6750" class="room-label">KITCHEN</text>
+  <text x="4000" y="7150" class="room-area">40.5 m²</text>
+
+  <text x="9000" y="2000" class="room-label">BEDROOM</text>
+  <text x="9000" y="2400" class="room-area">27.0 m²</text>
+
+  <text x="10500" y="6750" class="room-label">BATH</text>
+  <text x="10500" y="7150" class="room-area">13.5 m²</text>
+
+  <!-- ============================================ -->
+  <!-- LADDER DIMENSIONS - South Side (3 layers)   -->
+  <!-- ============================================ -->
+
+  <!-- Layer 1: Detail dimensions (closest to building) -->
+  <g id="dim-layer-1-south">
+    <!-- Entry door to corner A -->
+    <line x1="0" y1="-600" x2="1550" y2="-600" class="dim-line"/>
+    <line x1="0" y1="-400" x2="0" y2="-700" class="dim-ext"/>
+    <line x1="1550" y1="-400" x2="1550" y2="-700" class="dim-ext"/>
+    <text x="775" y="-750" class="dim-text">1550</text>
+
+    <!-- Entry door width -->
+    <line x1="1550" y1="-600" x2="2450" y2="-600" class="dim-line"/>
+    <line x1="2450" y1="-400" x2="2450" y2="-700" class="dim-ext"/>
+    <text x="2000" y="-750" class="dim-text">900</text>
+
+    <!-- Entry door to interior wall B -->
+    <line x1="2450" y1="-600" x2="6000" y2="-600" class="dim-line"/>
+    <line x1="6000" y1="-400" x2="6000" y2="-700" class="dim-ext"/>
+    <text x="4225" y="-750" class="dim-text">3550</text>
+
+    <!-- Interior wall B to window -->
+    <line x1="6000" y1="-600" x2="7100" y2="-600" class="dim-line"/>
+    <line x1="7100" y1="-400" x2="7100" y2="-700" class="dim-ext"/>
+    <text x="6550" y="-750" class="dim-text">1100</text>
+
+    <!-- Window width -->
+    <line x1="7100" y1="-600" x2="8900" y2="-600" class="dim-line"/>
+    <line x1="8900" y1="-400" x2="8900" y2="-700" class="dim-ext"/>
+    <text x="8000" y="-750" class="dim-text">1800</text>
+
+    <!-- Window to corner D -->
+    <line x1="8900" y1="-600" x2="12000" y2="-600" class="dim-line"/>
+    <line x1="12000" y1="-400" x2="12000" y2="-700" class="dim-ext"/>
+    <text x="10450" y="-750" class="dim-text">3100</text>
+  </g>
+
+  <!-- Layer 2: Wall-to-wall dimensions (middle) -->
+  <g id="dim-layer-2-south">
+    <!-- Grid A to B -->
+    <line x1="0" y1="-1100" x2="6000" y2="-1100" class="dim-line"/>
+    <line x1="0" y1="-900" x2="0" y2="-1200" class="dim-ext"/>
+    <line x1="6000" y1="-900" x2="6000" y2="-1200" class="dim-ext"/>
+    <text x="3000" y="-1250" class="dim-text">6000</text>
+
+    <!-- Grid B to D -->
+    <line x1="6000" y1="-1100" x2="12000" y2="-1100" class="dim-line"/>
+    <line x1="12000" y1="-900" x2="12000" y2="-1200" class="dim-ext"/>
+    <text x="9000" y="-1250" class="dim-text">6000</text>
+  </g>
+
+  <!-- Layer 3: Overall dimension (farthest) -->
+  <g id="dim-layer-3-south">
+    <line x1="0" y1="-1600" x2="12000" y2="-1600" class="dim-line"/>
+    <line x1="0" y1="-1400" x2="0" y2="-1700" class="dim-ext"/>
+    <line x1="12000" y1="-1400" x2="12000" y2="-1700" class="dim-ext"/>
+    <text x="6000" y="-1750" class="dim-text">12000</text>
+  </g>
+
+  <!-- ============================================ -->
+  <!-- LADDER DIMENSIONS - East Side (3 layers)    -->
+  <!-- ============================================ -->
+
+  <!-- Layer 1: Detail dimensions -->
+  <g id="dim-layer-1-east">
+    <!-- Corner 1 to bedroom window -->
+    <line x1="12600" y1="0" x2="12600" y2="1650" class="dim-line"/>
+    <line x1="12400" y1="0" x2="12700" y2="0" class="dim-ext"/>
+    <line x1="12400" y1="1650" x2="12700" y2="1650" class="dim-ext"/>
+    <text x="12850" y="825" class="dim-text" writing-mode="tb">1650</text>
+
+    <!-- Bedroom window -->
+    <line x1="12600" y1="1650" x2="12600" y2="2850" class="dim-line"/>
+    <line x1="12400" y1="2850" x2="12700" y2="2850" class="dim-ext"/>
+    <text x="12850" y="2250" class="dim-text" writing-mode="tb">1200</text>
+
+    <!-- Bedroom window to interior wall 2 -->
+    <line x1="12600" y1="2850" x2="12600" y2="4500" class="dim-line"/>
+    <line x1="12400" y1="4500" x2="12700" y2="4500" class="dim-ext"/>
+    <text x="12850" y="3675" class="dim-text" writing-mode="tb">1650</text>
+
+    <!-- Interior wall 2 to bath window -->
+    <line x1="12600" y1="4500" x2="12600" y2="6450" class="dim-line"/>
+    <line x1="12400" y1="6450" x2="12700" y2="6450" class="dim-ext"/>
+    <text x="12850" y="5475" class="dim-text" writing-mode="tb">1950</text>
+
+    <!-- Bath window -->
+    <line x1="12600" y1="6450" x2="12600" y2="7050" class="dim-line"/>
+    <line x1="12400" y1="7050" x2="12700" y2="7050" class="dim-ext"/>
+    <text x="12850" y="6750" class="dim-text" writing-mode="tb">600</text>
+
+    <!-- Bath window to corner 3 -->
+    <line x1="12600" y1="7050" x2="12600" y2="9000" class="dim-line"/>
+    <line x1="12400" y1="9000" x2="12700" y2="9000" class="dim-ext"/>
+    <text x="12850" y="8025" class="dim-text" writing-mode="tb">1950</text>
+  </g>
+
+  <!-- Layer 2: Room dimensions -->
+  <g id="dim-layer-2-east">
+    <line x1="13100" y1="0" x2="13100" y2="4500" class="dim-line"/>
+    <line x1="12900" y1="0" x2="13200" y2="0" class="dim-ext"/>
+    <line x1="12900" y1="4500" x2="13200" y2="4500" class="dim-ext"/>
+    <text x="13350" y="2250" class="dim-text" writing-mode="tb">4500</text>
+
+    <line x1="13100" y1="4500" x2="13100" y2="9000" class="dim-line"/>
+    <line x1="12900" y1="9000" x2="13200" y2="9000" class="dim-ext"/>
+    <text x="13350" y="6750" class="dim-text" writing-mode="tb">4500</text>
+  </g>
+
+  <!-- Layer 3: Overall -->
+  <g id="dim-layer-3-east">
+    <line x1="13600" y1="0" x2="13600" y2="9000" class="dim-line"/>
+    <line x1="13400" y1="0" x2="13700" y2="0" class="dim-ext"/>
+    <line x1="13400" y1="9000" x2="13700" y2="9000" class="dim-ext"/>
+    <text x="13850" y="4500" class="dim-text" writing-mode="tb">9000</text>
+  </g>
+
+  <!-- North Arrow -->
+  <g transform="translate(-2800, 1000)">
+    <polygon points="0,-350 -100,250 0,100 100,250" fill="black"/>
+    <circle cx="0" cy="0" r="400" fill="none" stroke="#000" stroke-width="3"/>
+    <text x="0" y="-500" class="grid-label">N</text>
+  </g>
+
+  <!-- Scale Bar -->
+  <g transform="translate(-2800, 8000)">
+    <text x="500" y="-100" class="scale-text">SCALE 1:100</text>
+    <rect x="0" y="0" width="500" height="60" fill="black"/>
+    <rect x="500" y="0" width="500" height="60" fill="white" stroke="black" stroke-width="2"/>
+    <rect x="1000" y="0" width="500" height="60" fill="black"/>
+    <rect x="1500" y="0" width="500" height="60" fill="white" stroke="black" stroke-width="2"/>
+    <text x="0" y="150" class="scale-text">0</text>
+    <text x="500" y="150" class="scale-text">0.5</text>
+    <text x="1000" y="150" class="scale-text">1m</text>
+    <text x="1500" y="150" class="scale-text">1.5</text>
+    <text x="2000" y="150" class="scale-text">2m</text>
+  </g>
+
+</svg>

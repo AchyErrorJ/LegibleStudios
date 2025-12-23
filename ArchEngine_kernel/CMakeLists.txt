@@ -39,7 +39,7 @@ FetchContent_MakeAvailable(glfw)
 FetchContent_Declare(
     glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
-    GIT_TAG        0.9.9.8
+    GIT_TAG        1.0.1
 )
 FetchContent_MakeAvailable(glm)
 
@@ -83,6 +83,9 @@ set(ENGINE_SOURCES
     src/physics_bridge.cpp
     src/geometry_loader.cpp
     src/imgui_layer.cpp
+    src/obc_engine.cpp
+    src/slicer_2d.cpp
+    src/qbd_interface.cpp
 )
 
 # Header files
@@ -97,6 +100,9 @@ set(ENGINE_HEADERS
     include/physics_bridge.hpp
     include/geometry_loader.hpp
     include/imgui_layer.hpp
+    include/obc_engine.hpp
+    include/slicer_2d.hpp
+    include/qbd_interface.hpp
 )
 
 # Main executable

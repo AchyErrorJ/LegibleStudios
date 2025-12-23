@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1184" height="1304"
+     viewBox="-4600 -4600 23682.165722668637 26095.860009780074">
+<defs>
+<marker id="arrow-drain" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+  <polygon points="0 0, 10 3.5, 0 7" fill="#2196F3"/>
+</marker>
+<style>
+.roof-outline { fill: #f5f5f5; stroke: #333; stroke-width: 6; }
+.building-outline { fill: none; stroke: #999; stroke-width: 2; stroke-dasharray: 30,15; }
+.ridge { stroke: #000; stroke-width: 8; stroke-linecap: round; }
+.hip { stroke: #000; stroke-width: 5; stroke-dasharray: 50,25; }
+.valley { stroke: #000; stroke-width: 5; stroke-dasharray: 25,12; }
+.eave { stroke: #555; stroke-width: 4; }
+.rake { stroke: #555; stroke-width: 4; stroke-dasharray: 40,20; }
+.drainage { stroke: #2196F3; stroke-width: 4; }
+.gutter { stroke: #795548; stroke-width: 10; stroke-linecap: round; }
+.downspout { fill: #795548; stroke: #5D4037; stroke-width: 2; }
+.skylight { fill: none; stroke: #00BCD4; stroke-width: 6; }
+.skylight-x { stroke: #00BCD4; stroke-width: 2; }
+.grid-line { stroke: #ddd; stroke-width: 2; stroke-dasharray: 60,30; }
+.grid-bubble { fill: white; stroke: #000; stroke-width: 4; }
+.grid-label { font: bold 280px Arial; text-anchor: middle; dominant-baseline: central; }
+.title { font: bold 400px Arial; }
+.subtitle { font: 250px Arial; fill: #666; }
+.pitch-label { font: bold 240px Arial; }
+.annotation { font: 180px Arial; }
+.dim-line { stroke: #000; stroke-width: 3; }
+.dim-ext { stroke: #000; stroke-width: 2; }
+.dim-text { font: 160px Arial; text-anchor: middle; }
+.legend-text { font: 160px Arial; }
+.legend-title { font: bold 200px Arial; }
+</style>
+</defs>
+<rect x="-4600" y="-4600" width="23682.165722668637" height="26095.860009780074" fill="white"/>
+
+<text x="7241.082861334317" y="-4100" class="title" text-anchor="middle">ROOF PLAN</text>
+<text x="7241.082861334317" y="-3700" class="subtitle" text-anchor="middle">Scale: 1:100 | Hip Roof - 6:12 Pitch</text>
+<!-- Roof Outline -->
+<rect x="-600" y="-600" width="15682.165722668635" height="18095.860009780074" class="roof-outline"/>
+<!-- Building Outline -->
+<rect x="0" y="0" width="14482.165722668635" height="16895.860009780074" class="building-outline"/>
+<!-- Hip Roof Elements -->
+<line x1="8447.930004890037" y1="8447.930004890037" x2="6034.235717778598" y2="8447.930004890037" class="ridge"/>
+<line x1="-600" y1="-600" x2="8447.930004890037" y2="8447.930004890037" class="hip"/>
+<line x1="-600" y1="17495.860009780074" x2="8447.930004890037" y2="8447.930004890037" class="hip"/>
+<line x1="15082.165722668635" y1="-600" x2="6034.235717778598" y2="8447.930004890037" class="hip"/>
+<line x1="15082.165722668635" y1="17495.860009780074" x2="6034.235717778598" y2="8447.930004890037" class="hip"/>
+<line x1="-600" y1="-600" x2="15082.165722668635" y2="-600" class="eave"/>
+<line x1="-600" y1="17495.860009780074" x2="15082.165722668635" y2="17495.860009780074" class="eave"/>
+<line x1="-600" y1="-600" x2="-600" y2="17495.860009780074" class="eave"/>
+<line x1="15082.165722668635" y1="-600" x2="15082.165722668635" y2="17495.860009780074" class="eave"/>
+<line x1="7241.082861334317" y1="8047.930004890037" x2="7241.082861334317" y2="-300" class="drainage" marker-end="url(#arrow-drain)"/>
+<line x1="7241.082861334317" y1="8847.930004890037" x2="7241.082861334317" y2="17195.860009780074" class="drainage" marker-end="url(#arrow-drain)"/>
+<line x1="8047.930004890037" y1="8447.930004890037" x2="-300" y2="8447.930004890037" class="drainage" marker-end="url(#arrow-drain)"/>
+<line x1="6434.235717778598" y1="8447.930004890037" x2="14782.165722668635" y2="8447.930004890037" class="drainage" marker-end="url(#arrow-drain)"/>
+<g transform="translate(6741.082861334317, 4223.965002445018)">
+  <path d="M 0 300.0 L 600 300.0 L 600 0 Z" fill="none" stroke="black" stroke-width="4"/>
+  <text x="300.0" y="600.0" class="pitch-label" text-anchor="middle">6:12</text>
+</g>
+<!-- Skylights -->
+<rect x="8813.407719734612" y="10532.309006357049" width="1200" height="900" class="skylight"/>
+<line x1="8813.407719734612" y1="10532.309006357049" x2="10013.407719734612" y2="11432.309006357049" class="skylight-x"/>
+<line x1="10013.407719734612" y1="10532.309006357049" x2="8813.407719734612" y2="11432.309006357049" class="skylight-x"/>
+<text x="9413.407719734612" y="11732.309006357049" class="annotation" text-anchor="middle">SKYLIGHT</text>
+<text x="9413.407719734612" y="11932.309006357049" class="annotation" text-anchor="middle">1200 x 900</text>
+<!-- Gutters and Downspouts -->
+<line x1="-600" y1="-600" x2="15082.165722668635" y2="-600" class="gutter"/>
+<line x1="-600" y1="17495.860009780074" x2="15082.165722668635" y2="17495.860009780074" class="gutter"/>
+<circle cx="-400" cy="-600" r="100" class="downspout"/>
+<text x="-400" y="-900" class="annotation" text-anchor="middle">DS</text>
+<circle cx="14882.165722668635" cy="-600" r="100" class="downspout"/>
+<text x="14882.165722668635" y="-900" class="annotation" text-anchor="middle">DS</text>
+<circle cx="-400" cy="17495.860009780074" r="100" class="downspout"/>
+<text x="-400" y="17845.860009780074" class="annotation" text-anchor="middle">DS</text>
+<circle cx="14882.165722668635" cy="17495.860009780074" r="100" class="downspout"/>
+<text x="14882.165722668635" y="17845.860009780074" class="annotation" text-anchor="middle">DS</text>
+<!-- Roof Dimensions -->
+<g>
+  <line x1="-600" y1="-1400" x2="15082.165722668635" y2="-1400" class="dim-line"/>
+  <line x1="-600" y1="-1300" x2="-600" y2="-1500" class="dim-ext"/>
+  <line x1="15082.165722668635" y1="-1300" x2="15082.165722668635" y2="-1500" class="dim-ext"/>
+  <text x="7241.082861334317" y="-1450" class="dim-text">15682</text>
+</g>
+<text x="7241.082861334317" y="-1700" class="annotation" text-anchor="middle">(incl. 600mm overhang)</text>
+<g>
+  <line x1="15882.165722668635" y1="-600" x2="15882.165722668635" y2="17495.860009780074" class="dim-line"/>
+  <line x1="15782.165722668635" y1="-600" x2="15982.165722668635" y2="-600" class="dim-ext"/>
+  <line x1="15782.165722668635" y1="17495.860009780074" x2="15982.165722668635" y2="17495.860009780074" class="dim-ext"/>
+  <text x="15932.165722668635" y="8447.930004890037" class="dim-text" writing-mode="tb">18095</text>
+</g>
+<g>
+  <line x1="0" y1="-2200" x2="14482.165722668635" y2="-2200" class="dim-line"/>
+  <line x1="0" y1="-2100" x2="0" y2="-2300" class="dim-ext"/>
+  <line x1="14482.165722668635" y1="-2100" x2="14482.165722668635" y2="-2300" class="dim-ext"/>
+  <text x="7241.082861334317" y="-2250" class="dim-text">14482</text>
+</g>
+<!-- North Arrow -->
+<g transform="translate(18082.165722668637, 1500)">
+  <circle cx="0" cy="0" r="400" fill="none" stroke="#000" stroke-width="4"/>
+  <polygon points="0,-300 -80,200 0,80 80,200" fill="black"/>
+  <text x="0" y="-450" class="grid-label" text-anchor="middle">N</text>
+</g>
+<!-- Legend -->
+<g transform="translate(-4100, 18295.860009780074)">
+  <text x="0" y="0" class="legend-title">LEGEND:</text>
+
+  <line x1="0" y1="350" x2="400" y2="350" class="ridge"/>
+  <text x="500" y="380" class="legend-text">Ridge</text>
+
+  <line x1="0" y1="550" x2="400" y2="550" class="eave"/>
+  <text x="500" y="580" class="legend-text">Eave</text>
+
+  <line x1="0" y1="750" x2="400" y2="750" class="rake"/>
+  <text x="500" y="780" class="legend-text">Rake</text>
+
+  <line x1="0" y1="950" x2="400" y2="950" class="hip"/>
+  <text x="500" y="980" class="legend-text">Hip/Valley</text>
+
+  <line x1="0" y1="1150" x2="400" y2="1150" class="gutter"/>
+  <text x="500" y="1180" class="legend-text">Gutter</text>
+
+  <line x1="0" y1="1350" x2="400" y2="1350" class="drainage" marker-end="url(#arrow-drain)"/>
+  <text x="500" y="1380" class="legend-text">Drainage</text>
+
+  <circle cx="80" cy="1550" r="80" class="downspout"/>
+  <text x="500" y="1580" class="legend-text">Downspout</text>
+</g>
+<!-- Roof Areas -->
+<g transform="translate(8741.082861334318, 18295.860009780074)">
+  <text x="0" y="0" class="legend-title">ROOF AREAS:</text>
+  <text x="0" y="350" class="annotation">North Slope: 158.6 m&#178; (6:12 pitch)</text>
+  <text x="0" y="550" class="annotation">South Slope: 158.6 m&#178; (6:12 pitch)</text>
+  <text x="0" y="750" class="annotation">Total Roof Area: 317.3 m&#178;</text>
+  <text x="0" y="950" class="annotation">Slope Factor: 1.118</text>
+</g>
+<!-- Scale Bar -->
+<g transform="translate(6241.082861334317, 19995.860009780074)">
+  <text x="0" y="-80" style="font: 180px Arial;">SCALE 1:100</text>
+  <rect x="0" y="0" width="1000" height="80" fill="black"/>
+  <rect x="1000" y="0" width="1000" height="80" fill="white" stroke="black" stroke-width="2"/>
+  <text x="0" y="180" style="font: 140px Arial;">0</text>
+  <text x="1000" y="180" style="font: 140px Arial;">1m</text>
+  <text x="2000" y="180" style="font: 140px Arial;">2m</text>
+</g>
+<!-- Title Block -->
+<g id="title-block">
+  <!-- Drawing Border -->
+  <rect x="-3700" y="-3700" width="23082.165722668637" height="25495.860009780074"
+        fill="none" stroke="#000" stroke-width="8"/>
+
+  <!-- Inner Border -->
+  <rect x="-3650" y="-3650" width="22982.165722668637" height="25395.860009780074"
+        fill="none" stroke="#000" stroke-width="2"/>
+
+  <!-- Title Block Box -->
+  <rect x="15282.165722668637" y="20495.860009780074" width="4000" height="1200"
+        fill="white" stroke="#000" stroke-width="4"/>
+
+  <!-- Title Block Grid Lines -->
+  <!-- Horizontal dividers -->
+  <line x1="15282.165722668637" y1="20795.860009780074" x2="19282.165722668637" y2="20795.860009780074" stroke="#000" stroke-width="2"/>
+  <line x1="15282.165722668637" y1="21095.860009780074" x2="19282.165722668637" y2="21095.860009780074" stroke="#000" stroke-width="2"/>
+  <line x1="15282.165722668637" y1="21395.860009780074" x2="19282.165722668637" y2="21395.860009780074" stroke="#000" stroke-width="2"/>
+
+  <!-- Vertical dividers -->
+  <line x1="17282.165722668637" y1="21095.860009780074" x2="17282.165722668637" y2="21695.860009780074" stroke="#000" stroke-width="2"/>
+  <line x1="18282.165722668637" y1="21095.860009780074" x2="18282.165722668637" y2="21695.860009780074" stroke="#000" stroke-width="2"/>
+
+  <!-- Project Name (large, top row) -->
+  <text x="17282.165722668637" y="20695.860009780074"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">3 BEDROOM 2 BATH TRADITIONAL HOUSE WITH </text>
+
+  <!-- Project Address -->
+  <text x="17282.165722668637" y="20945.860009780074"
+        font-family="Arial" font-size="120" text-anchor="middle" fill="#333"></text>
+
+  <!-- Client Name -->
+  <text x="17282.165722668637" y="21045.860009780074"
+        font-family="Arial" font-size="100" text-anchor="middle" fill="#666"></text>
+
+  <!-- Drawing Title (large) -->
+  <text x="16282.165722668637" y="21295.860009780074"
+        font-family="Arial" font-size="180" font-weight="bold" text-anchor="middle">ROOF PLAN</text>
+
+  <!-- Labels and Values Row -->
+  <!-- Scale -->
+  <text x="15382.165722668637" y="21465.860009780074"
+        font-family="Arial" font-size="80" fill="#666">SCALE</text>
+  <text x="15382.165722668637" y="21595.860009780074"
+        font-family="Arial" font-size="120" font-weight="bold">1:100</text>
+
+  <!-- Date -->
+  <text x="15982.165722668637" y="21465.860009780074"
+        font-family="Arial" font-size="80" fill="#666">DATE</text>
+  <text x="15982.165722668637" y="21595.860009780074"
+        font-family="Arial" font-size="120">2025-12-22</text>
+
+  <!-- Drawn By -->
+  <text x="16682.165722668637" y="21465.860009780074"
+        font-family="Arial" font-size="80" fill="#666">DRAWN</text>
+  <text x="16682.165722668637" y="21595.860009780074"
+        font-family="Arial" font-size="120">AE</text>
+
+  <!-- Drawing Number -->
+  <text x="17382.165722668637" y="21195.860009780074"
+        font-family="Arial" font-size="80" fill="#666">DWG NO.</text>
+  <text x="17782.165722668637" y="21345.860009780074"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">A-102</text>
+
+  <!-- Project Number -->
+  <text x="17382.165722668637" y="21465.860009780074"
+        font-family="Arial" font-size="80" fill="#666">PROJECT</text>
+  <text x="17382.165722668637" y="21595.860009780074"
+        font-family="Arial" font-size="100">263b5fd8</text>
+
+  <!-- Revision -->
+  <text x="18382.165722668637" y="21195.860009780074"
+        font-family="Arial" font-size="80" fill="#666">REV</text>
+  <text x="18782.165722668637" y="21345.860009780074"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">-</text>
+
+  <!-- Sheet Info -->
+  <text x="18382.165722668637" y="21465.860009780074"
+        font-family="Arial" font-size="80" fill="#666">SHEET</text>
+  <text x="18382.165722668637" y="21595.860009780074"
+        font-family="Arial" font-size="100">2 OF 8</text>
+
+</g>
+</svg>

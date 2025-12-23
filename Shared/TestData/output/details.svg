@@ -1,0 +1,278 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1000" height="750"
+     viewBox="0 0 16000 12000">
+<rect width="100%" height="100%" fill="white"/>
+<defs>
+
+    <!-- Wood (diagonal lines) -->
+    <pattern id="hatch-wood" patternUnits="userSpaceOnUse" width="6" height="6">
+      <path d="M0,6 L6,0 M-1,1 L1,-1 M5,7 L7,5" stroke="#8B4513" stroke-width="0.5" fill="none"/>
+    </pattern>
+    <!-- Insulation (wavy lines) -->
+    <pattern id="hatch-insulation" patternUnits="userSpaceOnUse" width="10" height="5">
+      <path d="M0,2.5 Q2.5,0 5,2.5 Q7.5,5 10,2.5" stroke="#E8A0B0" stroke-width="0.8" fill="none"/>
+    </pattern>
+    <!-- Plywood/OSB (cross-hatch) -->
+    <pattern id="hatch-plywood" patternUnits="userSpaceOnUse" width="5" height="5">
+      <path d="M0,0 L5,5 M5,0 L0,5" stroke="#C4A86B" stroke-width="0.4" fill="none"/>
+    </pattern>
+    <!-- Gypsum/Drywall (dots) -->
+    <pattern id="hatch-gypsum" patternUnits="userSpaceOnUse" width="4" height="4">
+      <circle cx="2" cy="2" r="0.6" fill="#AAA"/>
+    </pattern>
+    <!-- Concrete (random dots) -->
+    <pattern id="hatch-concrete" patternUnits="userSpaceOnUse" width="8" height="8">
+      <circle cx="1.5" cy="1.5" r="0.8" fill="#777"/>
+      <circle cx="5.5" cy="4" r="1.1" fill="#777"/>
+      <circle cx="3" cy="6.5" r="0.7" fill="#777"/>
+      <circle cx="6.5" cy="7" r="0.5" fill="#777"/>
+    </pattern>
+    <!-- Earth/Gravel (stipple) -->
+    <pattern id="hatch-earth" patternUnits="userSpaceOnUse" width="10" height="10">
+      <circle cx="2" cy="3" r="1.2" fill="#A08060"/>
+      <circle cx="7" cy="2" r="0.8" fill="#907050"/>
+      <circle cx="5" cy="6" r="1.0" fill="#A08060"/>
+      <circle cx="8" cy="8" r="0.7" fill="#907050"/>
+      <circle cx="1" cy="8" r="0.9" fill="#A08060"/>
+    </pattern>
+    <!-- Rigid insulation (horizontal lines) -->
+    <pattern id="hatch-rigid" patternUnits="userSpaceOnUse" width="4" height="4">
+      <line x1="0" y1="2" x2="4" y2="2" stroke="#7AC5E8" stroke-width="0.5"/>
+    </pattern>
+    <!-- Metal (solid gray) -->
+    <pattern id="hatch-metal" patternUnits="userSpaceOnUse" width="4" height="4">
+      <rect width="4" height="4" fill="#B0B0B0"/>
+    </pattern>
+    <!-- Air gap (empty) -->
+    <pattern id="hatch-air" patternUnits="userSpaceOnUse" width="4" height="4">
+      <rect width="4" height="4" fill="#FAFAFA"/>
+    </pattern>
+    <!-- Siding (horizontal lines) -->
+    <pattern id="hatch-siding" patternUnits="userSpaceOnUse" width="20" height="8">
+      <line x1="0" y1="7" x2="20" y2="7" stroke="#666" stroke-width="0.5"/>
+      <rect width="20" height="8" fill="#E8E0D8"/>
+    </pattern>
+    <!-- Brick -->
+    <pattern id="hatch-brick" patternUnits="userSpaceOnUse" width="16" height="8">
+      <rect width="16" height="8" fill="#C4755C"/>
+      <line x1="0" y1="4" x2="16" y2="4" stroke="#8B4513" stroke-width="0.5"/>
+      <line x1="8" y1="0" x2="8" y2="4" stroke="#8B4513" stroke-width="0.5"/>
+      <line x1="0" y1="8" x2="0" y2="4" stroke="#8B4513" stroke-width="0.5"/>
+      <line x1="16" y1="8" x2="16" y2="4" stroke="#8B4513" stroke-width="0.5"/>
+    </pattern>
+    <!-- Roofing/Shingles -->
+    <pattern id="hatch-roofing" patternUnits="userSpaceOnUse" width="12" height="6">
+      <rect width="12" height="6" fill="#505050"/>
+      <line x1="0" y1="5" x2="12" y2="5" stroke="#333" stroke-width="0.5"/>
+      <line x1="6" y1="0" x2="6" y2="5" stroke="#333" stroke-width="0.3"/>
+    </pattern>
+
+</defs>
+<style>
+    .detail-title { font-family: Arial, sans-serif; font-size: 200px; font-weight: bold; fill: #333; }
+    .detail-scale { font-family: Arial, sans-serif; font-size: 120px; fill: #666; }
+    .detail-number { font-family: Arial, sans-serif; font-size: 160px; font-weight: bold; fill: #333; }
+</style>
+<text x="8000.0" y="400" text-anchor="middle" class="detail-title">CONSTRUCTION DETAILS</text>
+<rect x="900" y="1900" width="5000" height="10000" fill="none" stroke="#ccc" stroke-width="2"/>
+<text x="3400.0" y="1950" text-anchor="middle" class="detail-number">1</text>
+<text x="3400.0" y="11750" text-anchor="middle" font-family="Arial" font-size="140" font-weight="bold">TYPICAL WALL SECTION</text>
+<text x="3400.0" y="11880" text-anchor="middle" class="detail-scale">SCALE: 1:10</text>
+<g transform="translate(1000, 2000) scale(8)">
+  <rect x="31.0" y="1150" width="538" height="200" fill="url(#hatch-concrete)" stroke="#000" stroke-width="1.5"/>
+  <rect x="131.0" y="850" width="338" height="300" fill="url(#hatch-concrete)" stroke="#000" stroke-width="1.5"/>
+  <rect x="0" y="900" width="111.0" height="450" fill="url(#hatch-earth)" stroke="none"/>
+  <rect x="489.0" y="900" width="111.0" height="450" fill="url(#hatch-earth)" stroke="none"/>
+  <rect x="131.0" y="800" width="338" height="100" fill="url(#hatch-concrete)" stroke="#000" stroke-width="1"/>
+  <rect x="206.0" y="150" width="20" height="650" fill="url(#hatch-siding)" stroke="#000" stroke-width="0.5"/>
+  <rect x="226.0" y="150" width="12" height="650" fill="url(#hatch-plywood)" stroke="#000" stroke-width="0.5"/>
+  <rect x="238.0" y="150" width="140" height="650" fill="url(#hatch-insulation)" stroke="#000" stroke-width="0.5"/>
+  <rect x="378.0" y="150" width="16" height="650" fill="url(#hatch-gypsum)" stroke="#000" stroke-width="0.5"/>
+  <rect x="206.0" y="150" width="188" height="650" fill="none" stroke="#000" stroke-width="1.5"/>
+  <rect x="226.0" y="150" width="148" height="40" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <rect x="226.0" y="190" width="148" height="40" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <rect x="156.0" y="100" width="338" height="50" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <rect x="378.0" y="230" width="16" height="100" fill="url(#hatch-gypsum)" stroke="#000" stroke-width="0.5"/>
+  <line x1="378.0" y1="330" x2="600" y2="330" stroke="#000" stroke-width="0.5" stroke-dasharray="5,3"/>
+  <line x1="206.0" y1="850" x2="394.0" y2="850" stroke="#000" stroke-width="0.5"/>
+  <line x1="206.0" y1="840" x2="206.0" y2="860" stroke="#000" stroke-width="0.5"/>
+  <line x1="394.0" y1="840" x2="394.0" y2="860" stroke="#000" stroke-width="0.5"/>
+  <text x="300.0" y="875" font-family="Arial" font-size="12" text-anchor="middle">188mm</text>
+  <line x1="394.0" y1="200.0" x2="424.0" y2="200.0" stroke="#666" stroke-width="0.5"/>
+  <text x="429.0" y="204.0" font-family="Arial" font-size="9" fill="#333">Lap Siding</text>
+  <line x1="394.0" y1="337.5" x2="424.0" y2="337.5" stroke="#666" stroke-width="0.5"/>
+  <text x="429.0" y="341.5" font-family="Arial" font-size="9" fill="#333">OSB Sheathing</text>
+  <line x1="394.0" y1="475.0" x2="424.0" y2="475.0" stroke="#666" stroke-width="0.5"/>
+  <text x="429.0" y="479.0" font-family="Arial" font-size="9" fill="#333">2x6 Stud w/ Batt</text>
+  <line x1="394.0" y1="612.5" x2="424.0" y2="612.5" stroke="#666" stroke-width="0.5"/>
+  <text x="429.0" y="616.5" font-family="Arial" font-size="9" fill="#333">5/8" Gypsum</text>
+  <text x="300.0" y="1370" font-family="Arial" font-size="10" text-anchor="middle">CONTINUOUS FOOTING</text>
+</g>
+<rect x="8400.0" y="1900" width="3400" height="3200" fill="none" stroke="#ccc" stroke-width="2"/>
+<text x="10100.0" y="1950" text-anchor="middle" class="detail-number">2</text>
+<text x="10100.0" y="4950" text-anchor="middle" font-family="Arial" font-size="140" font-weight="bold">EAVE DETAIL</text>
+<text x="10100.0" y="5080" text-anchor="middle" class="detail-scale">SCALE: 1:5</text>
+<g transform="translate(8500.0, 2000) scale(8)">
+  <polygon points="50,200 350,100.0 350,138.0 50,238" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <polygon points="50,188 350,88.0 350,100.0 50,200" fill="url(#hatch-plywood)" stroke="#000" stroke-width="0.5"/>
+  <polygon points="50,180 350,80.0 350,88.0 50,188" fill="url(#hatch-roofing)" stroke="#000" stroke-width="0.5"/>
+  <path d="M 50,180 L 40,180 L 40,220" fill="none" stroke="#000" stroke-width="1.5"/>
+  <rect x="25" y="200" width="25" height="150" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <rect x="25" y="335" width="120" height="12" fill="url(#hatch-plywood)" stroke="#000" stroke-width="0.5"/>
+  <rect x="130" y="347" width="150" height="-17" fill="url(#hatch-insulation)" stroke="#000" stroke-width="1"/>
+  <rect x="130" y="347" width="100" height="38" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <rect x="130" y="385" width="100" height="38" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <rect x="118" y="423" width="12" height="-93" fill="url(#hatch-plywood)" stroke="#000" stroke-width="0.5"/>
+  <text x="300" y="70.0" font-family="Arial" font-size="9" fill="#333">ASPHALT SHINGLES</text>
+  <text x="150" y="225" font-family="Arial" font-size="9" fill="#333">2x8 RAFTER</text>
+  <text x="20" y="280" font-family="Arial" font-size="9" fill="#333" text-anchor="end">1x8 FASCIA</text>
+  <text x="80" y="365" font-family="Arial" font-size="9" fill="#333">SOFFIT</text>
+</g>
+<rect x="900" y="6400.0" width="4200" height="3600" fill="none" stroke="#ccc" stroke-width="2"/>
+<text x="3000.0" y="6450.0" text-anchor="middle" class="detail-number">3</text>
+<text x="3000.0" y="9850.0" text-anchor="middle" font-family="Arial" font-size="140" font-weight="bold">WINDOW DETAILS</text>
+<text x="3000.0" y="9980.0" text-anchor="middle" class="detail-scale">SCALE: 1:5</text>
+<g transform="translate(1000, 6500.0) scale(8)">
+  <text x="100.0" y="40" font-family="Arial" font-size="11" font-weight="bold" text-anchor="middle">HEAD</text>
+  <rect x="30" y="50" width="140" height="40" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <text x="175" y="75" font-family="Arial" font-size="8">2x10 HEADER</text>
+  <rect x="30" y="90" width="12" height="80" fill="url(#hatch-plywood)" stroke="#000" stroke-width="0.5"/>
+  <rect x="45" y="95" width="110" height="25" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <text x="175" y="110" font-family="Arial" font-size="8">WINDOW FRAME</text>
+  <rect x="55" y="120" width="90" height="45" fill="#E8F4FC" stroke="#000" stroke-width="1"/>
+  <line x1="55" y1="142.5" x2="145" y2="142.5" stroke="#666" stroke-width="0.5"/>
+  <rect x="150" y="90" width="20" height="80" fill="url(#hatch-wood)" stroke="#000" stroke-width="0.5"/>
+  <text x="310.0" y="40" font-family="Arial" font-size="11" font-weight="bold" text-anchor="middle">JAMB</text>
+  <rect x="240" y="50" width="38" height="120" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <text x="259" y="185" font-family="Arial" font-size="8" text-anchor="middle">KING STUD</text>
+  <rect x="280" y="70" width="38" height="100" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <text x="299" y="185" font-family="Arial" font-size="8" text-anchor="middle">JACK</text>
+  <rect x="320" y="75" width="25" height="90" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <rect x="347" y="80" width="28" height="80" fill="#E8F4FC" stroke="#000" stroke-width="1"/>
+  <text x="520.0" y="40" font-family="Arial" font-size="11" font-weight="bold" text-anchor="middle">SILL</text>
+  <rect x="450" y="110" width="140" height="60" fill="url(#hatch-insulation)" stroke="#000" stroke-width="1"/>
+  <rect x="450" y="110" width="12" height="60" fill="url(#hatch-plywood)" stroke="#000" stroke-width="0.5"/>
+  <polygon points="465,105 570,105 580,115 455,115" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <text x="595" y="112" font-family="Arial" font-size="8">SLOPED SILL</text>
+  <rect x="470" y="80" width="100" height="25" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <rect x="475" y="50" width="90" height="30" fill="#E8F4FC" stroke="#000" stroke-width="1"/>
+  <rect x="570" y="105" width="20" height="65" fill="url(#hatch-wood)" stroke="#000" stroke-width="0.5"/>
+  <rect x="550" y="105" width="40" height="15" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <text x="595" y="140" font-family="Arial" font-size="8">STOOL</text>
+</g>
+<rect x="8400.0" y="6400.0" width="3400" height="3200" fill="none" stroke="#ccc" stroke-width="2"/>
+<text x="10100.0" y="6450.0" text-anchor="middle" class="detail-number">4</text>
+<text x="10100.0" y="9450.0" text-anchor="middle" font-family="Arial" font-size="140" font-weight="bold">DOOR DETAILS</text>
+<text x="10100.0" y="9580.0" text-anchor="middle" class="detail-scale">SCALE: 1:5</text>
+<g transform="translate(8500.0, 6500.0) scale(8)">
+  <text x="110.0" y="40" font-family="Arial" font-size="11" font-weight="bold" text-anchor="middle">DOOR HEAD</text>
+  <rect x="30" y="50" width="160" height="38" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <rect x="30" y="88" width="160" height="38" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <text x="195" y="95" font-family="Arial" font-size="8">(2) 2x10 HEADER</text>
+  <rect x="90" y="20" width="38" height="30" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <text x="195" y="40" font-family="Arial" font-size="8">CRIPPLE</text>
+  <rect x="50" y="130" width="120" height="30" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <text x="195" y="150" font-family="Arial" font-size="8">DOOR FRAME</text>
+  <rect x="60" y="160" width="100" height="30" fill="#F5F0E8" stroke="#000" stroke-width="1.5"/>
+  <rect x="165" y="126" width="25" height="64" fill="url(#hatch-wood)" stroke="#000" stroke-width="0.5"/>
+  <text x="195" y="180" font-family="Arial" font-size="8">CASING</text>
+  <text x="350.0" y="40" font-family="Arial" font-size="11" font-weight="bold" text-anchor="middle">THRESHOLD</text>
+  <rect x="270" y="130" width="160" height="18" fill="url(#hatch-plywood)" stroke="#000" stroke-width="1"/>
+  <text x="265" y="142" font-family="Arial" font-size="8" text-anchor="end">SUBFLOOR</text>
+  <rect x="290" y="148" width="38" height="42" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <rect x="372" y="148" width="38" height="42" fill="url(#hatch-wood)" stroke="#000" stroke-width="1"/>
+  <polygon points="310,115 390,115 395,130 305,130" fill="url(#hatch-metal)" stroke="#000" stroke-width="1"/>
+  <text x="435" y="125" font-family="Arial" font-size="8">THRESHOLD</text>
+  <rect x="320" y="50" width="60" height="65" fill="#F5F0E8" stroke="#000" stroke-width="1.5"/>
+  <text x="350.0" y="85" font-family="Arial" font-size="9" text-anchor="middle">DOOR</text>
+  <ellipse cx="318" cy="117" rx="3" ry="5" fill="#333" stroke="none"/>
+  <text x="435" y="105" font-family="Arial" font-size="8">WEATHERSTRIP</text>
+  <rect x="400" y="120" width="30" height="10" fill="url(#hatch-wood)" stroke="#000" stroke-width="0.5"/>
+  <text x="435" y="145" font-family="Arial" font-size="8">FIN. FLOOR</text>
+</g>
+<!-- Title Block -->
+<g id="title-block">
+  <!-- Drawing Border -->
+  <rect x="-200" y="-200" width="15400" height="11400"
+        fill="none" stroke="#000" stroke-width="8"/>
+
+  <!-- Inner Border -->
+  <rect x="-150" y="-150" width="15300" height="11300"
+        fill="none" stroke="#000" stroke-width="2"/>
+
+  <!-- Title Block Box -->
+  <rect x="11100" y="9900" width="4000" height="1200"
+        fill="white" stroke="#000" stroke-width="4"/>
+
+  <!-- Title Block Grid Lines -->
+  <!-- Horizontal dividers -->
+  <line x1="11100" y1="10200" x2="15100" y2="10200" stroke="#000" stroke-width="2"/>
+  <line x1="11100" y1="10500" x2="15100" y2="10500" stroke="#000" stroke-width="2"/>
+  <line x1="11100" y1="10800" x2="15100" y2="10800" stroke="#000" stroke-width="2"/>
+
+  <!-- Vertical dividers -->
+  <line x1="13100" y1="10500" x2="13100" y2="11100" stroke="#000" stroke-width="2"/>
+  <line x1="14100" y1="10500" x2="14100" y2="11100" stroke="#000" stroke-width="2"/>
+
+  <!-- Project Name (large, top row) -->
+  <text x="13100.0" y="10100"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">3 BEDROOM 2 BATH TRADITIONAL HOUSE WITH </text>
+
+  <!-- Project Address -->
+  <text x="13100.0" y="10350"
+        font-family="Arial" font-size="120" text-anchor="middle" fill="#333"></text>
+
+  <!-- Client Name -->
+  <text x="13100.0" y="10450"
+        font-family="Arial" font-size="100" text-anchor="middle" fill="#666"></text>
+
+  <!-- Drawing Title (large) -->
+  <text x="12100" y="10700"
+        font-family="Arial" font-size="180" font-weight="bold" text-anchor="middle">CONSTRUCTION DETAILS</text>
+
+  <!-- Labels and Values Row -->
+  <!-- Scale -->
+  <text x="11200" y="10870"
+        font-family="Arial" font-size="80" fill="#666">SCALE</text>
+  <text x="11200" y="11000"
+        font-family="Arial" font-size="120" font-weight="bold">AS NOTED</text>
+
+  <!-- Date -->
+  <text x="11800" y="10870"
+        font-family="Arial" font-size="80" fill="#666">DATE</text>
+  <text x="11800" y="11000"
+        font-family="Arial" font-size="120">2025-12-22</text>
+
+  <!-- Drawn By -->
+  <text x="12500" y="10870"
+        font-family="Arial" font-size="80" fill="#666">DRAWN</text>
+  <text x="12500" y="11000"
+        font-family="Arial" font-size="120">AE</text>
+
+  <!-- Drawing Number -->
+  <text x="13200" y="10600"
+        font-family="Arial" font-size="80" fill="#666">DWG NO.</text>
+  <text x="13600" y="10750"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">A-501</text>
+
+  <!-- Project Number -->
+  <text x="13200" y="10870"
+        font-family="Arial" font-size="80" fill="#666">PROJECT</text>
+  <text x="13200" y="11000"
+        font-family="Arial" font-size="100">263b5fd8</text>
+
+  <!-- Revision -->
+  <text x="14200" y="10600"
+        font-family="Arial" font-size="80" fill="#666">REV</text>
+  <text x="14600" y="10750"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">-</text>
+
+  <!-- Sheet Info -->
+  <text x="14200" y="10870"
+        font-family="Arial" font-size="80" fill="#666">SHEET</text>
+  <text x="14200" y="11000"
+        font-family="Arial" font-size="100">1 OF 1</text>
+
+</g>
+</svg>

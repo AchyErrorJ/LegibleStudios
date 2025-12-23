@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 999 571">
+  <title>South Elevation</title>
+  <rect width="100%" height="100%" fill="white"/>
+  <style>
+    .wall { fill: #f5f5f5; stroke: #333; stroke-width: 1.5; }
+    .wall-outline { fill: none; stroke: #333; stroke-width: 2; }
+    .opening { fill: white; stroke: #333; stroke-width: 1; }
+    .door { fill: #d4a574; stroke: #333; stroke-width: 1; }
+    .window-frame { fill: none; stroke: #333; stroke-width: 1.5; }
+    .window-glass { fill: #cce5ff; stroke: #666; stroke-width: 0.5; }
+    .window-mullion { stroke: #333; stroke-width: 1; }
+    .roof { fill: none; stroke: #333; stroke-width: 2; }
+    .level-line { stroke: #999; stroke-width: 0.5; stroke-dasharray: 5,5; }
+    .level-line-major { stroke: #666; stroke-width: 1; stroke-dasharray: none; }
+    .level-text { font-family: Arial, sans-serif; font-size: 10px; fill: #666; }
+    .title { font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; fill: #333; }
+    .dimension { font-family: Arial, sans-serif; font-size: 9px; fill: #333; }
+    .ground { fill: #e8e8e8; }
+    .grade-line { stroke: #666; stroke-width: 2; }
+  </style>
+  <rect x="110.0" y="521.1982501222509" width="764.1082861334318" height="20" class="ground"/>
+  <line x1="110.0" y1="521.1982501222509" x2="874.1082861334318" y2="521.1982501222509" class="grade-line"/>
+  <rect x="130.0" y="386.2" width="724.1" height="135.0" class="wall"/>
+  <rect x="207.2" y="414.5" width="45.7" height="106.7" class="door"/>
+  <rect x="207.2" y="414.5" width="45.7" height="106.7" class="window-frame"/>
+  <circle cx="246.0" cy="467.8" r="3" fill="#666"/>
+  <rect x="244.8" y="416.2" width="60.0" height="60.0" class="window-glass"/>
+  <rect x="244.8" y="416.2" width="60.0" height="60.0" class="window-frame"/>
+  <line x1="244.8" y1="446.2" x2="304.8" y2="446.2" class="window-mullion"/>
+  <line x1="239.8" y1="476.2" x2="309.8" y2="476.2" stroke="#333" stroke-width="2"/>
+  <rect x="389.6" y="416.2" width="60.0" height="60.0" class="window-glass"/>
+  <rect x="389.6" y="416.2" width="60.0" height="60.0" class="window-frame"/>
+  <line x1="389.6" y1="446.2" x2="449.6" y2="446.2" class="window-mullion"/>
+  <line x1="384.6" y1="476.2" x2="454.6" y2="476.2" stroke="#333" stroke-width="2"/>
+  <rect x="534.5" y="416.2" width="60.0" height="60.0" class="window-glass"/>
+  <rect x="534.5" y="416.2" width="60.0" height="60.0" class="window-frame"/>
+  <line x1="534.5" y1="446.2" x2="594.5" y2="446.2" class="window-mullion"/>
+  <line x1="529.5" y1="476.2" x2="599.5" y2="476.2" stroke="#333" stroke-width="2"/>
+  <rect x="679.3" y="416.2" width="60.0" height="60.0" class="window-glass"/>
+  <rect x="679.3" y="416.2" width="60.0" height="60.0" class="window-frame"/>
+  <line x1="679.3" y1="446.2" x2="739.3" y2="446.2" class="window-mullion"/>
+  <line x1="674.3" y1="476.2" x2="744.3" y2="476.2" stroke="#333" stroke-width="2"/>
+  <line x1="100.0" y1="386.2" x2="492.1" y2="175.0" class="roof"/>
+  <line x1="492.1" y1="175.0" x2="492.1" y2="175.0" class="roof"/>
+  <line x1="492.1" y1="175.0" x2="100.0" y2="386.2" class="roof"/>
+  <line x1="100.0" y1="386.2" x2="100.0" y2="386.2" class="roof"/>
+  <line x1="884.1" y1="386.2" x2="884.1" y2="386.2" class="roof"/>
+  <line x1="884.1" y1="386.2" x2="492.1" y2="175.0" class="roof"/>
+  <line x1="492.1" y1="175.0" x2="492.1" y2="175.0" class="roof"/>
+  <line x1="492.1" y1="175.0" x2="884.1" y2="386.2" class="roof"/>
+  <line x1="100.0" y1="386.2" x2="884.1" y2="386.2" class="roof"/>
+  <line x1="884.1" y1="386.2" x2="492.1" y2="175.0" class="roof"/>
+  <line x1="492.1" y1="175.0" x2="100.0" y2="386.2" class="roof"/>
+  <line x1="884.1" y1="386.2" x2="100.0" y2="386.2" class="roof"/>
+  <line x1="100.0" y1="386.2" x2="492.1" y2="175.0" class="roof"/>
+  <line x1="492.1" y1="175.0" x2="884.1" y2="386.2" class="roof"/>
+  <line x1="25.0" y1="521.2" x2="874.1082861334318" y2="521.2" class="level-line-major"/>
+  <circle cx="25.0" cy="521.2" r="8" fill="white" stroke="#333" stroke-width="1"/>
+  <text x="25.0" y="524.2" text-anchor="middle" class="dimension">0.0</text>
+  <text x="40.0" y="516.2" class="level-text">Floor</text>
+  <line x1="25.0" y1="386.2" x2="874.1082861334318" y2="386.2" class="level-line-major"/>
+  <circle cx="25.0" cy="386.2" r="8" fill="white" stroke="#333" stroke-width="1"/>
+  <text x="25.0" y="389.2" text-anchor="middle" class="dimension">2.7</text>
+  <text x="40.0" y="381.2" class="level-text">Plate</text>
+  <line x1="25.0" y1="476.2" x2="874.1082861334318" y2="476.2" class="level-line"/>
+  <text x="40.0" y="471.2" class="level-text">Sill 900</text>
+  <text x="499.5541430667159" y="25" text-anchor="middle" class="title">SOUTH ELEVATION</text>
+  <line x1="449.5541430667159" y1="551.1982501222509" x2="499.5541430667159" y2="551.1982501222509" stroke="#333" stroke-width="2"/>
+  <line x1="449.5541430667159" y1="546.1982501222509" x2="449.5541430667159" y2="556.1982501222509" stroke="#333" stroke-width="2"/>
+  <line x1="499.5541430667159" y1="546.1982501222509" x2="499.5541430667159" y2="556.1982501222509" stroke="#333" stroke-width="2"/>
+  <text x="474.5541430667159" y="543.1982501222509" text-anchor="middle" class="dimension">1m</text>
+<!-- Title Block -->
+<g id="title-block">
+  <!-- Drawing Border -->
+  <rect x="250" y="250" width="13982.165722668635" height="6423.9650024450175"
+        fill="none" stroke="#000" stroke-width="8"/>
+
+  <!-- Inner Border -->
+  <rect x="300" y="300" width="13882.165722668635" height="6323.9650024450175"
+        fill="none" stroke="#000" stroke-width="2"/>
+
+  <!-- Title Block Box -->
+  <rect x="10132.165722668635" y="5373.9650024450175" width="4000" height="1200"
+        fill="white" stroke="#000" stroke-width="4"/>
+
+  <!-- Title Block Grid Lines -->
+  <!-- Horizontal dividers -->
+  <line x1="10132.165722668635" y1="5673.9650024450175" x2="14132.165722668635" y2="5673.9650024450175" stroke="#000" stroke-width="2"/>
+  <line x1="10132.165722668635" y1="5973.9650024450175" x2="14132.165722668635" y2="5973.9650024450175" stroke="#000" stroke-width="2"/>
+  <line x1="10132.165722668635" y1="6273.9650024450175" x2="14132.165722668635" y2="6273.9650024450175" stroke="#000" stroke-width="2"/>
+
+  <!-- Vertical dividers -->
+  <line x1="12132.165722668635" y1="5973.9650024450175" x2="12132.165722668635" y2="6573.9650024450175" stroke="#000" stroke-width="2"/>
+  <line x1="13132.165722668635" y1="5973.9650024450175" x2="13132.165722668635" y2="6573.9650024450175" stroke="#000" stroke-width="2"/>
+
+  <!-- Project Name (large, top row) -->
+  <text x="12132.165722668635" y="5573.9650024450175"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">3 BEDROOM 2 BATH TRADITIONAL HOUSE WITH </text>
+
+  <!-- Project Address -->
+  <text x="12132.165722668635" y="5823.9650024450175"
+        font-family="Arial" font-size="120" text-anchor="middle" fill="#333"></text>
+
+  <!-- Client Name -->
+  <text x="12132.165722668635" y="5923.9650024450175"
+        font-family="Arial" font-size="100" text-anchor="middle" fill="#666"></text>
+
+  <!-- Drawing Title (large) -->
+  <text x="11132.165722668635" y="6173.9650024450175"
+        font-family="Arial" font-size="180" font-weight="bold" text-anchor="middle">SOUTH ELEVATION</text>
+
+  <!-- Labels and Values Row -->
+  <!-- Scale -->
+  <text x="10232.165722668635" y="6343.9650024450175"
+        font-family="Arial" font-size="80" fill="#666">SCALE</text>
+  <text x="10232.165722668635" y="6473.9650024450175"
+        font-family="Arial" font-size="120" font-weight="bold">1:100</text>
+
+  <!-- Date -->
+  <text x="10832.165722668635" y="6343.9650024450175"
+        font-family="Arial" font-size="80" fill="#666">DATE</text>
+  <text x="10832.165722668635" y="6473.9650024450175"
+        font-family="Arial" font-size="120">2025-12-22</text>
+
+  <!-- Drawn By -->
+  <text x="11532.165722668635" y="6343.9650024450175"
+        font-family="Arial" font-size="80" fill="#666">DRAWN</text>
+  <text x="11532.165722668635" y="6473.9650024450175"
+        font-family="Arial" font-size="120">AE</text>
+
+  <!-- Drawing Number -->
+  <text x="12232.165722668635" y="6073.9650024450175"
+        font-family="Arial" font-size="80" fill="#666">DWG NO.</text>
+  <text x="12632.165722668635" y="6223.9650024450175"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">A-201</text>
+
+  <!-- Project Number -->
+  <text x="12232.165722668635" y="6343.9650024450175"
+        font-family="Arial" font-size="80" fill="#666">PROJECT</text>
+  <text x="12232.165722668635" y="6473.9650024450175"
+        font-family="Arial" font-size="100">263b5fd8</text>
+
+  <!-- Revision -->
+  <text x="13232.165722668635" y="6073.9650024450175"
+        font-family="Arial" font-size="80" fill="#666">REV</text>
+  <text x="13632.165722668635" y="6223.9650024450175"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">-</text>
+
+  <!-- Sheet Info -->
+  <text x="13232.165722668635" y="6343.9650024450175"
+        font-family="Arial" font-size="80" fill="#666">SHEET</text>
+  <text x="13232.165722668635" y="6473.9650024450175"
+        font-family="Arial" font-size="100">3 OF 8</text>
+
+</g>
+</svg>

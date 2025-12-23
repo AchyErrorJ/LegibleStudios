@@ -1,0 +1,50 @@
+QBD VALIDATION REPORT
+=====================
+
+Project: QBD Test Project
+Generated: 2025-12-20
+
+LAYOUT SUMMARY
+--------------
+Dimensions: 12000 x 9000 ft
+Square Footage: 0 sqft
+Walls: 8 (Ext: 4, Int: 3, Wet: 1)
+Doors: 4
+Rooms: 4/4 placed
+
+OBC COMPLIANCE (Zone 6)
+-----------------------
+Overall: FAIL
+Thermal: FAIL
+Avg R-Value: 22.45
+
+WALL DETAILS
+------------
+[FAIL] wall_assembly (2x6 Exterior Wall R-21)
+  Thermal Performance (R-value) [OBC SB-12]: FAIL - Assembly is marginally below thermal requirements. Consider additional insulation.
+  Maximum Wall Height [OBC 9.23.10.1]: FAIL - No height data found for 2x6 studs
+  Stories Supported [OBC 9.23.10.1]: FAIL - No stud data available
+[FAIL] wall_assembly (2x6 Exterior Wall R-21)
+  Thermal Performance (R-value) [OBC SB-12]: FAIL - Assembly is marginally below thermal requirements. Consider additional insulation.
+  Maximum Wall Height [OBC 9.23.10.1]: FAIL - No height data found for 2x6 studs
+  Stories Supported [OBC 9.23.10.1]: FAIL - No stud data available
+[FAIL] wall_assembly (2x6 Exterior Wall R-21)
+  Thermal Performance (R-value) [OBC SB-12]: FAIL - Assembly is marginally below thermal requirements. Consider additional insulation.
+  Maximum Wall Height [OBC 9.23.10.1]: FAIL - No height data found for 2x6 studs
+  Stories Supported [OBC 9.23.10.1]: FAIL - No stud data available
+[FAIL] wall_assembly (2x6 Exterior Wall R-21)
+  Thermal Performance (R-value) [OBC SB-12]: FAIL - Assembly is marginally below thermal requirements. Consider additional insulation.
+  Maximum Wall Height [OBC 9.23.10.1]: FAIL - No height data found for 2x6 studs
+  Stories Supported [OBC 9.23.10.1]: FAIL - No stud data available
+[PASS] wall_assembly (2x4 Interior Partition)
+  Maximum Wall Height [OBC 9.23.10.1]: FAIL - No height data found for 2x4 studs
+  Stories Supported [OBC 9.23.10.1]: FAIL - No stud data available
+[PASS] wall_assembly (2x4 Interior Partition)
+  Maximum Wall Height [OBC 9.23.10.1]: FAIL - No height data found for 2x4 studs
+  Stories Supported [OBC 9.23.10.1]: FAIL - No stud data available
+[PASS] wall_assembly (2x4 Interior Partition)
+  Maximum Wall Height [OBC 9.23.10.1]: FAIL - No height data found for 2x4 studs
+  Stories Supported [OBC 9.23.10.1]: FAIL - No stud data available
+[PASS] wall_assembly (2x6 Plumbing Wall)
+  Maximum Wall Height [OBC 9.23.10.1]: FAIL - No height data found for 2x6 studs
+  Stories Supported [OBC 9.23.10.1]: FAIL - No stud data available

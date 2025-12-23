@@ -1,0 +1,218 @@
+{
+  "success": true,
+  "width": 15000,
+  "depth": 9000,
+  "sqm": 135,
+  "is_complete": true,
+  "score": 0.85,
+  "units": "mm",
+  "walls_batch": [
+    {
+      "start": [0, 0, 0],
+      "end": [15000, 0, 0],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "level_name": "Level 1",
+      "category": "exterior",
+      "rooms": ["exterior", "living"]
+    },
+    {
+      "start": [15000, 0, 0],
+      "end": [15000, 0, 9000],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "level_name": "Level 1",
+      "category": "exterior",
+      "rooms": ["exterior", "bedroom1"]
+    },
+    {
+      "start": [15000, 0, 9000],
+      "end": [0, 0, 9000],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "level_name": "Level 1",
+      "category": "exterior",
+      "rooms": ["exterior", "kitchen"]
+    },
+    {
+      "start": [0, 0, 9000],
+      "end": [0, 0, 0],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "level_name": "Level 1",
+      "category": "exterior",
+      "rooms": ["exterior", "living"]
+    },
+    {
+      "start": [6000, 0, 0],
+      "end": [6000, 0, 4500],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "level_name": "Level 1",
+      "category": "interior",
+      "rooms": ["living", "bedroom1"]
+    },
+    {
+      "start": [0, 0, 4500],
+      "end": [6000, 0, 4500],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "level_name": "Level 1",
+      "category": "interior",
+      "rooms": ["living", "kitchen"]
+    },
+    {
+      "start": [6000, 0, 4500],
+      "end": [15000, 0, 4500],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "level_name": "Level 1",
+      "category": "interior",
+      "rooms": ["bedroom1", "bathroom"]
+    },
+    {
+      "start": [12000, 0, 4500],
+      "end": [12000, 0, 9000],
+      "height": 2700,
+      "wall_type": "wet_2x6",
+      "level_name": "Level 1",
+      "category": "wet_wall",
+      "rooms": ["kitchen", "bathroom"]
+    }
+  ],
+  "doors": [
+    {
+      "wall_index": 5,
+      "offset": 3000,
+      "width": 900,
+      "height": 2100,
+      "type": "swing",
+      "swing": "left_in",
+      "room1": "living",
+      "room2": "kitchen"
+    },
+    {
+      "wall_index": 6,
+      "offset": 1500,
+      "width": 760,
+      "height": 2100,
+      "type": "pocket",
+      "swing": "left",
+      "room1": "bedroom1",
+      "room2": "bathroom"
+    },
+    {
+      "wall_index": 4,
+      "offset": 2250,
+      "width": 900,
+      "height": 2100,
+      "type": "swing",
+      "swing": "right_in",
+      "room1": "living",
+      "room2": "bedroom1"
+    },
+    {
+      "wall_index": 0,
+      "offset": 2000,
+      "width": 900,
+      "height": 2100,
+      "type": "entry",
+      "swing": "left_in",
+      "room1": "exterior",
+      "room2": "living"
+    }
+  ],
+  "windows": [
+    {
+      "wall_index": 0,
+      "offset": 8000,
+      "width": 1800,
+      "height": 1500,
+      "sill_height": 900,
+      "type": "fixed",
+      "room": "living"
+    },
+    {
+      "wall_index": 1,
+      "offset": 2250,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "type": "casement",
+      "room": "bedroom1"
+    },
+    {
+      "wall_index": 2,
+      "offset": 4500,
+      "width": 1500,
+      "height": 1200,
+      "sill_height": 1000,
+      "type": "double_hung",
+      "room": "kitchen"
+    },
+    {
+      "wall_index": 1,
+      "offset": 6750,
+      "width": 600,
+      "height": 600,
+      "sill_height": 1500,
+      "type": "casement",
+      "room": "bathroom"
+    }
+  ],
+  "rooms": {
+    "living": {
+      "name": "Living Room",
+      "room_type": "living",
+      "bounds": {"x": 0, "y": 0, "width": 6000, "height": 4500},
+      "area": 27000000,
+      "center": {"x": 3000, "y": 2250},
+      "zone": "public"
+    },
+    "kitchen": {
+      "name": "Kitchen",
+      "room_type": "kitchen",
+      "bounds": {"x": 0, "y": 4500, "width": 12000, "height": 4500},
+      "area": 54000000,
+      "center": {"x": 6000, "y": 6750},
+      "zone": "service"
+    },
+    "bedroom1": {
+      "name": "Primary Bedroom",
+      "room_type": "bedroom",
+      "bounds": {"x": 6000, "y": 0, "width": 9000, "height": 4500},
+      "area": 40500000,
+      "center": {"x": 10500, "y": 2250},
+      "zone": "private"
+    },
+    "bathroom": {
+      "name": "Bathroom",
+      "room_type": "bathroom",
+      "bounds": {"x": 12000, "y": 4500, "width": 3000, "height": 4500},
+      "area": 13500000,
+      "center": {"x": 13500, "y": 6750},
+      "zone": "service"
+    }
+  },
+  "unplaced_rooms": [],
+  "summary": {
+    "total_walls": 8,
+    "exterior_walls": 4,
+    "interior_walls": 3,
+    "wet_walls": 1,
+    "doors": 4,
+    "windows": 4,
+    "rooms_placed": 4,
+    "rooms_requested": 4
+  },
+  "qbd_answers": {
+    "start": "residential",
+    "res_type": "single_family",
+    "bedrooms": "1",
+    "bathrooms": "1",
+    "sqm": "108",
+    "garage": "none",
+    "special_rooms": [],
+    "style": "modern"
+  }
+}

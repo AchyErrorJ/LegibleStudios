@@ -1,6 +1,16 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// ArchEngine Viewer - Module implementation
 
 #include "ArchEngine.h"
 #include "Modules/ModuleManager.h"
 
-IMPLEMENT_PRIMARY_GAME_MODULE( FDefaultGameModuleImpl, ArchEngine, "ArchEngine" );
+void FArchEngineModule::StartupModule()
+{
+    UE_LOG(LogTemp, Log, TEXT("ArchEngine Viewer module started"));
+}
+
+void FArchEngineModule::ShutdownModule()
+{
+    UE_LOG(LogTemp, Log, TEXT("ArchEngine Viewer module shutdown"));
+}
+
+IMPLEMENT_PRIMARY_GAME_MODULE(FArchEngineModule, ArchEngine, "ArchEngine");

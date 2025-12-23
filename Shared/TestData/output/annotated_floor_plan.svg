@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1400" viewBox="-2000 -2000 16000 14000">
+  <defs>
+    <!-- Arrowhead marker -->
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="black"/>
+    </marker>
+    <!-- Grid bubble style -->
+    <style>
+      .wall-ext { stroke: #333; stroke-width: 180; stroke-linecap: square; }
+      .wall-int { stroke: #666; stroke-width: 100; stroke-linecap: square; }
+      .wall-wet { stroke: #4a90d9; stroke-width: 140; stroke-linecap: square; }
+      .grid-line { stroke: #ccc; stroke-width: 1; stroke-dasharray: 50,30; }
+      .dim-line { stroke: #000; stroke-width: 2; }
+      .dim-ext { stroke: #000; stroke-width: 1; }
+      .door-swing { stroke: #000; stroke-width: 2; fill: none; }
+      .window { stroke: #4a90d9; stroke-width: 4; }
+      .room-label { font-family: Arial, sans-serif; font-size: 400px; text-anchor: middle; }
+      .room-area { font-family: Arial, sans-serif; font-size: 280px; text-anchor: middle; fill: #666; }
+      .dim-text { font-family: Arial, sans-serif; font-size: 200px; text-anchor: middle; }
+      .grid-bubble { fill: white; stroke: black; stroke-width: 3; }
+      .grid-label { font-family: Arial, sans-serif; font-size: 300px; text-anchor: middle; font-weight: bold; }
+      .title { font-family: Arial, sans-serif; font-size: 500px; font-weight: bold; }
+      .subtitle { font-family: Arial, sans-serif; font-size: 300px; fill: #666; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect x="-2000" y="-2000" width="16000" height="14000" fill="white"/>
+
+  <!-- Title Block -->
+  <text x="6000" y="-1200" class="title">FLOOR PLAN - LEVEL 1</text>
+  <text x="6000" y="-800" class="subtitle">Scale: 1:100 | All dimensions in mm</text>
+
+  <!-- Grid Lines -->
+  <!-- Vertical grids (A, B, C) -->
+  <line x1="0" y1="-500" x2="0" y2="10000" class="grid-line"/>
+  <line x1="6000" y1="-500" x2="6000" y2="10000" class="grid-line"/>
+  <line x1="12000" y1="-500" x2="12000" y2="10000" class="grid-line"/>
+
+  <!-- Horizontal grids (1, 2, 3) -->
+  <line x1="-500" y1="0" x2="13000" y2="0" class="grid-line"/>
+  <line x1="-500" y1="4500" x2="13000" y2="4500" class="grid-line"/>
+  <line x1="-500" y1="9000" x2="13000" y2="9000" class="grid-line"/>
+
+  <!-- Grid Bubbles - Top -->
+  <circle cx="0" cy="-800" r="250" class="grid-bubble"/>
+  <text x="0" y="-700" class="grid-label">A</text>
+  <circle cx="6000" cy="-800" r="250" class="grid-bubble"/>
+  <text x="6000" y="-700" class="grid-label">B</text>
+  <circle cx="12000" cy="-800" r="250" class="grid-bubble"/>
+  <text x="12000" y="-700" class="grid-label">C</text>
+
+  <!-- Grid Bubbles - Left -->
+  <circle cx="-800" cy="0" r="250" class="grid-bubble"/>
+  <text x="-800" y="100" class="grid-label">1</text>
+  <circle cx="-800" cy="4500" r="250" class="grid-bubble"/>
+  <text x="-800" y="4600" class="grid-label">2</text>
+  <circle cx="-800" cy="9000" r="250" class="grid-bubble"/>
+  <text x="-800" y="9100" class="grid-label">3</text>
+
+  <!-- Exterior Walls -->
+  <line x1="0" y1="0" x2="12000" y2="0" class="wall-ext"/>
+  <line x1="12000" y1="0" x2="12000" y2="9000" class="wall-ext"/>
+  <line x1="12000" y1="9000" x2="0" y2="9000" class="wall-ext"/>
+  <line x1="0" y1="9000" x2="0" y2="0" class="wall-ext"/>
+
+  <!-- Interior Walls -->
+  <line x1="6000" y1="0" x2="6000" y2="4500" class="wall-int"/>
+  <line x1="0" y1="4500" x2="6000" y2="4500" class="wall-int"/>
+  <line x1="6000" y1="4500" x2="12000" y2="4500" class="wall-int"/>
+
+  <!-- Wet Wall (plumbing) -->
+  <line x1="9000" y1="4500" x2="9000" y2="9000" class="wall-wet"/>
+
+  <!-- Door Openings (white rectangles to cut walls) -->
+  <!-- Entry door on south wall -->
+  <rect x="1550" y="-100" width="900" height="200" fill="white"/>
+  <!-- Living to Kitchen door -->
+  <rect x="2550" y="4400" width="900" height="200" fill="white"/>
+  <!-- Living to Bedroom door -->
+  <rect x="5900" y="1800" width="200" height="900" fill="white"/>
+  <!-- Bedroom to Bathroom door -->
+  <rect x="7050" y="4400" width="760" height="200" fill="white"/>
+
+  <!-- Door Swings -->
+  <!-- Entry door swing (90 deg arc) -->
+  <path d="M 2450 0 A 900 900 0 0 1 1550 900" class="door-swing"/>
+  <line x1="2450" y1="0" x2="2450" y2="900" stroke="#000" stroke-width="2"/>
+
+  <!-- Living to Kitchen door swing -->
+  <path d="M 3450 4500 A 900 900 0 0 0 2550 5400" class="door-swing"/>
+  <line x1="2550" y1="4500" x2="2550" y2="5400" stroke="#000" stroke-width="2"/>
+
+  <!-- Living to Bedroom door swing -->
+  <path d="M 6000 1800 A 900 900 0 0 0 6900 2700" class="door-swing"/>
+  <line x1="6000" y1="2700" x2="6900" y2="2700" stroke="#000" stroke-width="2"/>
+
+  <!-- Pocket door (no swing, just dashed line) -->
+  <line x1="7050" y1="4500" x2="7810" y2="4500" stroke="#000" stroke-width="2" stroke-dasharray="20,10"/>
+
+  <!-- Windows -->
+  <!-- South wall - Living room large window -->
+  <line x1="7100" y1="0" x2="8900" y2="0" class="window"/>
+  <line x1="7100" y1="-50" x2="7100" y2="50" stroke="#4a90d9" stroke-width="4"/>
+  <line x1="8900" y1="-50" x2="8900" y2="50" stroke="#4a90d9" stroke-width="4"/>
+  <line x1="8000" y1="-40" x2="8000" y2="40" stroke="#4a90d9" stroke-width="2"/>
+
+  <!-- East wall - Bedroom window -->
+  <line x1="12000" y1="1650" x2="12000" y2="2850" class="window"/>
+  <line x1="11950" y1="1650" x2="12050" y2="1650" stroke="#4a90d9" stroke-width="4"/>
+  <line x1="11950" y1="2850" x2="12050" y2="2850" stroke="#4a90d9" stroke-width="4"/>
+
+  <!-- East wall - Bathroom window (small) -->
+  <line x1="12000" y1="6450" x2="12000" y2="7050" class="window"/>
+  <line x1="11950" y1="6450" x2="12050" y2="6450" stroke="#4a90d9" stroke-width="4"/>
+  <line x1="11950" y1="7050" x2="12050" y2="7050" stroke="#4a90d9" stroke-width="4"/>
+
+  <!-- North wall - Kitchen window -->
+  <line x1="3750" y1="9000" x2="5250" y2="9000" class="window"/>
+  <line x1="3750" y1="8950" x2="3750" y2="9050" stroke="#4a90d9" stroke-width="4"/>
+  <line x1="5250" y1="8950" x2="5250" y2="9050" stroke="#4a90d9" stroke-width="4"/>
+
+  <!-- Room Labels -->
+  <text x="3000" y="2000" class="room-label">LIVING</text>
+  <text x="3000" y="2500" class="room-area">27.0 m²</text>
+
+  <text x="4500" y="6500" class="room-label">KITCHEN</text>
+  <text x="4500" y="7000" class="room-area">40.5 m²</text>
+
+  <text x="9000" y="2000" class="room-label">BEDROOM</text>
+  <text x="9000" y="2500" class="room-area">27.0 m²</text>
+
+  <text x="10500" y="6500" class="room-label">BATH</text>
+  <text x="10500" y="7000" class="room-area">13.5 m²</text>
+
+  <!-- Exterior Dimensions - South Wall -->
+  <line x1="0" y1="-400" x2="12000" y2="-400" class="dim-line"/>
+  <line x1="0" y1="-200" x2="0" y2="-500" class="dim-ext"/>
+  <line x1="12000" y1="-200" x2="12000" y2="-500" class="dim-ext"/>
+  <text x="6000" y="-550" class="dim-text">12000</text>
+
+  <!-- Exterior Dimensions - East Wall -->
+  <line x1="12400" y1="0" x2="12400" y2="9000" class="dim-line"/>
+  <line x1="12200" y1="0" x2="12500" y2="0" class="dim-ext"/>
+  <line x1="12200" y1="9000" x2="12500" y2="9000" class="dim-ext"/>
+  <text x="12700" y="4500" class="dim-text" transform="rotate(90 12700 4500)">9000</text>
+
+  <!-- Interior Dimension - Room width -->
+  <line x1="0" y1="4100" x2="6000" y2="4100" class="dim-line" stroke-dasharray="10,5"/>
+  <line x1="0" y1="4000" x2="0" y2="4200" class="dim-ext"/>
+  <line x1="6000" y1="4000" x2="6000" y2="4200" class="dim-ext"/>
+  <text x="3000" y="3900" class="dim-text">6000</text>
+
+  <line x1="6000" y1="4100" x2="12000" y2="4100" class="dim-line" stroke-dasharray="10,5"/>
+  <line x1="12000" y1="4000" x2="12000" y2="4200" class="dim-ext"/>
+  <text x="9000" y="3900" class="dim-text">6000</text>
+
+  <!-- North Arrow -->
+  <g transform="translate(13500, 1500)">
+    <polygon points="0,-400 -120,300 0,150 120,300" fill="black"/>
+    <text x="0" y="-550" class="grid-label">N</text>
+  </g>
+
+  <!-- Roof Plan Annotations (showing what they would look like) -->
+  <!-- Pitch indicator example in corner -->
+  <g transform="translate(-1500, 10500)">
+    <text x="0" y="-100" font-family="Arial" font-size="250" font-weight="bold">ROOF ANNOTATIONS:</text>
+
+    <!-- Pitch triangle -->
+    <g transform="translate(0, 200)">
+      <path d="M 0 400 L 600 400 L 600 200 Z" fill="none" stroke="black" stroke-width="3"/>
+      <text x="300" y="550" font-family="Arial" font-size="180" text-anchor="middle">4:12</text>
+      <text x="750" y="350" font-family="Arial" font-size="150">Pitch Indicator</text>
+    </g>
+
+    <!-- Drainage arrow -->
+    <g transform="translate(0, 800)">
+      <line x1="0" y1="200" x2="400" y2="200" stroke="black" stroke-width="3" marker-end="url(#arrowhead)"/>
+      <text x="550" y="220" font-family="Arial" font-size="150">Drainage Arrow</text>
+    </g>
+
+    <!-- Ridge line -->
+    <g transform="translate(0, 1100)">
+      <line x1="0" y1="200" x2="400" y2="200" stroke="black" stroke-width="4"/>
+      <text x="550" y="220" font-family="Arial" font-size="150">Ridge Line</text>
+    </g>
+
+    <!-- Valley line -->
+    <g transform="translate(0, 1400)">
+      <line x1="0" y1="200" x2="400" y2="200" stroke="black" stroke-width="3" stroke-dasharray="30,15"/>
+      <text x="550" y="220" font-family="Arial" font-size="150">Valley Line</text>
+    </g>
+  </g>
+
+  <!-- Section Marker Example -->
+  <g transform="translate(13500, 4500)">
+    <circle cx="0" cy="0" r="300" fill="white" stroke="black" stroke-width="4"/>
+    <text x="0" y="80" class="grid-label">A</text>
+    <line x1="-400" y1="0" x2="-700" y2="0" stroke="black" stroke-width="3" marker-end="url(#arrowhead)"/>
+    <text x="0" y="550" font-family="Arial" font-size="180" text-anchor="middle">A3.1</text>
+  </g>
+
+  <!-- Scale Bar -->
+  <g transform="translate(0, 10000)">
+    <rect x="0" y="0" width="1000" height="100" fill="black"/>
+    <rect x="1000" y="0" width="1000" height="100" fill="white" stroke="black"/>
+    <rect x="2000" y="0" width="1000" height="100" fill="black"/>
+    <text x="0" y="250" font-family="Arial" font-size="150">0</text>
+    <text x="1000" y="250" font-family="Arial" font-size="150">1m</text>
+    <text x="2000" y="250" font-family="Arial" font-size="150">2m</text>
+    <text x="3000" y="250" font-family="Arial" font-size="150">3m</text>
+  </g>
+
+</svg>
