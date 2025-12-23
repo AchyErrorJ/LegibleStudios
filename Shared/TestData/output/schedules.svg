@@ -1,0 +1,397 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1000" height="750"
+     viewBox="0 0 16000 12000">
+<rect width="100%" height="100%" fill="white"/>
+<style>
+    .sheet-title { font-family: Arial, sans-serif; font-size: 250px; font-weight: bold; fill: #333; }
+</style>
+<text x="8000.0" y="500" text-anchor="middle" class="sheet-title">SCHEDULES</text>
+<text x="3750.0" y="1150" font-family="Arial" font-size="180" font-weight="bold" text-anchor="middle">DOOR SCHEDULE</text>
+<rect x="700" y="1300" width="6100" height="360.0" fill="#E8E8E8" stroke="#000" stroke-width="2"/>
+<text x="950.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">MARK</text>
+<line x1="1200" y1="1300" x2="1200" y2="4060.0" stroke="#000" stroke-width="1"/>
+<text x="1800.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">LOCATION</text>
+<line x1="2400" y1="1300" x2="2400" y2="4060.0" stroke="#000" stroke-width="1"/>
+<text x="2700.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">WIDTH</text>
+<line x1="3000" y1="1300" x2="3000" y2="4060.0" stroke="#000" stroke-width="1"/>
+<text x="3300.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">HEIGHT</text>
+<line x1="3600" y1="1300" x2="3600" y2="4060.0" stroke="#000" stroke-width="1"/>
+<text x="4100.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">TYPE</text>
+<line x1="4600" y1="1300" x2="4600" y2="4060.0" stroke="#000" stroke-width="1"/>
+<text x="5200.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">FRAME</text>
+<line x1="5800" y1="1300" x2="5800" y2="4060.0" stroke="#000" stroke-width="1"/>
+<text x="6300.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">HARDWARE</text>
+<line x1="700" y1="1660.0" x2="6800" y2="1660.0" stroke="#000" stroke-width="2"/>
+<line x1="700" y1="1960.0" x2="6800" y2="1960.0" stroke="#000" stroke-width="0.5"/>
+<text x="950.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">A</text>
+<text x="1800.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">Living Room</text>
+<text x="2700.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">914mm</text>
+<text x="3300.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">2134mm</text>
+<text x="4100.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">SINGLE PANEL</text>
+<text x="5200.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">WOOD W/ WEATHERSTRIP</text>
+<text x="6300.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">ENTRY LOCKSET</text>
+<rect x="700" y="1960.0" width="6100" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="700" y1="2260.0" x2="6800" y2="2260.0" stroke="#000" stroke-width="0.5"/>
+<text x="950.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">B</text>
+<text x="1800.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">Living Room</text>
+<text x="2700.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">812mm</text>
+<text x="3300.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">2134mm</text>
+<text x="4100.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">POCKET</text>
+<text x="5200.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">WOOD</text>
+<text x="6300.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">PASSAGE SET</text>
+<line x1="700" y1="2560.0" x2="6800" y2="2560.0" stroke="#000" stroke-width="0.5"/>
+<text x="950.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">A</text>
+<text x="1800.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">Living Room</text>
+<text x="2700.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">914mm</text>
+<text x="3300.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">2134mm</text>
+<text x="4100.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">SINGLE PANEL</text>
+<text x="5200.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">WOOD</text>
+<text x="6300.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">PASSAGE SET</text>
+<rect x="700" y="2560.0" width="6100" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="700" y1="2860.0" x2="6800" y2="2860.0" stroke="#000" stroke-width="0.5"/>
+<text x="950.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">B</text>
+<text x="1800.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">Living Room</text>
+<text x="2700.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">812mm</text>
+<text x="3300.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">2134mm</text>
+<text x="4100.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">POCKET</text>
+<text x="5200.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">WOOD</text>
+<text x="6300.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">PASSAGE SET</text>
+<line x1="700" y1="3160.0" x2="6800" y2="3160.0" stroke="#000" stroke-width="0.5"/>
+<text x="950.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">A</text>
+<text x="1800.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">Living Room</text>
+<text x="2700.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">914mm</text>
+<text x="3300.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">2134mm</text>
+<text x="4100.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">SINGLE PANEL</text>
+<text x="5200.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">WOOD</text>
+<text x="6300.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">PASSAGE SET</text>
+<rect x="700" y="3160.0" width="6100" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="700" y1="3460.0" x2="6800" y2="3460.0" stroke="#000" stroke-width="0.5"/>
+<text x="950.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">B</text>
+<text x="1800.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">Living Room</text>
+<text x="2700.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">812mm</text>
+<text x="3300.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">2134mm</text>
+<text x="4100.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">POCKET</text>
+<text x="5200.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">WOOD</text>
+<text x="6300.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">PASSAGE SET</text>
+<line x1="700" y1="3760.0" x2="6800" y2="3760.0" stroke="#000" stroke-width="0.5"/>
+<text x="950.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">A</text>
+<text x="1800.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">Living Room</text>
+<text x="2700.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">914mm</text>
+<text x="3300.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">2134mm</text>
+<text x="4100.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">SINGLE PANEL</text>
+<text x="5200.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">WOOD</text>
+<text x="6300.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">PASSAGE SET</text>
+<rect x="700" y="3760.0" width="6100" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="700" y1="4060.0" x2="6800" y2="4060.0" stroke="#000" stroke-width="0.5"/>
+<text x="950.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">B</text>
+<text x="1800.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">Living Room</text>
+<text x="2700.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">812mm</text>
+<text x="3300.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">2134mm</text>
+<text x="4100.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">POCKET</text>
+<text x="5200.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">WOOD</text>
+<text x="6300.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">PASSAGE SET</text>
+<rect x="700" y="1300" width="6100" height="2760.0" fill="none" stroke="#000" stroke-width="2"/>
+<text x="10000.0" y="1150" font-family="Arial" font-size="180" font-weight="bold" text-anchor="middle">WINDOW SCHEDULE</text>
+<rect x="7600" y="1300" width="4800" height="360.0" fill="#E8E8E8" stroke="#000" stroke-width="2"/>
+<text x="7800.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">MARK</text>
+<line x1="8000" y1="1300" x2="8000" y2="5560.0" stroke="#000" stroke-width="1"/>
+<text x="8300.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">WIDTH</text>
+<line x1="8600" y1="1300" x2="8600" y2="5560.0" stroke="#000" stroke-width="1"/>
+<text x="8900.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">HEIGHT</text>
+<line x1="9200" y1="1300" x2="9200" y2="5560.0" stroke="#000" stroke-width="1"/>
+<text x="9500.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">SILL HT</text>
+<line x1="9800" y1="1300" x2="9800" y2="5560.0" stroke="#000" stroke-width="1"/>
+<text x="10300.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">TYPE</text>
+<line x1="10800" y1="1300" x2="10800" y2="5560.0" stroke="#000" stroke-width="1"/>
+<text x="11200.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">GLAZING</text>
+<line x1="11600" y1="1300" x2="11600" y2="5560.0" stroke="#000" stroke-width="1"/>
+<text x="12000.0" y="1530.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">REMARKS</text>
+<line x1="7600" y1="1660.0" x2="12400" y2="1660.0" stroke="#000" stroke-width="2"/>
+<line x1="7600" y1="1960.0" x2="12400" y2="1960.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">1</text>
+<text x="8300.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="8900.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="9500.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">900mm</text>
+<text x="10300.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">DOUBLE HUNG</text>
+<text x="11200.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="1845.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<rect x="7600" y="1960.0" width="4800" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="7600" y1="2260.0" x2="12400" y2="2260.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">1</text>
+<text x="8300.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="8900.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="9500.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">900mm</text>
+<text x="10300.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">DOUBLE HUNG</text>
+<text x="11200.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="2145.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<line x1="7600" y1="2560.0" x2="12400" y2="2560.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">1</text>
+<text x="8300.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="8900.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="9500.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">900mm</text>
+<text x="10300.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">DOUBLE HUNG</text>
+<text x="11200.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="2445.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<rect x="7600" y="2560.0" width="4800" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="7600" y1="2860.0" x2="12400" y2="2860.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">1</text>
+<text x="8300.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="8900.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="9500.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">900mm</text>
+<text x="10300.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">DOUBLE HUNG</text>
+<text x="11200.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="2745.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<line x1="7600" y1="3160.0" x2="12400" y2="3160.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">2</text>
+<text x="8300.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">600mm</text>
+<text x="8900.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">600mm</text>
+<text x="9500.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">1500mm</text>
+<text x="10300.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">SLIDER</text>
+<text x="11200.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="3045.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<rect x="7600" y="3160.0" width="4800" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="7600" y1="3460.0" x2="12400" y2="3460.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">2</text>
+<text x="8300.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">600mm</text>
+<text x="8900.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">600mm</text>
+<text x="9500.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">1500mm</text>
+<text x="10300.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">SLIDER</text>
+<text x="11200.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="3345.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<line x1="7600" y1="3760.0" x2="12400" y2="3760.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">2</text>
+<text x="8300.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">600mm</text>
+<text x="8900.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">600mm</text>
+<text x="9500.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">1500mm</text>
+<text x="10300.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">SLIDER</text>
+<text x="11200.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="3645.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<rect x="7600" y="3760.0" width="4800" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="7600" y1="4060.0" x2="12400" y2="4060.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">2</text>
+<text x="8300.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">600mm</text>
+<text x="8900.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">600mm</text>
+<text x="9500.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">1500mm</text>
+<text x="10300.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">SLIDER</text>
+<text x="11200.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="3945.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<line x1="7600" y1="4360.0" x2="12400" y2="4360.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="4245.0" font-family="Arial" font-size="90" text-anchor="middle">1</text>
+<text x="8300.0" y="4245.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="8900.0" y="4245.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="9500.0" y="4245.0" font-family="Arial" font-size="90" text-anchor="middle">900mm</text>
+<text x="10300.0" y="4245.0" font-family="Arial" font-size="90" text-anchor="middle">DOUBLE HUNG</text>
+<text x="11200.0" y="4245.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="4245.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<rect x="7600" y="4360.0" width="4800" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="7600" y1="4660.0" x2="12400" y2="4660.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="4545.0" font-family="Arial" font-size="90" text-anchor="middle">1</text>
+<text x="8300.0" y="4545.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="8900.0" y="4545.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="9500.0" y="4545.0" font-family="Arial" font-size="90" text-anchor="middle">900mm</text>
+<text x="10300.0" y="4545.0" font-family="Arial" font-size="90" text-anchor="middle">DOUBLE HUNG</text>
+<text x="11200.0" y="4545.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="4545.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<line x1="7600" y1="4960.0" x2="12400" y2="4960.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="4845.0" font-family="Arial" font-size="90" text-anchor="middle">1</text>
+<text x="8300.0" y="4845.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="8900.0" y="4845.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="9500.0" y="4845.0" font-family="Arial" font-size="90" text-anchor="middle">900mm</text>
+<text x="10300.0" y="4845.0" font-family="Arial" font-size="90" text-anchor="middle">DOUBLE HUNG</text>
+<text x="11200.0" y="4845.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="4845.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<rect x="7600" y="4960.0" width="4800" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="7600" y1="5260.0" x2="12400" y2="5260.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="5145.0" font-family="Arial" font-size="90" text-anchor="middle">1</text>
+<text x="8300.0" y="5145.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="8900.0" y="5145.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="9500.0" y="5145.0" font-family="Arial" font-size="90" text-anchor="middle">900mm</text>
+<text x="10300.0" y="5145.0" font-family="Arial" font-size="90" text-anchor="middle">DOUBLE HUNG</text>
+<text x="11200.0" y="5145.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="5145.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<line x1="7600" y1="5560.0" x2="12400" y2="5560.0" stroke="#000" stroke-width="0.5"/>
+<text x="7800.0" y="5445.0" font-family="Arial" font-size="90" text-anchor="middle">1</text>
+<text x="8300.0" y="5445.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="8900.0" y="5445.0" font-family="Arial" font-size="90" text-anchor="middle">1200mm</text>
+<text x="9500.0" y="5445.0" font-family="Arial" font-size="90" text-anchor="middle">900mm</text>
+<text x="10300.0" y="5445.0" font-family="Arial" font-size="90" text-anchor="middle">DOUBLE HUNG</text>
+<text x="11200.0" y="5445.0" font-family="Arial" font-size="90" text-anchor="middle">INSULATED</text>
+<text x="12000.0" y="5445.0" font-family="Arial" font-size="90" text-anchor="middle">—</text>
+<rect x="7600" y="1300" width="4800" height="4260.0" fill="none" stroke="#000" stroke-width="2"/>
+<text x="3450.0" y="4310" font-family="Arial" font-size="180" font-weight="bold" text-anchor="middle">ROOM FINISH SCHEDULE</text>
+<rect x="700" y="4460" width="5500" height="360.0" fill="#E8E8E8" stroke="#000" stroke-width="2"/>
+<text x="900.0" y="4690.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">NO.</text>
+<line x1="1100" y1="4460" x2="1100" y2="7220.0" stroke="#000" stroke-width="1"/>
+<text x="1800.0" y="4690.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">ROOM NAME</text>
+<line x1="2500" y1="4460" x2="2500" y2="7220.0" stroke="#000" stroke-width="1"/>
+<text x="2900.0" y="4690.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">FLOOR</text>
+<line x1="3300" y1="4460" x2="3300" y2="7220.0" stroke="#000" stroke-width="1"/>
+<text x="3600.0" y="4690.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">BASE</text>
+<line x1="3900" y1="4460" x2="3900" y2="7220.0" stroke="#000" stroke-width="1"/>
+<text x="4200.0" y="4690.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">WALLS</text>
+<line x1="4500" y1="4460" x2="4500" y2="7220.0" stroke="#000" stroke-width="1"/>
+<text x="4850.0" y="4690.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">CEILING</text>
+<line x1="5200" y1="4460" x2="5200" y2="7220.0" stroke="#000" stroke-width="1"/>
+<text x="5700.0" y="4690.0" font-family="Arial" font-size="100" font-weight="bold" text-anchor="middle">CLG. HT.</text>
+<line x1="700" y1="4820.0" x2="6200" y2="4820.0" stroke="#000" stroke-width="2"/>
+<line x1="700" y1="5120.0" x2="6200" y2="5120.0" stroke="#000" stroke-width="0.5"/>
+<text x="900.0" y="5005.0" font-family="Arial" font-size="90" text-anchor="middle">100</text>
+<text x="1800.0" y="5005.0" font-family="Arial" font-size="90" text-anchor="middle">LIVING ROOM</text>
+<text x="2900.0" y="5005.0" font-family="Arial" font-size="90" text-anchor="middle">HARDWOOD</text>
+<text x="3600.0" y="5005.0" font-family="Arial" font-size="90" text-anchor="middle">4" WOOD</text>
+<text x="4200.0" y="5005.0" font-family="Arial" font-size="90" text-anchor="middle">PAINT</text>
+<text x="4850.0" y="5005.0" font-family="Arial" font-size="90" text-anchor="middle">GYP. BD.</text>
+<text x="5700.0" y="5005.0" font-family="Arial" font-size="90" text-anchor="middle">2700mm (8.9')</text>
+<rect x="700" y="5120.0" width="5500" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="700" y1="5420.0" x2="6200" y2="5420.0" stroke="#000" stroke-width="0.5"/>
+<text x="900.0" y="5305.0" font-family="Arial" font-size="90" text-anchor="middle">101</text>
+<text x="1800.0" y="5305.0" font-family="Arial" font-size="90" text-anchor="middle">BATHROOM</text>
+<text x="2900.0" y="5305.0" font-family="Arial" font-size="90" text-anchor="middle">TILE</text>
+<text x="3600.0" y="5305.0" font-family="Arial" font-size="90" text-anchor="middle">4" TILE</text>
+<text x="4200.0" y="5305.0" font-family="Arial" font-size="90" text-anchor="middle">TILE</text>
+<text x="4850.0" y="5305.0" font-family="Arial" font-size="90" text-anchor="middle">GYP. BD.</text>
+<text x="5700.0" y="5305.0" font-family="Arial" font-size="90" text-anchor="middle">2700mm (8.9')</text>
+<line x1="700" y1="5720.0" x2="6200" y2="5720.0" stroke="#000" stroke-width="0.5"/>
+<text x="900.0" y="5605.0" font-family="Arial" font-size="90" text-anchor="middle">102</text>
+<text x="1800.0" y="5605.0" font-family="Arial" font-size="90" text-anchor="middle">KITCHEN</text>
+<text x="2900.0" y="5605.0" font-family="Arial" font-size="90" text-anchor="middle">TILE</text>
+<text x="3600.0" y="5605.0" font-family="Arial" font-size="90" text-anchor="middle">4" TILE</text>
+<text x="4200.0" y="5605.0" font-family="Arial" font-size="90" text-anchor="middle">PAINT</text>
+<text x="4850.0" y="5605.0" font-family="Arial" font-size="90" text-anchor="middle">GYP. BD.</text>
+<text x="5700.0" y="5605.0" font-family="Arial" font-size="90" text-anchor="middle">2700mm (8.9')</text>
+<rect x="700" y="5720.0" width="5500" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="700" y1="6020.0" x2="6200" y2="6020.0" stroke="#000" stroke-width="0.5"/>
+<text x="900.0" y="5905.0" font-family="Arial" font-size="90" text-anchor="middle">103</text>
+<text x="1800.0" y="5905.0" font-family="Arial" font-size="90" text-anchor="middle">PRIMARY BEDROOM</text>
+<text x="2900.0" y="5905.0" font-family="Arial" font-size="90" text-anchor="middle">CARPET</text>
+<text x="3600.0" y="5905.0" font-family="Arial" font-size="90" text-anchor="middle">4" WOOD</text>
+<text x="4200.0" y="5905.0" font-family="Arial" font-size="90" text-anchor="middle">PAINT</text>
+<text x="4850.0" y="5905.0" font-family="Arial" font-size="90" text-anchor="middle">GYP. BD.</text>
+<text x="5700.0" y="5905.0" font-family="Arial" font-size="90" text-anchor="middle">2700mm (8.9')</text>
+<line x1="700" y1="6320.0" x2="6200" y2="6320.0" stroke="#000" stroke-width="0.5"/>
+<text x="900.0" y="6205.0" font-family="Arial" font-size="90" text-anchor="middle">104</text>
+<text x="1800.0" y="6205.0" font-family="Arial" font-size="90" text-anchor="middle">BEDROOM 2</text>
+<text x="2900.0" y="6205.0" font-family="Arial" font-size="90" text-anchor="middle">CARPET</text>
+<text x="3600.0" y="6205.0" font-family="Arial" font-size="90" text-anchor="middle">4" WOOD</text>
+<text x="4200.0" y="6205.0" font-family="Arial" font-size="90" text-anchor="middle">PAINT</text>
+<text x="4850.0" y="6205.0" font-family="Arial" font-size="90" text-anchor="middle">GYP. BD.</text>
+<text x="5700.0" y="6205.0" font-family="Arial" font-size="90" text-anchor="middle">2700mm (8.9')</text>
+<rect x="700" y="6320.0" width="5500" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="700" y1="6620.0" x2="6200" y2="6620.0" stroke="#000" stroke-width="0.5"/>
+<text x="900.0" y="6505.0" font-family="Arial" font-size="90" text-anchor="middle">105</text>
+<text x="1800.0" y="6505.0" font-family="Arial" font-size="90" text-anchor="middle">BEDROOM 3</text>
+<text x="2900.0" y="6505.0" font-family="Arial" font-size="90" text-anchor="middle">CARPET</text>
+<text x="3600.0" y="6505.0" font-family="Arial" font-size="90" text-anchor="middle">4" WOOD</text>
+<text x="4200.0" y="6505.0" font-family="Arial" font-size="90" text-anchor="middle">PAINT</text>
+<text x="4850.0" y="6505.0" font-family="Arial" font-size="90" text-anchor="middle">GYP. BD.</text>
+<text x="5700.0" y="6505.0" font-family="Arial" font-size="90" text-anchor="middle">2700mm (8.9')</text>
+<line x1="700" y1="6920.0" x2="6200" y2="6920.0" stroke="#000" stroke-width="0.5"/>
+<text x="900.0" y="6805.0" font-family="Arial" font-size="90" text-anchor="middle">106</text>
+<text x="1800.0" y="6805.0" font-family="Arial" font-size="90" text-anchor="middle">PRIMARY BATH</text>
+<text x="2900.0" y="6805.0" font-family="Arial" font-size="90" text-anchor="middle">CARPET</text>
+<text x="3600.0" y="6805.0" font-family="Arial" font-size="90" text-anchor="middle">4" WOOD</text>
+<text x="4200.0" y="6805.0" font-family="Arial" font-size="90" text-anchor="middle">PAINT</text>
+<text x="4850.0" y="6805.0" font-family="Arial" font-size="90" text-anchor="middle">GYP. BD.</text>
+<text x="5700.0" y="6805.0" font-family="Arial" font-size="90" text-anchor="middle">2700mm (8.9')</text>
+<rect x="700" y="6920.0" width="5500" height="300" fill="#F8F8F8" stroke="none"/>
+<line x1="700" y1="7220.0" x2="6200" y2="7220.0" stroke="#000" stroke-width="0.5"/>
+<text x="900.0" y="7105.0" font-family="Arial" font-size="90" text-anchor="middle">107</text>
+<text x="1800.0" y="7105.0" font-family="Arial" font-size="90" text-anchor="middle">HALLWAY</text>
+<text x="2900.0" y="7105.0" font-family="Arial" font-size="90" text-anchor="middle">HARDWOOD</text>
+<text x="3600.0" y="7105.0" font-family="Arial" font-size="90" text-anchor="middle">4" WOOD</text>
+<text x="4200.0" y="7105.0" font-family="Arial" font-size="90" text-anchor="middle">PAINT</text>
+<text x="4850.0" y="7105.0" font-family="Arial" font-size="90" text-anchor="middle">GYP. BD.</text>
+<text x="5700.0" y="7105.0" font-family="Arial" font-size="90" text-anchor="middle">2700mm (8.9')</text>
+<rect x="700" y="4460" width="5500" height="2760.0" fill="none" stroke="#000" stroke-width="2"/>
+<text x="700" y="10000" font-family="Arial" font-size="140" font-weight="bold">GENERAL NOTES:</text>
+<text x="700" y="10180" font-family="Arial" font-size="100">1. ALL DIMENSIONS ARE IN MILLIMETERS UNLESS OTHERWISE NOTED.</text>
+<text x="700" y="10330" font-family="Arial" font-size="100">2. VERIFY ALL DIMENSIONS AND CONDITIONS IN FIELD BEFORE ORDERING.</text>
+<text x="700" y="10480" font-family="Arial" font-size="100">3. ALL DOORS TO HAVE SELF-CLOSING HINGES WHERE REQUIRED BY CODE.</text>
+<text x="700" y="10630" font-family="Arial" font-size="100">4. ALL EXTERIOR DOORS TO BE INSULATED WITH WEATHERSTRIPPING.</text>
+<text x="700" y="10780" font-family="Arial" font-size="100">5. ALL WINDOWS TO BE DOUBLE-GLAZED INSULATED UNITS.</text>
+<!-- Title Block -->
+<g id="title-block">
+  <!-- Drawing Border -->
+  <rect x="-200" y="-200" width="15400" height="11400"
+        fill="none" stroke="#000" stroke-width="8"/>
+
+  <!-- Inner Border -->
+  <rect x="-150" y="-150" width="15300" height="11300"
+        fill="none" stroke="#000" stroke-width="2"/>
+
+  <!-- Title Block Box -->
+  <rect x="11100" y="9900" width="4000" height="1200"
+        fill="white" stroke="#000" stroke-width="4"/>
+
+  <!-- Title Block Grid Lines -->
+  <!-- Horizontal dividers -->
+  <line x1="11100" y1="10200" x2="15100" y2="10200" stroke="#000" stroke-width="2"/>
+  <line x1="11100" y1="10500" x2="15100" y2="10500" stroke="#000" stroke-width="2"/>
+  <line x1="11100" y1="10800" x2="15100" y2="10800" stroke="#000" stroke-width="2"/>
+
+  <!-- Vertical dividers -->
+  <line x1="13100" y1="10500" x2="13100" y2="11100" stroke="#000" stroke-width="2"/>
+  <line x1="14100" y1="10500" x2="14100" y2="11100" stroke="#000" stroke-width="2"/>
+
+  <!-- Project Name (large, top row) -->
+  <text x="13100.0" y="10100"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">3 BEDROOM 2 BATH TRADITIONAL HOUSE WITH </text>
+
+  <!-- Project Address -->
+  <text x="13100.0" y="10350"
+        font-family="Arial" font-size="120" text-anchor="middle" fill="#333"></text>
+
+  <!-- Client Name -->
+  <text x="13100.0" y="10450"
+        font-family="Arial" font-size="100" text-anchor="middle" fill="#666"></text>
+
+  <!-- Drawing Title (large) -->
+  <text x="12100" y="10700"
+        font-family="Arial" font-size="180" font-weight="bold" text-anchor="middle">DOOR, WINDOW & FINISH SCHEDULES</text>
+
+  <!-- Labels and Values Row -->
+  <!-- Scale -->
+  <text x="11200" y="10870"
+        font-family="Arial" font-size="80" fill="#666">SCALE</text>
+  <text x="11200" y="11000"
+        font-family="Arial" font-size="120" font-weight="bold">NOT TO SCALE</text>
+
+  <!-- Date -->
+  <text x="11800" y="10870"
+        font-family="Arial" font-size="80" fill="#666">DATE</text>
+  <text x="11800" y="11000"
+        font-family="Arial" font-size="120">2025-12-22</text>
+
+  <!-- Drawn By -->
+  <text x="12500" y="10870"
+        font-family="Arial" font-size="80" fill="#666">DRAWN</text>
+  <text x="12500" y="11000"
+        font-family="Arial" font-size="120">AE</text>
+
+  <!-- Drawing Number -->
+  <text x="13200" y="10600"
+        font-family="Arial" font-size="80" fill="#666">DWG NO.</text>
+  <text x="13600" y="10750"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">A-601</text>
+
+  <!-- Project Number -->
+  <text x="13200" y="10870"
+        font-family="Arial" font-size="80" fill="#666">PROJECT</text>
+  <text x="13200" y="11000"
+        font-family="Arial" font-size="100">263b5fd8</text>
+
+  <!-- Revision -->
+  <text x="14200" y="10600"
+        font-family="Arial" font-size="80" fill="#666">REV</text>
+  <text x="14600" y="10750"
+        font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">-</text>
+
+  <!-- Sheet Info -->
+  <text x="14200" y="10870"
+        font-family="Arial" font-size="80" fill="#666">SHEET</text>
+  <text x="14200" y="11000"
+        font-family="Arial" font-size="100">1 OF 1</text>
+
+</g>
+</svg>
