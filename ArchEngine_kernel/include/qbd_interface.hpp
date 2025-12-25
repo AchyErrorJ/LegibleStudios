@@ -12,6 +12,109 @@ namespace arch {
 namespace qbd {
 
 // ============================================================================
+// QBD JSON FORMAT DOCUMENTATION (for translators/interpreters)
+// ============================================================================
+//
+// The QBD interface expects JSON with the following structure. All dimensions
+// are in millimeters (mm). Coordinate system: X = width, Y = height, Z = depth.
+//
+// Required fields:
+//   - success: boolean
+//   - width: number (building width in mm)
+//   - depth: number (building depth in mm)
+//
+// Optional arrays:
+//
+// walls_batch: Array of wall objects
+//   {
+//     "start": [x, y, z],        // Wall start point in mm
+//     "end": [x, y, z],          // Wall end point in mm
+//     "height": 2700,            // Wall height in mm (default 2700)
+//     "wall_type": "ext_2x6",    // Wall type identifier
+//     "level_name": "Level 1",
+//     "category": "exterior",    // "exterior", "interior", or "wet_wall"
+//     "rooms": ["room1", "room2"] // Rooms on each side (can be null)
+//   }
+//
+// floors_batch: Array of floor objects (NEW)
+//   {
+//     "start": [x, y, z],        // Bottom-left corner in mm (y = floor elevation)
+//     "end": [x, y, z],          // Top-right corner in mm (y = same elevation)
+//     "thickness": 300,          // Floor slab thickness in mm (default 300)
+//     "level_name": "Level 1",
+//     "room": "living_room"      // Optional: room this floor belongs to
+//   }
+//
+// doors: Array of door objects
+//   {
+//     "wall_index": 0,           // Index into walls_batch array
+//     "offset": 1500,            // Distance from wall start to door center (mm)
+//     "width": 900,              // Door width in mm (default 900)
+//     "height": 2100,            // Door height in mm (default 2100)
+//     "type": "swing",           // "swing", "entry", "pocket", "sliding", "bifold", "french", "barn"
+//     "swing": "left_in",        // "left_in", "right_in", "left_out", "right_out", "left", "right"
+//     "room1": "living",         // Room on one side
+//     "room2": "kitchen"         // Room on other side
+//   }
+//
+// windows: Array of window objects
+//   {
+//     "wall_index": 0,           // Index into walls_batch array
+//     "offset": 2000,            // Distance from wall start to window center (mm)
+//     "width": 1200,             // Window width in mm (default 1200)
+//     "height": 1200,            // Window height in mm (default 1200)
+//     "sill_height": 900,        // Height from floor to bottom of window (mm)
+//     "type": "double_hung",     // "fixed", "casement", "double_hung", "sliding", "awning"
+//     "room": "bedroom"
+//   }
+//
+// roofs: Array of roof objects
+//   {
+//     "id": "roof_1",
+//     "type": "gable",           // "flat", "gable", "hip", "shed", "mansard", "gambrel"
+//     "pitch": 6.0,              // Rise per 12" run (e.g., 6:12)
+//     "overhang": 600,           // Eave overhang in mm
+//     "ridge_height": 3000,      // Height of ridge above wall top in mm
+//     "surfaces": [              // Array of roof surface polygons
+//       {
+//         "id": "surface_1",
+//         "name": "west",
+//         "pitch": 26.57,        // Slope in degrees
+//         "vertices": [[x,y,z], [x,y,z], ...]  // Polygon vertices in mm
+//       }
+//     ],
+//     "ridges": [...],           // Optional ridge lines
+//     "dormers": [...],          // Optional dormers
+//     "skylights": [...]         // Optional skylights
+//   }
+//
+// rooms: Object with room_id as key
+//   {
+//     "living_room": {
+//       "name": "Living Room",
+//       "room_type": "living",
+//       "area": 25000000,        // Area in mm² (25 m²)
+//       "bounds": {"x": 0, "y": 0, "width": 5000, "height": 5000},
+//       "center": {"x": 2500, "y": 2500}
+//     }
+//   }
+//
+// summary: Statistics object
+//   {
+//     "total_walls": 12,
+//     "exterior_walls": 4,
+//     "interior_walls": 6,
+//     "wet_walls": 2,
+//     "doors": 5,
+//     "windows": 8,
+//     "floors": 1,               // NEW
+//     "rooms_placed": 6,
+//     "rooms_requested": 6
+//   }
+//
+// ============================================================================
+
+// ============================================================================
 // QBD INPUT TYPES (from Python QBD system)
 // ============================================================================
 
@@ -73,6 +176,31 @@ struct QBDWall {
 
     f32 length() const {
         return glm::length(vec2(end.x - start.x, end.y - start.y));
+    }
+};
+
+// Floor from QBD output
+// JSON format in floors_batch:
+// {
+//   "start": [x, y, z],     // Bottom-left corner in mm (y = floor elevation)
+//   "end": [x, y, z],       // Top-right corner in mm (y = floor elevation)
+//   "thickness": 300,       // Floor thickness in mm (default 300)
+//   "level_name": "Level 1",
+//   "room": "living_room"   // Optional: room this floor belongs to
+// }
+struct QBDFloor {
+    vec3 start;                 // Bottom-left corner (X, Y elevation, Z)
+    vec3 end;                   // Top-right corner (X, Y elevation, Z)
+    f32 thickness = 300.0f;     // Floor thickness in mm (default 300mm = ~12")
+    std::string levelName;
+    std::string room;           // Room this floor belongs to (optional)
+
+    f32 area() const {
+        return std::abs((end.x - start.x) * (end.z - start.z));
+    }
+
+    vec2 dimensions() const {
+        return vec2(std::abs(end.x - start.x), std::abs(end.z - start.z));
     }
 };
 
@@ -197,6 +325,7 @@ struct QBDSummary {
     int wetWalls = 0;
     int doors = 0;
     int windows = 0;
+    int floors = 0;
     int roomsPlaced = 0;
     int roomsRequested = 0;
 };
@@ -214,6 +343,7 @@ struct QBDLayout {
     f32 score = 0.0f;
 
     std::vector<QBDWall> walls;
+    std::vector<QBDFloor> floors;
     std::vector<QBDDoor> doors;
     std::vector<QBDWindow> windows;
     std::vector<QBDRoof> roofs;

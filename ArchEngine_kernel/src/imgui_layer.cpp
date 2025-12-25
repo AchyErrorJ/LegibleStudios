@@ -1,5 +1,6 @@
 #include "imgui_layer.hpp"
 #include "physics_bridge.hpp"
+#include "renderer.hpp"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <stdexcept>
@@ -37,7 +38,7 @@ ImGuiLayer::ImGuiLayer(VulkanContext& context, GLFWwindow* window, VkRenderPass 
     initInfo.DescriptorPool = m_imguiPool;
     initInfo.MinImageCount = 2;
     initInfo.ImageCount = static_cast<u32>(context.getSwapchainImageViews().size());
-    initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    initInfo.MSAASamples = context.getMsaaSamples();  // Match render pass MSAA
 
     ImGui_ImplVulkan_Init(&initInfo, renderPass);
 
@@ -630,6 +631,279 @@ void ImGuiLayer::drawWallEditor(Building& building, bool show) {
             }
         } else {
             ImGui::Text("No walls in model");
+        }
+    }
+    ImGui::End();
+}
+
+void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
+    if (!show) return;
+
+    ImGui::SetNextWindowPos(ImVec2(10, 660), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(320, 300), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Render Settings", &show)) {
+        // Shadow Settings
+        if (ImGui::CollapsingHeader("Shadow Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+            bool shadowsEnabled = renderer.getShadowsEnabled();
+            if (ImGui::Checkbox("Enable Shadows", &shadowsEnabled)) {
+                renderer.setShadowsEnabled(shadowsEnabled);
+            }
+
+            if (shadowsEnabled) {
+                vec3 lightDir = renderer.getLightDirection();
+                float lightAngles[2] = {
+                    glm::degrees(std::atan2(lightDir.x, lightDir.z)),  // Azimuth
+                    glm::degrees(std::asin(-lightDir.y))               // Elevation
+                };
+
+                if (ImGui::SliderFloat("Sun Azimuth", &lightAngles[0], -180.0f, 180.0f, "%.0f deg")) {
+                    float az = glm::radians(lightAngles[0]);
+                    float el = glm::radians(lightAngles[1]);
+                    vec3 newDir = vec3(
+                        std::sin(az) * std::cos(el),
+                        -std::sin(el),
+                        std::cos(az) * std::cos(el)
+                    );
+                    renderer.setLightDirection(newDir);
+                }
+
+                if (ImGui::SliderFloat("Sun Elevation", &lightAngles[1], 10.0f, 80.0f, "%.0f deg")) {
+                    float az = glm::radians(lightAngles[0]);
+                    float el = glm::radians(lightAngles[1]);
+                    vec3 newDir = vec3(
+                        std::sin(az) * std::cos(el),
+                        -std::sin(el),
+                        std::cos(az) * std::cos(el)
+                    );
+                    renderer.setLightDirection(newDir);
+                }
+
+                // Quick presets
+                ImGui::Text("Light Presets:");
+                if (ImGui::Button("Morning")) {
+                    renderer.setLightDirection(vec3(-0.7f, -0.5f, 0.5f));
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Noon")) {
+                    renderer.setLightDirection(vec3(0.0f, -1.0f, 0.1f));
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Evening")) {
+                    renderer.setLightDirection(vec3(0.7f, -0.3f, -0.5f));
+                }
+
+                ImGui::Separator();
+
+                // Sun animation
+                static bool animateSun = false;
+                static float animSpeed = 0.1f;  // Slower default
+                static float sunAngle = 0.0f;
+
+                ImGui::Checkbox("Animate Sun", &animateSun);
+                if (animateSun) {
+                    ImGui::SliderFloat("Speed", &animSpeed, 0.01f, 2.0f, "%.2fx");
+
+                    // Update sun angle
+                    sunAngle += animSpeed * 0.016f;  // ~60fps
+                    if (sunAngle > 6.28318f) sunAngle -= 6.28318f;
+
+                    // Calculate sun position (circular path)
+                    float elevation = 0.5f + 0.3f * std::sin(sunAngle * 0.5f);  // Varies 0.2-0.8
+                    vec3 newDir = vec3(
+                        std::sin(sunAngle) * std::cos(elevation),
+                        -std::sin(elevation),
+                        std::cos(sunAngle) * std::cos(elevation)
+                    );
+                    renderer.setLightDirection(newDir);
+
+                    // Show current time of day
+                    float hours = (sunAngle / 6.28318f) * 24.0f;
+                    int hour = static_cast<int>(hours) % 24;
+                    int minute = static_cast<int>((hours - hour) * 60.0f) % 60;
+                    ImGui::Text("Time: %02d:%02d", (hour + 6) % 24, minute);
+                }
+            }
+        }
+
+        ImGui::Separator();
+
+        // PBR Material Settings
+        if (ImGui::CollapsingHeader("Material Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+            // Wall Materials
+            if (ImGui::TreeNode("Wall Material")) {
+                float wallMetallic = renderer.getWallMetallic();
+                if (ImGui::SliderFloat("Metallic##wall", &wallMetallic, 0.0f, 1.0f, "%.2f")) {
+                    renderer.setWallMetallic(wallMetallic);
+                }
+
+                float wallRoughness = renderer.getWallRoughness();
+                if (ImGui::SliderFloat("Roughness##wall", &wallRoughness, 0.04f, 1.0f, "%.2f")) {
+                    renderer.setWallRoughness(wallRoughness);
+                }
+
+                // Wall presets
+                if (ImGui::Button("Concrete##wall")) {
+                    renderer.setWallMetallic(0.0f);
+                    renderer.setWallRoughness(0.9f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Stucco##wall")) {
+                    renderer.setWallMetallic(0.0f);
+                    renderer.setWallRoughness(0.8f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Brick##wall")) {
+                    renderer.setWallMetallic(0.0f);
+                    renderer.setWallRoughness(0.85f);
+                }
+                ImGui::TreePop();
+            }
+
+            // Roof Materials
+            if (ImGui::TreeNode("Roof Material")) {
+                float roofMetallic = renderer.getRoofMetallic();
+                if (ImGui::SliderFloat("Metallic##roof", &roofMetallic, 0.0f, 1.0f, "%.2f")) {
+                    renderer.setRoofMetallic(roofMetallic);
+                }
+
+                float roofRoughness = renderer.getRoofRoughness();
+                if (ImGui::SliderFloat("Roughness##roof", &roofRoughness, 0.04f, 1.0f, "%.2f")) {
+                    renderer.setRoofRoughness(roofRoughness);
+                }
+
+                // Roof presets
+                if (ImGui::Button("Shingle##roof")) {
+                    renderer.setRoofMetallic(0.0f);
+                    renderer.setRoofRoughness(0.8f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Metal##roof")) {
+                    renderer.setRoofMetallic(0.9f);
+                    renderer.setRoofRoughness(0.3f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Tile##roof")) {
+                    renderer.setRoofMetallic(0.0f);
+                    renderer.setRoofRoughness(0.6f);
+                }
+                ImGui::TreePop();
+            }
+
+            // Default/Other Materials
+            if (ImGui::TreeNode("Other Elements")) {
+                float metallic = renderer.getDefaultMetallic();
+                if (ImGui::SliderFloat("Metallic##default", &metallic, 0.0f, 1.0f, "%.2f")) {
+                    renderer.setDefaultMetallic(metallic);
+                }
+
+                float roughness = renderer.getDefaultRoughness();
+                if (ImGui::SliderFloat("Roughness##default", &roughness, 0.04f, 1.0f, "%.2f")) {
+                    renderer.setDefaultRoughness(roughness);
+                }
+
+                if (ImGui::Button("Steel##default")) {
+                    renderer.setDefaultMetallic(0.95f);
+                    renderer.setDefaultRoughness(0.4f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Wood##default")) {
+                    renderer.setDefaultMetallic(0.0f);
+                    renderer.setDefaultRoughness(0.7f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Concrete##default")) {
+                    renderer.setDefaultMetallic(0.0f);
+                    renderer.setDefaultRoughness(0.9f);
+                }
+                ImGui::TreePop();
+            }
+        }
+
+        ImGui::Separator();
+
+        // Section Clipping Settings
+        if (ImGui::CollapsingHeader("Section Clipping", ImGuiTreeNodeFlags_DefaultOpen)) {
+            bool clippingEnabled = renderer.getClippingEnabled();
+            if (ImGui::Checkbox("Enable Section Cut", &clippingEnabled)) {
+                renderer.setClippingEnabled(clippingEnabled);
+            }
+
+            if (clippingEnabled) {
+                // Axis selection
+                const char* axisNames[] = { "X (Left/Right)", "Y (Up/Down)", "Z (Front/Back)" };
+                int clipAxis = renderer.getClipAxis();
+                if (ImGui::Combo("Cut Axis", &clipAxis, axisNames, 3)) {
+                    renderer.setClipAxis(clipAxis);
+                }
+
+                // Height/position slider
+                float clipHeight = renderer.getClipHeight();
+                const char* heightLabel = "Cut Position";
+                float minVal = -100.0f;
+                float maxVal = 100.0f;
+
+                switch (clipAxis) {
+                    case 0: heightLabel = "X Position (ft)"; break;
+                    case 1: heightLabel = "Y Position (ft)"; minVal = 0.0f; maxVal = 50.0f; break;
+                    case 2: heightLabel = "Z Position (ft)"; break;
+                }
+
+                if (ImGui::SliderFloat(heightLabel, &clipHeight, minVal, maxVal, "%.1f")) {
+                    renderer.setClipHeight(clipHeight);
+                }
+
+                // Flip direction
+                bool flipped = renderer.getClipFlipped();
+                if (ImGui::Checkbox("Flip Cut Direction", &flipped)) {
+                    renderer.setClipFlipped(flipped);
+                }
+
+                ImGui::Separator();
+
+                // Quick section presets
+                ImGui::Text("Quick Sections:");
+                if (ImGui::Button("Floor Plan (Y=4ft)")) {
+                    renderer.setClipAxis(1);
+                    renderer.setClipHeight(4.0f);
+                    renderer.setClipFlipped(false);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Roof Plan (Y=10ft)")) {
+                    renderer.setClipAxis(1);
+                    renderer.setClipHeight(10.0f);
+                    renderer.setClipFlipped(false);
+                }
+
+                if (ImGui::Button("Section A-A (X=0)")) {
+                    renderer.setClipAxis(0);
+                    renderer.setClipHeight(0.0f);
+                    renderer.setClipFlipped(false);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Section B-B (Z=0)")) {
+                    renderer.setClipAxis(2);
+                    renderer.setClipHeight(0.0f);
+                    renderer.setClipFlipped(false);
+                }
+
+                ImGui::Separator();
+
+                // Help text
+                ImGui::TextWrapped("Section clipping cuts away geometry to show interior views. "
+                                   "Use Y axis for floor plans, X/Z for building sections.");
+            }
+        }
+
+        ImGui::Separator();
+
+        // Visualization mode (moved from elsewhere for convenience)
+        if (ImGui::CollapsingHeader("Visualization")) {
+            VisualizationMode mode = renderer.getVisualizationMode();
+            const char* modeNames[] = { "Structural", "Thermal", "Lighting", "Acoustic", "Material", "Wireframe" };
+            int currentMode = static_cast<int>(mode);
+            if (ImGui::Combo("Mode", &currentMode, modeNames, 6)) {
+                renderer.setVisualizationMode(static_cast<VisualizationMode>(currentMode));
+            }
         }
     }
     ImGui::End();

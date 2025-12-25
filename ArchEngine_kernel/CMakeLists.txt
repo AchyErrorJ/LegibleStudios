@@ -86,6 +86,10 @@ set(ENGINE_SOURCES
     src/obc_engine.cpp
     src/slicer_2d.cpp
     src/qbd_interface.cpp
+    src/descriptor_manager.cpp
+    src/instance_batch.cpp
+    src/shadow_map.cpp
+    src/environment_map.cpp
 )
 
 # Header files
@@ -103,6 +107,10 @@ set(ENGINE_HEADERS
     include/obc_engine.hpp
     include/slicer_2d.hpp
     include/qbd_interface.hpp
+    include/descriptor_manager.hpp
+    include/instance_batch.hpp
+    include/shadow_map.hpp
+    include/environment_map.hpp
 )
 
 # Main executable
@@ -110,6 +118,7 @@ add_executable(ArchEngine ${ENGINE_SOURCES} ${ENGINE_HEADERS} ${IMGUI_SOURCES})
 
 target_include_directories(ArchEngine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/external
     ${Vulkan_INCLUDE_DIRS}
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends

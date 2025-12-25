@@ -16,7 +16,7 @@ PipelineConfig PipelineConfig::defaultConfig() {
     config.rasterization.rasterizerDiscardEnable = VK_FALSE;
     config.rasterization.polygonMode = VK_POLYGON_MODE_FILL;
     config.rasterization.lineWidth = 1.0f;
-    config.rasterization.cullMode = VK_CULL_MODE_BACK_BIT;
+    config.rasterization.cullMode = VK_CULL_MODE_NONE;  // Disable culling to test flickering
     config.rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     config.rasterization.depthBiasEnable = VK_FALSE;
 
@@ -116,7 +116,7 @@ Pipeline::Pipeline(VulkanContext& context, const std::string& vertPath,
     pipelineInfo.renderPass = config.renderPass;
     pipelineInfo.subpass = config.subpass;
 
-    if (vkCreateGraphicsPipelines(m_context.getDevice(), VK_NULL_HANDLE, 1,
+    if (vkCreateGraphicsPipelines(m_context.getDevice(), m_context.getPipelineCache(), 1,
                                    &pipelineInfo, nullptr, &m_pipeline) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create graphics pipeline");
     }

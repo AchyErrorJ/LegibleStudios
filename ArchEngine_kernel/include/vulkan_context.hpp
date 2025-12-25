@@ -4,6 +4,7 @@
 #include "window.hpp"
 #include <optional>
 #include <set>
+#include <fstream>
 
 namespace arch {
 
@@ -29,6 +30,17 @@ struct VulkanConfig {
     bool enableValidation = true;
     bool enableDebugMarkers = true;
     u32 maxFramesInFlight = 2;
+
+    // MSAA settings (Phase 2)
+    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_4_BIT;
+    bool enableMsaa = true;
+
+    // Shadow settings (Phase 4)
+    u32 shadowMapResolution = 2048;
+    bool enableShadows = true;
+
+    // Pipeline cache path
+    std::string pipelineCachePath = "pipeline_cache.bin";
 };
 
 class VulkanContext {
@@ -51,6 +63,17 @@ public:
     const QueueFamilyIndices& getQueueFamilies() const { return m_queueFamilies; }
     u32 getGraphicsQueueFamily() const { return m_queueFamilies.graphicsFamily.value(); }
     u32 getMaxFramesInFlight() const { return m_config.maxFramesInFlight; }
+
+    // Pipeline cache (Phase 0)
+    VkPipelineCache getPipelineCache() const { return m_pipelineCache; }
+
+    // MSAA support (Phase 2)
+    VkSampleCountFlagBits getMsaaSamples() const { return m_msaaSamples; }
+    VkSampleCountFlagBits getMaxUsableSampleCount() const;
+    VkImageView getMsaaColorImageView() const { return m_msaaColorImageView; }
+
+    // Config access
+    const VulkanConfig& getConfig() const { return m_config; }
 
     // Swapchain
     VkSwapchainKHR getSwapchain() const { return m_swapchain; }
@@ -83,7 +106,8 @@ public:
     // Image creation helpers
     void createImage(u32 width, u32 height, VkFormat format, VkImageTiling tiling,
                     VkImageUsageFlags usage, VkMemoryPropertyFlags properties,
-                    VkImage& image, VkDeviceMemory& imageMemory);
+                    VkImage& image, VkDeviceMemory& imageMemory,
+                    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
 
     VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
 
@@ -105,6 +129,9 @@ private:
     void createImageViews();
     void createCommandPool();
     void createDepthResources();
+    void createPipelineCache();
+    void savePipelineCache();
+    void createMsaaResources();
 
     void cleanupSwapchain();
 
@@ -133,6 +160,15 @@ private:
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
+
+    // Pipeline cache (Phase 0)
+    VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
+
+    // MSAA resources (Phase 2)
+    VkSampleCountFlagBits m_msaaSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkImage m_msaaColorImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_msaaColorMemory = VK_NULL_HANDLE;
+    VkImageView m_msaaColorImageView = VK_NULL_HANDLE;
 
     // Queues
     VkQueue m_graphicsQueue = VK_NULL_HANDLE;

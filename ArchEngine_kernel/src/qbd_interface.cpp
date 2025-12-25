@@ -188,6 +188,43 @@ std::optional<QBDLayout> QBDInterface::loadFromJSON(const std::string& jsonStrin
             }
         }
 
+        // Parse floors
+        // JSON format: floors_batch array with objects containing:
+        //   start: [x, y, z] - bottom-left corner in mm (y = floor elevation)
+        //   end: [x, y, z] - top-right corner in mm
+        //   thickness: floor thickness in mm (default 300)
+        //   level_name: string
+        //   room: string (optional)
+        if (j.contains("floors_batch") && j["floors_batch"].is_array()) {
+            for (const auto& fj : j["floors_batch"]) {
+                QBDFloor floor;
+
+                // Parse start point
+                if (fj.contains("start") && fj["start"].is_array() && fj["start"].size() >= 3) {
+                    floor.start = vec3(
+                        static_cast<f32>(fj["start"][0]),
+                        static_cast<f32>(fj["start"][1]),
+                        static_cast<f32>(fj["start"][2])
+                    );
+                }
+
+                // Parse end point
+                if (fj.contains("end") && fj["end"].is_array() && fj["end"].size() >= 3) {
+                    floor.end = vec3(
+                        static_cast<f32>(fj["end"][0]),
+                        static_cast<f32>(fj["end"][1]),
+                        static_cast<f32>(fj["end"][2])
+                    );
+                }
+
+                floor.thickness = fj.value("thickness", 300.0f);  // Default 300mm
+                floor.levelName = fj.value("level_name", "Level 1");
+                floor.room = fj.value("room", "");
+
+                layout.floors.push_back(floor);
+            }
+        }
+
         // Parse doors (new format with wall_index and offset)
         if (j.contains("doors") && j["doors"].is_array()) {
             for (const auto& dj : j["doors"]) {
@@ -373,6 +410,7 @@ std::optional<QBDLayout> QBDInterface::loadFromJSON(const std::string& jsonStrin
             layout.summary.wetWalls = j["summary"].value("wet_walls", 0);
             layout.summary.doors = j["summary"].value("doors", 0);
             layout.summary.windows = j["summary"].value("windows", 0);
+            layout.summary.floors = j["summary"].value("floors", 0);
             layout.summary.roomsPlaced = j["summary"].value("rooms_placed", 0);
             layout.summary.roomsRequested = j["summary"].value("rooms_requested", 0);
         }
@@ -429,6 +467,7 @@ std::optional<QBDLayout> QBDInterface::loadFromJSON(const std::string& jsonStrin
 
         std::cout << "[QBD] Loaded layout: " << layout.width << "x" << layout.depth
                   << " with " << layout.walls.size() << " walls, "
+                  << layout.floors.size() << " floors, "
                   << layout.doors.size() << " doors, "
                   << layout.windows.size() << " windows, "
                   << layout.roofs.size() << " roofs, "
@@ -491,6 +530,28 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
                 elem.material = "interior_wall";
                 break;
         }
+
+        building.elements.push_back(elem);
+    }
+
+    // Convert floors to structural elements
+    for (const auto& floor : layout.floors) {
+        StructuralElement elem;
+        elem.type = ElementType::Floor;
+
+        // Floor uses start/end to define the rectangle
+        // Y is the elevation, thickness is the depth of the floor slab
+        elem.start = floor.start;
+        elem.end = vec3(floor.end.x, floor.start.y + floor.thickness, floor.end.z);
+
+        // Width and depth are the horizontal dimensions
+        elem.width = std::abs(floor.end.x - floor.start.x);
+        elem.depth = std::abs(floor.end.z - floor.start.z);
+
+        elem.material = "floor_slab";
+        elem.stress = 0.0f;
+        elem.deflection = 0.0f;
+        elem.failed = false;
 
         building.elements.push_back(elem);
     }

@@ -19,6 +19,7 @@ public:
 
     void bind(VkCommandBuffer commandBuffer);
     void draw(VkCommandBuffer commandBuffer);
+    void drawInstanced(VkCommandBuffer commandBuffer, u32 instanceCount);
 
     u32 getVertexCount() const { return m_vertexCount; }
     u32 getIndexCount() const { return m_indexCount; }

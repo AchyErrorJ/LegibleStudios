@@ -1,6 +1,7 @@
 #include "renderer.hpp"
 #include <stdexcept>
 #include <cstring>
+#include <array>
 
 namespace arch {
 
@@ -10,6 +11,16 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
     createFramebuffers();
     createCommandBuffers();
     createSyncObjects();
+
+    // Create shadow map BEFORE descriptor sets so it can be bound
+    if (m_context.getConfig().enableShadows) {
+        m_shadowMap = std::make_unique<ShadowMap>(m_context, m_context.getConfig().shadowMapResolution);
+    }
+
+    // Create environment map (procedural sky by default)
+    m_envMap = std::make_unique<EnvironmentMap>(m_context);
+    m_envMap->createProceduralSky();
+
     createDescriptorPool();
     createUniformBuffers();
     createDescriptorSets();
@@ -23,12 +34,14 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
 Renderer::~Renderer() {
     m_context.waitIdle();
 
+    m_envMap.reset();
+    m_shadowMap.reset();
     m_gridMesh.reset();
     m_meshCache.clear();
     m_pipeline.reset();
     m_wireframePipeline.reset();
 
-    for (size_t i = 0; i < m_context.getMaxFramesInFlight(); ++i) {
+    for (size_t i = 0; i < m_context.getSwapchainImageCount(); ++i) {
         vkDestroyBuffer(m_context.getDevice(), m_uniformBuffers[i], nullptr);
         vkFreeMemory(m_context.getDevice(), m_uniformBuffersMemory[i], nullptr);
     }
@@ -37,10 +50,26 @@ Renderer::~Renderer() {
     vkDestroyDescriptorSetLayout(m_context.getDevice(), m_descriptorSetLayout, nullptr);
     vkDestroyPipelineLayout(m_context.getDevice(), m_pipelineLayout, nullptr);
 
+    // Cleanup sky pipeline
+    if (m_skyPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_context.getDevice(), m_skyPipeline, nullptr);
+    }
+    if (m_skyPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(m_context.getDevice(), m_skyPipelineLayout, nullptr);
+    }
+    if (m_skyDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_context.getDevice(), m_skyDescriptorSetLayout, nullptr);
+    }
+
+    // Destroy per-frame-in-flight sync objects
     for (size_t i = 0; i < m_context.getMaxFramesInFlight(); ++i) {
         vkDestroySemaphore(m_context.getDevice(), m_imageAvailableSemaphores[i], nullptr);
-        vkDestroySemaphore(m_context.getDevice(), m_renderFinishedSemaphores[i], nullptr);
         vkDestroyFence(m_context.getDevice(), m_inFlightFences[i], nullptr);
+    }
+
+    // Destroy per-swapchain-image semaphores
+    for (size_t i = 0; i < m_renderFinishedSemaphores.size(); ++i) {
+        vkDestroySemaphore(m_context.getDevice(), m_renderFinishedSemaphores[i], nullptr);
     }
 
     for (auto fb : m_framebuffers) {
@@ -51,27 +80,121 @@ Renderer::~Renderer() {
 }
 
 void Renderer::createRenderPass() {
-    m_renderPass = RenderPassBuilder(m_context)
-        .addColorAttachment(m_context.getSwapchainFormat())
-        .addDepthAttachment(VK_FORMAT_D32_SFLOAT)
-        .addSubpass()
-        .build();
+    VkSampleCountFlagBits msaaSamples = m_context.getMsaaSamples();
+    bool useMsaa = msaaSamples != VK_SAMPLE_COUNT_1_BIT;
+
+    std::vector<VkAttachmentDescription> attachments;
+    
+    if (useMsaa) {
+        // Attachment 0: MSAA color buffer (multisampled)
+        VkAttachmentDescription colorAttachment{};
+        colorAttachment.format = m_context.getSwapchainFormat();
+        colorAttachment.samples = msaaSamples;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachments.push_back(colorAttachment);
+
+        // Attachment 1: Resolve target (swapchain image)
+        VkAttachmentDescription resolveAttachment{};
+        resolveAttachment.format = m_context.getSwapchainFormat();
+        resolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        resolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        resolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        resolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        resolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        resolveAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        attachments.push_back(resolveAttachment);
+
+        // Attachment 2: MSAA depth buffer
+        VkAttachmentDescription depthAttachment{};
+        depthAttachment.format = VK_FORMAT_D32_SFLOAT;
+        depthAttachment.samples = msaaSamples;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        attachments.push_back(depthAttachment);
+
+        // Subpass references
+        VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkAttachmentReference resolveRef{1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkAttachmentReference depthRef{2, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorRef;
+        subpass.pResolveAttachments = &resolveRef;
+        subpass.pDepthStencilAttachment = &depthRef;
+
+        VkSubpassDependency dependency{};
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass = 0;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        VkRenderPassCreateInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        renderPassInfo.attachmentCount = static_cast<u32>(attachments.size());
+        renderPassInfo.pAttachments = attachments.data();
+        renderPassInfo.subpassCount = 1;
+        renderPassInfo.pSubpasses = &subpass;
+        renderPassInfo.dependencyCount = 1;
+        renderPassInfo.pDependencies = &dependency;
+
+        if (vkCreateRenderPass(m_context.getDevice(), &renderPassInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create MSAA render pass");
+        }
+    } else {
+        // Non-MSAA path using RenderPassBuilder
+        m_renderPass = RenderPassBuilder(m_context)
+            .addColorAttachment(m_context.getSwapchainFormat())
+            .addDepthAttachment(VK_FORMAT_D32_SFLOAT)
+            .addSubpass()
+            .build();
+    }
 }
 
 void Renderer::createFramebuffers() {
     const auto& imageViews = m_context.getSwapchainImageViews();
     auto extent = m_context.getSwapchainExtent();
+    VkSampleCountFlagBits msaaSamples = m_context.getMsaaSamples();
+    bool useMsaa = msaaSamples != VK_SAMPLE_COUNT_1_BIT;
 
     m_framebuffers.resize(imageViews.size());
 
     for (size_t i = 0; i < imageViews.size(); ++i) {
-        VkImageView attachments[] = {imageViews[i], m_context.getDepthImageView()};
+        std::vector<VkImageView> attachments;
+        
+        if (useMsaa) {
+            // MSAA: 3 attachments - MSAA color, resolve target (swapchain), MSAA depth
+            attachments = {
+                m_context.getMsaaColorImageView(),  // MSAA color
+                imageViews[i],                       // Resolve target
+                m_context.getDepthImageView()        // MSAA depth
+            };
+        } else {
+            // No MSAA: 2 attachments - color, depth
+            attachments = {
+                imageViews[i],
+                m_context.getDepthImageView()
+            };
+        }
 
         VkFramebufferCreateInfo framebufferInfo{};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         framebufferInfo.renderPass = m_renderPass;
-        framebufferInfo.attachmentCount = 2;
-        framebufferInfo.pAttachments = attachments;
+        framebufferInfo.attachmentCount = static_cast<u32>(attachments.size());
+        framebufferInfo.pAttachments = attachments.data();
         framebufferInfo.width = extent.width;
         framebufferInfo.height = extent.height;
         framebufferInfo.layers = 1;
@@ -84,7 +207,8 @@ void Renderer::createFramebuffers() {
 }
 
 void Renderer::createCommandBuffers() {
-    m_commandBuffers.resize(m_context.getMaxFramesInFlight());
+    // One command buffer per swapchain image
+    m_commandBuffers.resize(m_context.getSwapchainImageCount());
 
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -98,10 +222,18 @@ void Renderer::createCommandBuffers() {
 }
 
 void Renderer::createSyncObjects() {
-    u32 framesInFlight = m_context.getMaxFramesInFlight();
-    m_imageAvailableSemaphores.resize(framesInFlight);
-    m_renderFinishedSemaphores.resize(framesInFlight);
-    m_inFlightFences.resize(framesInFlight);
+    u32 maxFrames = m_context.getMaxFramesInFlight();
+    u32 imageCount = m_context.getSwapchainImageCount();
+
+    // Per-frame-in-flight: semaphores for acquiring images, fences for CPU-GPU sync
+    m_imageAvailableSemaphores.resize(maxFrames);
+    m_inFlightFences.resize(maxFrames);
+
+    // Per-swapchain-image: semaphores for presentation (must match acquired image)
+    m_renderFinishedSemaphores.resize(imageCount);
+
+    // Track which fence is using each swapchain image
+    m_imagesInFlight.resize(imageCount, VK_NULL_HANDLE);
 
     VkSemaphoreCreateInfo semaphoreInfo{};
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -110,40 +242,72 @@ void Renderer::createSyncObjects() {
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-    for (size_t i = 0; i < framesInFlight; ++i) {
+    for (size_t i = 0; i < maxFrames; ++i) {
         if (vkCreateSemaphore(m_context.getDevice(), &semaphoreInfo, nullptr, &m_imageAvailableSemaphores[i]) != VK_SUCCESS ||
-            vkCreateSemaphore(m_context.getDevice(), &semaphoreInfo, nullptr, &m_renderFinishedSemaphores[i]) != VK_SUCCESS ||
             vkCreateFence(m_context.getDevice(), &fenceInfo, nullptr, &m_inFlightFences[i]) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create sync objects");
+        }
+    }
+
+    // Create per-image render finished semaphores
+    for (size_t i = 0; i < imageCount; ++i) {
+        if (vkCreateSemaphore(m_context.getDevice(), &semaphoreInfo, nullptr, &m_renderFinishedSemaphores[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create render finished semaphores");
         }
     }
 }
 
 void Renderer::createDescriptorPool() {
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSize.descriptorCount = m_context.getMaxFramesInFlight();
+    std::vector<VkDescriptorPoolSize> poolSizes;
+
+    u32 imageCount = m_context.getSwapchainImageCount();
+
+    // UBO pool size (main pipeline + sky pipeline)
+    VkDescriptorPoolSize uboPoolSize{};
+    uboPoolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboPoolSize.descriptorCount = imageCount * 2;  // main + sky
+    poolSizes.push_back(uboPoolSize);
+
+    // Sampler pool size (shadow map + environment cubemap)
+    VkDescriptorPoolSize samplerPoolSize{};
+    samplerPoolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    samplerPoolSize.descriptorCount = imageCount * 2;  // shadow + envmap
+    poolSizes.push_back(samplerPoolSize);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = m_context.getMaxFramesInFlight();
+    poolInfo.poolSizeCount = static_cast<u32>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+    poolInfo.maxSets = imageCount * 2;  // main + sky descriptor sets
 
     if (vkCreateDescriptorPool(m_context.getDevice(), &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor pool");
     }
 
+    std::vector<VkDescriptorSetLayoutBinding> bindings;
+
+    // Binding 0: UBO
     VkDescriptorSetLayoutBinding uboBinding{};
     uboBinding.binding = 0;
     uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboBinding.descriptorCount = 1;
-    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings.push_back(uboBinding);
+
+    // Binding 1: Shadow map sampler (if shadows enabled)
+    if (m_shadowMap) {
+        VkDescriptorSetLayoutBinding shadowBinding{};
+        shadowBinding.binding = 1;
+        shadowBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        shadowBinding.descriptorCount = 1;
+        shadowBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings.push_back(shadowBinding);
+    }
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &uboBinding;
+    layoutInfo.bindingCount = static_cast<u32>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
 
     if (vkCreateDescriptorSetLayout(m_context.getDevice(), &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor set layout");
@@ -153,11 +317,11 @@ void Renderer::createDescriptorPool() {
 void Renderer::createUniformBuffers() {
     VkDeviceSize bufferSize = sizeof(UniformBufferObject);
 
-    m_uniformBuffers.resize(m_context.getMaxFramesInFlight());
-    m_uniformBuffersMemory.resize(m_context.getMaxFramesInFlight());
-    m_uniformBuffersMapped.resize(m_context.getMaxFramesInFlight());
+    m_uniformBuffers.resize(m_context.getSwapchainImageCount());
+    m_uniformBuffersMemory.resize(m_context.getSwapchainImageCount());
+    m_uniformBuffersMapped.resize(m_context.getSwapchainImageCount());
 
-    for (size_t i = 0; i < m_context.getMaxFramesInFlight(); ++i) {
+    for (size_t i = 0; i < m_context.getSwapchainImageCount(); ++i) {
         m_context.createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                m_uniformBuffers[i], m_uniformBuffersMemory[i]);
@@ -167,35 +331,58 @@ void Renderer::createUniformBuffers() {
 }
 
 void Renderer::createDescriptorSets() {
-    std::vector<VkDescriptorSetLayout> layouts(m_context.getMaxFramesInFlight(), m_descriptorSetLayout);
+    std::vector<VkDescriptorSetLayout> layouts(m_context.getSwapchainImageCount(), m_descriptorSetLayout);
 
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_descriptorPool;
-    allocInfo.descriptorSetCount = m_context.getMaxFramesInFlight();
+    allocInfo.descriptorSetCount = m_context.getSwapchainImageCount();
     allocInfo.pSetLayouts = layouts.data();
 
-    m_descriptorSets.resize(m_context.getMaxFramesInFlight());
+    m_descriptorSets.resize(m_context.getSwapchainImageCount());
     if (vkAllocateDescriptorSets(m_context.getDevice(), &allocInfo, m_descriptorSets.data()) != VK_SUCCESS) {
         throw std::runtime_error("Failed to allocate descriptor sets");
     }
 
-    for (size_t i = 0; i < m_context.getMaxFramesInFlight(); ++i) {
+    for (size_t i = 0; i < m_context.getSwapchainImageCount(); ++i) {
+        std::vector<VkWriteDescriptorSet> descriptorWrites;
+
+        // UBO write
         VkDescriptorBufferInfo bufferInfo{};
         bufferInfo.buffer = m_uniformBuffers[i];
         bufferInfo.offset = 0;
         bufferInfo.range = sizeof(UniformBufferObject);
 
-        VkWriteDescriptorSet descriptorWrite{};
-        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrite.dstSet = m_descriptorSets[i];
-        descriptorWrite.dstBinding = 0;
-        descriptorWrite.dstArrayElement = 0;
-        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorWrite.descriptorCount = 1;
-        descriptorWrite.pBufferInfo = &bufferInfo;
+        VkWriteDescriptorSet uboWrite{};
+        uboWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        uboWrite.dstSet = m_descriptorSets[i];
+        uboWrite.dstBinding = 0;
+        uboWrite.dstArrayElement = 0;
+        uboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboWrite.descriptorCount = 1;
+        uboWrite.pBufferInfo = &bufferInfo;
+        descriptorWrites.push_back(uboWrite);
 
-        vkUpdateDescriptorSets(m_context.getDevice(), 1, &descriptorWrite, 0, nullptr);
+        // Shadow map write (if shadows enabled)
+        VkDescriptorImageInfo shadowImageInfo{};
+        if (m_shadowMap) {
+            shadowImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            shadowImageInfo.imageView = m_shadowMap->getImageView();
+            shadowImageInfo.sampler = m_shadowMap->getSampler();
+
+            VkWriteDescriptorSet shadowWrite{};
+            shadowWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            shadowWrite.dstSet = m_descriptorSets[i];
+            shadowWrite.dstBinding = 1;
+            shadowWrite.dstArrayElement = 0;
+            shadowWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            shadowWrite.descriptorCount = 1;
+            shadowWrite.pImageInfo = &shadowImageInfo;
+            descriptorWrites.push_back(shadowWrite);
+        }
+
+        vkUpdateDescriptorSets(m_context.getDevice(), static_cast<u32>(descriptorWrites.size()),
+                               descriptorWrites.data(), 0, nullptr);
     }
 }
 
@@ -205,9 +392,17 @@ void Renderer::createPipeline() {
         .addPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants))
         .build();
 
+    VkSampleCountFlagBits msaaSamples = m_context.getMsaaSamples();
+
     PipelineConfig config = PipelineConfig::defaultConfig();
     config.renderPass = m_renderPass;
     config.pipelineLayout = m_pipelineLayout;
+    config.multisample.rasterizationSamples = msaaSamples;
+    // Enable sample shading for better quality (reduces aliasing inside polygons)
+    if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+        config.multisample.sampleShadingEnable = VK_TRUE;
+        config.multisample.minSampleShading = 0.2f;  // Min fraction of samples to shade
+    }
 
     m_pipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                              "shaders/structural.frag.spv", config);
@@ -216,12 +411,254 @@ void Renderer::createPipeline() {
     PipelineConfig wireframeConfig = PipelineConfig::defaultConfig();
     wireframeConfig.renderPass = m_renderPass;
     wireframeConfig.pipelineLayout = m_pipelineLayout;
+    wireframeConfig.multisample.rasterizationSamples = msaaSamples;
+    if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+        wireframeConfig.multisample.sampleShadingEnable = VK_TRUE;
+        wireframeConfig.multisample.minSampleShading = 0.2f;
+    }
     wireframeConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
     wireframeConfig.rasterization.lineWidth = 1.5f;
     wireframeConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
 
     m_wireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                                       "shaders/structural.frag.spv", wireframeConfig);
+
+    // Sky pipeline - renders fullscreen triangle behind everything
+    createSkyPipeline();
+}
+
+void Renderer::createSkyPipeline() {
+    // Create sky-specific descriptor set layout (UBO + environment cubemap)
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+
+    // Binding 0: UBO (same as main pipeline)
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 1: Environment cubemap
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutCreateInfo{};
+    layoutCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutCreateInfo.bindingCount = static_cast<u32>(bindings.size());
+    layoutCreateInfo.pBindings = bindings.data();
+
+    if (vkCreateDescriptorSetLayout(m_context.getDevice(), &layoutCreateInfo, nullptr, &m_skyDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create sky descriptor set layout");
+    }
+
+    // Allocate sky descriptor sets
+    u32 imageCount = m_context.getSwapchainImageCount();
+    m_skyDescriptorSets.resize(imageCount);
+    std::vector<VkDescriptorSetLayout> layouts(imageCount, m_skyDescriptorSetLayout);
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_descriptorPool;
+    allocInfo.descriptorSetCount = imageCount;
+    allocInfo.pSetLayouts = layouts.data();
+
+    if (vkAllocateDescriptorSets(m_context.getDevice(), &allocInfo, m_skyDescriptorSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate sky descriptor sets");
+    }
+
+    // Update sky descriptor sets
+    for (size_t i = 0; i < imageCount; ++i) {
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = m_uniformBuffers[i];
+        bufferInfo.offset = 0;
+        bufferInfo.range = sizeof(UniformBufferObject);
+
+        VkDescriptorImageInfo envMapInfo = m_envMap->getDescriptorInfo();
+
+        std::array<VkWriteDescriptorSet, 2> writes{};
+
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = m_skyDescriptorSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo = &bufferInfo;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = m_skyDescriptorSets[i];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo = &envMapInfo;
+
+        vkUpdateDescriptorSets(m_context.getDevice(), static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
+    }
+
+    // Sky push constants: sun direction (xyz) + useHdr flag (w)
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.offset = 0;
+    pushRange.size = sizeof(vec4);
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &m_skyDescriptorSetLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushRange;
+
+    if (vkCreatePipelineLayout(m_context.getDevice(), &pipelineLayoutInfo, nullptr, &m_skyPipelineLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create sky pipeline layout");
+    }
+
+    // Load shaders
+    auto readFile = [](const std::string& filepath) -> std::vector<char> {
+        std::ifstream file(filepath, std::ios::ate | std::ios::binary);
+        if (!file.is_open()) throw std::runtime_error("Failed to open: " + filepath);
+        size_t fileSize = static_cast<size_t>(file.tellg());
+        std::vector<char> buffer(fileSize);
+        file.seekg(0);
+        file.read(buffer.data(), fileSize);
+        return buffer;
+    };
+
+    auto vertCode = readFile("shaders/sky.vert.spv");
+    auto fragCode = readFile("shaders/sky.frag.spv");
+
+    VkShaderModuleCreateInfo moduleInfo{};
+    moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+
+    moduleInfo.codeSize = vertCode.size();
+    moduleInfo.pCode = reinterpret_cast<const u32*>(vertCode.data());
+    VkShaderModule vertModule;
+    vkCreateShaderModule(m_context.getDevice(), &moduleInfo, nullptr, &vertModule);
+
+    moduleInfo.codeSize = fragCode.size();
+    moduleInfo.pCode = reinterpret_cast<const u32*>(fragCode.data());
+    VkShaderModule fragModule;
+    vkCreateShaderModule(m_context.getDevice(), &moduleInfo, nullptr, &fragModule);
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    // No vertex input for fullscreen triangle
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = m_context.getMsaaSamples();
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_FALSE;  // Sky renders behind everything
+    depthStencil.depthWriteEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates = dynamicStates;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = m_skyPipelineLayout;
+    pipelineInfo.renderPass = m_renderPass;
+
+    if (vkCreateGraphicsPipelines(m_context.getDevice(), m_context.getPipelineCache(), 1,
+                                   &pipelineInfo, nullptr, &m_skyPipeline) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create sky pipeline");
+    }
+
+    vkDestroyShaderModule(m_context.getDevice(), vertModule, nullptr);
+    vkDestroyShaderModule(m_context.getDevice(), fragModule, nullptr);
+}
+
+void Renderer::drawSky() {
+    if (m_skyPipeline == VK_NULL_HANDLE) return;
+    if (m_skyDescriptorSets.empty()) return;
+
+    vkCmdBindPipeline(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);
+
+    // Bind sky descriptor set (includes UBO and environment cubemap)
+    vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_skyPipelineLayout, 0, 1, &m_skyDescriptorSets[m_currentFrame], 0, nullptr);
+
+    // Set viewport and scissor
+    auto extent = m_context.getSwapchainExtent();
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<f32>(extent.width);
+    viewport.height = static_cast<f32>(extent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(m_currentCommandBuffer, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = extent;
+    vkCmdSetScissor(m_currentCommandBuffer, 0, 1, &scissor);
+
+    // Pass sun direction (xyz) and useHdr flag (w) to shader
+    vec4 sunDir = vec4(m_lightDirection, m_useHdrEnvMap ? 1.0f : 0.0f);
+    vkCmdPushConstants(m_currentCommandBuffer, m_skyPipelineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(vec4), &sunDir);
+
+    // Draw fullscreen triangle (3 vertices, no vertex buffer)
+    vkCmdDraw(m_currentCommandBuffer, 3, 1, 0, 0);
+
+    // Rebind the structural pipeline and descriptor sets for subsequent draws
+    if (m_vizMode == VisualizationMode::Wireframe) {
+        m_wireframePipeline->bind(m_currentCommandBuffer);
+    } else {
+        m_pipeline->bind(m_currentCommandBuffer);
+    }
+    vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
 }
 
 void Renderer::cleanupSwapchain() {
@@ -236,6 +673,9 @@ void Renderer::recreateSwapchain() {
     cleanupSwapchain();
     m_context.recreateSwapchain();
     createFramebuffers();
+    // Reset frame counter and per-image fence tracking
+    m_currentFrame = 0;
+    m_imagesInFlight.assign(m_context.getSwapchainImageCount(), VK_NULL_HANDLE);
 }
 
 void Renderer::onResize() {
@@ -243,6 +683,7 @@ void Renderer::onResize() {
 }
 
 bool Renderer::beginFrame() {
+    // Wait for the current frame-in-flight's fence
     vkWaitForFences(m_context.getDevice(), 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
 
     VkResult result = vkAcquireNextImageKHR(m_context.getDevice(), m_context.getSwapchain(),
@@ -256,7 +697,16 @@ bool Renderer::beginFrame() {
         throw std::runtime_error("Failed to acquire swap chain image");
     }
 
+    // Check if a previous frame is still using this swapchain image
+    if (m_imagesInFlight[m_imageIndex] != VK_NULL_HANDLE) {
+        vkWaitForFences(m_context.getDevice(), 1, &m_imagesInFlight[m_imageIndex], VK_TRUE, UINT64_MAX);
+    }
+    // Mark this image as now being used by the current frame's fence
+    m_imagesInFlight[m_imageIndex] = m_inFlightFences[m_currentFrame];
+
     vkResetFences(m_context.getDevice(), 1, &m_inFlightFences[m_currentFrame]);
+
+    // Use m_currentFrame for command buffer (need enough for swapchain images)
     vkResetCommandBuffer(m_commandBuffers[m_currentFrame], 0);
 
     VkCommandBufferBeginInfo beginInfo{};
@@ -291,7 +741,8 @@ void Renderer::endFrame() {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &m_commandBuffers[m_currentFrame];
 
-    VkSemaphore signalSemaphores[] = {m_renderFinishedSemaphores[m_currentFrame]};
+    // Use per-image semaphore for render finished (indexed by acquired image)
+    VkSemaphore signalSemaphores[] = {m_renderFinishedSemaphores[m_imageIndex]};
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
@@ -302,7 +753,7 @@ void Renderer::endFrame() {
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = signalSemaphores;
+    presentInfo.pWaitSemaphores = signalSemaphores;  // Same semaphore indexed by m_imageIndex
 
     VkSwapchainKHR swapchains[] = {m_context.getSwapchain()};
     presentInfo.swapchainCount = 1;
@@ -317,6 +768,7 @@ void Renderer::endFrame() {
         throw std::runtime_error("Failed to present swap chain image");
     }
 
+    // Cycle through frames in flight (typically 2)
     m_currentFrame = (m_currentFrame + 1) % m_context.getMaxFramesInFlight();
     m_frameStarted = false;
     m_time += 0.016f;
@@ -330,12 +782,34 @@ void Renderer::beginRenderPass(vec4 clearColor) {
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = m_context.getSwapchainExtent();
 
-    VkClearValue clearValues[2];
-    clearValues[0].color = {{clearColor.r, clearColor.g, clearColor.b, clearColor.a}};
-    clearValues[1].depthStencil = {1.0f, 0};
+    VkSampleCountFlagBits msaaSamples = m_context.getMsaaSamples();
+    bool useMsaa = msaaSamples != VK_SAMPLE_COUNT_1_BIT;
 
-    renderPassInfo.clearValueCount = 2;
-    renderPassInfo.pClearValues = clearValues;
+    std::vector<VkClearValue> clearValues;
+    if (useMsaa) {
+        // MSAA: 3 attachments - MSAA color, resolve (no clear needed), MSAA depth
+        VkClearValue colorClear{};
+        colorClear.color = {{clearColor.r, clearColor.g, clearColor.b, clearColor.a}};
+        clearValues.push_back(colorClear);  // MSAA color
+
+        VkClearValue resolveClear{};  // Not actually used since loadOp is DONT_CARE
+        clearValues.push_back(resolveClear);  // Resolve target
+
+        VkClearValue depthClear{};
+        depthClear.depthStencil = {1.0f, 0};
+        clearValues.push_back(depthClear);  // MSAA depth
+    } else {
+        VkClearValue colorClear{};
+        colorClear.color = {{clearColor.r, clearColor.g, clearColor.b, clearColor.a}};
+        clearValues.push_back(colorClear);
+
+        VkClearValue depthClear{};
+        depthClear.depthStencil = {1.0f, 0};
+        clearValues.push_back(depthClear);
+    }
+
+    renderPassInfo.clearValueCount = static_cast<u32>(clearValues.size());
+    renderPassInfo.pClearValues = clearValues.data();
 
     vkCmdBeginRenderPass(m_currentCommandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -368,6 +842,139 @@ void Renderer::endRenderPass() {
     vkCmdEndRenderPass(m_currentCommandBuffer);
 }
 
+void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) {
+    if (!m_shadowMap || !m_shadowsEnabled || elements.empty()) {
+        return;
+    }
+
+    // Calculate scene bounds for light matrix
+    vec3 minBounds(FLT_MAX);
+    vec3 maxBounds(-FLT_MAX);
+    for (const auto& elem : elements) {
+        minBounds = glm::min(minBounds, glm::min(elem.start, elem.end));
+        maxBounds = glm::max(maxBounds, glm::max(elem.start, elem.end));
+    }
+    vec3 sceneCenter = (minBounds + maxBounds) * 0.5f;
+    f32 sceneRadius = glm::length(maxBounds - minBounds) * 0.5f;
+    sceneRadius = glm::max(sceneRadius, 10.0f);  // Minimum radius
+
+    // Update light matrices
+    m_shadowMap->updateLightMatrix(m_lightDirection, sceneCenter, sceneRadius);
+
+    // Begin shadow pass
+    m_shadowMap->beginShadowPass(m_currentCommandBuffer);
+
+    // Shadow push constants structure
+    struct ShadowPushConstants {
+        mat4 lightViewProj;
+        mat4 model;
+    };
+
+    // Draw all elements to shadow map - mirror drawStructuralFrame logic
+    for (const auto& elem : elements) {
+        std::string key;
+        mat4 transform = mat4(1.0f);
+
+        switch (elem.type) {
+            case ElementType::Beam: {
+                f32 length = glm::length(elem.end - elem.start);
+                key = "beam_" + std::to_string(length) + "_" +
+                      std::to_string(elem.width) + "_" + std::to_string(elem.depth);
+
+                vec3 dir = glm::normalize(elem.end - elem.start);
+                vec3 up = vec3(0, 1, 0);
+                if (std::abs(glm::dot(dir, up)) > 0.99f) up = vec3(0, 0, 1);
+
+                transform = glm::translate(mat4(1.0f), elem.start);
+                vec3 right = glm::normalize(glm::cross(up, dir));
+                vec3 localUp = glm::cross(dir, right);
+                mat4 rotation(1.0f);
+                rotation[0] = vec4(dir, 0);
+                rotation[1] = vec4(localUp, 0);
+                rotation[2] = vec4(right, 0);
+                transform = transform * rotation;
+                break;
+            }
+            case ElementType::Column: {
+                f32 height = elem.end.y - elem.start.y;
+                key = "col_" + std::to_string(elem.width) + "_" + std::to_string(elem.depth) + "_" + std::to_string(height);
+                transform = glm::translate(mat4(1.0f), elem.start);
+                break;
+            }
+            case ElementType::Wall: {
+                f32 height = elem.end.y - elem.start.y;
+                f32 xExtent = elem.end.x - elem.start.x;
+                f32 zExtent = elem.end.z - elem.start.z;
+                key = "col_" + std::to_string(xExtent) + "_" + std::to_string(zExtent) + "_" + std::to_string(height);
+                vec3 center = (elem.start + elem.end) * 0.5f;
+                center.y = elem.start.y;
+                transform = glm::translate(mat4(1.0f), center);
+                break;
+            }
+            case ElementType::Floor: {
+                f32 floorWidth = elem.end.x - elem.start.x;
+                f32 floorDepth = elem.end.z - elem.start.z;
+                key = "floor_" + std::to_string(floorWidth) + "_" + std::to_string(floorDepth) + "_" + std::to_string(elem.depth);
+                vec3 center = (elem.start + elem.end) * 0.5f;
+                center.y = elem.start.y;
+                transform = glm::translate(mat4(1.0f), center);
+                break;
+            }
+            case ElementType::Door: {
+                f32 xExtent = elem.end.x - elem.start.x;
+                f32 zExtent = elem.end.z - elem.start.z;
+                f32 doorHeight = elem.end.y - elem.start.y;
+                f32 doorWidth = std::max(std::abs(xExtent), std::abs(zExtent));
+                f32 doorDepth = std::min(std::abs(xExtent), std::abs(zExtent));
+                if (doorDepth < 0.1f) doorDepth = elem.depth;
+                key = "door_" + std::to_string(doorWidth) + "_" + std::to_string(doorHeight) + "_" + std::to_string(doorDepth);
+                vec3 center = (elem.start + elem.end) * 0.5f;
+                center.y = elem.start.y;
+                transform = glm::translate(mat4(1.0f), center);
+                break;
+            }
+            case ElementType::Window: {
+                f32 xExtent = elem.end.x - elem.start.x;
+                f32 zExtent = elem.end.z - elem.start.z;
+                f32 windowHeight = elem.end.y - elem.start.y;
+                f32 windowWidth = std::max(std::abs(xExtent), std::abs(zExtent));
+                f32 windowDepth = std::min(std::abs(xExtent), std::abs(zExtent));
+                if (windowDepth < 0.1f) windowDepth = elem.depth;
+                key = "window_" + std::to_string(windowWidth) + "_" + std::to_string(windowHeight) + "_" + std::to_string(windowDepth);
+                vec3 center = (elem.start + elem.end) * 0.5f;
+                center.y = elem.start.y;
+                transform = glm::translate(mat4(1.0f), center);
+                break;
+            }
+            case ElementType::Roof: {
+                // Roofs use custom mesh - key based on position
+                key = "roof_" + std::to_string(elem.start.x) + "_" + std::to_string(elem.start.y) + "_" + std::to_string(elem.start.z);
+                transform = mat4(1.0f);  // Identity - mesh vertices already in world space
+                break;
+            }
+            default:
+                continue;  // Skip other types
+        }
+
+        auto it = m_meshCache.find(key);
+        if (it == m_meshCache.end()) {
+            continue;  // Skip if mesh not cached
+        }
+
+        ShadowPushConstants shadowPush;
+        shadowPush.lightViewProj = m_shadowMap->getLightViewProj();
+        shadowPush.model = transform;
+
+        vkCmdPushConstants(m_currentCommandBuffer, m_shadowMap->getPipelineLayout(),
+                           VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ShadowPushConstants), &shadowPush);
+
+        it->second->bind(m_currentCommandBuffer);
+        it->second->draw(m_currentCommandBuffer);
+    }
+
+    m_shadowMap->endShadowPass(m_currentCommandBuffer);
+}
+
 void Renderer::setCamera(const Camera& camera) {
     m_camera = camera;
 }
@@ -376,12 +983,29 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
     auto extent = m_context.getSwapchainExtent();
 
     f32 aspectRatio = static_cast<f32>(extent.width) / static_cast<f32>(extent.height);
-    
+
     UniformBufferObject ubo{};
     ubo.view = m_camera.getViewMatrix();
     ubo.proj = m_camera.getProjectionMatrix(aspectRatio);
     ubo.proj[1][1] *= -1;
     ubo.time = m_time;
+
+    // Shadow mapping data
+    if (m_shadowMap && m_shadowsEnabled) {
+        ubo.lightViewProj = m_shadowMap->getLightViewProj();
+        ubo.lightDirection = vec4(m_lightDirection, 0.0f);
+        ubo.shadowBias = 0.005f;
+        ubo.enableShadows = 1;
+    } else {
+        ubo.lightViewProj = mat4(1.0f);
+        ubo.lightDirection = vec4(0.0f, -1.0f, 0.0f, 0.0f);
+        ubo.shadowBias = 0.0f;
+        ubo.enableShadows = 0;
+    }
+
+    // Section clipping data
+    ubo.clipPlane = m_clipPlane;
+    ubo.enableClipping = m_clippingEnabled ? 1 : 0;
 
     std::memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
 }
@@ -447,9 +1071,16 @@ vec3 Renderer::getElementColor(const StructuralElement& element, const Building&
 }
 
 void Renderer::drawMesh(Mesh& mesh, const mat4& transform, vec3 color, f32 stress) {
+    // Use default material
+    drawMeshWithMaterial(mesh, transform, color, stress,
+                         vec4(m_defaultMetallic, m_defaultRoughness, m_defaultAO, m_defaultEmission));
+}
+
+void Renderer::drawMeshWithMaterial(Mesh& mesh, const mat4& transform, vec3 color, f32 stress, vec4 material) {
     PushConstants push{};
     push.model = transform;
     push.color = vec4(color, stress);  // stress in alpha controls shader behavior
+    push.material = material;
 
     vkCmdPushConstants(m_currentCommandBuffer, m_pipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -505,6 +1136,18 @@ void Renderer::drawColumn(vec3 position, f32 width, f32 depth, f32 height, vec3 
 
     mat4 transform = glm::translate(mat4(1.0f), position);
     drawMesh(*m_meshCache[key], transform, color, stress);
+}
+
+void Renderer::drawColumnWithMaterial(vec3 position, f32 width, f32 depth, f32 height, vec3 color, f32 stress, vec4 material) {
+    std::string key = "col_" + std::to_string(width) + "_" + std::to_string(depth) + "_" + std::to_string(height);
+
+    if (m_meshCache.find(key) == m_meshCache.end()) {
+        auto [verts, indices] = Geometry::createColumn(vec3(0), width, depth, height, color);
+        m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+    }
+
+    mat4 transform = glm::translate(mat4(1.0f), position);
+    drawMeshWithMaterial(*m_meshCache[key], transform, color, stress, material);
 }
 
 void Renderer::drawFloor(vec3 position, f32 width, f32 depth, f32 thickness, vec3 color, f32 stress) {
@@ -604,6 +1247,48 @@ void Renderer::drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress) 
     drawMesh(*m_meshCache[key], transform, color, stress);
 }
 
+void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, f32 stress, vec4 material) {
+    if (!meshData.hasData()) return;
+
+    // Create unique key based on mesh data hash
+    size_t hash = 0;
+    for (const auto& v : meshData.vertices) {
+        hash ^= std::hash<float>{}(v.x) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+        hash ^= std::hash<float>{}(v.y) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+        hash ^= std::hash<float>{}(v.z) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    }
+    std::string key = "custom_" + std::to_string(hash);
+
+    if (m_meshCache.find(key) == m_meshCache.end()) {
+        std::vector<Vertex> vertices;
+        std::vector<u32> indices;
+
+        for (const auto& face : meshData.faces) {
+            const vec3& v0 = meshData.vertices[face[0]];
+            const vec3& v1 = meshData.vertices[face[1]];
+            const vec3& v2 = meshData.vertices[face[2]];
+
+            vec3 edge1 = v1 - v0;
+            vec3 edge2 = v2 - v0;
+            vec3 normal = glm::normalize(glm::cross(edge1, edge2));
+
+            u32 baseIndex = static_cast<u32>(vertices.size());
+            vertices.push_back({v0, normal, color});
+            vertices.push_back({v1, normal, color});
+            vertices.push_back({v2, normal, color});
+
+            indices.push_back(baseIndex + 0);
+            indices.push_back(baseIndex + 1);
+            indices.push_back(baseIndex + 2);
+        }
+
+        m_meshCache[key] = std::make_unique<Mesh>(m_context, vertices, indices);
+    }
+
+    mat4 transform = mat4(1.0f);
+    drawMeshWithMaterial(*m_meshCache[key], transform, color, stress, material);
+}
+
 void Renderer::drawGrid(f32 size, f32 spacing) {
     (void)size; (void)spacing;
     mat4 transform = mat4(1.0f);
@@ -681,22 +1366,46 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                 if (element.mesh.hasData()) {
                     drawCustomMesh(element.mesh, color, stressForShader);
                 } else {
-                    // Fall back to generated box geometry
-                    // Determine wall orientation from extents
+                    // Generate wall geometry - supports diagonal walls
                     float xExtent = element.end.x - element.start.x;
                     float zExtent = element.end.z - element.start.z;
                     float height = element.end.y - element.start.y;
 
-                    // Calculate center point (drawColumn centers geometry on position)
-                    glm::vec3 center = (element.start + element.end) * 0.5f;
-                    center.y = element.start.y;  // Keep base at start height
+                    // Check if this is a diagonal wall (both X and Z extents significant)
+                    bool isDiagonal = std::abs(xExtent) > 0.1f && std::abs(zExtent) > 0.1f;
 
-                    if (std::abs(xExtent) >= std::abs(zExtent)) {
-                        // Wall runs along X axis
-                        drawColumn(center, xExtent, zExtent, height, color, stressForShader);
+                    // Wall material
+                    vec4 wallMat = vec4(m_wallMetallic, m_wallRoughness, m_wallAO, m_wallEmission);
+
+                    if (isDiagonal) {
+                        // Diagonal wall - use beam geometry
+                        // Beam is centered on start-end line, so offset to wall mid-height
+                        float midHeight = element.start.y + height * 0.5f;
+                        vec3 wallStart = vec3(element.start.x, midHeight, element.start.z);
+                        vec3 wallEnd = vec3(element.end.x, midHeight, element.end.z);
+
+                        // Calculate wall thickness (use depth or a default)
+                        float thickness = element.depth > 0.01f ? element.depth : 0.5f;
+
+                        // Create unique key for diagonal wall
+                        std::string key = "diagwall_" + std::to_string(xExtent) + "_" +
+                                         std::to_string(zExtent) + "_" + std::to_string(height) + "_" +
+                                         std::to_string(thickness);
+
+                        if (m_meshCache.find(key) == m_meshCache.end()) {
+                            // Create beam geometry: width=thickness (perpendicular), height=wall height (vertical)
+                            auto [verts, indices] = Geometry::createBeam(
+                                wallStart, wallEnd, thickness, height, vec3(1.0f));
+                            m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                        }
+
+                        // Draw with wall material
+                        drawMeshWithMaterial(*m_meshCache[key], mat4(1.0f), color, stressForShader, wallMat);
                     } else {
-                        // Wall runs along Z axis
-                        drawColumn(center, xExtent, zExtent, height, color, stressForShader);
+                        // Axis-aligned wall - use column geometry with wall material
+                        glm::vec3 center = (element.start + element.end) * 0.5f;
+                        center.y = element.start.y;
+                        drawColumnWithMaterial(center, std::abs(xExtent), std::abs(zExtent), height, color, stressForShader, wallMat);
                     }
                 }
                 break;
@@ -747,9 +1456,12 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             }
 
             case ElementType::Roof: {
+                // Roof material
+                vec4 roofMat = vec4(m_roofMetallic, m_roofRoughness, m_roofAO, m_roofEmission);
+
                 // Use actual IFC mesh if available
                 if (element.mesh.hasData()) {
-                    drawCustomMesh(element.mesh, color, stressForShader);
+                    drawCustomMeshWithMaterial(element.mesh, color, stressForShader, roofMat);
                 } else {
                     // Fall back to generated geometry
                     float roofWidth = std::abs(element.end.x - element.start.x);
@@ -760,7 +1472,14 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                     glm::vec3 center = (element.start + element.end) * 0.5f;
                     center.y = element.start.y;
 
-                    drawRoof(center, roofWidth, roofDepthZ, roofThickness, color, stressForShader);
+                    // Use roof material for generated roof geometry
+                    std::string key = "roof_" + std::to_string(roofWidth) + "_" + std::to_string(roofDepthZ) + "_" + std::to_string(roofThickness);
+                    if (m_meshCache.find(key) == m_meshCache.end()) {
+                        auto [verts, indices] = Geometry::createFloorSlab(vec3(0), roofWidth, roofDepthZ, roofThickness);
+                        m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                    }
+                    mat4 transform = glm::translate(mat4(1.0f), center);
+                    drawMeshWithMaterial(*m_meshCache[key], transform, color, stressForShader, roofMat);
                 }
                 break;
             }
@@ -772,6 +1491,34 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
     }
 
     m_context.endDebugLabel(m_currentCommandBuffer);
+}
+
+void Renderer::updateClipPlane() {
+    // Create clip plane based on axis and height
+    // Clip plane equation: ax + by + cz + d = 0
+    // Points with dot(pos, plane) > 0 are kept
+    vec3 normal(0.0f);
+    switch (m_clipAxis) {
+        case 0: normal.x = m_clipFlipped ? -1.0f : 1.0f; break;  // X axis
+        case 1: normal.y = m_clipFlipped ? -1.0f : 1.0f; break;  // Y axis
+        case 2: normal.z = m_clipFlipped ? -1.0f : 1.0f; break;  // Z axis
+    }
+    // d = -dot(normal, point_on_plane)
+    // point_on_plane is (height, 0, 0) for X axis, etc.
+    f32 d = -m_clipHeight * (m_clipFlipped ? -1.0f : 1.0f);
+    m_clipPlane = vec4(normal, d);
+}
+
+bool Renderer::loadHdrEnvironment(const std::string& filepath) {
+    if (!m_envMap) {
+        m_envMap = std::make_unique<EnvironmentMap>(m_context);
+    }
+
+    bool success = m_envMap->loadFromFile(filepath);
+    if (success) {
+        m_useHdrEnvMap = true;
+    }
+    return success;
 }
 
 } // namespace arch

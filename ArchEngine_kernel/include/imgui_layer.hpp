@@ -16,6 +16,7 @@ namespace arch {
 // Forward declarations
 struct Building;
 struct FrameAnalysis;
+class Renderer;
 
 // Drawing modes for geometry creation
 enum class DrawMode {
@@ -45,6 +46,7 @@ public:
     void drawVisualizationPanel(VisualizationMode& mode);
     void drawHelpPanel(bool& show);
     void drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles);
+    void drawRenderSettingsPanel(Renderer& renderer, bool& show);
     void drawGeometryEditor(bool& show);
 
     // Geometry editor state

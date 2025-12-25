@@ -19,12 +19,34 @@ VulkanContext::VulkanContext(Window& window, const VulkanConfig& config)
     createSwapchain();
     createImageViews();
     createCommandPool();
+    createPipelineCache();
+
+    // Determine MSAA sample count BEFORE creating depth resources
+    if (m_config.enableMsaa) {
+        m_msaaSamples = getMaxUsableSampleCount();
+        // Clamp to configured max
+        if (m_msaaSamples > m_config.msaaSamples) {
+            m_msaaSamples = m_config.msaaSamples;
+        }
+        std::cout << "MSAA enabled with " << m_msaaSamples << "x samples" << std::endl;
+    }
+
+    // Now create depth resources (uses m_msaaSamples)
     createDepthResources();
+
+    // Create MSAA color buffer
+    if (m_config.enableMsaa) {
+        createMsaaResources();
+    }
 }
 
 VulkanContext::~VulkanContext() {
+    savePipelineCache();
     cleanupSwapchain();
 
+    if (m_pipelineCache != VK_NULL_HANDLE) {
+        vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
+    }
     vkDestroyCommandPool(m_device, m_commandPool, nullptr);
     vkDestroyDevice(m_device, nullptr);
 
@@ -145,8 +167,10 @@ void VulkanContext::createLogicalDevice() {
     }
 
     VkPhysicalDeviceFeatures deviceFeatures{};
-    deviceFeatures.fillModeNonSolid = VK_TRUE;  // For wireframe
-    deviceFeatures.wideLines = VK_TRUE;         // For thick lines
+    deviceFeatures.fillModeNonSolid = VK_TRUE;   // For wireframe
+    deviceFeatures.wideLines = VK_TRUE;          // For thick lines
+    deviceFeatures.sampleRateShading = VK_TRUE;  // For MSAA sample shading
+    deviceFeatures.shaderClipDistance = VK_TRUE; // For section clipping
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -242,12 +266,27 @@ void VulkanContext::createDepthResources() {
 
     createImage(m_swapchainExtent.width, m_swapchainExtent.height, depthFormat,
                 VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_depthImage, m_depthImageMemory);
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_depthImage, m_depthImageMemory,
+                m_msaaSamples);
 
     m_depthImageView = createImageView(m_depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
 void VulkanContext::cleanupSwapchain() {
+    // Cleanup MSAA resources
+    if (m_msaaColorImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device, m_msaaColorImageView, nullptr);
+        m_msaaColorImageView = VK_NULL_HANDLE;
+    }
+    if (m_msaaColorImage != VK_NULL_HANDLE) {
+        vkDestroyImage(m_device, m_msaaColorImage, nullptr);
+        m_msaaColorImage = VK_NULL_HANDLE;
+    }
+    if (m_msaaColorMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(m_device, m_msaaColorMemory, nullptr);
+        m_msaaColorMemory = VK_NULL_HANDLE;
+    }
+
     vkDestroyImageView(m_device, m_depthImageView, nullptr);
     vkDestroyImage(m_device, m_depthImage, nullptr);
     vkFreeMemory(m_device, m_depthImageMemory, nullptr);
@@ -270,6 +309,9 @@ void VulkanContext::recreateSwapchain() {
     createSwapchain();
     createImageViews();
     createDepthResources();
+    if (m_config.enableMsaa) {
+        createMsaaResources();
+    }
 }
 
 // Helper functions
@@ -469,7 +511,8 @@ u32 VulkanContext::findMemoryType(u32 typeFilter, VkMemoryPropertyFlags properti
 // Image creation
 void VulkanContext::createImage(u32 width, u32 height, VkFormat format, VkImageTiling tiling,
                                 VkImageUsageFlags usage, VkMemoryPropertyFlags properties,
-                                VkImage& image, VkDeviceMemory& imageMemory) {
+                                VkImage& image, VkDeviceMemory& imageMemory,
+                                VkSampleCountFlagBits samples) {
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -482,7 +525,7 @@ void VulkanContext::createImage(u32 width, u32 height, VkFormat format, VkImageT
     imageInfo.tiling = tiling;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = usage;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.samples = samples;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateImage(m_device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
@@ -596,6 +639,77 @@ void VulkanContext::insertDebugLabel(VkCommandBuffer cmd, const char* name, vec4
         label.color[3] = color.a;
         m_vkCmdInsertDebugUtilsLabelEXT(cmd, &label);
     }
+}
+
+// Pipeline cache implementation
+void VulkanContext::createPipelineCache() {
+    VkPipelineCacheCreateInfo cacheInfo{};
+    cacheInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+
+    // Try to load existing cache
+    std::ifstream cacheFile(m_config.pipelineCachePath, std::ios::binary | std::ios::ate);
+    std::vector<char> cacheData;
+    if (cacheFile.is_open()) {
+        size_t fileSize = static_cast<size_t>(cacheFile.tellg());
+        cacheData.resize(fileSize);
+        cacheFile.seekg(0);
+        cacheFile.read(cacheData.data(), fileSize);
+        cacheFile.close();
+
+        cacheInfo.initialDataSize = cacheData.size();
+        cacheInfo.pInitialData = cacheData.data();
+        std::cout << "Loaded pipeline cache (" << fileSize << " bytes)" << std::endl;
+    }
+
+    if (vkCreatePipelineCache(m_device, &cacheInfo, nullptr, &m_pipelineCache) != VK_SUCCESS) {
+        std::cerr << "Warning: Failed to create pipeline cache" << std::endl;
+        m_pipelineCache = VK_NULL_HANDLE;
+    }
+}
+
+void VulkanContext::savePipelineCache() {
+    if (m_pipelineCache == VK_NULL_HANDLE) return;
+
+    size_t dataSize = 0;
+    vkGetPipelineCacheData(m_device, m_pipelineCache, &dataSize, nullptr);
+
+    std::vector<char> cacheData(dataSize);
+    vkGetPipelineCacheData(m_device, m_pipelineCache, &dataSize, cacheData.data());
+
+    std::ofstream cacheFile(m_config.pipelineCachePath, std::ios::binary);
+    if (cacheFile.is_open()) {
+        cacheFile.write(cacheData.data(), dataSize);
+        cacheFile.close();
+        std::cout << "Saved pipeline cache (" << dataSize << " bytes)" << std::endl;
+    }
+}
+
+// MSAA support
+VkSampleCountFlagBits VulkanContext::getMaxUsableSampleCount() const {
+    VkPhysicalDeviceProperties physicalDeviceProperties;
+    vkGetPhysicalDeviceProperties(m_physicalDevice, &physicalDeviceProperties);
+
+    VkSampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts &
+                                 physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+
+    if (counts & VK_SAMPLE_COUNT_64_BIT) return VK_SAMPLE_COUNT_64_BIT;
+    if (counts & VK_SAMPLE_COUNT_32_BIT) return VK_SAMPLE_COUNT_32_BIT;
+    if (counts & VK_SAMPLE_COUNT_16_BIT) return VK_SAMPLE_COUNT_16_BIT;
+    if (counts & VK_SAMPLE_COUNT_8_BIT) return VK_SAMPLE_COUNT_8_BIT;
+    if (counts & VK_SAMPLE_COUNT_4_BIT) return VK_SAMPLE_COUNT_4_BIT;
+    if (counts & VK_SAMPLE_COUNT_2_BIT) return VK_SAMPLE_COUNT_2_BIT;
+
+    return VK_SAMPLE_COUNT_1_BIT;
+}
+
+void VulkanContext::createMsaaResources() {
+    createImage(m_swapchainExtent.width, m_swapchainExtent.height, m_swapchainFormat,
+                VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                m_msaaColorImage, m_msaaColorMemory, m_msaaSamples);
+
+    m_msaaColorImageView = createImageView(m_msaaColorImage, m_swapchainFormat, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
 VKAPI_ATTR VkBool32 VKAPI_CALL VulkanContext::debugCallback(

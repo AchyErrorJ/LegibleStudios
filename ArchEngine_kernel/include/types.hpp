@@ -67,6 +67,43 @@ struct Vertex {
     }
 };
 
+// Instance data for instanced rendering (Phase 3)
+// Used for batching multiple objects with the same mesh
+struct InstanceData {
+    mat4 model;      // Model transformation matrix
+    vec4 color;      // RGB color + stress in alpha
+
+    // Binding 1 uses per-instance rate
+    static VkVertexInputBindingDescription getBindingDescription() {
+        VkVertexInputBindingDescription binding{};
+        binding.binding = 1;
+        binding.stride = sizeof(InstanceData);
+        binding.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+        return binding;
+    }
+
+    // Instance attributes at locations 5-9 (mat4 = 4 vec4s + color vec4)
+    static std::array<VkVertexInputAttributeDescription, 5> getAttributeDescriptions() {
+        std::array<VkVertexInputAttributeDescription, 5> attrs{};
+
+        // mat4 model takes locations 5, 6, 7, 8 (one vec4 per row)
+        for (u32 i = 0; i < 4; i++) {
+            attrs[i].binding = 1;
+            attrs[i].location = 5 + i;
+            attrs[i].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            attrs[i].offset = sizeof(vec4) * i;
+        }
+
+        // vec4 color at location 9
+        attrs[4].binding = 1;
+        attrs[4].location = 9;
+        attrs[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        attrs[4].offset = sizeof(mat4);
+
+        return attrs;
+    }
+};
+
 // Structural element types
 enum class ElementType : u32 {
     Beam,       // 0
@@ -142,15 +179,21 @@ struct Camera {
 // Push constants for shaders
 struct PushConstants {
     mat4 model;
-    vec4 color;
+    vec4 color;      // RGB = albedo, A = stress (for visualization)
+    vec4 material;   // x = metallic, y = roughness, z = ao, w = emission
 };
 
 // Uniform buffer object
 struct UniformBufferObject {
     mat4 view;
     mat4 proj;
+    mat4 lightViewProj;     // Shadow mapping (Phase 4)
+    vec4 lightDirection;    // Directional light direction
+    vec4 clipPlane;         // Section clipping plane (Phase 5)
     f32 time;
-    f32 padding[3];
+    f32 shadowBias;         // Shadow mapping bias
+    u32 enableClipping;     // Section clipping enabled flag
+    u32 enableShadows;      // Shadow mapping enabled flag
 };
 
 // Visualization modes

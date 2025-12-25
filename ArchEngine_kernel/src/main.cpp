@@ -759,7 +759,13 @@ int main(int argc, char* argv[]) {
                         clearColor = {0.05f, 0.05f, 0.08f, 1.0f};
                 }
 
+                // Render shadow pass first
+                renderer.renderShadowPass(buildings[currentBuilding].elements);
+
                 renderer.beginRenderPass(clearColor);
+
+                // Draw sky background (renders behind everything)
+                renderer.drawSky();
 
                 // Draw reference grid
                 renderer.drawGrid(150.0f, 5.0f);
@@ -775,6 +781,10 @@ int main(int argc, char* argv[]) {
                 imgui.drawVisualizationPanel(vizMode);
                 renderer.setVisualizationMode(vizMode);  // Update renderer when UI changes mode
                 imgui.drawGeometryEditor(showGeometryEditor);
+
+                // Render settings panel (shadows, clipping)
+                static bool showRenderSettings = true;
+                imgui.drawRenderSettingsPanel(renderer, showRenderSettings);
 
                 // Parametric Wall Test Panel
                 static bool showWallSystem = false;

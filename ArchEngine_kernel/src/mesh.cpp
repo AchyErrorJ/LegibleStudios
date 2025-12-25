@@ -78,6 +78,10 @@ void Mesh::draw(VkCommandBuffer commandBuffer) {
     vkCmdDrawIndexed(commandBuffer, m_indexCount, 1, 0, 0, 0);
 }
 
+void Mesh::drawInstanced(VkCommandBuffer commandBuffer, u32 instanceCount) {
+    vkCmdDrawIndexed(commandBuffer, m_indexCount, instanceCount, 0, 0, 0);
+}
+
 void Mesh::createVertexBuffer(const std::vector<Vertex>& vertices) {
     VkDeviceSize bufferSize = sizeof(Vertex) * vertices.size();
 
@@ -146,15 +150,25 @@ createBeam(vec3 start, vec3 end, f32 width, f32 height, vec3 color) {
 
     // Beam direction and perpendicular vectors
     vec3 dir = glm::normalize(end - start);
-    vec3 up = vec3(0, 1, 0);
 
-    // Handle vertical beams
-    if (std::abs(glm::dot(dir, up)) > 0.99f) {
-        up = vec3(1, 0, 0);
+    // For beams, we want the "top" face to face upward when possible
+    // Use world up as reference, but handle edge cases
+    vec3 worldUp = vec3(0, 1, 0);
+    vec3 right, localUp;
+
+    f32 upDot = std::abs(glm::dot(dir, worldUp));
+
+    if (upDot > 0.99f) {
+        // Nearly vertical beam - use world X as reference
+        right = vec3(1, 0, 0);
+        localUp = glm::normalize(glm::cross(right, dir));
+        right = glm::normalize(glm::cross(dir, localUp));
+    } else {
+        // Normal case - project world up onto plane perpendicular to beam
+        // This keeps the "top" of the beam facing upward
+        localUp = glm::normalize(worldUp - dir * glm::dot(worldUp, dir));
+        right = glm::normalize(glm::cross(dir, localUp));
     }
-
-    vec3 right = glm::normalize(glm::cross(dir, up));
-    vec3 localUp = glm::normalize(glm::cross(right, dir));
 
     f32 hw = width * 0.5f;
     f32 hh = height * 0.5f;
@@ -338,17 +352,18 @@ createGrid(f32 size, f32 spacing, vec3 color) {
 
     vec3 normal(0, 1, 0);
 
-    // Lines along X axis
+    // Lines along X axis (slightly below Y=0 to avoid Z-fighting with floor)
+    const f32 gridY = -0.05f;
     for (i32 i = 0; i < lineCount; ++i) {
         f32 z = -halfSize + i * spacing;
         u32 baseIndex = static_cast<u32>(vertices.size());
 
-        vertices.push_back({{-halfSize, 0, z}, normal, color});
-        vertices.push_back({{halfSize, 0, z}, normal, color});
+        vertices.push_back({{-halfSize, gridY, z}, normal, color});
+        vertices.push_back({{halfSize, gridY, z}, normal, color});
 
         // Create thin quad for line
-        vertices.push_back({{-halfSize, 0.01f, z}, normal, color});
-        vertices.push_back({{halfSize, 0.01f, z}, normal, color});
+        vertices.push_back({{-halfSize, gridY + 0.01f, z}, normal, color});
+        vertices.push_back({{halfSize, gridY + 0.01f, z}, normal, color});
 
         indices.push_back(baseIndex + 0);
         indices.push_back(baseIndex + 1);
@@ -363,11 +378,11 @@ createGrid(f32 size, f32 spacing, vec3 color) {
         f32 x = -halfSize + i * spacing;
         u32 baseIndex = static_cast<u32>(vertices.size());
 
-        vertices.push_back({{x, 0, -halfSize}, normal, color});
-        vertices.push_back({{x, 0, halfSize}, normal, color});
+        vertices.push_back({{x, gridY, -halfSize}, normal, color});
+        vertices.push_back({{x, gridY, halfSize}, normal, color});
 
-        vertices.push_back({{x, 0.01f, -halfSize}, normal, color});
-        vertices.push_back({{x, 0.01f, halfSize}, normal, color});
+        vertices.push_back({{x, gridY + 0.01f, -halfSize}, normal, color});
+        vertices.push_back({{x, gridY + 0.01f, halfSize}, normal, color});
 
         indices.push_back(baseIndex + 0);
         indices.push_back(baseIndex + 1);
