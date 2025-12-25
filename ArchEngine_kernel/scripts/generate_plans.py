@@ -173,18 +173,31 @@ class PlanGenerator:
             'is_vertical': abs(dx) < 1,    # Runs along Z
         }
 
-    def _get_opening_position(self, wall: Wall, offset: float, width: float) -> Tuple[float, float, float, float]:
-        """Get opening rectangle position on wall."""
-        geom = self._get_wall_geometry(wall)
+    def _get_opening_position(self, wall: Wall, offset: float, width: float) -> Tuple[float, float, float, float, float]:
+        """Get opening position on wall (works for diagonal walls).
 
-        if geom['is_horizontal']:
-            # Wall runs along X axis
-            start_x = min(geom['start_x'], geom['end_x']) + offset - width/2
-            return (start_x, geom['start_z'], width, self.ext_wall_thickness)
-        else:
-            # Wall runs along Z axis
-            start_z = min(geom['start_z'], geom['end_z']) + offset - width/2
-            return (geom['start_x'], start_z, self.ext_wall_thickness, width)
+        Returns: (center_x, center_z, dx, dz, angle) where dx/dz are direction vectors
+        """
+        geom = self._get_wall_geometry(wall)
+        sx, sz = geom['start_x'], geom['start_z']
+        ex, ez = geom['end_x'], geom['end_z']
+        length = geom['length']
+
+        if length < 1:
+            return (sx, sz, 1, 0, 0)
+
+        # Direction along wall
+        dx = (ex - sx) / length
+        dz = (ez - sz) / length
+
+        # Position along wall at offset
+        center_x = sx + dx * offset
+        center_z = sz + dz * offset
+
+        # Angle for rotation
+        angle = math.degrees(math.atan2(dz, dx))
+
+        return (center_x, center_z, dx, dz, angle)
 
     def generate_floor_plan_svg(self, scale: float = 0.1) -> str:
         """Generate floor plan SVG with proper annotations."""
@@ -205,9 +218,9 @@ class PlanGenerator:
      viewBox="{vb_x} {vb_y} {vb_w} {vb_h}">
 <defs>
 <style>
-.wall-ext {{ fill: none; stroke: #000; stroke-width: 8; }}
-.wall-int {{ fill: none; stroke: #000; stroke-width: 6; }}
-.wall-wet {{ fill: none; stroke: #5588cc; stroke-width: 6; }}
+.wall-ext {{ fill: #333; stroke: #000; stroke-width: 2; }}
+.wall-int {{ fill: #666; stroke: #000; stroke-width: 1; }}
+.wall-wet {{ fill: #5588cc; stroke: #3366aa; stroke-width: 1; }}
 .opening {{ fill: white; stroke: none; }}
 .door-leaf {{ stroke: #000; stroke-width: 4; fill: none; }}
 .door-swing {{ stroke: #000; stroke-width: 2; fill: none; }}
@@ -683,7 +696,7 @@ class PlanGenerator:
         return '\n'.join(lines)
 
     def _generate_walls(self) -> str:
-        """Generate walls as double lines (outline rectangles) per architectural convention."""
+        """Generate walls as polygons to properly handle diagonal walls."""
         walls_svg = ['<!-- Walls -->']
 
         for wall in self.walls:
@@ -696,47 +709,68 @@ class PlanGenerator:
             elif wall.category == 'wet_wall':
                 css_class = 'wall-wet'
 
-            if geom['is_horizontal']:
-                # Horizontal wall (runs along X axis)
-                x = min(geom['start_x'], geom['end_x'])
-                w = geom['length']
-                y = geom['start_z'] - thickness/2
-                h = thickness
-            else:
-                # Vertical wall (runs along Z axis)
-                x = geom['start_x'] - thickness/2
-                w = thickness
-                y = min(geom['start_z'], geom['end_z'])
-                h = geom['length']
+            # Calculate wall polygon points (rectangle with thickness along the wall)
+            sx, sz = geom['start_x'], geom['start_z']
+            ex, ez = geom['end_x'], geom['end_z']
 
-            # Draw wall as outline rectangle (double lines) - no fill, just stroke
-            walls_svg.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" class="{css_class}"/>')
+            # Get perpendicular offset for wall thickness
+            length = geom['length']
+            if length < 1:
+                continue  # Skip zero-length walls
+
+            # Direction vector
+            dx = (ex - sx) / length
+            dz = (ez - sz) / length
+
+            # Perpendicular vector (rotated 90 degrees)
+            px = -dz * thickness / 2
+            pz = dx * thickness / 2
+
+            # Four corners of the wall polygon
+            p1 = (sx + px, sz + pz)
+            p2 = (sx - px, sz - pz)
+            p3 = (ex - px, ez - pz)
+            p4 = (ex + px, ez + pz)
+
+            # Draw as polygon path
+            points = f"{p1[0]},{p1[1]} {p2[0]},{p2[1]} {p3[0]},{p3[1]} {p4[0]},{p4[1]}"
+            walls_svg.append(f'<polygon points="{points}" class="{css_class}"/>')
 
         return '\n'.join(walls_svg)
 
     def _generate_openings(self) -> str:
-        """Generate white rectangles to cut openings in walls."""
+        """Generate white polygons to cut openings in walls (works for diagonal walls)."""
         openings = ['<!-- Openings -->']
 
         # Door openings
         for door in self.doors:
             if door.wall_index < len(self.walls):
                 wall = self.walls[door.wall_index]
-                x, y, w, h = self._get_opening_position(wall, door.offset, door.width)
-                openings.append(f'<rect x="{x}" y="{y - 50}" width="{w}" height="{h + 100}" class="opening"/>')
+                thickness = self.ext_wall_thickness if wall.category == 'exterior' else self.int_wall_thickness
+                cx, cz, dx, dz, angle = self._get_opening_position(wall, door.offset, door.width)
 
-        # Window openings (windows are in the wall, so we don't cut through)
-        # But we do need to show them differently
+                # Perpendicular direction
+                px, pz = -dz, dx
+
+                # Half dimensions
+                hw = door.width / 2
+                ht = thickness / 2 + 50  # Extra margin
+
+                # Four corners of opening
+                p1 = (cx - dx*hw + px*ht, cz - dz*hw + pz*ht)
+                p2 = (cx - dx*hw - px*ht, cz - dz*hw - pz*ht)
+                p3 = (cx + dx*hw - px*ht, cz + dz*hw - pz*ht)
+                p4 = (cx + dx*hw + px*ht, cz + dz*hw + pz*ht)
+
+                points = f"{p1[0]},{p1[1]} {p2[0]},{p2[1]} {p3[0]},{p3[1]} {p4[0]},{p4[1]}"
+                openings.append(f'<polygon points="{points}" class="opening"/>')
 
         return '\n'.join(openings)
 
     def _generate_door_symbols(self) -> str:
-        """Generate proper door symbols with swing arcs.
+        """Generate door symbols with swing arcs (works for diagonal walls).
 
-        Standard door symbol convention:
-        - Hinge is at one end of the door opening
-        - Door panel is shown as a line from hinge, swinging 90 degrees into the room
-        - Arc shows the path of the door edge from closed to open position
+        Uses transform groups to rotate door symbols for diagonal walls.
         """
         doors_svg = ['<!-- Door Symbols -->']
 
@@ -745,97 +779,52 @@ class PlanGenerator:
                 continue
 
             wall = self.walls[door.wall_index]
-            geom = self._get_wall_geometry(wall)
-            thickness = self.ext_wall_thickness if wall.category == 'exterior' else self.int_wall_thickness
+            cx, cz, dx, dz, angle = self._get_opening_position(wall, door.offset, door.width)
 
-            if geom['is_horizontal']:
-                # Door in horizontal wall (wall runs along X axis)
-                door_center_x = min(geom['start_x'], geom['end_x']) + door.offset
-                door_y = geom['start_z']
+            # Determine hinge side and swing direction
+            hinge_left = 'left' in door.swing
+            swing_in = 'in' in door.swing or door.swing == 'left'
 
-                # Hinge position (left or right side of opening)
-                if 'left' in door.swing:
-                    hinge_x = door_center_x - door.width / 2
-                    leaf_end_x = door_center_x + door.width / 2  # Where the door edge starts in opening
-                else:
-                    hinge_x = door_center_x + door.width / 2
-                    leaf_end_x = door_center_x - door.width / 2
+            # Door width
+            w = door.width
+            hw = w / 2
 
-                # Swing direction (in = positive Y, out = negative Y)
-                if 'in' in door.swing or door.swing == 'left':
-                    swing_dir = 1  # Into room (positive Y)
-                else:
-                    swing_dir = -1  # Out of room (negative Y)
+            # In local coordinates (before rotation):
+            # - Door opening is from -hw to +hw along X
+            # - Swing is in +Y direction (or -Y if swing_out)
 
-                # Door panel - line from hinge perpendicular into room
-                panel_end_y = door_y + swing_dir * door.width
-                doors_svg.append(f'<line x1="{hinge_x}" y1="{door_y}" x2="{hinge_x}" y2="{panel_end_y}" class="door-leaf"/>')
-
-                # Swing arc - from the other edge of opening to where the door panel ends
-                # Arc is 90 degrees from where door would be when closed (in wall) to open position
-                if 'left' in door.swing:
-                    # Left hinge - arc sweeps from right edge to panel end
-                    if swing_dir > 0:
-                        doors_svg.append(f'<path d="M {leaf_end_x},{door_y} A {door.width},{door.width} 0 0 1 {hinge_x},{panel_end_y}" class="door-swing"/>')
-                    else:
-                        doors_svg.append(f'<path d="M {leaf_end_x},{door_y} A {door.width},{door.width} 0 0 0 {hinge_x},{panel_end_y}" class="door-swing"/>')
-                else:
-                    # Right hinge - arc sweeps from left edge to panel end
-                    if swing_dir > 0:
-                        doors_svg.append(f'<path d="M {leaf_end_x},{door_y} A {door.width},{door.width} 0 0 0 {hinge_x},{panel_end_y}" class="door-swing"/>')
-                    else:
-                        doors_svg.append(f'<path d="M {leaf_end_x},{door_y} A {door.width},{door.width} 0 0 1 {hinge_x},{panel_end_y}" class="door-swing"/>')
-
+            if hinge_left:
+                hinge_x = -hw
+                leaf_end_x = hw
             else:
-                # Door in vertical wall (wall runs along Z axis)
-                door_x = geom['start_x']
-                door_center_y = min(geom['start_z'], geom['end_z']) + door.offset
+                hinge_x = hw
+                leaf_end_x = -hw
 
-                # Hinge position
-                if 'left' in door.swing:
-                    hinge_y = door_center_y - door.width / 2
-                    leaf_end_y = door_center_y + door.width / 2
-                else:
-                    hinge_y = door_center_y + door.width / 2
-                    leaf_end_y = door_center_y - door.width / 2
+            swing_y = w if swing_in else -w
 
-                # Swing direction (assume swing into positive X for vertical walls)
-                if 'in' in door.swing:
-                    swing_dir = 1
-                else:
-                    swing_dir = -1
+            # Build door symbol in local coordinates
+            # Door leaf (line from hinge perpendicular to wall)
+            leaf_line = f'<line x1="{hinge_x}" y1="0" x2="{hinge_x}" y2="{swing_y}" class="door-leaf"/>'
 
-                # Door panel
-                panel_end_x = door_x + swing_dir * door.width
-                doors_svg.append(f'<line x1="{door_x}" y1="{hinge_y}" x2="{panel_end_x}" y2="{hinge_y}" class="door-leaf"/>')
+            # Swing arc
+            if hinge_left:
+                sweep = "1" if swing_in else "0"
+            else:
+                sweep = "0" if swing_in else "1"
 
-                # Swing arc
-                if 'left' in door.swing:
-                    if swing_dir > 0:
-                        doors_svg.append(f'<path d="M {door_x},{leaf_end_y} A {door.width},{door.width} 0 0 0 {panel_end_x},{hinge_y}" class="door-swing"/>')
-                    else:
-                        doors_svg.append(f'<path d="M {door_x},{leaf_end_y} A {door.width},{door.width} 0 0 1 {panel_end_x},{hinge_y}" class="door-swing"/>')
-                else:
-                    if swing_dir > 0:
-                        doors_svg.append(f'<path d="M {door_x},{leaf_end_y} A {door.width},{door.width} 0 0 1 {panel_end_x},{hinge_y}" class="door-swing"/>')
-                    else:
-                        doors_svg.append(f'<path d="M {door_x},{leaf_end_y} A {door.width},{door.width} 0 0 0 {panel_end_x},{hinge_y}" class="door-swing"/>')
+            arc = f'<path d="M {leaf_end_x},0 A {w},{w} 0 0 {sweep} {hinge_x},{swing_y}" class="door-swing"/>'
 
-            # Pocket/sliding doors shown as dashed lines in opening
-            if door.door_type == 'pocket' or door.door_type == 'sliding':
-                if geom['is_horizontal']:
-                    x1 = door_center_x - door.width / 2
-                    x2 = door_center_x + door.width / 2
-                    doors_svg.append(f'<line x1="{x1}" y1="{door_y}" x2="{x2}" y2="{door_y}" stroke="#000" stroke-width="3" stroke-dasharray="40,20"/>')
-                else:
-                    y1 = door_center_y - door.width / 2
-                    y2 = door_center_y + door.width / 2
-                    doors_svg.append(f'<line x1="{door_x}" y1="{y1}" x2="{door_x}" y2="{y2}" stroke="#000" stroke-width="3" stroke-dasharray="40,20"/>')
+            # Pocket/sliding door (dashed line)
+            if door.door_type in ('pocket', 'sliding'):
+                pocket = f'<line x1="{-hw}" y1="0" x2="{hw}" y2="0" stroke="#000" stroke-width="3" stroke-dasharray="40,20"/>'
+                doors_svg.append(f'<g transform="translate({cx},{cz}) rotate({angle})">{pocket}</g>')
+            else:
+                doors_svg.append(f'<g transform="translate({cx},{cz}) rotate({angle})">{leaf_line}{arc}</g>')
 
         return '\n'.join(doors_svg)
 
     def _generate_window_symbols(self) -> str:
-        """Generate window symbols."""
+        """Generate window symbols (works for diagonal walls)."""
         windows_svg = ['<!-- Window Symbols -->']
 
         for window in self.windows:
@@ -843,21 +832,21 @@ class PlanGenerator:
                 continue
 
             wall = self.walls[window.wall_index]
-            geom = self._get_wall_geometry(wall)
             thickness = self.ext_wall_thickness if wall.category == 'exterior' else self.int_wall_thickness
+            cx, cz, dx, dz, angle = self._get_opening_position(wall, window.offset, window.width)
 
-            if geom['is_horizontal']:
-                win_x = min(geom['start_x'], geom['end_x']) + window.offset - window.width/2
-                win_y = geom['start_z'] - thickness/2
-                windows_svg.append(f'<rect x="{win_x}" y="{win_y}" width="{window.width}" height="{thickness}" class="window"/>')
-                # Glass lines
-                windows_svg.append(f'<line x1="{win_x}" y1="{geom["start_z"]}" x2="{win_x + window.width}" y2="{geom["start_z"]}" class="window-glass"/>')
-            else:
-                win_x = geom['start_x'] - thickness/2
-                win_y = min(geom['start_z'], geom['end_z']) + window.offset - window.width/2
-                windows_svg.append(f'<rect x="{win_x}" y="{win_y}" width="{thickness}" height="{window.width}" class="window"/>')
-                # Glass lines
-                windows_svg.append(f'<line x1="{geom["start_x"]}" y1="{win_y}" x2="{geom["start_x"]}" y2="{win_y + window.width}" class="window-glass"/>')
+            # Window dimensions
+            w = window.width
+            hw = w / 2
+            ht = thickness / 2
+
+            # Build window in local coordinates then rotate
+            # Rectangle for window frame
+            rect = f'<rect x="{-hw}" y="{-ht}" width="{w}" height="{thickness}" class="window"/>'
+            # Center glass line
+            glass = f'<line x1="{-hw}" y1="0" x2="{hw}" y2="0" class="window-glass"/>'
+
+            windows_svg.append(f'<g transform="translate({cx},{cz}) rotate({angle})">{rect}{glass}</g>')
 
         return '\n'.join(windows_svg)
 

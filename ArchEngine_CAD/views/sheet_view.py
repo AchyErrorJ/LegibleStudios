@@ -53,18 +53,20 @@ class SheetView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         # State
         self._zoom = 1.0
-        self._min_zoom = 0.05
-        self._max_zoom = 20.0
+        self._min_zoom = 0.001  # Allow much more zoom out
+        self._max_zoom = 100.0  # Allow much more zoom in
         self._panning = False
 
         # Colors
         self._bg_color = QColor("#f8f8f8")
         self.setBackgroundBrush(self._bg_color)
+
+        # Enable scroll bars for panning
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         # Placeholder for empty state
         self._placeholder_text = None
@@ -228,20 +230,38 @@ class SheetView(QGraphicsView):
         self._scene.addItem(self._placeholder_text)
 
     # =========================================================================
+    # Keyboard Events
+    # =========================================================================
+
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts."""
+        if event.key() == Qt.Key.Key_H:
+            self.zoom_fit()
+        elif event.key() == Qt.Key.Key_Plus or event.key() == Qt.Key.Key_Equal:
+            self.zoom_in()
+        elif event.key() == Qt.Key.Key_Minus:
+            self.zoom_out()
+        elif event.key() == Qt.Key.Key_0:
+            self.zoom_100()
+        else:
+            super().keyPressEvent(event)
+
+    # =========================================================================
     # Mouse Events
     # =========================================================================
 
     def wheelEvent(self, event):
         """Handle mouse wheel for zooming."""
         mouse_pos = event.position().toPoint()
+        # More aggressive zoom for faster navigation
         if event.angleDelta().y() > 0:
-            self._zoom_by(1.15, center_on_mouse=True, mouse_pos=mouse_pos)
+            self._zoom_by(1.25, center_on_mouse=True, mouse_pos=mouse_pos)
         else:
-            self._zoom_by(0.87, center_on_mouse=True, mouse_pos=mouse_pos)
+            self._zoom_by(0.8, center_on_mouse=True, mouse_pos=mouse_pos)
 
     def mousePressEvent(self, event):
-        """Handle mouse press."""
-        if event.button() == Qt.MouseButton.MiddleButton:
+        """Handle mouse press - left or middle button for panning."""
+        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
             self._panning = True
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             # Fake left button for drag mode
@@ -258,7 +278,7 @@ class SheetView(QGraphicsView):
 
     def mouseReleaseEvent(self, event):
         """Handle mouse release."""
-        if event.button() == Qt.MouseButton.MiddleButton:
+        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton) and self._panning:
             fake_event = type(event)(
                 event.type(),
                 event.position(),
