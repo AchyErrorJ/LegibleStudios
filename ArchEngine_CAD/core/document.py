@@ -685,3 +685,19 @@ class ArchDocument(QObject):
                 result.append((wall.index, 'end'))
 
         return result
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Export document data as a dictionary.
+
+        This returns the data in the format expected by generators,
+        updating from parsed objects to ensure current state.
+
+        Returns:
+            Dictionary with all building data
+        """
+        # Update data from parsed objects first
+        self._update_data()
+
+        # Return a copy to prevent external modification
+        return copy.deepcopy(self._data)
