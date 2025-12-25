@@ -6,7 +6,8 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow, QDockWidget, QToolBar, QStatusBar,
-    QFileDialog, QMessageBox, QWidget, QVBoxLayout
+    QFileDialog, QMessageBox, QWidget, QVBoxLayout,
+    QSplitter, QLabel
 )
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
@@ -14,6 +15,13 @@ from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from app.config import Config
 from core.document import ArchDocument
 from core.events import event_bus
+
+# Optional UE5 viewport import
+try:
+    from viewport import UE5ViewportWidget
+    HAS_VIEWPORT = True
+except ImportError:
+    HAS_VIEWPORT = False
 
 
 class ArchEngineApplication(QMainWindow):
@@ -153,6 +161,22 @@ class ArchEngineApplication(QMainWindow):
         self.action_snap_angular.setChecked(self.config.snap_angular)
         self.action_snap_angular.triggered.connect(lambda: self._toggle_snap_type('angular'))
 
+        # 3D Viewport actions (only if viewport module available)
+        if HAS_VIEWPORT:
+            self.action_connect_ue5 = QAction("&Connect to UE5", self)
+            self.action_connect_ue5.setShortcut(QKeySequence("F5"))
+            self.action_connect_ue5.triggered.connect(self._toggle_ue5_connection)
+
+            self.action_toggle_3d_view = QAction("&3D Viewport", self)
+            self.action_toggle_3d_view.setCheckable(True)
+            self.action_toggle_3d_view.setChecked(False)
+            self.action_toggle_3d_view.setShortcut(QKeySequence("F6"))
+            self.action_toggle_3d_view.triggered.connect(self._toggle_3d_view)
+
+            self.action_3d_split = QAction("Split View (2D | 3D)", self)
+            self.action_3d_split.setCheckable(True)
+            self.action_3d_split.triggered.connect(self._toggle_split_view)
+
     def _create_menus(self):
         """Create menu bar."""
         menubar = self.menuBar()
@@ -205,6 +229,14 @@ class ArchEngineApplication(QMainWindow):
         # Window menu
         self.window_menu = menubar.addMenu("&Window")
 
+        # 3D menu (only if viewport module available)
+        if HAS_VIEWPORT:
+            view_3d_menu = menubar.addMenu("&3D")
+            view_3d_menu.addAction(self.action_connect_ue5)
+            view_3d_menu.addSeparator()
+            view_3d_menu.addAction(self.action_toggle_3d_view)
+            view_3d_menu.addAction(self.action_3d_split)
+
     def _create_toolbars(self):
         """Create toolbars."""
         # Main toolbar
@@ -234,6 +266,15 @@ class ArchEngineApplication(QMainWindow):
         options_toolbar.addAction(self.action_grid)
         options_toolbar.addAction(self.action_snap)
         self.addToolBar(options_toolbar)
+
+        # 3D Viewport toolbar (only if viewport module available)
+        if HAS_VIEWPORT:
+            viewport_toolbar = QToolBar("3D Viewport")
+            viewport_toolbar.setObjectName("viewport_toolbar")
+            viewport_toolbar.addAction(self.action_connect_ue5)
+            viewport_toolbar.addAction(self.action_toggle_3d_view)
+            viewport_toolbar.addAction(self.action_3d_split)
+            self.addToolBar(viewport_toolbar)
 
     def _create_status_bar(self):
         """Create status bar."""
@@ -291,15 +332,55 @@ class ArchEngineApplication(QMainWindow):
         self.tabifyDockWidget(self.properties_dock, self.history_dock)
         self.window_menu.addAction(self.history_dock.toggleViewAction())
 
+        # 3D Viewport dock (only if viewport module available)
+        if HAS_VIEWPORT:
+            self.viewport_dock = QDockWidget("3D Viewport", self)
+            self.viewport_dock.setObjectName("viewport_dock")
+            self.viewport_dock.setAllowedAreas(
+                Qt.DockWidgetArea.LeftDockWidgetArea |
+                Qt.DockWidgetArea.RightDockWidgetArea |
+                Qt.DockWidgetArea.BottomDockWidgetArea
+            )
+            # Create the viewport widget
+            self.viewport_3d = UE5ViewportWidget()
+            self.viewport_3d.setMinimumSize(400, 300)
+            self.viewport_3d.connected.connect(self._on_ue5_connected)
+            self.viewport_3d.disconnected.connect(self._on_ue5_disconnected)
+            self.viewport_3d.texture_ready.connect(self._on_ue5_texture_ready)
+            self.viewport_dock.setWidget(self.viewport_3d)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.viewport_dock)
+            self.viewport_dock.hide()  # Hidden by default
+            self.window_menu.addAction(self.viewport_dock.toggleViewAction())
+
     def _create_central_widget(self):
-        """Create the central plan view widget."""
+        """Create the central plan view widget with optional split view."""
         from views.plan_view import PlanView
         from tools.tool_manager import ToolManager
         from tools.base_tool import ToolType
         from tools.wall_tool import WallTool
 
+        # Create the main plan view
         self.plan_view = PlanView(self.document, self.config, self)
-        self.setCentralWidget(self.plan_view)
+
+        # Create split view container (for 2D | 3D side-by-side mode)
+        self._split_mode = False
+        self._split_viewport: Optional[UE5ViewportWidget] = None
+
+        if HAS_VIEWPORT:
+            self.central_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+            self.central_splitter.addWidget(self.plan_view)
+            # Create a separate viewport for split mode
+            self._split_viewport = UE5ViewportWidget()
+            self._split_viewport.setMinimumWidth(400)
+            self._split_viewport.connected.connect(self._on_ue5_connected)
+            self._split_viewport.disconnected.connect(self._on_ue5_disconnected)
+            self._split_viewport.texture_ready.connect(self._on_ue5_texture_ready)
+            self.central_splitter.addWidget(self._split_viewport)
+            self._split_viewport.hide()  # Hidden by default
+            self.central_splitter.setSizes([700, 0])  # Start with plan view full
+            self.setCentralWidget(self.central_splitter)
+        else:
+            self.setCentralWidget(self.plan_view)
 
         # Create tool manager
         self.tool_manager = ToolManager(self.plan_view, self.document, self)
@@ -520,6 +601,102 @@ class ArchEngineApplication(QMainWindow):
         if self._check_save():
             self._save_state()
             self.config.save()
+            # Disconnect from UE5 if connected
+            if HAS_VIEWPORT:
+                if hasattr(self, 'viewport_3d') and self.viewport_3d.is_connected:
+                    self.viewport_3d.disconnect_from_ue5()
+                if self._split_viewport and self._split_viewport.is_connected:
+                    self._split_viewport.disconnect_from_ue5()
             event.accept()
         else:
             event.ignore()
+
+    # =========================================================================
+    # UE5 3D Viewport Operations
+    # =========================================================================
+
+    def _toggle_ue5_connection(self):
+        """Toggle connection to UE5."""
+        if not HAS_VIEWPORT:
+            return
+
+        # Get the active viewport (prefer split viewport if visible, else dock)
+        viewport = self._get_active_viewport()
+        if not viewport:
+            self.status_bar.showMessage("No 3D viewport visible. Show the viewport first.", 3000)
+            return
+
+        if viewport.is_connected:
+            viewport.disconnect_from_ue5()
+            self.action_connect_ue5.setText("&Connect to UE5")
+            self.status_bar.showMessage("Disconnected from UE5", 3000)
+        else:
+            # Try to connect with default pipe name
+            if viewport.connect_to_ue5("ArchEngine_Viewport"):
+                self.action_connect_ue5.setText("&Disconnect from UE5")
+                self.status_bar.showMessage("Connecting to UE5...", 3000)
+            else:
+                self.status_bar.showMessage("Failed to initiate UE5 connection", 3000)
+
+    def _toggle_3d_view(self, checked: bool):
+        """Toggle 3D viewport dock visibility."""
+        if not HAS_VIEWPORT:
+            return
+
+        if hasattr(self, 'viewport_dock'):
+            self.viewport_dock.setVisible(checked)
+            if checked and not self.viewport_3d.is_connected:
+                self.status_bar.showMessage("3D Viewport visible. Press F5 to connect to UE5.", 5000)
+
+    def _toggle_split_view(self, checked: bool):
+        """Toggle split view mode (2D | 3D side-by-side)."""
+        if not HAS_VIEWPORT or not self._split_viewport:
+            return
+
+        self._split_mode = checked
+        if checked:
+            self._split_viewport.show()
+            # Set equal split
+            total_width = self.central_splitter.width()
+            self.central_splitter.setSizes([total_width // 2, total_width // 2])
+            self.status_bar.showMessage("Split view enabled (2D | 3D)", 3000)
+            if not self._split_viewport.is_connected:
+                self.status_bar.showMessage("Split view enabled. Press F5 to connect to UE5.", 5000)
+        else:
+            self._split_viewport.hide()
+            self.central_splitter.setSizes([1, 0])
+            self.status_bar.showMessage("Split view disabled", 3000)
+
+    def _get_active_viewport(self) -> Optional['UE5ViewportWidget']:
+        """Get the currently active/visible viewport."""
+        if not HAS_VIEWPORT:
+            return None
+
+        # Prefer split viewport if in split mode
+        if self._split_mode and self._split_viewport and self._split_viewport.isVisible():
+            return self._split_viewport
+
+        # Otherwise use dock viewport if visible
+        if hasattr(self, 'viewport_3d') and hasattr(self, 'viewport_dock'):
+            if self.viewport_dock.isVisible():
+                return self.viewport_3d
+
+        # Fallback to split viewport even if not visible (for connection before showing)
+        if self._split_viewport:
+            return self._split_viewport
+
+        return getattr(self, 'viewport_3d', None)
+
+    def _on_ue5_connected(self):
+        """Handle UE5 connection established."""
+        self.action_connect_ue5.setText("&Disconnect from UE5")
+        self.status_bar.showMessage("Connected to UE5", 3000)
+
+    def _on_ue5_disconnected(self):
+        """Handle UE5 disconnection."""
+        self.action_connect_ue5.setText("&Connect to UE5")
+        self.status_bar.showMessage("Disconnected from UE5", 3000)
+
+    def _on_ue5_texture_ready(self, width: int, height: int):
+        """Handle UE5 texture ready."""
+        self.status_bar.showMessage(f"UE5 Viewport: {width}x{height}", 5000)

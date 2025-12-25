@@ -13,11 +13,26 @@ public class ArchEngine : ModuleRules
             "CoreUObject",
             "Engine",
             "InputCore",
+            "EnhancedInput",
+            "UMG",
+            "Slate",
+            "SlateCore",
             "Json",
             "JsonUtilities",
             "ProceduralMeshComponent",
-            "WebSockets"
+            "WebSockets",
+            "RHI",
+            "RenderCore"
         });
+
+        // Platform-specific for D3D11 texture sharing
+        if (Target.Platform == UnrealTargetPlatform.Win64)
+        {
+            PublicSystemLibraries.AddRange(new string[] {
+                "d3d11.lib",
+                "dxgi.lib"
+            });
+        }
 
         // Add module directory so "Types/ArchTypes.h" style includes work
         PublicIncludePaths.Add(ModuleDirectory);
