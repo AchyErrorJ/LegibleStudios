@@ -26,6 +26,14 @@ class Config:
     ortho_mode: bool = True
     snap_enabled: bool = True
 
+    # Individual snap toggles
+    snap_endpoint: bool = True
+    snap_midpoint: bool = True
+    snap_perpendicular: bool = True
+    snap_parallel: bool = True
+    snap_extension: bool = True
+    snap_angular: bool = True
+
     # Display settings
     background_color: str = "#1a1a2e"
     grid_color: str = "#2a2a4e"
@@ -75,6 +83,12 @@ class Config:
             'grid_visible': self.grid_visible,
             'ortho_mode': self.ortho_mode,
             'snap_enabled': self.snap_enabled,
+            'snap_endpoint': self.snap_endpoint,
+            'snap_midpoint': self.snap_midpoint,
+            'snap_perpendicular': self.snap_perpendicular,
+            'snap_parallel': self.snap_parallel,
+            'snap_extension': self.snap_extension,
+            'snap_angular': self.snap_angular,
             'background_color': self.background_color,
             'default_scale': self.default_scale,
         }

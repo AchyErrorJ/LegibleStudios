@@ -122,6 +122,37 @@ class ArchEngineApplication(QMainWindow):
         self.action_snap.setShortcut(QKeySequence("F9"))
         self.action_snap.triggered.connect(self._toggle_snap)
 
+        # Individual snap type toggles
+        self.action_snap_endpoint = QAction("&Endpoint", self)
+        self.action_snap_endpoint.setCheckable(True)
+        self.action_snap_endpoint.setChecked(self.config.snap_endpoint)
+        self.action_snap_endpoint.triggered.connect(lambda: self._toggle_snap_type('endpoint'))
+
+        self.action_snap_midpoint = QAction("&Midpoint", self)
+        self.action_snap_midpoint.setCheckable(True)
+        self.action_snap_midpoint.setChecked(self.config.snap_midpoint)
+        self.action_snap_midpoint.triggered.connect(lambda: self._toggle_snap_type('midpoint'))
+
+        self.action_snap_perpendicular = QAction("Per&pendicular", self)
+        self.action_snap_perpendicular.setCheckable(True)
+        self.action_snap_perpendicular.setChecked(self.config.snap_perpendicular)
+        self.action_snap_perpendicular.triggered.connect(lambda: self._toggle_snap_type('perpendicular'))
+
+        self.action_snap_parallel = QAction("Para&llel", self)
+        self.action_snap_parallel.setCheckable(True)
+        self.action_snap_parallel.setChecked(self.config.snap_parallel)
+        self.action_snap_parallel.triggered.connect(lambda: self._toggle_snap_type('parallel'))
+
+        self.action_snap_extension = QAction("E&xtension", self)
+        self.action_snap_extension.setCheckable(True)
+        self.action_snap_extension.setChecked(self.config.snap_extension)
+        self.action_snap_extension.triggered.connect(lambda: self._toggle_snap_type('extension'))
+
+        self.action_snap_angular = QAction("&Angular", self)
+        self.action_snap_angular.setCheckable(True)
+        self.action_snap_angular.setChecked(self.config.snap_angular)
+        self.action_snap_angular.triggered.connect(lambda: self._toggle_snap_type('angular'))
+
     def _create_menus(self):
         """Create menu bar."""
         menubar = self.menuBar()
@@ -158,6 +189,18 @@ class ArchEngineApplication(QMainWindow):
         # Tools menu
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction(self.action_select)
+
+        # Snap menu
+        snap_menu = menubar.addMenu("&Snap")
+        snap_menu.addAction(self.action_snap)
+        snap_menu.addSeparator()
+        snap_menu.addAction(self.action_snap_endpoint)
+        snap_menu.addAction(self.action_snap_midpoint)
+        snap_menu.addAction(self.action_snap_extension)
+        snap_menu.addSeparator()
+        snap_menu.addAction(self.action_snap_perpendicular)
+        snap_menu.addAction(self.action_snap_parallel)
+        snap_menu.addAction(self.action_snap_angular)
 
         # Window menu
         self.window_menu = menubar.addMenu("&Window")
@@ -427,6 +470,23 @@ class ArchEngineApplication(QMainWindow):
         self.config.snap_enabled = checked
         self.config.save()
         self.status_bar.showMessage(f"Snap: {'On' if checked else 'Off'}", 2000)
+
+    def _toggle_snap_type(self, snap_type: str):
+        """Toggle individual snap type."""
+        attr_name = f'snap_{snap_type}'
+        action_name = f'action_snap_{snap_type}'
+
+        if hasattr(self.config, attr_name) and hasattr(self, action_name):
+            action = getattr(self, action_name)
+            new_value = action.isChecked()
+            setattr(self.config, attr_name, new_value)
+            self.config.save()
+
+            # Update snap manager's cached snap points if endpoint/midpoint changed
+            if snap_type in ('endpoint', 'midpoint') and hasattr(self, 'plan_view'):
+                self.plan_view._snap_manager.collect_snap_points()
+
+            self.status_bar.showMessage(f"Snap {snap_type.title()}: {'On' if new_value else 'Off'}", 2000)
 
     # =========================================================================
     # Event Handlers

@@ -28,6 +28,9 @@ class SnapType(Enum):
     ENDPOINT = "endpoint"
     MIDPOINT = "midpoint"
     PERPENDICULAR = "perpendicular"
+    PARALLEL = "parallel"
+    EXTENSION = "extension"
+    ANGULAR = "angular"  # 45°, 30°, 60° etc
     INTERSECTION = "intersection"
 
 
@@ -115,6 +118,32 @@ class SnapIndicator(QGraphicsItem):
             angle_text = f"{self._angle:.4f}°"
             painter.drawText(QPointF(s/2 + 50, s/2), angle_text)
 
+        elif self._snap_type == SnapType.PARALLEL:
+            # Two parallel lines symbol
+            pen = QPen(QColor(0, 200, 255), 20)
+            painter.setPen(pen)
+            painter.drawLine(QPointF(-s/2, -s/4), QPointF(s/2, -s/4))
+            painter.drawLine(QPointF(-s/2, s/4), QPointF(s/2, s/4))
+
+        elif self._snap_type == SnapType.EXTENSION:
+            # Dashed line extending symbol
+            pen = QPen(QColor(255, 200, 0), 20, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawLine(QPointF(-s, 0), QPointF(s, 0))
+            # Small square at snap point
+            pen.setStyle(Qt.PenStyle.SolidLine)
+            painter.setPen(pen)
+            painter.drawRect(QRectF(-s/4, -s/4, s/2, s/2))
+
+        elif self._snap_type == SnapType.ANGULAR:
+            # Arc symbol for angular snap
+            pen = QPen(QColor(200, 100, 255), 20)
+            painter.setPen(pen)
+            painter.drawArc(QRectF(-s/2, -s/2, s, s), 0, int(self._angle * 16))
+            # Draw angle text
+            painter.setFont(self._font)
+            painter.drawText(QPointF(s/2 + 50, 0), f"{self._angle:.0f}°")
+
         elif self._snap_type == SnapType.INTERSECTION:
             # X for intersections
             pen = QPen(QColor(255, 0, 255), 20)
@@ -128,8 +157,9 @@ class SnapManager:
 
     SNAP_TOLERANCE = 500  # mm - distance within which to snap
 
-    def __init__(self, document: ArchDocument):
+    def __init__(self, document: ArchDocument, config: Config = None):
         self.document = document
+        self.config = config
         self._snap_points: List[SnapPoint] = []
         self._excluded_wall_idx: int = -1  # Wall being edited (exclude from snapping)
 
@@ -149,17 +179,32 @@ class SnapManager:
             x2, z2 = wall.end[0], wall.end[2]
             cx, cz = (x1 + x2) / 2, (z1 + z2) / 2
 
-            # Endpoints
-            self._snap_points.append(SnapPoint(x1, z1, SnapType.ENDPOINT, i))
-            self._snap_points.append(SnapPoint(x2, z2, SnapType.ENDPOINT, i))
+            # Endpoints (if enabled)
+            if not self.config or self.config.snap_endpoint:
+                self._snap_points.append(SnapPoint(x1, z1, SnapType.ENDPOINT, i))
+                self._snap_points.append(SnapPoint(x2, z2, SnapType.ENDPOINT, i))
 
-            # Midpoint
-            self._snap_points.append(SnapPoint(cx, cz, SnapType.MIDPOINT, i))
+            # Midpoint (if enabled)
+            if not self.config or self.config.snap_midpoint:
+                self._snap_points.append(SnapPoint(cx, cz, SnapType.MIDPOINT, i))
 
-    def find_perpendicular_snap(self, point: QPointF, from_point: Optional[QPointF] = None) -> Optional[SnapPoint]:
-        """Find perpendicular snap point - where a 90° line from drag start hits a wall."""
+    def find_perpendicular_snap(self, point: QPointF, from_point: Optional[QPointF] = None,
+                                  fixed_point: Optional[QPointF] = None) -> Optional[SnapPoint]:
+        """
+        Find perpendicular snap point.
+
+        If fixed_point is provided: Find position where the line from fixed_point to
+        the snap position would be perpendicular to a target wall (makes your wall ⊥ to another).
+
+        Otherwise (legacy): Find where a 90° line from from_point hits a wall.
+        """
+        # New behavior: make wall perpendicular to another wall
+        if fixed_point:
+            return self._find_make_wall_perpendicular(point, fixed_point)
+
+        # Legacy behavior
         if not from_point:
-            return None  # Need a start point to calculate perpendicular
+            return None
 
         best_snap = None
         best_dist = self.SNAP_TOLERANCE
@@ -171,33 +216,20 @@ class SnapManager:
             x1, z1 = wall.start[0], wall.start[2]
             x2, z2 = wall.end[0], wall.end[2]
 
-            # Wall direction vector
             wall_dx = x2 - x1
             wall_dz = z2 - z1
             wall_len = math.sqrt(wall_dx**2 + wall_dz**2)
             if wall_len < 1:
                 continue
 
-            # Normalize wall direction
             wall_ux = wall_dx / wall_len
             wall_uz = wall_dz / wall_len
-
-            # Perpendicular direction (90° to wall)
             perp_ux = -wall_uz
             perp_uz = wall_ux
 
-            # Find where a line from from_point in perpendicular direction hits the wall
-            # Line 1: from_point + t * perp_dir
-            # Line 2: wall_start + s * wall_dir
-            # Solve for intersection
-
-            # Using parametric intersection:
-            # from_point.x + t * perp_ux = x1 + s * wall_ux
-            # from_point.y + t * perp_uz = z1 + s * wall_uz
-
             denom = perp_ux * wall_uz - perp_uz * wall_ux
             if abs(denom) < 0.0001:
-                continue  # Lines are parallel
+                continue
 
             dx = x1 - from_point.x()
             dz = z1 - from_point.y()
@@ -205,20 +237,215 @@ class SnapManager:
             t = (dx * wall_uz - dz * wall_ux) / denom
             s = (dx * perp_uz - dz * perp_ux) / denom
 
-            # Check if intersection is on the wall segment
             if s < -0.01 or s > wall_len + 0.01:
                 continue
 
-            # Calculate intersection point
             snap_x = from_point.x() + t * perp_ux
             snap_z = from_point.y() + t * perp_uz
 
-            # Check if current drag position is close to this perpendicular snap
             dist = self._distance(point.x(), point.y(), snap_x, snap_z)
             if dist < best_dist:
                 best_dist = dist
-                # Angle is always 90° for perpendicular snap
                 best_snap = SnapPoint(snap_x, snap_z, SnapType.PERPENDICULAR, i, 90.0)
+
+        return best_snap
+
+    def _find_make_wall_perpendicular(self, point: QPointF, fixed_point: QPointF) -> Optional[SnapPoint]:
+        """
+        Find snap position where the wall being edited becomes perpendicular to another wall.
+
+        fixed_point: The other endpoint of the wall being edited (stays fixed)
+        point: Current drag position
+
+        Returns snap position where fixed_point → snap_pos is ⊥ to a target wall.
+        """
+        best_snap = None
+        best_dist = self.SNAP_TOLERANCE
+
+        # Current distance from fixed point (we keep the same length)
+        dx = point.x() - fixed_point.x()
+        dz = point.y() - fixed_point.y()
+        current_len = math.sqrt(dx * dx + dz * dz)
+
+        if current_len < 10:
+            return None  # Too close to fixed point
+
+        for i, wall in enumerate(self.document.walls):
+            if i == self._excluded_wall_idx:
+                continue
+
+            x1, z1 = wall.start[0], wall.start[2]
+            x2, z2 = wall.end[0], wall.end[2]
+
+            # Target wall direction
+            wall_dx = x2 - x1
+            wall_dz = z2 - z1
+            wall_len = math.sqrt(wall_dx * wall_dx + wall_dz * wall_dz)
+            if wall_len < 1:
+                continue
+
+            # Normalized target wall direction
+            wall_ux = wall_dx / wall_len
+            wall_uz = wall_dz / wall_len
+
+            # Two perpendicular directions to the target wall
+            perp_dirs = [
+                (-wall_uz, wall_ux),   # +90°
+                (wall_uz, -wall_ux),   # -90°
+            ]
+
+            for perp_ux, perp_uz in perp_dirs:
+                # Snap position: fixed_point + current_len * perp_dir
+                snap_x = fixed_point.x() + current_len * perp_ux
+                snap_z = fixed_point.y() + current_len * perp_uz
+
+                # Check if this is close to where user is dragging
+                dist = self._distance(point.x(), point.y(), snap_x, snap_z)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_snap = SnapPoint(snap_x, snap_z, SnapType.PERPENDICULAR, i, 90.0)
+
+        return best_snap
+
+    def find_parallel_snap(self, point: QPointF, fixed_point: Optional[QPointF] = None) -> Optional[SnapPoint]:
+        """
+        Find snap position where the wall being edited becomes parallel to another wall.
+        Similar to perpendicular but at 0° instead of 90°.
+        """
+        if not fixed_point:
+            return None
+
+        best_snap = None
+        best_dist = self.SNAP_TOLERANCE
+
+        # Current distance from fixed point
+        dx = point.x() - fixed_point.x()
+        dz = point.y() - fixed_point.y()
+        current_len = math.sqrt(dx * dx + dz * dz)
+
+        if current_len < 10:
+            return None
+
+        for i, wall in enumerate(self.document.walls):
+            if i == self._excluded_wall_idx:
+                continue
+
+            x1, z1 = wall.start[0], wall.start[2]
+            x2, z2 = wall.end[0], wall.end[2]
+
+            wall_dx = x2 - x1
+            wall_dz = z2 - z1
+            wall_len = math.sqrt(wall_dx * wall_dx + wall_dz * wall_dz)
+            if wall_len < 1:
+                continue
+
+            # Normalized target wall direction (parallel directions)
+            wall_ux = wall_dx / wall_len
+            wall_uz = wall_dz / wall_len
+
+            # Two parallel directions (same as wall, or opposite)
+            parallel_dirs = [
+                (wall_ux, wall_uz),    # Same direction
+                (-wall_ux, -wall_uz),  # Opposite direction
+            ]
+
+            for par_ux, par_uz in parallel_dirs:
+                snap_x = fixed_point.x() + current_len * par_ux
+                snap_z = fixed_point.y() + current_len * par_uz
+
+                dist = self._distance(point.x(), point.y(), snap_x, snap_z)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_snap = SnapPoint(snap_x, snap_z, SnapType.PARALLEL, i, 0.0)
+
+        return best_snap
+
+    def find_extension_snap(self, point: QPointF) -> Optional[SnapPoint]:
+        """
+        Find snap to extension lines of existing walls.
+        Snaps to where wall centerlines would extend beyond their endpoints.
+        """
+        best_snap = None
+        best_dist = self.SNAP_TOLERANCE
+
+        for i, wall in enumerate(self.document.walls):
+            if i == self._excluded_wall_idx:
+                continue
+
+            x1, z1 = wall.start[0], wall.start[2]
+            x2, z2 = wall.end[0], wall.end[2]
+
+            wall_dx = x2 - x1
+            wall_dz = z2 - z1
+            wall_len = math.sqrt(wall_dx * wall_dx + wall_dz * wall_dz)
+            if wall_len < 1:
+                continue
+
+            wall_ux = wall_dx / wall_len
+            wall_uz = wall_dz / wall_len
+
+            # Project point onto the infinite line of this wall
+            # Vector from wall start to point
+            px = point.x() - x1
+            pz = point.y() - z1
+
+            # Parameter t along wall direction
+            t = (px * wall_ux + pz * wall_uz)
+
+            # Only snap if in extension zone (before start or after end)
+            if 0 <= t <= wall_len:
+                continue  # Point is alongside the wall, not in extension
+
+            # Calculate snap point on the extension line
+            snap_x = x1 + t * wall_ux
+            snap_z = z1 + t * wall_uz
+
+            # Check perpendicular distance to extension line
+            perp_dist = abs(px * (-wall_uz) + pz * wall_ux)
+            if perp_dist > self.SNAP_TOLERANCE:
+                continue
+
+            dist = self._distance(point.x(), point.y(), snap_x, snap_z)
+            if dist < best_dist:
+                best_dist = dist
+                best_snap = SnapPoint(snap_x, snap_z, SnapType.EXTENSION, i, 0.0)
+
+        return best_snap
+
+    def find_angular_snap(self, point: QPointF, fixed_point: Optional[QPointF] = None) -> Optional[SnapPoint]:
+        """
+        Snap to common architectural angles: 30°, 45°, 60° (and their multiples).
+        """
+        if not fixed_point:
+            return None
+
+        dx = point.x() - fixed_point.x()
+        dz = point.y() - fixed_point.y()
+        current_len = math.sqrt(dx * dx + dz * dz)
+
+        if current_len < 10:
+            return None
+
+        # Current angle in degrees
+        current_angle = math.degrees(math.atan2(dz, dx))
+
+        # Common angles to snap to (excluding 0, 90, 180, -90 which are handled by ortho)
+        snap_angles = [30, 45, 60, 120, 135, 150, -30, -45, -60, -120, -135, -150]
+
+        best_snap = None
+        best_diff = 10  # degrees tolerance for angular snap
+
+        for target_angle in snap_angles:
+            diff = abs(current_angle - target_angle)
+            if diff > 180:
+                diff = 360 - diff
+
+            if diff < best_diff:
+                best_diff = diff
+                rad = math.radians(target_angle)
+                snap_x = fixed_point.x() + current_len * math.cos(rad)
+                snap_z = fixed_point.y() + current_len * math.sin(rad)
+                best_snap = SnapPoint(snap_x, snap_z, SnapType.ANGULAR, -1, abs(target_angle))
 
         return best_snap
 
@@ -246,25 +473,63 @@ class SnapManager:
 
         return (proj_x, proj_y)
 
-    def find_nearest_snap(self, point: QPointF, include_perpendicular: bool = True, from_point: Optional[QPointF] = None) -> Optional[SnapPoint]:
-        """Find nearest snap point within tolerance."""
+    def find_nearest_snap(self, point: QPointF, include_perpendicular: bool = True,
+                          from_point: Optional[QPointF] = None,
+                          fixed_point: Optional[QPointF] = None) -> Optional[SnapPoint]:
+        """
+        Find nearest snap point within tolerance.
+
+        fixed_point: For perpendicular/parallel/angular snaps, the fixed endpoint of the wall being edited.
+        """
+        # Check if snapping is globally enabled
+        if self.config and not self.config.snap_enabled:
+            return None
+
         best_snap = None
         best_dist = self.SNAP_TOLERANCE
 
-        # Check collected snap points (endpoints, midpoints)
+        # Priority 1: Check collected snap points (endpoints, midpoints) - highest priority
+        # These are already filtered in collect_snap_points based on config
         for snap in self._snap_points:
             dist = self._distance(point.x(), point.y(), snap.x, snap.y)
             if dist < best_dist:
                 best_dist = dist
                 best_snap = snap
 
-        # Check perpendicular snaps
-        if include_perpendicular:
-            perp_snap = self.find_perpendicular_snap(point, from_point)
+        # Priority 2: Extension snaps (align to wall extensions)
+        if not self.config or self.config.snap_extension:
+            ext_snap = self.find_extension_snap(point)
+            if ext_snap:
+                dist = self._distance(point.x(), point.y(), ext_snap.x, ext_snap.y)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_snap = ext_snap
+
+        # Priority 3: Perpendicular snaps (make wall ⊥ to another)
+        if (not self.config or self.config.snap_perpendicular) and include_perpendicular and fixed_point:
+            perp_snap = self.find_perpendicular_snap(point, from_point, fixed_point)
             if perp_snap:
                 dist = self._distance(point.x(), point.y(), perp_snap.x, perp_snap.y)
                 if dist < best_dist:
+                    best_dist = dist
                     best_snap = perp_snap
+
+        # Priority 4: Parallel snaps (make wall ∥ to another)
+        if (not self.config or self.config.snap_parallel) and fixed_point:
+            par_snap = self.find_parallel_snap(point, fixed_point)
+            if par_snap:
+                dist = self._distance(point.x(), point.y(), par_snap.x, par_snap.y)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_snap = par_snap
+
+        # Priority 5: Angular snaps (30°, 45°, 60° etc) - lowest priority geometry snap
+        if (not self.config or self.config.snap_angular) and fixed_point:
+            ang_snap = self.find_angular_snap(point, fixed_point)
+            if ang_snap:
+                dist = self._distance(point.x(), point.y(), ang_snap.x, ang_snap.y)
+                if dist < best_dist:
+                    best_snap = ang_snap
 
         return best_snap
 
@@ -385,6 +650,21 @@ class GripItem(QGraphicsEllipseItem):
         self._current_snap = None
         super().mouseReleaseEvent(event)
 
+    def _get_fixed_point(self) -> Optional[QPointF]:
+        """Get the fixed endpoint of the wall (the one NOT being dragged)."""
+        if not self.parent_item or not hasattr(self.parent_item, 'wall'):
+            return None
+        wall = self.parent_item.wall
+        if self.grip_type == 'start':
+            # Dragging start, so end is fixed
+            return QPointF(wall.end[0], wall.end[2])
+        elif self.grip_type == 'end':
+            # Dragging end, so start is fixed
+            return QPointF(wall.start[0], wall.start[2])
+        else:
+            # Center grip - no fixed point
+            return None
+
     def itemChange(self, change, value):
         # Use ItemPositionChange to modify position BEFORE it's applied
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
@@ -394,7 +674,9 @@ class GripItem(QGraphicsEllipseItem):
                 # Check for snap points first
                 snap_found = False
                 if self.snap_manager:
-                    snap = self.snap_manager.find_nearest_snap(new_pos, from_point=self._drag_start)
+                    # Get the fixed point for perpendicular snaps
+                    fixed_point = self._get_fixed_point()
+                    snap = self.snap_manager.find_nearest_snap(new_pos, from_point=self._drag_start, fixed_point=fixed_point)
                     if snap:
                         self._current_snap = snap
                         # Show snap indicator
@@ -518,8 +800,10 @@ class WallLayerItem(QGraphicsItem):
         self._fill_color = QColor(int(r * 255), int(g * 255), int(b * 255), int(a * 255))
         self._selection_color = QColor("#00ffff")
 
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        # Layers are non-selectable - clicks pass through to parent wall
+        # But they enable precise hover detection for grips
         self.setAcceptHoverEvents(True)
+        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)  # Pass clicks through
         self.setZValue(100 + layer_index)  # Outer layers on top
 
     def _get_geometry(self) -> Tuple[QPointF, QPointF, QPointF, QPointF]:
@@ -566,6 +850,8 @@ class WallLayerItem(QGraphicsItem):
         return QRectF(min_x, min_y, max_x - min_x, max_y - min_y)
 
     def shape(self) -> QPainterPath:
+        # Minimal shape for layers - they're visual only
+        # Mouse events should pass to parent wall
         geom = self._get_geometry()
         if not geom:
             return QPainterPath()
@@ -609,83 +895,44 @@ class WallLayerItem(QGraphicsItem):
             painter.drawPath(path)
 
     def _create_grips(self):
-        """Create grips for editing this layer's extensions."""
-        self._remove_grips()
-        geom = self._get_geometry()
-        if not geom:
-            return
-
-        p1, p2, p3, p4 = geom
-
-        # Midpoint of start edge
-        start_mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
-        # Midpoint of end edge
-        end_mid = QPointF((p3.x() + p4.x()) / 2, (p3.y() + p4.y()) / 2)
-
-        # Start extension grip
-        start_grip = GripItem('layer_start', self, self._on_grip_moved)
-        start_grip.setPos(start_mid)
-        start_grip.setBrush(QBrush(QColor(255, 128, 0)))  # Orange for layer grips
-        self.scene().addItem(start_grip)
-        self._grips.append(start_grip)
-
-        # End extension grip
-        end_grip = GripItem('layer_end', self, self._on_grip_moved)
-        end_grip.setPos(end_mid)
-        end_grip.setBrush(QBrush(QColor(255, 128, 0)))
-        self.scene().addItem(end_grip)
-        self._grips.append(end_grip)
+        """Layer grips disabled - use wall grips instead."""
+        pass
 
     def _remove_grips(self):
+        """Layer grips disabled."""
         for grip in self._grips:
             if grip.scene():
                 grip.scene().removeItem(grip)
         self._grips.clear()
 
-    def _on_grip_moved(self, grip_type: str, new_pos: QPointF):
-        """Handle layer grip movement - adjusts layer extension."""
-        x1, z1 = self.wall.start[0], self.wall.start[2]
-        x2, z2 = self.wall.end[0], self.wall.end[2]
-        dx = x2 - x1
-        dz = z2 - z1
-        length = math.sqrt(dx**2 + dz**2)
-        if length < 1:
-            return
-
-        ux, uz = dx / length, dz / length
-
-        if grip_type == 'layer_start':
-            # Calculate extension based on how far grip moved from wall start
-            # Project new pos onto wall direction
-            vx, vz = new_pos.x() - x1, new_pos.y() - z1
-            dist_along = vx * ux + vz * uz
-            self.start_extension = -dist_along  # Negative = extend outward
-        elif grip_type == 'layer_end':
-            vx, vz = new_pos.x() - x2, new_pos.y() - z2
-            dist_along = vx * ux + vz * uz
-            self.end_extension = dist_along
-
-        self.prepareGeometryChange()
-        self.update()
-
     def hoverEnterEvent(self, event):
-        if not self._grips:
-            self._create_grips()
+        """Forward hover to parent wall to show grips."""
+        if self.parent_wall_item:
+            # Show grips on parent wall when hovering any layer
+            if not self.parent_wall_item._grips:
+                self.parent_wall_item._create_grips()
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event):
-        dragging = any(grip._dragging for grip in self._grips) if self._grips else False
-        if not self.isSelected() and not dragging:
-            self._remove_grips()
+        """Check if we should hide parent wall grips."""
+        if self.parent_wall_item:
+            # Only hide grips if parent wall isn't selected and no grip is being dragged
+            if not self.parent_wall_item.isSelected():
+                dragging = any(grip._dragging for grip in self.parent_wall_item._grips) if self.parent_wall_item._grips else False
+                # Check if another layer of the same wall is being hovered
+                other_layer_hovered = any(
+                    layer.isUnderMouse() for layer in self.parent_wall_item._layer_items
+                    if layer is not self
+                )
+                # Check if parent wall itself or a grip is under mouse
+                parent_hovered = self.parent_wall_item.isUnderMouse()
+                grip_hovered = any(grip.isUnderMouse() for grip in self.parent_wall_item._grips) if self.parent_wall_item._grips else False
+
+                if not dragging and not other_layer_hovered and not parent_hovered and not grip_hovered:
+                    self.parent_wall_item._remove_grips()
         super().hoverLeaveEvent(event)
 
     def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
-            if value:
-                if not self._grips:
-                    self._create_grips()
-            else:
-                self._remove_grips()
         return super().itemChange(change, value)
 
 
@@ -871,10 +1118,12 @@ class WallItem(QGraphicsItem):
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event):
-        """Hide grips when leaving wall (unless selected or dragging)."""
+        """Hide grips when leaving wall (unless selected, dragging, or hovering layer)."""
         # Don't remove grips if any grip is being dragged
         dragging = any(grip._dragging for grip in self._grips) if self._grips else False
-        if not self.isSelected() and not dragging:
+        # Check if any layer is currently being hovered
+        layer_hovered = any(layer.isUnderMouse() for layer in self._layer_items) if self._layer_items else False
+        if not self.isSelected() and not dragging and not layer_hovered:
             self._remove_grips()
         super().hoverLeaveEvent(event)
 
@@ -1494,7 +1743,7 @@ class PlanView(BaseView):
         self._room_labels: List[RoomLabelItem] = []
 
         # Snap system
-        self._snap_manager = SnapManager(document)
+        self._snap_manager = SnapManager(document, config)
         self._snap_indicator = SnapIndicator()
         self.scene.addItem(self._snap_indicator)
 
