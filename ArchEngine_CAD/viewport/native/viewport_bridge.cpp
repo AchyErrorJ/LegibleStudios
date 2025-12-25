@@ -2,10 +2,28 @@
 
 #include "viewport_bridge.h"
 #include <Windows.h>
-#include <d3d11.h>
+#include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <GL/gl.h>
 #include <string>
+
+// OpenGL constants
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
+#ifndef GL_RGBA8
+#define GL_RGBA8 0x8058
+#endif
+#ifndef GL_TEXTURE_2D
+#define GL_TEXTURE_2D 0x0DE1
+#endif
+
+// OpenGL function types
+typedef void (APIENTRY* PFNGLGENTEXTURESPROC)(GLsizei n, GLuint* textures);
+typedef void (APIENTRY* PFNGLDELETETEXTURESPROC)(GLsizei n, const GLuint* textures);
+typedef void (APIENTRY* PFNGLBINDTEXTUREPROC)(GLenum target, GLuint texture);
+typedef void (APIENTRY* PFNGLTEXPARAMETERIPROC)(GLenum target, GLenum pname, GLint param);
+typedef void (APIENTRY* PFNGLTEXIMAGE2DPROC)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels);
 
 // WGL_NV_DX_interop function types
 typedef BOOL(WINAPI* PFNWGLDXSETRESOURCESHAREHANDLENVPROC)(void*, HANDLE);
