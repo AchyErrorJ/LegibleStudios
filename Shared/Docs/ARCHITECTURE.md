@@ -123,14 +123,366 @@ A Tkinter-based 2D editor with real-time sync to UE5.
 
 | Script | Purpose |
 |--------|---------|
-| `generate_plans.py` | Generate SVG/DXF floor plans |
 | `ifc_import.py` | Import IFC (Industry Foundation Classes) files |
 | `physics_bridge.py` | Python physics simulation interface |
 | `text_to_json_gui.py` | GUI wrapper for text_to_json |
 
 ---
 
-## 3. UE5 Viewer (ArchEngine_Viewer)
+## 3. Drawing Generator Suite
+
+**Location:** `ArchEngine_kernel/scripts/`
+
+A comprehensive suite for generating construction-quality architectural drawings from building JSON data. Produces SVG drawings and professional PDF output with precise line weights.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     Drawing Generator Pipeline                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌──────────────────┐                                                   │
+│  │ generated_       │                                                   │
+│  │ building.json    │                                                   │
+│  └────────┬─────────┘                                                   │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌──────────────────┐     ┌──────────────────┐                         │
+│  │ schema_validator │────►│ Validation       │                         │
+│  │      .py         │     │ Report           │                         │
+│  └────────┬─────────┘     └──────────────────┘                         │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌──────────────────┐     ┌──────────────────┐                         │
+│  │ roof_generator   │────►│ Enriched JSON    │                         │
+│  │ wall_types       │     │ (+ roofs, types) │                         │
+│  └────────┬─────────┘     └──────────────────┘                         │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                    generate_all.py (Master)                      │   │
+│  ├─────────────────────────────────────────────────────────────────┤   │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐   │   │
+│  │  │ generate_  │ │ generate_  │ │ generate_  │ │ generate_  │   │   │
+│  │  │ plans.py   │ │ elevations │ │ sections   │ │ details    │   │   │
+│  │  └─────┬──────┘ └─────┬──────┘ └─────┬──────┘ └─────┬──────┘   │   │
+│  │        │              │              │              │          │   │
+│  │        ▼              ▼              ▼              ▼          │   │
+│  │   floor_plan.svg elevation_*.svg section_*.svg details.svg    │   │
+│  │   roof_plan.svg                                schedules.svg   │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌──────────────────┐     ┌──────────────────┐                         │
+│  │   pdf_export.py  │────►│ drawing_set.pdf  │  (ARCH D, vector)       │
+│  └──────────────────┘     │ + individual PDFs│                         │
+│                           └──────────────────┘                         │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Core Modules
+
+#### generate_all.py - Master Generator
+
+Unified pipeline that runs all generators and produces a complete drawing set.
+
+```bash
+# Basic usage
+python generate_all.py building.json -o output/
+
+# With PDF export
+python generate_all.py building.json -o output/ --pdf --sheet-size arch_d
+
+# Skip specific generators
+python generate_all.py building.json -o output/ --skip details,schedules
+```
+
+**Features:**
+- Validates input JSON against schema
+- Enriches data with roof geometry and wall types
+- Runs all drawing generators in sequence
+- Generates HTML index page for viewing
+- Optional PDF export with title blocks
+- Progress logging with timing
+
+#### Drawing Generators
+
+| Script | Output | Description |
+|--------|--------|-------------|
+| `generate_plans.py` | `floor_plan.svg`, `roof_plan.svg` | Floor plan with walls, doors, windows, room labels; Roof plan with slopes and ridges |
+| `generate_elevations.py` | `elevation_*.svg` (4 files) | South, North, East, West building elevations with roof profiles |
+| `generate_sections.py` | `section_a.svg`, `section_b.svg` | Building cross-sections showing wall layers and interior |
+| `generate_details.py` | `details.svg` | Construction details: wall section, eave, window/door jambs |
+| `generate_schedules.py` | `schedules.svg` | Door schedule, window schedule, room finish schedule |
+
+### Support Modules
+
+#### wall_types.py - Wall Assembly Definitions
+
+Defines 15+ standard wall assemblies with layer-by-layer specifications.
+
+```python
+from wall_types import get_wall_type, get_all_wall_types, WallCategory
+
+# Get a specific wall type
+ext_wall = get_wall_type('ext_2x6_r21')
+print(ext_wall.total_thickness)  # 189mm
+print(ext_wall.total_r_value)    # 21.5
+
+# Get default for category
+default = get_default_wall_type('exterior')
+```
+
+**Wall Categories:**
+| Category | Example Types |
+|----------|---------------|
+| Exterior | 2x4 R-13, 2x6 R-21, Brick Veneer, Stucco |
+| Interior | 2x4 Standard, 2x4 Soundproof |
+| Wet Wall | 2x6 Plumbing Wall |
+| Fire-Rated | 1-Hour, 2-Hour Assemblies |
+| Garage | CMU, Insulated |
+| Basement | ICF, Poured Concrete |
+
+**Layer Properties:**
+- `name` - Layer description
+- `thickness` - mm
+- `material` - wood_frame, fiberglass, gypsum, osb, etc.
+- `function` - structure, insulation, sheathing, vapor_barrier, etc.
+- `r_value` - Thermal resistance (optional)
+- `fire_rating` - Minutes (optional)
+
+#### roof_generator.py - Roof Geometry Generation
+
+Generates roof geometry from building footprint.
+
+```python
+from roof_generator import generate_gable_roof, generate_hip_roof, add_roof_to_building
+
+# Generate specific roof type
+roof = generate_gable_roof(
+    width=12000,      # mm
+    depth=9000,       # mm
+    wall_height=2700, # mm
+    pitch=4.0,        # rise/run ratio
+    overhang=600      # mm
+)
+
+# Auto-add roof based on building style
+building_data = add_roof_to_building(building_json)
+```
+
+**Supported Roof Types:**
+- Gable (2 surfaces, 1 ridge)
+- Hip (4 surfaces, 1 ridge + 4 hips)
+- Shed (1 sloped surface)
+- Flat (1 horizontal surface)
+
+**Output Format:**
+```json
+{
+  "type": "gable",
+  "pitch": 4,
+  "overhang": 600,
+  "ridge_height": 4200,
+  "surfaces": [
+    {
+      "name": "West Slope",
+      "vertices": [[x,y,z], ...],
+      "normal": [nx, ny, nz],
+      "slope": 18.43
+    }
+  ],
+  "edges": [
+    {"type": "ridge", "start": [...], "end": [...], "length": 10200},
+    {"type": "eave", ...},
+    {"type": "rake", ...}
+  ]
+}
+```
+
+#### schema_validator.py - JSON Schema Validation
+
+Validates building JSON against expected structure.
+
+```python
+from schema_validator import validate_building_data, ValidationResult
+
+result = validate_building_data(building_json, strict=False)
+
+if result.is_valid:
+    print(f"Valid with {result.warnings_count} warnings")
+else:
+    for error in result.errors:
+        print(f"Error: {error}")
+```
+
+**Validates:**
+- Required fields (width, depth, walls_batch)
+- Wall geometry (start/end coordinates, height)
+- Door/window placement within walls
+- Room bounds and labels
+- Roof surface vertices
+
+#### pdf_export.py - Professional PDF Output
+
+Generates construction-quality PDF drawings with precise line weights.
+
+```python
+from pdf_export import batch_convert_svg_to_pdf, SheetSize, generate_single_sheet_pdf
+
+# Convert all SVGs to PDF
+batch_convert_svg_to_pdf(
+    svg_dir='output/',
+    output_dir='output/',
+    sheet_size=SheetSize.ARCH_D,
+    project_name='Sample House',
+    create_set=True  # Creates combined drawing_set.pdf
+)
+```
+
+**Sheet Sizes:**
+| Type | Sizes |
+|------|-------|
+| US Architectural | ARCH A (9"×12") through ARCH E (36"×48") |
+| ISO | A4 through A0 |
+| ANSI | Letter through E-size |
+
+**Line Weights (ISO 128):**
+| Weight | Size | Use |
+|--------|------|-----|
+| Hairline | 0.13mm | Dimensions, hatching |
+| Fine | 0.18mm | Text, annotations |
+| Light | 0.25mm | Minor details |
+| Medium | 0.35mm | Object lines |
+| Heavy | 0.50mm | Section cuts |
+| Extra Heavy | 0.70mm | Borders |
+| Border | 1.00mm | Sheet border |
+
+**Features:**
+- Vector output (no rasterization)
+- Professional title blocks
+- Drawing scales (1:1 to 1:200, imperial)
+- Multi-page drawing sets with bookmarks
+- SVG to PDF conversion via svglib
+
+#### generator_base.py - Common Utilities
+
+Base utilities shared by all generators.
+
+```python
+from generator_base import (
+    load_building_json,
+    write_svg,
+    handle_errors,
+    create_base_parser,
+    svg_header,
+    svg_footer
+)
+
+@handle_errors
+def main():
+    data = load_building_json('building.json', validate=True)
+    # ... generate drawing ...
+    write_svg(svg_content, 'output.svg')
+```
+
+**Provides:**
+- Error handling decorators
+- JSON loading with validation
+- SVG file writing
+- Command-line argument parsing
+- SVG header/footer generation
+- Building dimension extraction
+
+#### logging_config.py - Logging Infrastructure
+
+Centralized logging with colored console output.
+
+```python
+from logging_config import setup_logging, get_logger, log_section, log_step
+
+logger = setup_logging(name='generator', level=logging.INFO, colors=True)
+
+with log_section("Generating Plans"):
+    with log_step("Floor plan"):
+        # ... work ...
+        logger.success("Floor plan complete")  # Custom SUCCESS level
+```
+
+**Features:**
+- Color-coded log levels (ERROR=red, WARNING=yellow, SUCCESS=green)
+- Section/step context managers
+- File + console output
+- Progress tracking
+
+### Usage
+
+#### Full Pipeline
+
+```bash
+cd ArchEngine_kernel/scripts
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run full pipeline
+python generate_all.py ../../Shared/TestData/sample_building_complete.json \
+    -o ../../Shared/TestData/output \
+    --pdf \
+    --sheet-size arch_d \
+    -v
+```
+
+#### Individual Generators
+
+```bash
+# Floor and roof plans only
+python generate_plans.py building.json -o output/
+
+# Elevations only
+python generate_elevations.py building.json -o output/
+
+# Sections only
+python generate_sections.py building.json -o output/
+```
+
+### Dependencies
+
+```
+# requirements.txt
+reportlab>=4.0.0    # PDF generation
+svglib>=1.5.0       # SVG to PDF conversion
+Pillow>=10.0.0      # Image handling
+lxml>=4.9.0         # XML parsing
+```
+
+### Output Structure
+
+```
+output/
+├── floor_plan.svg
+├── roof_plan.svg
+├── elevation_south.svg
+├── elevation_north.svg
+├── elevation_east.svg
+├── elevation_west.svg
+├── section_a.svg
+├── section_b.svg
+├── details.svg
+├── schedules.svg
+├── enriched_building.json
+├── index.html              # HTML viewer
+├── floor_plan.pdf          # Individual PDFs
+├── elevation_south.pdf
+├── ...
+└── drawing_set.pdf         # Combined multi-page PDF
+```
+
+---
+
+## 4. UE5 Viewer (ArchEngine_Viewer)
 
 **Location:** `ArchEngine_Viewer/ArchEngine/Source/ArchEngine/`
 
@@ -231,7 +583,7 @@ FArchBuilding
 
 ---
 
-## 4. Shared Data (JSON Schema)
+## 5. Shared Data (JSON Schema)
 
 **Location:** `Shared/`
 
@@ -246,12 +598,22 @@ Shared/
 │   └── samples/
 │       └── exterior_wall_2x6.json
 ├── TestData/
-│   ├── output/
+│   ├── output/                      # Generated drawings
 │   │   ├── generated_building.json  # Current building data
-│   │   ├── floor_plan.svg           # Generated floor plan
-│   │   ├── roof_plan_generated.svg  # Generated roof plan
-│   │   └── validation_report.txt    # OBC validation results
+│   │   ├── enriched_building.json   # Data with roofs/wall types added
+│   │   ├── floor_plan.svg           # Floor plan drawing
+│   │   ├── roof_plan.svg            # Roof plan drawing
+│   │   ├── elevation_*.svg          # 4 elevation drawings
+│   │   ├── section_*.svg            # Section drawings
+│   │   ├── details.svg              # Construction details
+│   │   ├── schedules.svg            # Door/window/finish schedules
+│   │   ├── index.html               # HTML viewer
+│   │   ├── *.pdf                    # PDF exports (optional)
+│   │   └── drawing_set.pdf          # Combined PDF set
+│   ├── sample_building_complete.json # Complete test building
 │   └── sample_qbd_output.json
+├── Specs/
+│   └── QBD_Format_v2.1.md        # QBD format specification
 └── Docs/
     └── ARCHITECTURE.md           # This document
 ```
@@ -300,7 +662,7 @@ Shared/
 
 ---
 
-## 5. Coordinate Systems
+## 6. Coordinate Systems
 
 ### Kernel Coordinates (mm)
 ```
@@ -337,7 +699,7 @@ FVector KernelToUnreal(const FVector& K) const {
 
 ---
 
-## 6. Data Flow
+## 7. Data Flow
 
 ### 1. Text Input to 3D Model
 
@@ -406,7 +768,7 @@ User Input: "3 bedroom 2 bath house 1800 sqft"
 
 ---
 
-## 7. Section View System
+## 8. Section View System
 
 The section view allows visualization of wall construction layers.
 
@@ -430,7 +792,7 @@ The section view allows visualization of wall construction layers.
 
 ---
 
-## 8. Roof System
+## 9. Roof System
 
 ### Roof Types
 - **Gable** - Two sloped surfaces meeting at ridge
@@ -458,7 +820,7 @@ The section view allows visualization of wall construction layers.
 
 ---
 
-## 9. Build & Run
+## 10. Build & Run
 
 ### Kernel (CMake)
 ```bash
@@ -489,7 +851,7 @@ python plan_editor_2d.py
 
 ---
 
-## 10. Future Considerations
+## 11. Future Considerations
 
 - **IFC Export** - Export to Industry Foundation Classes format
 - **Structural Analysis** - Integrate with FEA solvers

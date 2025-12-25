@@ -1,0 +1,378 @@
+{
+  "building_id": "BLDG-2025-001",
+  "success": true,
+  "width": 12000,
+  "depth": 9000,
+  "sqm": 108,
+  "sqft": 1163,
+  "is_complete": true,
+  "score": 0.85,
+  "units": "mm",
+
+  "wall_types": [
+    {
+      "id": "ext_2x6_r21",
+      "name": "Exterior 2x6 R-21",
+      "category": "exterior",
+      "total_thickness": 189,
+      "total_r_value": 21.5,
+      "fire_rating": 0,
+      "layers": [
+        {"name": "Lap Siding", "thickness": 20, "material": "fiber_cement", "function": "exterior_finish"},
+        {"name": "House Wrap", "thickness": 1, "material": "tyvek", "function": "air_barrier"},
+        {"name": "OSB Sheathing", "thickness": 12, "material": "osb", "function": "sheathing", "r_value": 0.62},
+        {"name": "2x6 Stud Cavity", "thickness": 140, "material": "wood_frame", "function": "structure"},
+        {"name": "R-21 Batt", "thickness": 140, "material": "fiberglass", "function": "insulation", "r_value": 3.8},
+        {"name": "6mil Poly", "thickness": 0.15, "material": "polyethylene", "function": "vapor_barrier"},
+        {"name": "5/8\" Gypsum", "thickness": 16, "material": "gypsum", "function": "interior_finish", "fire_rating": 45}
+      ]
+    },
+    {
+      "id": "int_2x4",
+      "name": "Interior 2x4",
+      "category": "interior",
+      "total_thickness": 115,
+      "total_r_value": 0,
+      "fire_rating": 0,
+      "layers": [
+        {"name": "1/2\" Gypsum", "thickness": 13, "material": "gypsum", "function": "interior_finish", "fire_rating": 30},
+        {"name": "2x4 Stud Cavity", "thickness": 89, "material": "wood_frame", "function": "structure"},
+        {"name": "1/2\" Gypsum", "thickness": 13, "material": "gypsum", "function": "interior_finish", "fire_rating": 30}
+      ]
+    },
+    {
+      "id": "wet_2x6",
+      "name": "Plumbing Wall 2x6",
+      "category": "wet_wall",
+      "total_thickness": 166,
+      "total_r_value": 0,
+      "fire_rating": 0,
+      "layers": [
+        {"name": "1/2\" Gypsum", "thickness": 13, "material": "gypsum", "function": "interior_finish", "fire_rating": 30},
+        {"name": "2x6 Stud Cavity", "thickness": 140, "material": "wood_frame", "function": "structure"},
+        {"name": "1/2\" Gypsum", "thickness": 13, "material": "gypsum", "function": "interior_finish", "fire_rating": 30}
+      ]
+    }
+  ],
+
+  "walls_batch": [
+    {
+      "start": [0, 0, 0],
+      "end": [12000, 0, 0],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "level_name": "Level 1",
+      "category": "exterior",
+      "rooms": ["exterior", "living"]
+    },
+    {
+      "start": [12000, 0, 0],
+      "end": [12000, 0, 9000],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "level_name": "Level 1",
+      "category": "exterior",
+      "rooms": ["exterior", "bedroom1"]
+    },
+    {
+      "start": [12000, 0, 9000],
+      "end": [0, 0, 9000],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "level_name": "Level 1",
+      "category": "exterior",
+      "rooms": ["exterior", "kitchen"]
+    },
+    {
+      "start": [0, 0, 9000],
+      "end": [0, 0, 0],
+      "height": 2700,
+      "wall_type": "ext_2x6_r21",
+      "level_name": "Level 1",
+      "category": "exterior",
+      "rooms": ["exterior", "living"]
+    },
+    {
+      "start": [6000, 0, 0],
+      "end": [6000, 0, 4500],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "level_name": "Level 1",
+      "category": "interior",
+      "rooms": ["living", "bedroom1"]
+    },
+    {
+      "start": [0, 0, 4500],
+      "end": [6000, 0, 4500],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "level_name": "Level 1",
+      "category": "interior",
+      "rooms": ["living", "kitchen"]
+    },
+    {
+      "start": [6000, 0, 4500],
+      "end": [12000, 0, 4500],
+      "height": 2700,
+      "wall_type": "int_2x4",
+      "level_name": "Level 1",
+      "category": "interior",
+      "rooms": ["bedroom1", "bathroom"]
+    },
+    {
+      "start": [9000, 0, 4500],
+      "end": [9000, 0, 9000],
+      "height": 2700,
+      "wall_type": "wet_2x6",
+      "level_name": "Level 1",
+      "category": "wet_wall",
+      "rooms": ["kitchen", "bathroom"]
+    }
+  ],
+
+  "doors": [
+    {
+      "wall_index": 0,
+      "offset": 2000,
+      "width": 914,
+      "height": 2134,
+      "type": "entry",
+      "swing": "left_in",
+      "room1": "exterior",
+      "room2": "living",
+      "hardware": "entry_lockset",
+      "frame": "wood_weatherstrip"
+    },
+    {
+      "wall_index": 5,
+      "offset": 3000,
+      "width": 864,
+      "height": 2032,
+      "type": "swing",
+      "swing": "left_in",
+      "room1": "living",
+      "room2": "kitchen",
+      "hardware": "passage",
+      "frame": "wood"
+    },
+    {
+      "wall_index": 4,
+      "offset": 2250,
+      "width": 864,
+      "height": 2032,
+      "type": "swing",
+      "swing": "right_in",
+      "room1": "living",
+      "room2": "bedroom1",
+      "hardware": "privacy",
+      "frame": "wood"
+    },
+    {
+      "wall_index": 6,
+      "offset": 1500,
+      "width": 762,
+      "height": 2032,
+      "type": "pocket",
+      "swing": "left",
+      "room1": "bedroom1",
+      "room2": "bathroom",
+      "hardware": "privacy",
+      "frame": "pocket_frame"
+    }
+  ],
+
+  "windows": [
+    {
+      "wall_index": 0,
+      "offset": 8000,
+      "width": 1800,
+      "height": 1500,
+      "sill_height": 900,
+      "type": "picture",
+      "glazing": "double_low_e",
+      "room": "living",
+      "u_factor": 0.30,
+      "shgc": 0.25
+    },
+    {
+      "wall_index": 1,
+      "offset": 2250,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "type": "casement",
+      "glazing": "double_low_e",
+      "room": "bedroom1",
+      "u_factor": 0.30,
+      "shgc": 0.25
+    },
+    {
+      "wall_index": 2,
+      "offset": 4500,
+      "width": 1500,
+      "height": 1200,
+      "sill_height": 1000,
+      "type": "double_hung",
+      "glazing": "double_low_e",
+      "room": "kitchen",
+      "u_factor": 0.30,
+      "shgc": 0.25
+    },
+    {
+      "wall_index": 1,
+      "offset": 6750,
+      "width": 600,
+      "height": 600,
+      "sill_height": 1500,
+      "type": "awning",
+      "glazing": "obscure",
+      "room": "bathroom",
+      "u_factor": 0.35,
+      "shgc": 0.25
+    }
+  ],
+
+  "rooms": {
+    "living": {
+      "name": "Living Room",
+      "room_type": "living",
+      "bounds": {"x": 0, "y": 0, "width": 6000, "height": 4500},
+      "area_sqmm": 27000000,
+      "area_sqm": 27.0,
+      "center": {"x": 3000, "y": 2250},
+      "zone": "public",
+      "floor_finish": "hardwood",
+      "wall_finish": "paint",
+      "ceiling_finish": "gypsum",
+      "ceiling_height": 2700
+    },
+    "kitchen": {
+      "name": "Kitchen",
+      "room_type": "kitchen",
+      "bounds": {"x": 0, "y": 4500, "width": 9000, "height": 4500},
+      "area_sqmm": 40500000,
+      "area_sqm": 40.5,
+      "center": {"x": 4500, "y": 6750},
+      "zone": "service",
+      "floor_finish": "tile",
+      "wall_finish": "paint",
+      "ceiling_finish": "gypsum",
+      "ceiling_height": 2700
+    },
+    "bedroom1": {
+      "name": "Primary Bedroom",
+      "room_type": "bedroom",
+      "bounds": {"x": 6000, "y": 0, "width": 6000, "height": 4500},
+      "area_sqmm": 27000000,
+      "area_sqm": 27.0,
+      "center": {"x": 9000, "y": 2250},
+      "zone": "private",
+      "floor_finish": "carpet",
+      "wall_finish": "paint",
+      "ceiling_finish": "gypsum",
+      "ceiling_height": 2700
+    },
+    "bathroom": {
+      "name": "Bathroom",
+      "room_type": "bathroom",
+      "bounds": {"x": 9000, "y": 4500, "width": 3000, "height": 4500},
+      "area_sqmm": 13500000,
+      "area_sqm": 13.5,
+      "center": {"x": 10500, "y": 6750},
+      "zone": "service",
+      "floor_finish": "tile",
+      "wall_finish": "tile_wainscot",
+      "ceiling_finish": "gypsum",
+      "ceiling_height": 2700
+    }
+  },
+
+  "roofs": [
+    {
+      "type": "gable",
+      "pitch": 4,
+      "overhang": 600,
+      "ridge_height": 4200,
+      "material": "asphalt_shingle",
+      "fascia_height": 150,
+      "surfaces": [
+        {
+          "name": "West Slope",
+          "vertices": [
+            [-600, 2700, -600],
+            [-600, 2700, 9600],
+            [6000, 4200, 9600],
+            [6000, 4200, -600]
+          ],
+          "normal": [-0.316, 0.949, 0],
+          "slope": 18.43,
+          "area": 76320000,
+          "material": "asphalt_shingle"
+        },
+        {
+          "name": "East Slope",
+          "vertices": [
+            [6000, 4200, -600],
+            [6000, 4200, 9600],
+            [12600, 2700, 9600],
+            [12600, 2700, -600]
+          ],
+          "normal": [0.316, 0.949, 0],
+          "slope": 18.43,
+          "area": 76320000,
+          "material": "asphalt_shingle"
+        }
+      ],
+      "edges": [
+        {"type": "ridge", "start": [6000, 4200, -600], "end": [6000, 4200, 9600], "length": 10200},
+        {"type": "eave", "start": [-600, 2700, -600], "end": [-600, 2700, 9600], "length": 10200},
+        {"type": "eave", "start": [12600, 2700, -600], "end": [12600, 2700, 9600], "length": 10200},
+        {"type": "rake", "start": [-600, 2700, -600], "end": [6000, 4200, -600], "length": 6820},
+        {"type": "rake", "start": [6000, 4200, -600], "end": [12600, 2700, -600], "length": 6820},
+        {"type": "rake", "start": [-600, 2700, 9600], "end": [6000, 4200, 9600], "length": 6820},
+        {"type": "rake", "start": [6000, 4200, 9600], "end": [12600, 2700, 9600], "length": 6820}
+      ],
+      "total_area": 152640000
+    }
+  ],
+
+  "unplaced_rooms": [],
+
+  "summary": {
+    "total_walls": 8,
+    "exterior_walls": 4,
+    "interior_walls": 3,
+    "wet_walls": 1,
+    "doors": 4,
+    "windows": 4,
+    "rooms_placed": 4,
+    "rooms_requested": 4,
+    "total_floor_area_sqm": 108,
+    "exterior_wall_area_sqm": 113.4,
+    "roof_area_sqm": 152.6
+  },
+
+  "qbd_answers": {
+    "start": "residential",
+    "res_type": "single_family",
+    "bedrooms": "1",
+    "bathrooms": "1",
+    "sqm": "108",
+    "garage": "none",
+    "special_rooms": [],
+    "style": "traditional",
+    "description": "1 Bedroom Modern Cottage"
+  },
+
+  "metadata": {
+    "generator": "ArchEngine",
+    "version": "1.0.0",
+    "generated_at": "2025-12-24T12:00:00Z",
+    "coordinate_system": "right_handed",
+    "units": {
+      "length": "mm",
+      "area": "sqmm",
+      "angle": "degrees"
+    }
+  }
+}
