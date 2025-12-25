@@ -660,6 +660,8 @@ def main():
     parser.add_argument('-o', '--output',
                         default='../../Shared/TestData/output',
                         help='Output directory for SVG files')
+    parser.add_argument('-s', '--scale', type=float, default=0.05,
+                        help='Scale factor (unused, for compatibility)')
 
     args = parser.parse_args()
 
