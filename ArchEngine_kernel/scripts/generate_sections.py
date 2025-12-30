@@ -103,6 +103,208 @@ class Section:
     height: float
 
 # =============================================================================
+# ROOF GEOMETRY CALCULATORS
+# =============================================================================
+
+def calculate_rafter_depth(span: float, spacing: float = 600, load: str = "normal") -> float:
+    """
+    Calculate rafter depth based on span.
+
+    Args:
+        span: Rafter span in mm (horizontal distance)
+        spacing: Rafter spacing in mm (typically 400 or 600)
+        load: "light", "normal", or "heavy"
+
+    Returns:
+        Recommended rafter depth in mm
+    """
+    # Basic rule: span/15 to span/20 depending on load
+    # Common sizes: 140, 190, 240, 290mm
+    load_factors = {"light": 20, "normal": 17, "heavy": 15}
+    factor = load_factors.get(load, 17)
+
+    min_depth = span / factor
+
+    # Round up to standard lumber sizes
+    standard_depths = [140, 190, 240, 290, 340]
+    for depth in standard_depths:
+        if depth >= min_depth:
+            return depth
+    return standard_depths[-1]
+
+
+def calculate_heel_height(pitch: float, rafter_depth: float,
+                          insulation_depth: float = 300, energy_heel: bool = True) -> float:
+    """
+    Calculate heel height at the eave.
+
+    Heel height is the vertical distance from top of wall plate
+    to top of rafter at the bearing point.
+
+    Args:
+        pitch: Roof pitch as rise per 12 run
+        rafter_depth: Rafter/truss depth in mm
+        insulation_depth: Required ceiling insulation depth in mm
+        energy_heel: If True, size for full insulation at eave
+
+    Returns:
+        Heel height in mm
+    """
+    import math
+
+    pitch_angle = math.atan(pitch / 12)
+
+    if energy_heel:
+        # Energy heel: sized to allow full insulation depth at eave
+        # Heel height = insulation_depth + rafter_depth * cos(angle)
+        heel = insulation_depth + rafter_depth * math.cos(pitch_angle) * 0.3
+        return max(heel, 250)  # Minimum 250mm for energy heel
+    else:
+        # Standard heel: minimal, just enough for birdsmouth
+        # Typically rafter_depth * cos(angle) * 0.6
+        heel = rafter_depth * math.cos(pitch_angle) * 0.6
+        return max(heel, 100)  # Minimum 100mm
+
+
+def calculate_birdsmouth(rafter_depth: float, pitch: float,
+                         plate_width: float = 90) -> dict:
+    """
+    Calculate birdsmouth cut dimensions.
+
+    The birdsmouth is the notch cut in a rafter where it sits on the wall plate.
+
+    Args:
+        rafter_depth: Rafter depth in mm
+        pitch: Roof pitch as rise per 12 run
+        plate_width: Wall plate width in mm (typically 90 for 2x4)
+
+    Returns:
+        Dict with seat_cut, plumb_cut, notch_depth, remaining_depth
+    """
+    import math
+
+    pitch_angle = math.atan(pitch / 12)
+
+    # Seat cut (horizontal bearing surface) - minimum 38mm per code
+    seat_cut = max(plate_width * 0.9, 38)
+
+    # Notch depth - max 1/3 of rafter depth per code
+    max_notch = rafter_depth / 3
+
+    # Calculate actual notch based on seat cut and pitch
+    notch_depth = seat_cut * math.tan(pitch_angle)
+    notch_depth = min(notch_depth, max_notch)
+
+    # Plumb cut (vertical cut at heel)
+    plumb_cut = notch_depth / math.sin(pitch_angle) if pitch_angle > 0.1 else notch_depth
+
+    return {
+        'seat_cut': seat_cut,
+        'plumb_cut': plumb_cut,
+        'notch_depth': notch_depth,
+        'remaining_depth': rafter_depth - notch_depth,
+        'pitch_angle_deg': math.degrees(pitch_angle)
+    }
+
+
+def calculate_roof_section_profile(
+    building_width: float,
+    wall_height: float,
+    pitch: float,
+    overhang: float = 600,
+    rafter_depth: float = None,
+    energy_heel: bool = True
+) -> dict:
+    """
+    Calculate complete roof section profile with proper geometry.
+
+    Args:
+        building_width: Building width in mm
+        wall_height: Wall/plate height in mm
+        pitch: Roof pitch as rise per 12 run
+        overhang: Eave overhang in mm
+        rafter_depth: Rafter depth (calculated if None)
+        energy_heel: Use energy heel sizing
+
+    Returns:
+        Dict with all roof geometry points and dimensions
+    """
+    import math
+
+    # Calculate span (half building width for symmetrical gable)
+    half_span = building_width / 2
+
+    # Calculate rafter depth if not provided
+    if rafter_depth is None:
+        rafter_depth = calculate_rafter_depth(half_span)
+
+    # Calculate heel height
+    heel_height = calculate_heel_height(pitch, rafter_depth, energy_heel=energy_heel)
+
+    # Calculate birdsmouth
+    birdsmouth = calculate_birdsmouth(rafter_depth, pitch)
+
+    # Pitch angle
+    pitch_angle = math.atan(pitch / 12)
+
+    # Ridge height from plate level
+    ridge_rise = half_span * (pitch / 12)
+    ridge_height = wall_height + heel_height + ridge_rise
+
+    # Rafter length (along slope)
+    rafter_length = half_span / math.cos(pitch_angle)
+
+    # Eave point (bottom of fascia at overhang)
+    eave_drop = overhang * math.tan(pitch_angle)
+    eave_height = wall_height + heel_height - eave_drop
+
+    # Fascia height (typically 150-200mm)
+    fascia_height = min(rafter_depth + 50, 200)
+
+    # Build profile points (for section view)
+    # Left side of building looking at section
+    profile = {
+        'dimensions': {
+            'rafter_depth': rafter_depth,
+            'heel_height': heel_height,
+            'ridge_height': ridge_height,
+            'eave_height': eave_height,
+            'fascia_height': fascia_height,
+            'pitch_angle_deg': math.degrees(pitch_angle),
+            'rafter_length': rafter_length,
+        },
+        'birdsmouth': birdsmouth,
+        'points': {
+            # Outer roof line (top of rafters)
+            'left_eave_outer': (-overhang, eave_height + fascia_height),
+            'left_plate_outer': (0, wall_height + heel_height),
+            'ridge_outer': (half_span, ridge_height),
+            'right_plate_outer': (building_width, wall_height + heel_height),
+            'right_eave_outer': (building_width + overhang, eave_height + fascia_height),
+
+            # Inner roof line (bottom of rafters)
+            'left_eave_inner': (-overhang, eave_height + fascia_height - rafter_depth * 0.3),
+            'left_plate_inner': (0, wall_height + heel_height - rafter_depth * math.cos(pitch_angle)),
+            'ridge_inner': (half_span, ridge_height - rafter_depth),
+            'right_plate_inner': (building_width, wall_height + heel_height - rafter_depth * math.cos(pitch_angle)),
+            'right_eave_inner': (building_width + overhang, eave_height + fascia_height - rafter_depth * 0.3),
+
+            # Fascia
+            'left_fascia_top': (-overhang, eave_height + fascia_height),
+            'left_fascia_bottom': (-overhang, eave_height),
+            'right_fascia_top': (building_width + overhang, eave_height + fascia_height),
+            'right_fascia_bottom': (building_width + overhang, eave_height),
+
+            # Ceiling line (at plate height)
+            'ceiling_left': (0, wall_height),
+            'ceiling_right': (building_width, wall_height),
+        }
+    }
+
+    return profile
+
+
+# =============================================================================
 # WALL TYPE LAYERS
 # =============================================================================
 
@@ -446,7 +648,7 @@ def generate_section(data: dict, direction: SectionDirection,
         FloorLevel(y=wall_height, label="Ceiling/Plate", start_x=0, end_x=section_width),
     ]
 
-    # Roof section - generate roof profile based on roof type and geometry
+    # Roof section - generate roof profile using truss calculator for proper geometry
     roof_section = None
     max_roof_height = wall_height
 
@@ -456,71 +658,61 @@ def generate_section(data: dict, direction: SectionDirection,
         pitch = roof.get('pitch', 4)  # Rise per 12 run
         overhang = roof.get('overhang', 600)
 
-        # Calculate ridge height based on pitch
-        # For gable: ridge is at center, height = (depth/2) * (pitch/12)
-        # For hip: similar but ridge is shorter
+        # Use roof geometry calculator for accurate heel height and profile
+        roof_profile = calculate_roof_section_profile(
+            building_width=section_width,
+            wall_height=wall_height,
+            pitch=pitch,
+            overhang=overhang,
+            energy_heel=True
+        )
+
+        dims = roof_profile['dimensions']
+        pts = roof_profile['points']
+
         roof_points = []
 
         if direction == SectionDirection.LONGITUDINAL:
             # Looking along the building length (north/south view)
-            # Shows the roof slope from eave to ridge to eave
-
-            # Eave height at plate line
-            eave_height = wall_height
-
-            # Ridge height calculation
-            half_depth = building_depth / 2
-            ridge_rise = half_depth * (pitch / 12)
-            ridge_height = eave_height + ridge_rise
+            # Shows the roof slope from eave to ridge to eave with proper heel height
 
             if roof_type in ['gable', 'hip']:
-                # Left eave (with overhang)
-                roof_points.append(Point2D(-overhang, eave_height))
-                # Left plate
-                roof_points.append(Point2D(0, eave_height))
-                # Ridge
-                roof_points.append(Point2D(section_width / 2, ridge_height))
-                # Right plate
-                roof_points.append(Point2D(section_width, eave_height))
-                # Right eave (with overhang)
-                roof_points.append(Point2D(section_width + overhang, eave_height))
+                # Use calculated profile points with heel height
+                roof_points.append(Point2D(pts['left_eave_outer'][0], pts['left_eave_outer'][1]))
+                roof_points.append(Point2D(pts['left_plate_outer'][0], pts['left_plate_outer'][1]))
+                roof_points.append(Point2D(pts['ridge_outer'][0], pts['ridge_outer'][1]))
+                roof_points.append(Point2D(pts['right_plate_outer'][0], pts['right_plate_outer'][1]))
+                roof_points.append(Point2D(pts['right_eave_outer'][0], pts['right_eave_outer'][1]))
 
-            max_roof_height = ridge_height
+            max_roof_height = dims['ridge_height']
 
         else:
             # TRANSVERSE - looking across the building width (east/west view)
-            # For gable roof: shows the triangular gable end
-            # For hip roof: shows sloped end
-
-            eave_height = wall_height
-            half_depth = building_depth / 2
-            ridge_rise = half_depth * (pitch / 12)
-            ridge_height = eave_height + ridge_rise
+            # For gable roof: shows the triangular gable end with heel height
 
             if roof_type == 'gable':
-                # Gable end - triangular profile
-                # Bottom left
-                roof_points.append(Point2D(-overhang, eave_height))
-                # Peak (ridge extends to gable end)
-                roof_points.append(Point2D(section_width / 2, ridge_height))
-                # Bottom right
-                roof_points.append(Point2D(section_width + overhang, eave_height))
+                # Gable end - triangular profile with heel
+                roof_points.append(Point2D(pts['left_eave_outer'][0], pts['left_eave_outer'][1]))
+                roof_points.append(Point2D(pts['ridge_outer'][0], pts['ridge_outer'][1]))
+                roof_points.append(Point2D(pts['right_eave_outer'][0], pts['right_eave_outer'][1]))
 
             elif roof_type == 'hip':
-                # Hip end - sloped profile
-                hip_inset = half_depth  # Hip comes in from end
-                # Bottom left eave
-                roof_points.append(Point2D(-overhang, eave_height))
-                # Left plate
-                roof_points.append(Point2D(0, eave_height))
-                # Ridge point (hip reaches ridge inside the building)
-                roof_points.append(Point2D(section_width / 2, ridge_height))
-                # Right plate
-                roof_points.append(Point2D(section_width, eave_height))
-                # Bottom right eave
-                roof_points.append(Point2D(section_width + overhang, eave_height))
+                # Hip end - sloped profile with heel
+                roof_points.append(Point2D(pts['left_eave_outer'][0], pts['left_eave_outer'][1]))
+                roof_points.append(Point2D(pts['left_plate_outer'][0], pts['left_plate_outer'][1]))
+                roof_points.append(Point2D(pts['ridge_outer'][0], pts['ridge_outer'][1]))
+                roof_points.append(Point2D(pts['right_plate_outer'][0], pts['right_plate_outer'][1]))
+                roof_points.append(Point2D(pts['right_eave_outer'][0], pts['right_eave_outer'][1]))
 
-            max_roof_height = ridge_height
+            max_roof_height = dims['ridge_height']
+
+        # Add heel height level marker
+        heel_height = dims['heel_height']
+        floor_levels.append(FloorLevel(
+            y=wall_height + heel_height,
+            label=f"Heel ({heel_height:.0f}mm)",
+            start_x=0, end_x=section_width
+        ))
 
         if roof_points:
             roof_section = RoofSection(
@@ -570,6 +762,42 @@ def generate_section(data: dict, direction: SectionDirection,
 # SVG RENDERER
 # =============================================================================
 
+def _draw_angled_member(x1: float, y1: float, x2: float, y2: float, thickness: float) -> str:
+    """
+    Generate SVG path for an angled structural member with thickness.
+
+    Returns an SVG path string for a parallelogram representing the member.
+    """
+    import math
+
+    # Calculate angle and perpendicular offset
+    dx = x2 - x1
+    dy = y2 - y1
+    length = math.sqrt(dx*dx + dy*dy)
+
+    if length < 1:
+        return ""
+
+    # Unit perpendicular vector
+    px = -dy / length
+    py = dx / length
+
+    # Half thickness offset
+    offset = thickness / 2
+
+    # Four corners of the member
+    p1x = x1 + px * offset
+    p1y = y1 + py * offset
+    p2x = x2 + px * offset
+    p2y = y2 + py * offset
+    p3x = x2 - px * offset
+    p3y = y2 - py * offset
+    p4x = x1 - px * offset
+    p4y = y1 - py * offset
+
+    return f"M {p1x:.0f} {p1y:.0f} L {p2x:.0f} {p2y:.0f} L {p3x:.0f} {p3y:.0f} L {p4x:.0f} {p4y:.0f} Z"
+
+
 def get_hatch_pattern(function: str) -> str:
     """Return SVG pattern ID for layer function."""
     patterns = {
@@ -581,214 +809,352 @@ def get_hatch_pattern(function: str) -> str:
     }
     return patterns.get(function, 'hatch-solid')
 
-def render_section_svg(section: Section, scale: float = 0.05, margin: float = 80,
+def render_section_svg(section: Section, scale: float = 0.1, margin: float = 4000,
                        project_info: Dict = None, drawing_type: str = 'section_a') -> str:
-    """Render a section to SVG format."""
+    """Render a section to SVG format using model-space coordinates."""
 
-    svg_width = section.width * scale + margin * 2 + 100
-    svg_height = section.height * scale + margin * 2 + 50
-
-    def tx(x): return x * scale + margin + 60
-    def ty(y): return svg_height - margin - y * scale
+    # Use model-space viewBox (like floor plan and elevations)
+    vb_x = -margin
+    vb_y = -margin
+    vb_w = section.width + 2 * margin
+    vb_h = section.height + 2 * margin + 1000
 
     lines = []
-    lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_width:.0f} {svg_height:.0f}">')
+    lines.append(f'''<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="{int(vb_w * scale)}" height="{int(vb_h * scale)}"
+     viewBox="{vb_x} {vb_y} {vb_w} {vb_h}">''')
     lines.append(f'  <title>Section {section.name}</title>')
 
-    # Background
-    lines.append('  <rect width="100%" height="100%" fill="white"/>')
-
-    # Define patterns for hatching
+    # Define patterns for hatching (in model-space units)
     lines.append('''  <defs>
-    <!-- Wood hatching (diagonal lines) -->
-    <pattern id="hatch-wood" patternUnits="userSpaceOnUse" width="8" height="8">
-      <path d="M0,8 L8,0 M-2,2 L2,-2 M6,10 L10,6" stroke="#8B4513" stroke-width="0.5" fill="none"/>
+    <!-- Wood framing hatching (diagonal lines) -->
+    <pattern id="hatch-wood" patternUnits="userSpaceOnUse" width="100" height="100">
+      <rect width="100" height="100" fill="#f5e6d3"/>
+      <path d="M0,100 L100,0 M-20,20 L20,-20 M80,120 L120,80" stroke="#c9a87c" stroke-width="6" fill="none"/>
     </pattern>
+
     <!-- Insulation hatching (wavy lines) -->
-    <pattern id="hatch-insulation" patternUnits="userSpaceOnUse" width="12" height="6">
-      <path d="M0,3 Q3,0 6,3 Q9,6 12,3" stroke="#FFB6C1" stroke-width="1" fill="none"/>
+    <pattern id="hatch-insulation" patternUnits="userSpaceOnUse" width="150" height="80">
+      <rect width="150" height="80" fill="#fff5f5"/>
+      <path d="M0,40 Q37,10 75,40 Q112,70 150,40" stroke="#ffb6c1" stroke-width="8" fill="none"/>
     </pattern>
+
     <!-- Plywood/Sheathing (cross-hatch) -->
-    <pattern id="hatch-plywood" patternUnits="userSpaceOnUse" width="6" height="6">
-      <path d="M0,0 L6,6 M6,0 L0,6" stroke="#DEB887" stroke-width="0.5" fill="none"/>
+    <pattern id="hatch-plywood" patternUnits="userSpaceOnUse" width="80" height="80">
+      <rect width="80" height="80" fill="#e8dcc8"/>
+      <path d="M0,0 L80,80 M80,0 L0,80" stroke="#c9b8a8" stroke-width="4" fill="none"/>
     </pattern>
-    <!-- Solid fill -->
-    <pattern id="hatch-solid" patternUnits="userSpaceOnUse" width="4" height="4">
-      <rect width="4" height="4" fill="#E0E0E0"/>
+
+    <!-- Solid fill for exterior finish -->
+    <pattern id="hatch-solid" patternUnits="userSpaceOnUse" width="50" height="50">
+      <rect width="50" height="50" fill="#d0d0d0"/>
     </pattern>
-    <!-- Gypsum (dots) -->
-    <pattern id="hatch-gypsum" patternUnits="userSpaceOnUse" width="4" height="4">
-      <circle cx="2" cy="2" r="0.5" fill="#999"/>
+
+    <!-- Gypsum/Drywall (stipple dots) -->
+    <pattern id="hatch-gypsum" patternUnits="userSpaceOnUse" width="60" height="60">
+      <rect width="60" height="60" fill="#f8f8f8"/>
+      <circle cx="15" cy="15" r="4" fill="#ddd"/>
+      <circle cx="45" cy="45" r="4" fill="#ddd"/>
     </pattern>
-    <!-- Concrete hatching -->
-    <pattern id="hatch-concrete" patternUnits="userSpaceOnUse" width="10" height="10">
-      <circle cx="2" cy="2" r="1" fill="#888"/>
-      <circle cx="7" cy="6" r="1.5" fill="#888"/>
-      <circle cx="4" cy="8" r="0.8" fill="#888"/>
+
+    <!-- Concrete hatching (aggregate) -->
+    <pattern id="hatch-concrete" patternUnits="userSpaceOnUse" width="150" height="150">
+      <rect width="150" height="150" fill="#c0c0c0"/>
+      <circle cx="30" cy="30" r="12" fill="#999"/>
+      <circle cx="100" cy="60" r="18" fill="#888"/>
+      <circle cx="50" cy="110" r="10" fill="#999"/>
+      <circle cx="120" cy="130" r="14" fill="#888"/>
+    </pattern>
+
+    <!-- Earth/Grade hatching (diagonal) -->
+    <pattern id="hatch-earth" patternUnits="userSpaceOnUse" width="100" height="100">
+      <rect width="100" height="100" fill="#d4c9b8"/>
+      <line x1="0" y1="100" x2="100" y2="0" stroke="#c4b9a8" stroke-width="5"/>
+      <line x1="50" y1="100" x2="100" y2="50" stroke="#c4b9a8" stroke-width="5"/>
+      <line x1="0" y1="50" x2="50" y2="0" stroke="#c4b9a8" stroke-width="5"/>
+    </pattern>
+
+    <!-- Roof shingle pattern -->
+    <pattern id="hatch-roof" patternUnits="userSpaceOnUse" width="200" height="100">
+      <rect width="200" height="100" fill="#5a5a5a"/>
+      <line x1="0" y1="50" x2="200" y2="50" stroke="#484848" stroke-width="4"/>
+      <line x1="50" y1="0" x2="50" y2="50" stroke="#4a4a4a" stroke-width="3"/>
+      <line x1="150" y1="0" x2="150" y2="50" stroke="#4a4a4a" stroke-width="3"/>
+      <line x1="0" y1="50" x2="0" y2="100" stroke="#4a4a4a" stroke-width="3"/>
+      <line x1="100" y1="50" x2="100" y2="100" stroke="#4a4a4a" stroke-width="3"/>
     </pattern>
   </defs>''')
 
-    # Styles
+    # Background
+    lines.append(f'  <rect x="{vb_x}" y="{vb_y}" width="{vb_w}" height="{vb_h}" fill="white"/>')
+
+    # Styles (in model-space units)
     lines.append('''  <style>
-    .cut-wall { stroke: #000; stroke-width: 2; }
-    .beyond-wall { fill: #f5f5f5; stroke: #666; stroke-width: 1; }
-    .opening { fill: white; stroke: #333; stroke-width: 1; }
-    .floor-line { stroke: #000; stroke-width: 2; }
-    .level-line { stroke: #999; stroke-width: 0.5; stroke-dasharray: 5,5; }
-    .roof-line { stroke: #000; stroke-width: 2; fill: none; }
-    .room-label { font-family: Arial, sans-serif; font-size: 11px; fill: #333; text-anchor: middle; }
-    .title { font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; fill: #333; }
-    .dimension { font-family: Arial, sans-serif; font-size: 9px; fill: #333; }
-    .level-marker { font-family: Arial, sans-serif; font-size: 10px; fill: #666; }
-    .ground { fill: #e8e8e8; }
-    .grade-hatch { fill: url(#hatch-concrete); }
+    .cut-wall { stroke: #000; stroke-width: 10; }
+    .beyond-wall { fill: #f5f5f5; stroke: #666; stroke-width: 4; }
+    .opening { fill: white; stroke: #333; stroke-width: 4; }
+    .floor-line { stroke: #000; stroke-width: 10; }
+    .level-line { stroke: #999; stroke-width: 4; stroke-dasharray: 80,40; }
+    .roof-line { stroke: #000; stroke-width: 10; fill: none; }
+    .room-label { font-family: Arial, sans-serif; font-size: 300px; fill: #333; text-anchor: middle; }
+    .title { font-family: Arial, sans-serif; font-size: 400px; font-weight: bold; fill: #333; }
+    .dimension { font-family: Arial, sans-serif; font-size: 200px; fill: #333; }
+    .level-marker { font-family: Arial, sans-serif; font-size: 200px; fill: #666; }
+    .ground { fill: url(#hatch-earth); }
+    .shadow { fill: rgba(0,0,0,0.15); }
   </style>''')
 
-    # Ground
-    ground_y = ty(0)
-    lines.append(f'  <rect x="{tx(0) - 30}" y="{ground_y}" width="{section.width * scale + 60}" height="30" class="ground"/>')
-    lines.append(f'  <rect x="{tx(0) - 30}" y="{ground_y}" width="{section.width * scale + 60}" height="30" class="grade-hatch"/>')
+    # Y-flip transform for section drawing (Y=0 at ground, positive Y going up)
+    flip_y = section.height + 500
 
-    # Floor lines
-    for level in section.floor_levels:
-        y = ty(level.y)
-        x1 = tx(level.start_x)
-        x2 = tx(level.end_x)
+    lines.append(f'<!-- Section drawing (Y-flipped) -->')
+    lines.append(f'<g transform="translate(0, {flip_y}) scale(1, -1)">')
 
-        if level.label == "Floor":
-            lines.append(f'  <line x1="{x1:.1f}" y1="{y:.1f}" x2="{x2:.1f}" y2="{y:.1f}" class="floor-line"/>')
-        else:
-            lines.append(f'  <line x1="{x1:.1f}" y1="{y:.1f}" x2="{x2:.1f}" y2="{y:.1f}" class="level-line"/>')
-
-        # Level marker
-        lines.append(f'  <text x="{margin/2}" y="{y + 3:.1f}" class="level-marker">{level.label}</text>')
+    # Ground/grade with hatching
+    lines.append(f'  <rect x="-200" y="-500" width="{section.width + 400}" height="500" class="ground"/>')
+    lines.append(f'  <line x1="-200" y1="0" x2="{section.width + 200}" y2="0" stroke="#666" stroke-width="8"/>')
 
     # Walls beyond (in elevation) - sort by depth (farthest first so closer walls draw on top)
     sorted_walls_beyond = sorted(section.walls_beyond, key=lambda w: -w.depth)
     for wall in sorted_walls_beyond:
-        x1 = tx(wall.start_x)
-        x2 = tx(wall.end_x)
-        y1 = ty(wall.bottom_y)
-        y2 = ty(wall.top_y)
+        x = wall.start_x
+        y = wall.bottom_y
+        w = wall.end_x - wall.start_x
+        h = wall.top_y - wall.bottom_y
 
         # Fade color based on depth (farther = lighter)
-        max_depth = max(w.depth for w in section.walls_beyond) if section.walls_beyond else 1
+        max_depth = max(wd.depth for wd in section.walls_beyond) if section.walls_beyond else 1
         depth_factor = min(wall.depth / max_depth, 1) if max_depth > 0 else 0
         gray_value = int(220 + depth_factor * 30)  # Range 220-250 (light gray)
         fill_color = f"rgb({gray_value},{gray_value},{gray_value})"
 
-        stroke_color = "#888" if wall.depth > 500 else "#666"
-        stroke_width = "0.5" if wall.depth > 500 else "1"
+        stroke_width = 4 if wall.depth > 500 else 6
+        lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" fill="{fill_color}" stroke="#888" stroke-width="{stroke_width}"/>')
 
-        lines.append(f'  <rect x="{x1:.1f}" y="{y2:.1f}" width="{x2-x1:.1f}" height="{y1-y2:.1f}" fill="{fill_color}" stroke="{stroke_color}" stroke-width="{stroke_width}"/>')
+    # Floor lines
+    for level in section.floor_levels:
+        line_class = "floor-line" if level.label == "Floor" else "level-line"
+        lines.append(f'  <line x1="{level.start_x:.0f}" y1="{level.y:.0f}" x2="{level.end_x:.0f}" y2="{level.y:.0f}" class="{line_class}"/>')
 
-    # Walls in section (cut through)
+    # Walls in section (cut through) with layer hatching
     for wall in section.walls_cut:
-        x = tx(wall.x - wall.thickness / 2)
-        y = ty(wall.top_y)
-        w = wall.thickness * scale
-        h = (wall.top_y - wall.bottom_y) * scale
+        x = wall.x - wall.thickness / 2
+        y = wall.bottom_y
+        w = wall.thickness
+        h = wall.top_y - wall.bottom_y
 
-        # Draw layers
+        # Draw each layer with its hatching pattern
         current_x = x
         for layer in wall.layers:
-            layer_w = layer.get('thickness', 20) * scale
+            layer_w = layer.get('thickness', 20)
             pattern = get_hatch_pattern(layer.get('function', 'structure'))
-            lines.append(f'  <rect x="{current_x:.1f}" y="{y:.1f}" width="{layer_w:.1f}" height="{h:.1f}" fill="url(#{pattern})" class="cut-wall"/>')
+            lines.append(f'  <rect x="{current_x:.0f}" y="{y:.0f}" width="{layer_w:.0f}" height="{h:.0f}" fill="url(#{pattern})" stroke="#333" stroke-width="4"/>')
             current_x += layer_w
 
-        # Outline
-        lines.append(f'  <rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" fill="none" class="cut-wall"/>')
+        # Bold outline around entire wall section
+        lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" fill="none" stroke="#000" stroke-width="10"/>')
 
     # Openings - sort by depth (farthest first) for proper layering
     sorted_openings = sorted(section.openings, key=lambda o: -o.depth)
     for opening in sorted_openings:
-        x = tx(opening.center_x - opening.width / 2)
-        y = ty(opening.top_y)
-        w = opening.width * scale
-        h = (opening.top_y - opening.bottom_y) * scale
+        x = opening.center_x - opening.width / 2
+        y = opening.bottom_y
+        w = opening.width
+        h = opening.top_y - opening.bottom_y
 
         if opening.in_section:
-            # Show as cut-through (just the opening)
-            lines.append(f'  <rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" class="opening"/>')
+            # Show as cut-through (white opening in wall)
+            lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" fill="white" stroke="#333" stroke-width="6"/>')
         else:
             # Show in elevation - door or window behind the cut
             if opening.is_door:
-                # Door in elevation - rectangle with threshold line
-                lines.append(f'  <rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" fill="white" stroke="#666" stroke-width="1"/>')
+                # Door in elevation
+                lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" fill="#d4a574" stroke="#666" stroke-width="4"/>')
+                # Door panels
+                panel_margin = 40
+                panel_h = (h - 3 * panel_margin) / 2
+                lines.append(f'  <rect x="{x + panel_margin:.0f}" y="{y + panel_margin:.0f}" width="{w - 2*panel_margin:.0f}" height="{panel_h:.0f}" fill="#c49664" stroke="#8b6e4a" stroke-width="3"/>')
+                lines.append(f'  <rect x="{x + panel_margin:.0f}" y="{y + 2*panel_margin + panel_h:.0f}" width="{w - 2*panel_margin:.0f}" height="{panel_h:.0f}" fill="#c49664" stroke="#8b6e4a" stroke-width="3"/>')
             else:
-                # Window in elevation - rectangle with mullion cross
-                lines.append(f'  <rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" fill="#e8f4fc" stroke="#666" stroke-width="1"/>')
-                # Horizontal mullion
+                # Window in elevation
+                lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" fill="#cce5ff" stroke="#666" stroke-width="4"/>')
+                # Mullions
                 mid_y = y + h / 2
-                lines.append(f'  <line x1="{x:.1f}" y1="{mid_y:.1f}" x2="{x + w:.1f}" y2="{mid_y:.1f}" stroke="#666" stroke-width="0.5"/>')
-                # Vertical mullion
                 mid_x = x + w / 2
-                lines.append(f'  <line x1="{mid_x:.1f}" y1="{y:.1f}" x2="{mid_x:.1f}" y2="{y + h:.1f}" stroke="#666" stroke-width="0.5"/>')
+                lines.append(f'  <line x1="{x:.0f}" y1="{mid_y:.0f}" x2="{x + w:.0f}" y2="{mid_y:.0f}" stroke="#666" stroke-width="4"/>')
+                lines.append(f'  <line x1="{mid_x:.0f}" y1="{y:.0f}" x2="{mid_x:.0f}" y2="{y + h:.0f}" stroke="#666" stroke-width="4"/>')
+                # Sill
+                lines.append(f'  <rect x="{x - 50:.0f}" y="{y - 40:.0f}" width="{w + 100:.0f}" height="40" fill="#ddd" stroke="#333" stroke-width="4"/>')
 
-    # Roof
+    # Roof truss - draw actual truss structure
     if section.roof and section.roof.points:
         points = section.roof.points
         if len(points) >= 2:
-            # Sort points by x
             sorted_points = sorted(points, key=lambda p: p.x)
 
-            # Draw filled roof profile with thickness
-            roof_thickness = 200  # mm - typical roof assembly thickness
+            # Get wall height (ceiling level) for bottom chord
+            wall_height = 2700
+            for level in section.floor_levels:
+                if "Ceiling" in level.label or "Plate" in level.label:
+                    wall_height = level.y
+                    break
 
-            # Create outer roof line
-            path_d = f"M {tx(sorted_points[0].x):.1f} {ty(sorted_points[0].y):.1f}"
-            for p in sorted_points[1:]:
-                path_d += f" L {tx(p.x):.1f} {ty(p.y):.1f}"
+            # Calculate truss geometry
+            left_eave = sorted_points[0]
+            ridge = sorted_points[len(sorted_points) // 2]
+            right_eave = sorted_points[-1]
 
-            # Create inner (underside) line - offset by thickness toward interior
-            inner_points = []
-            for i, p in enumerate(sorted_points):
-                # Offset each point downward by roof thickness
-                # For ridge point, offset straight down; for eave points, offset perpendicular to slope
-                if i == 0 or i == len(sorted_points) - 1:
-                    # Eave points - just offset down
-                    inner_points.append(Point2D(p.x, p.y - roof_thickness * 0.3))
-                elif i == len(sorted_points) // 2:
-                    # Ridge point - offset down
-                    inner_points.append(Point2D(p.x, p.y - roof_thickness))
-                else:
-                    # Intermediate points
-                    inner_points.append(Point2D(p.x, p.y - roof_thickness * 0.5))
+            # Find heel points (where slope meets wall)
+            left_plate_x = 0
+            right_plate_x = section.width
 
-            # Complete the filled polygon (outer line + inner line reversed)
-            for p in reversed(inner_points):
-                path_d += f" L {tx(p.x):.1f} {ty(p.y):.1f}"
-            path_d += " Z"
+            # Interpolate heel heights on the slope
+            if ridge.x > left_eave.x:
+                t_left = (left_plate_x - left_eave.x) / (ridge.x - left_eave.x)
+                left_heel_y = left_eave.y + t_left * (ridge.y - left_eave.y)
+            else:
+                left_heel_y = left_eave.y
 
-            # Draw filled roof section with hatching
-            lines.append(f'  <path d="{path_d}" fill="url(#hatch-wood)" stroke="#000" stroke-width="1.5"/>')
+            if right_eave.x > ridge.x:
+                t_right = (right_plate_x - ridge.x) / (right_eave.x - ridge.x)
+                right_heel_y = ridge.y + t_right * (right_eave.y - ridge.y)
+            else:
+                right_heel_y = right_eave.y
 
-            # Draw just the outer roof line thicker for emphasis
-            outer_path = f"M {tx(sorted_points[0].x):.1f} {ty(sorted_points[0].y):.1f}"
-            for p in sorted_points[1:]:
-                outer_path += f" L {tx(p.x):.1f} {ty(p.y):.1f}"
-            lines.append(f'  <path d="{outer_path}" fill="none" stroke="#000" stroke-width="2"/>')
+            # Truss member thickness
+            chord_depth = 190  # 2x8 typical
+            web_thickness = 89  # 2x4
 
-    # Room labels
+            # Draw bottom chord (at ceiling level)
+            bc_y = wall_height
+            lines.append(f'  <rect x="0" y="{bc_y - chord_depth/2:.0f}" width="{section.width:.0f}" height="{chord_depth:.0f}" fill="url(#hatch-wood)" stroke="#333" stroke-width="6"/>')
+
+            # Draw top chords with proper angle and thickness
+            # Left top chord: from left heel to ridge
+            lines.append(f'  <!-- Left top chord -->')
+            tc_left_path = _draw_angled_member(
+                left_plate_x, left_heel_y,
+                ridge.x, ridge.y,
+                chord_depth
+            )
+            lines.append(f'  <path d="{tc_left_path}" fill="url(#hatch-wood)" stroke="#333" stroke-width="6"/>')
+
+            # Right top chord: from ridge to right heel
+            lines.append(f'  <!-- Right top chord -->')
+            tc_right_path = _draw_angled_member(
+                ridge.x, ridge.y,
+                right_plate_x, right_heel_y,
+                chord_depth
+            )
+            lines.append(f'  <path d="{tc_right_path}" fill="url(#hatch-wood)" stroke="#333" stroke-width="6"/>')
+
+            # King post (center vertical from bottom chord to ridge)
+            kp_x = section.width / 2
+            kp_bottom = bc_y
+            kp_top = ridge.y - chord_depth
+            lines.append(f'  <rect x="{kp_x - web_thickness/2:.0f}" y="{kp_bottom:.0f}" width="{web_thickness:.0f}" height="{kp_top - kp_bottom:.0f}" fill="url(#hatch-wood)" stroke="#333" stroke-width="4"/>')
+
+            # Web members (W pattern for Fink truss)
+            quarter_span = section.width / 4
+
+            # Left web diagonal (from 1/4 point on BC up to midpoint on left TC)
+            web_bc_left = quarter_span
+            web_tc_left_x = quarter_span
+            web_tc_left_y = left_heel_y + (ridge.y - left_heel_y) * 0.5
+
+            web_left_path = _draw_angled_member(
+                web_bc_left, bc_y,
+                web_tc_left_x, web_tc_left_y,
+                web_thickness
+            )
+            lines.append(f'  <path d="{web_left_path}" fill="url(#hatch-wood)" stroke="#333" stroke-width="4"/>')
+
+            # Left inner diagonal (from TC midpoint down to center BC)
+            web_inner_left_path = _draw_angled_member(
+                web_tc_left_x, web_tc_left_y,
+                kp_x, bc_y,
+                web_thickness
+            )
+            lines.append(f'  <path d="{web_inner_left_path}" fill="url(#hatch-wood)" stroke="#333" stroke-width="4"/>')
+
+            # Right web diagonal (mirror of left)
+            web_bc_right = section.width - quarter_span
+            web_tc_right_x = section.width - quarter_span
+            web_tc_right_y = right_heel_y + (ridge.y - right_heel_y) * 0.5
+
+            web_right_path = _draw_angled_member(
+                web_bc_right, bc_y,
+                web_tc_right_x, web_tc_right_y,
+                web_thickness
+            )
+            lines.append(f'  <path d="{web_right_path}" fill="url(#hatch-wood)" stroke="#333" stroke-width="4"/>')
+
+            # Right inner diagonal
+            web_inner_right_path = _draw_angled_member(
+                web_tc_right_x, web_tc_right_y,
+                kp_x, bc_y,
+                web_thickness
+            )
+            lines.append(f'  <path d="{web_inner_right_path}" fill="url(#hatch-wood)" stroke="#333" stroke-width="4"/>')
+
+            # Heel blocks (vertical at ends)
+            heel_block_height = left_heel_y - bc_y
+            if heel_block_height > 50:
+                # Left heel
+                lines.append(f'  <rect x="{-web_thickness/2:.0f}" y="{bc_y:.0f}" width="{web_thickness:.0f}" height="{heel_block_height:.0f}" fill="url(#hatch-wood)" stroke="#333" stroke-width="4"/>')
+                # Right heel
+                lines.append(f'  <rect x="{section.width - web_thickness/2:.0f}" y="{bc_y:.0f}" width="{web_thickness:.0f}" height="{heel_block_height:.0f}" fill="url(#hatch-wood)" stroke="#333" stroke-width="4"/>')
+
+            # Roof sheathing on top of top chords
+            sheathing_thickness = 18  # OSB/plywood
+            # Left sheathing
+            lines.append(f'  <line x1="{left_eave.x:.0f}" y1="{left_eave.y:.0f}" x2="{ridge.x:.0f}" y2="{ridge.y:.0f}" stroke="#8B4513" stroke-width="{sheathing_thickness}"/>')
+            # Right sheathing
+            lines.append(f'  <line x1="{ridge.x:.0f}" y1="{ridge.y:.0f}" x2="{right_eave.x:.0f}" y2="{right_eave.y:.0f}" stroke="#8B4513" stroke-width="{sheathing_thickness}"/>')
+
+            # Fascia at eaves
+            fascia_height = 200
+            lines.append(f'  <rect x="{left_eave.x - 25:.0f}" y="{left_eave.y - fascia_height:.0f}" width="50" height="{fascia_height:.0f}" fill="#DEB887" stroke="#333" stroke-width="4"/>')
+            lines.append(f'  <rect x="{right_eave.x - 25:.0f}" y="{right_eave.y - fascia_height:.0f}" width="50" height="{fascia_height:.0f}" fill="#DEB887" stroke="#333" stroke-width="4"/>')
+
+    lines.append('</g>')
+
+    # Level markers (outside flipped group - text right-side up)
+    marker_x = -margin + 500
+    for level in section.floor_levels:
+        y = flip_y - level.y  # Convert to SVG Y
+
+        # Level line extending from marker
+        if level.label == "Floor":
+            lines.append(f'<line x1="{marker_x}" y1="{y:.0f}" x2="{section.width + 200}" y2="{y:.0f}" stroke="#666" stroke-width="6"/>')
+        else:
+            lines.append(f'<line x1="{marker_x}" y1="{y:.0f}" x2="{section.width + 200}" y2="{y:.0f}" stroke="#999" stroke-width="4" stroke-dasharray="80,40"/>')
+
+        # Level circle marker
+        lines.append(f'<circle cx="{marker_x}" cy="{y:.0f}" r="200" fill="white" stroke="#333" stroke-width="6"/>')
+        lines.append(f'<text x="{marker_x}" y="{y + 60:.0f}" text-anchor="middle" class="dimension">{level.y/1000:.1f}</text>')
+
+        # Label
+        lines.append(f'<text x="{marker_x + 350}" y="{y - 100:.0f}" class="level-marker">{level.label}</text>')
+
+    # Room labels (outside flipped group)
     for label in section.room_labels:
-        x = tx(label.center_x)
-        y = ty(label.center_y)
-        lines.append(f'  <text x="{x:.1f}" y="{y:.1f}" class="room-label">{label.name.upper()}</text>')
+        x = label.center_x
+        y = flip_y - label.center_y
+        lines.append(f'<text x="{x:.0f}" y="{y:.0f}" class="room-label">{label.name.upper()}</text>')
 
-    # Title
-    dir_label = "Longitudinal" if section.direction == SectionDirection.LONGITUDINAL else "Transverse"
-    lines.append(f'  <text x="{svg_width/2}" y="25" text-anchor="middle" class="title">SECTION {section.name} - {dir_label.upper()}</text>')
-
-    # Section cut indicator
-    lines.append(f'  <text x="{svg_width/2}" y="40" text-anchor="middle" class="dimension">Cut @ {section.cut_position:.0f}mm</text>')
+    # Title (in model space at top)
+    dir_label = "LONGITUDINAL" if section.direction == SectionDirection.LONGITUDINAL else "TRANSVERSE"
+    lines.append(f'<text x="{section.width/2}" y="{-margin + 600}" text-anchor="middle" class="title">SECTION {section.name} - {dir_label}</text>')
 
     # Scale bar
-    scale_bar_y = svg_height - 20
-    scale_bar_x = svg_width / 2 - 50
-    scale_length = 1000 * scale
-    lines.append(f'  <line x1="{scale_bar_x}" y1="{scale_bar_y}" x2="{scale_bar_x + scale_length}" y2="{scale_bar_y}" stroke="#333" stroke-width="2"/>')
-    lines.append(f'  <text x="{scale_bar_x + scale_length/2}" y="{scale_bar_y - 8}" text-anchor="middle" class="dimension">1m</text>')
+    sb_x = section.width / 2 - 500
+    sb_y = section.height + 800
+    lines.append(f'<line x1="{sb_x}" y1="{sb_y}" x2="{sb_x + 1000}" y2="{sb_y}" stroke="#333" stroke-width="8"/>')
+    lines.append(f'<line x1="{sb_x}" y1="{sb_y - 50}" x2="{sb_x}" y2="{sb_y + 50}" stroke="#333" stroke-width="8"/>')
+    lines.append(f'<line x1="{sb_x + 1000}" y1="{sb_y - 50}" x2="{sb_x + 1000}" y2="{sb_y + 50}" stroke="#333" stroke-width="8"/>')
+    lines.append(f'<text x="{sb_x + 500}" y="{sb_y - 100}" text-anchor="middle" class="dimension">1m</text>')
 
     # Title block
     if project_info:

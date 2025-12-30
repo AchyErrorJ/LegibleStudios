@@ -16,6 +16,13 @@ from app.config import Config
 from core.document import ArchDocument
 from core.events import event_bus
 
+# Sheet system imports
+from sheets.sheet_registry import SheetRegistry
+from generators.generator_service import GeneratorService
+from panels.sheet_manager import SheetManagerPanel
+from panels.sheet_properties import SheetPropertiesPanel
+from app.sheet_tab_widget import SheetTabWidget
+
 # Optional UE5 viewport import
 try:
     from viewport import UE5ViewportWidget
@@ -34,6 +41,14 @@ class ArchEngineApplication(QMainWindow):
         super().__init__(parent)
         self.config = config
         self.document = ArchDocument(self)
+
+        # Initialize sheet system
+        self.sheet_registry = SheetRegistry(self)
+        self.generator_service = GeneratorService(
+            self.sheet_registry,
+            lambda: self.document.to_dict(),
+            self
+        )
 
         self._setup_window()
         self._create_actions()
@@ -177,6 +192,15 @@ class ArchEngineApplication(QMainWindow):
             self.action_3d_split.setCheckable(True)
             self.action_3d_split.triggered.connect(self._toggle_split_view)
 
+        # Sheet actions
+        self.action_regenerate_all = QAction("Regenerate &All Sheets", self)
+        self.action_regenerate_all.setShortcut(QKeySequence("Ctrl+Shift+G"))
+        self.action_regenerate_all.triggered.connect(self._regenerate_all_sheets)
+
+        self.action_regenerate_current = QAction("Regenerate &Current Sheet", self)
+        self.action_regenerate_current.setShortcut(QKeySequence("Ctrl+G"))
+        self.action_regenerate_current.triggered.connect(self._regenerate_current_sheet)
+
     def _create_menus(self):
         """Create menu bar."""
         menubar = self.menuBar()
@@ -225,6 +249,11 @@ class ArchEngineApplication(QMainWindow):
         snap_menu.addAction(self.action_snap_perpendicular)
         snap_menu.addAction(self.action_snap_parallel)
         snap_menu.addAction(self.action_snap_angular)
+
+        # Sheets menu
+        sheets_menu = menubar.addMenu("S&heets")
+        sheets_menu.addAction(self.action_regenerate_current)
+        sheets_menu.addAction(self.action_regenerate_all)
 
         # Window menu
         self.window_menu = menubar.addMenu("&Window")
@@ -289,33 +318,36 @@ class ArchEngineApplication(QMainWindow):
         """Create dockable panels."""
         from panels.version_history import VersionHistoryPanel
 
-        # Project Browser dock (left side)
-        self.project_dock = QDockWidget("Project Browser", self)
-        self.project_dock.setObjectName("project_dock")
-        self.project_dock.setAllowedAreas(
+        # Sheets dock (left side) - replaces Project Browser
+        self.sheets_dock = QDockWidget("Sheets", self)
+        self.sheets_dock.setObjectName("sheets_dock")
+        self.sheets_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea |
             Qt.DockWidgetArea.RightDockWidgetArea
         )
-        # Placeholder widget for now
-        project_widget = QWidget()
-        project_widget.setMinimumWidth(200)
-        self.project_dock.setWidget(project_widget)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.project_dock)
-        self.window_menu.addAction(self.project_dock.toggleViewAction())
+        self.sheet_manager = SheetManagerPanel(self.sheet_registry, self)
+        self.sheet_manager.setMinimumWidth(200)
+        self.sheet_manager.sheet_selected.connect(self._on_sheet_selected)
+        self.sheet_manager.sheet_double_clicked.connect(self._on_sheet_double_clicked)
+        self.sheet_manager.regenerate_requested.connect(self._on_regenerate_requested)
+        self.sheets_dock.setWidget(self.sheet_manager)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.sheets_dock)
+        self.window_menu.addAction(self.sheets_dock.toggleViewAction())
 
-        # Properties dock (right side)
-        self.properties_dock = QDockWidget("Properties", self)
-        self.properties_dock.setObjectName("properties_dock")
-        self.properties_dock.setAllowedAreas(
+        # Sheet Properties dock (right side) - replaces Properties
+        self.sheet_props_dock = QDockWidget("Sheet Properties", self)
+        self.sheet_props_dock.setObjectName("sheet_props_dock")
+        self.sheet_props_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea |
             Qt.DockWidgetArea.RightDockWidgetArea
         )
-        # Placeholder widget for now
-        properties_widget = QWidget()
-        properties_widget.setMinimumWidth(250)
-        self.properties_dock.setWidget(properties_widget)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.properties_dock)
-        self.window_menu.addAction(self.properties_dock.toggleViewAction())
+        self.sheet_properties = SheetPropertiesPanel(self.sheet_registry, self)
+        self.sheet_properties.setMinimumWidth(250)
+        self.sheet_properties.regenerate_requested.connect(self._on_regenerate_requested)
+        self.sheet_properties.text_sizes_changed.connect(self._on_text_sizes_changed)
+        self.sheet_props_dock.setWidget(self.sheet_properties)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.sheet_props_dock)
+        self.window_menu.addAction(self.sheet_props_dock.toggleViewAction())
 
         # Version History dock (right side, tabbed with properties)
         self.history_dock = QDockWidget("Version History", self)
@@ -328,8 +360,8 @@ class ArchEngineApplication(QMainWindow):
         self.history_panel.setMinimumWidth(250)
         self.history_dock.setWidget(self.history_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.history_dock)
-        # Tab it with properties dock
-        self.tabifyDockWidget(self.properties_dock, self.history_dock)
+        # Tab it with sheet properties dock
+        self.tabifyDockWidget(self.sheet_props_dock, self.history_dock)
         self.window_menu.addAction(self.history_dock.toggleViewAction())
 
         # 3D Viewport dock (only if viewport module available)
@@ -353,7 +385,7 @@ class ArchEngineApplication(QMainWindow):
             self.window_menu.addAction(self.viewport_dock.toggleViewAction())
 
     def _create_central_widget(self):
-        """Create the central plan view widget with optional split view."""
+        """Create the central tabbed widget with plan view and sheet views."""
         from views.plan_view import PlanView
         from tools.tool_manager import ToolManager
         from tools.base_tool import ToolType
@@ -362,13 +394,18 @@ class ArchEngineApplication(QMainWindow):
         # Create the main plan view
         self.plan_view = PlanView(self.document, self.config, self)
 
+        # Create sheet tab widget
+        self.sheet_tabs = SheetTabWidget(self.config, self.sheet_registry, self)
+        self.sheet_tabs.set_plan_view(self.plan_view)
+        self.sheet_tabs.current_sheet_changed.connect(self._on_current_sheet_changed)
+
         # Create split view container (for 2D | 3D side-by-side mode)
         self._split_mode = False
         self._split_viewport: Optional[UE5ViewportWidget] = None
 
         if HAS_VIEWPORT:
             self.central_splitter = QSplitter(Qt.Orientation.Horizontal, self)
-            self.central_splitter.addWidget(self.plan_view)
+            self.central_splitter.addWidget(self.sheet_tabs)
             # Create a separate viewport for split mode
             self._split_viewport = UE5ViewportWidget()
             self._split_viewport.setMinimumWidth(400)
@@ -377,10 +414,10 @@ class ArchEngineApplication(QMainWindow):
             self._split_viewport.texture_ready.connect(self._on_ue5_texture_ready)
             self.central_splitter.addWidget(self._split_viewport)
             self._split_viewport.hide()  # Hidden by default
-            self.central_splitter.setSizes([700, 0])  # Start with plan view full
+            self.central_splitter.setSizes([700, 0])  # Start with tabs full
             self.setCentralWidget(self.central_splitter)
         else:
-            self.setCentralWidget(self.plan_view)
+            self.setCentralWidget(self.sheet_tabs)
 
         # Create tool manager
         self.tool_manager = ToolManager(self.plan_view, self.document, self)
@@ -700,3 +737,48 @@ class ArchEngineApplication(QMainWindow):
     def _on_ue5_texture_ready(self, width: int, height: int):
         """Handle UE5 texture ready."""
         self.status_bar.showMessage(f"UE5 Viewport: {width}x{height}", 5000)
+
+    # =========================================================================
+    # Sheet Operations
+    # =========================================================================
+
+    def _on_sheet_selected(self, sheet_id: str):
+        """Handle sheet selected in manager."""
+        self.sheet_properties.set_sheet(sheet_id)
+
+    def _on_sheet_double_clicked(self, sheet_id: str):
+        """Handle sheet double-clicked - open in tab."""
+        self.sheet_tabs.open_sheet(sheet_id)
+
+    def _on_current_sheet_changed(self, sheet_id: str):
+        """Handle current tab changed."""
+        self.sheet_properties.set_sheet(sheet_id if sheet_id else None)
+
+    def _on_regenerate_requested(self, sheet_id: str):
+        """Handle regenerate request from panel."""
+        if sheet_id:
+            self.generator_service.generate_sheet(sheet_id)
+            self.status_bar.showMessage(f"Regenerated sheet", 2000)
+        else:
+            self._regenerate_all_sheets()
+
+    def _regenerate_all_sheets(self):
+        """Regenerate all enabled sheets."""
+        self.status_bar.showMessage("Regenerating all sheets...", 0)
+        self.generator_service.generate_all()
+        self.status_bar.showMessage("All sheets regenerated", 3000)
+
+    def _on_text_sizes_changed(self, sizes: dict):
+        """Handle text size changes - regenerate all sheets."""
+        self.status_bar.showMessage("Text sizes changed, regenerating...", 0)
+        self.generator_service.generate_all()
+        self.status_bar.showMessage("Sheets regenerated with new text sizes", 3000)
+
+    def _regenerate_current_sheet(self):
+        """Regenerate the currently displayed sheet."""
+        sheet_id = self.sheet_tabs.get_current_sheet_id()
+        if sheet_id:
+            self.generator_service.generate_sheet(sheet_id)
+            self.status_bar.showMessage("Sheet regenerated", 2000)
+        else:
+            self.status_bar.showMessage("No sheet selected to regenerate", 2000)

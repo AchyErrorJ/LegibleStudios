@@ -88,6 +88,13 @@ class PlanGenerator:
         self.default_overhang = 600  # 600mm overhang
         self.default_pitch = 4  # 4:12 pitch
 
+        # Text sizes (in viewBox units/mm) - configurable
+        self.dim_text_size = self.data.get('dim_text_size', 300)      # Dimension text
+        self.room_text_size = self.data.get('room_text_size', 500)    # Room labels
+        self.room_area_size = self.data.get('room_area_size', 350)    # Room area text
+        self.title_text_size = self.data.get('title_text_size', 500)  # Title text
+        self.grid_label_size = self.data.get('grid_label_size', 350)  # Grid bubble labels
+
     def _parse_walls(self) -> List[Wall]:
         walls = []
         for i, w in enumerate(self.data.get('walls_batch', [])):
@@ -173,18 +180,31 @@ class PlanGenerator:
             'is_vertical': abs(dx) < 1,    # Runs along Z
         }
 
-    def _get_opening_position(self, wall: Wall, offset: float, width: float) -> Tuple[float, float, float, float]:
-        """Get opening rectangle position on wall."""
-        geom = self._get_wall_geometry(wall)
+    def _get_opening_position(self, wall: Wall, offset: float, width: float) -> Tuple[float, float, float, float, float]:
+        """Get opening position on wall (works for diagonal walls).
 
-        if geom['is_horizontal']:
-            # Wall runs along X axis
-            start_x = min(geom['start_x'], geom['end_x']) + offset - width/2
-            return (start_x, geom['start_z'], width, self.ext_wall_thickness)
-        else:
-            # Wall runs along Z axis
-            start_z = min(geom['start_z'], geom['end_z']) + offset - width/2
-            return (geom['start_x'], start_z, self.ext_wall_thickness, width)
+        Returns: (center_x, center_z, dx, dz, angle) where dx/dz are direction vectors
+        """
+        geom = self._get_wall_geometry(wall)
+        sx, sz = geom['start_x'], geom['start_z']
+        ex, ez = geom['end_x'], geom['end_z']
+        length = geom['length']
+
+        if length < 1:
+            return (sx, sz, 1, 0, 0)
+
+        # Direction along wall
+        dx = (ex - sx) / length
+        dz = (ez - sz) / length
+
+        # Position along wall at offset
+        center_x = sx + dx * offset
+        center_z = sz + dz * offset
+
+        # Angle for rotation
+        angle = math.degrees(math.atan2(dz, dx))
+
+        return (center_x, center_z, dx, dz, angle)
 
     def generate_floor_plan_svg(self, scale: float = 0.1) -> str:
         """Generate floor plan SVG with proper annotations."""
@@ -205,9 +225,9 @@ class PlanGenerator:
      viewBox="{vb_x} {vb_y} {vb_w} {vb_h}">
 <defs>
 <style>
-.wall-ext {{ fill: none; stroke: #000; stroke-width: 8; }}
-.wall-int {{ fill: none; stroke: #000; stroke-width: 6; }}
-.wall-wet {{ fill: none; stroke: #5588cc; stroke-width: 6; }}
+.wall-ext {{ fill: #333; stroke: #000; stroke-width: 2; }}
+.wall-int {{ fill: #666; stroke: #000; stroke-width: 1; }}
+.wall-wet {{ fill: #5588cc; stroke: #3366aa; stroke-width: 1; }}
 .opening {{ fill: white; stroke: none; }}
 .door-leaf {{ stroke: #000; stroke-width: 4; fill: none; }}
 .door-swing {{ stroke: #000; stroke-width: 2; fill: none; }}
@@ -215,13 +235,13 @@ class PlanGenerator:
 .window-glass {{ stroke: #000; stroke-width: 2; }}
 .grid-line {{ stroke: #ccc; stroke-width: 2; stroke-dasharray: 60,30; }}
 .grid-bubble {{ fill: white; stroke: #000; stroke-width: 4; }}
-.grid-label {{ font: bold 280px Arial; text-anchor: middle; dominant-baseline: central; }}
-.room-label {{ font: 500 320px Arial; text-anchor: middle; }}
-.room-area {{ font: 220px Arial; text-anchor: middle; fill: #555; }}
+.grid-label {{ font: bold {self.grid_label_size}px Arial; text-anchor: middle; dominant-baseline: central; }}
+.room-label {{ font: 500 {self.room_text_size}px Arial; text-anchor: middle; }}
+.room-area {{ font: {self.room_area_size}px Arial; text-anchor: middle; fill: #555; }}
 .dim-line {{ stroke: #000; stroke-width: 3; }}
 .dim-ext {{ stroke: #000; stroke-width: 2; }}
-.dim-text {{ font: 160px Arial; text-anchor: middle; }}
-.title {{ font: bold 350px Arial; }}
+.dim-text {{ font: bold {self.dim_text_size}px Arial; text-anchor: middle; }}
+.title {{ font: bold {self.title_text_size}px Arial; }}
 </style>
 </defs>
 <rect x="{vb_x}" y="{vb_y}" width="{vb_w}" height="{vb_h}" fill="white"/>
@@ -317,16 +337,16 @@ class PlanGenerator:
 .skylight-x {{ stroke: #00BCD4; stroke-width: 2; }}
 .grid-line {{ stroke: #ddd; stroke-width: 2; stroke-dasharray: 60,30; }}
 .grid-bubble {{ fill: white; stroke: #000; stroke-width: 4; }}
-.grid-label {{ font: bold 280px Arial; text-anchor: middle; dominant-baseline: central; }}
-.title {{ font: bold 400px Arial; }}
-.subtitle {{ font: 250px Arial; fill: #666; }}
-.pitch-label {{ font: bold 240px Arial; }}
-.annotation {{ font: 180px Arial; }}
+.grid-label {{ font: bold {self.grid_label_size}px Arial; text-anchor: middle; dominant-baseline: central; }}
+.title {{ font: bold {self.title_text_size}px Arial; }}
+.subtitle {{ font: {self.room_area_size}px Arial; fill: #666; }}
+.pitch-label {{ font: bold {self.dim_text_size}px Arial; }}
+.annotation {{ font: {self.room_area_size}px Arial; }}
 .dim-line {{ stroke: #000; stroke-width: 3; }}
 .dim-ext {{ stroke: #000; stroke-width: 2; }}
-.dim-text {{ font: 160px Arial; text-anchor: middle; }}
-.legend-text {{ font: 160px Arial; }}
-.legend-title {{ font: bold 200px Arial; }}
+.dim-text {{ font: bold {self.dim_text_size}px Arial; text-anchor: middle; }}
+.legend-text {{ font: {self.dim_text_size}px Arial; }}
+.legend-title {{ font: bold {self.room_text_size}px Arial; }}
 </style>
 </defs>
 <rect x="{vb_x}" y="{vb_y}" width="{vb_w}" height="{vb_h}" fill="white"/>
@@ -683,7 +703,7 @@ class PlanGenerator:
         return '\n'.join(lines)
 
     def _generate_walls(self) -> str:
-        """Generate walls as double lines (outline rectangles) per architectural convention."""
+        """Generate walls as polygons to properly handle diagonal walls."""
         walls_svg = ['<!-- Walls -->']
 
         for wall in self.walls:
@@ -696,47 +716,68 @@ class PlanGenerator:
             elif wall.category == 'wet_wall':
                 css_class = 'wall-wet'
 
-            if geom['is_horizontal']:
-                # Horizontal wall (runs along X axis)
-                x = min(geom['start_x'], geom['end_x'])
-                w = geom['length']
-                y = geom['start_z'] - thickness/2
-                h = thickness
-            else:
-                # Vertical wall (runs along Z axis)
-                x = geom['start_x'] - thickness/2
-                w = thickness
-                y = min(geom['start_z'], geom['end_z'])
-                h = geom['length']
+            # Calculate wall polygon points (rectangle with thickness along the wall)
+            sx, sz = geom['start_x'], geom['start_z']
+            ex, ez = geom['end_x'], geom['end_z']
 
-            # Draw wall as outline rectangle (double lines) - no fill, just stroke
-            walls_svg.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" class="{css_class}"/>')
+            # Get perpendicular offset for wall thickness
+            length = geom['length']
+            if length < 1:
+                continue  # Skip zero-length walls
+
+            # Direction vector
+            dx = (ex - sx) / length
+            dz = (ez - sz) / length
+
+            # Perpendicular vector (rotated 90 degrees)
+            px = -dz * thickness / 2
+            pz = dx * thickness / 2
+
+            # Four corners of the wall polygon
+            p1 = (sx + px, sz + pz)
+            p2 = (sx - px, sz - pz)
+            p3 = (ex - px, ez - pz)
+            p4 = (ex + px, ez + pz)
+
+            # Draw as polygon path
+            points = f"{p1[0]},{p1[1]} {p2[0]},{p2[1]} {p3[0]},{p3[1]} {p4[0]},{p4[1]}"
+            walls_svg.append(f'<polygon points="{points}" class="{css_class}"/>')
 
         return '\n'.join(walls_svg)
 
     def _generate_openings(self) -> str:
-        """Generate white rectangles to cut openings in walls."""
+        """Generate white polygons to cut openings in walls (works for diagonal walls)."""
         openings = ['<!-- Openings -->']
 
         # Door openings
         for door in self.doors:
             if door.wall_index < len(self.walls):
                 wall = self.walls[door.wall_index]
-                x, y, w, h = self._get_opening_position(wall, door.offset, door.width)
-                openings.append(f'<rect x="{x}" y="{y - 50}" width="{w}" height="{h + 100}" class="opening"/>')
+                thickness = self.ext_wall_thickness if wall.category == 'exterior' else self.int_wall_thickness
+                cx, cz, dx, dz, angle = self._get_opening_position(wall, door.offset, door.width)
 
-        # Window openings (windows are in the wall, so we don't cut through)
-        # But we do need to show them differently
+                # Perpendicular direction
+                px, pz = -dz, dx
+
+                # Half dimensions
+                hw = door.width / 2
+                ht = thickness / 2 + 50  # Extra margin
+
+                # Four corners of opening
+                p1 = (cx - dx*hw + px*ht, cz - dz*hw + pz*ht)
+                p2 = (cx - dx*hw - px*ht, cz - dz*hw - pz*ht)
+                p3 = (cx + dx*hw - px*ht, cz + dz*hw - pz*ht)
+                p4 = (cx + dx*hw + px*ht, cz + dz*hw + pz*ht)
+
+                points = f"{p1[0]},{p1[1]} {p2[0]},{p2[1]} {p3[0]},{p3[1]} {p4[0]},{p4[1]}"
+                openings.append(f'<polygon points="{points}" class="opening"/>')
 
         return '\n'.join(openings)
 
     def _generate_door_symbols(self) -> str:
-        """Generate proper door symbols with swing arcs.
+        """Generate door symbols with swing arcs (works for diagonal walls).
 
-        Standard door symbol convention:
-        - Hinge is at one end of the door opening
-        - Door panel is shown as a line from hinge, swinging 90 degrees into the room
-        - Arc shows the path of the door edge from closed to open position
+        Uses transform groups to rotate door symbols for diagonal walls.
         """
         doors_svg = ['<!-- Door Symbols -->']
 
@@ -745,97 +786,52 @@ class PlanGenerator:
                 continue
 
             wall = self.walls[door.wall_index]
-            geom = self._get_wall_geometry(wall)
-            thickness = self.ext_wall_thickness if wall.category == 'exterior' else self.int_wall_thickness
+            cx, cz, dx, dz, angle = self._get_opening_position(wall, door.offset, door.width)
 
-            if geom['is_horizontal']:
-                # Door in horizontal wall (wall runs along X axis)
-                door_center_x = min(geom['start_x'], geom['end_x']) + door.offset
-                door_y = geom['start_z']
+            # Determine hinge side and swing direction
+            hinge_left = 'left' in door.swing
+            swing_in = 'in' in door.swing or door.swing == 'left'
 
-                # Hinge position (left or right side of opening)
-                if 'left' in door.swing:
-                    hinge_x = door_center_x - door.width / 2
-                    leaf_end_x = door_center_x + door.width / 2  # Where the door edge starts in opening
-                else:
-                    hinge_x = door_center_x + door.width / 2
-                    leaf_end_x = door_center_x - door.width / 2
+            # Door width
+            w = door.width
+            hw = w / 2
 
-                # Swing direction (in = positive Y, out = negative Y)
-                if 'in' in door.swing or door.swing == 'left':
-                    swing_dir = 1  # Into room (positive Y)
-                else:
-                    swing_dir = -1  # Out of room (negative Y)
+            # In local coordinates (before rotation):
+            # - Door opening is from -hw to +hw along X
+            # - Swing is in +Y direction (or -Y if swing_out)
 
-                # Door panel - line from hinge perpendicular into room
-                panel_end_y = door_y + swing_dir * door.width
-                doors_svg.append(f'<line x1="{hinge_x}" y1="{door_y}" x2="{hinge_x}" y2="{panel_end_y}" class="door-leaf"/>')
-
-                # Swing arc - from the other edge of opening to where the door panel ends
-                # Arc is 90 degrees from where door would be when closed (in wall) to open position
-                if 'left' in door.swing:
-                    # Left hinge - arc sweeps from right edge to panel end
-                    if swing_dir > 0:
-                        doors_svg.append(f'<path d="M {leaf_end_x},{door_y} A {door.width},{door.width} 0 0 1 {hinge_x},{panel_end_y}" class="door-swing"/>')
-                    else:
-                        doors_svg.append(f'<path d="M {leaf_end_x},{door_y} A {door.width},{door.width} 0 0 0 {hinge_x},{panel_end_y}" class="door-swing"/>')
-                else:
-                    # Right hinge - arc sweeps from left edge to panel end
-                    if swing_dir > 0:
-                        doors_svg.append(f'<path d="M {leaf_end_x},{door_y} A {door.width},{door.width} 0 0 0 {hinge_x},{panel_end_y}" class="door-swing"/>')
-                    else:
-                        doors_svg.append(f'<path d="M {leaf_end_x},{door_y} A {door.width},{door.width} 0 0 1 {hinge_x},{panel_end_y}" class="door-swing"/>')
-
+            if hinge_left:
+                hinge_x = -hw
+                leaf_end_x = hw
             else:
-                # Door in vertical wall (wall runs along Z axis)
-                door_x = geom['start_x']
-                door_center_y = min(geom['start_z'], geom['end_z']) + door.offset
+                hinge_x = hw
+                leaf_end_x = -hw
 
-                # Hinge position
-                if 'left' in door.swing:
-                    hinge_y = door_center_y - door.width / 2
-                    leaf_end_y = door_center_y + door.width / 2
-                else:
-                    hinge_y = door_center_y + door.width / 2
-                    leaf_end_y = door_center_y - door.width / 2
+            swing_y = w if swing_in else -w
 
-                # Swing direction (assume swing into positive X for vertical walls)
-                if 'in' in door.swing:
-                    swing_dir = 1
-                else:
-                    swing_dir = -1
+            # Build door symbol in local coordinates
+            # Door leaf (line from hinge perpendicular to wall)
+            leaf_line = f'<line x1="{hinge_x}" y1="0" x2="{hinge_x}" y2="{swing_y}" class="door-leaf"/>'
 
-                # Door panel
-                panel_end_x = door_x + swing_dir * door.width
-                doors_svg.append(f'<line x1="{door_x}" y1="{hinge_y}" x2="{panel_end_x}" y2="{hinge_y}" class="door-leaf"/>')
+            # Swing arc
+            if hinge_left:
+                sweep = "1" if swing_in else "0"
+            else:
+                sweep = "0" if swing_in else "1"
 
-                # Swing arc
-                if 'left' in door.swing:
-                    if swing_dir > 0:
-                        doors_svg.append(f'<path d="M {door_x},{leaf_end_y} A {door.width},{door.width} 0 0 0 {panel_end_x},{hinge_y}" class="door-swing"/>')
-                    else:
-                        doors_svg.append(f'<path d="M {door_x},{leaf_end_y} A {door.width},{door.width} 0 0 1 {panel_end_x},{hinge_y}" class="door-swing"/>')
-                else:
-                    if swing_dir > 0:
-                        doors_svg.append(f'<path d="M {door_x},{leaf_end_y} A {door.width},{door.width} 0 0 1 {panel_end_x},{hinge_y}" class="door-swing"/>')
-                    else:
-                        doors_svg.append(f'<path d="M {door_x},{leaf_end_y} A {door.width},{door.width} 0 0 0 {panel_end_x},{hinge_y}" class="door-swing"/>')
+            arc = f'<path d="M {leaf_end_x},0 A {w},{w} 0 0 {sweep} {hinge_x},{swing_y}" class="door-swing"/>'
 
-            # Pocket/sliding doors shown as dashed lines in opening
-            if door.door_type == 'pocket' or door.door_type == 'sliding':
-                if geom['is_horizontal']:
-                    x1 = door_center_x - door.width / 2
-                    x2 = door_center_x + door.width / 2
-                    doors_svg.append(f'<line x1="{x1}" y1="{door_y}" x2="{x2}" y2="{door_y}" stroke="#000" stroke-width="3" stroke-dasharray="40,20"/>')
-                else:
-                    y1 = door_center_y - door.width / 2
-                    y2 = door_center_y + door.width / 2
-                    doors_svg.append(f'<line x1="{door_x}" y1="{y1}" x2="{door_x}" y2="{y2}" stroke="#000" stroke-width="3" stroke-dasharray="40,20"/>')
+            # Pocket/sliding door (dashed line)
+            if door.door_type in ('pocket', 'sliding'):
+                pocket = f'<line x1="{-hw}" y1="0" x2="{hw}" y2="0" stroke="#000" stroke-width="3" stroke-dasharray="40,20"/>'
+                doors_svg.append(f'<g transform="translate({cx},{cz}) rotate({angle})">{pocket}</g>')
+            else:
+                doors_svg.append(f'<g transform="translate({cx},{cz}) rotate({angle})">{leaf_line}{arc}</g>')
 
         return '\n'.join(doors_svg)
 
     def _generate_window_symbols(self) -> str:
-        """Generate window symbols."""
+        """Generate window symbols (works for diagonal walls)."""
         windows_svg = ['<!-- Window Symbols -->']
 
         for window in self.windows:
@@ -843,21 +839,21 @@ class PlanGenerator:
                 continue
 
             wall = self.walls[window.wall_index]
-            geom = self._get_wall_geometry(wall)
             thickness = self.ext_wall_thickness if wall.category == 'exterior' else self.int_wall_thickness
+            cx, cz, dx, dz, angle = self._get_opening_position(wall, window.offset, window.width)
 
-            if geom['is_horizontal']:
-                win_x = min(geom['start_x'], geom['end_x']) + window.offset - window.width/2
-                win_y = geom['start_z'] - thickness/2
-                windows_svg.append(f'<rect x="{win_x}" y="{win_y}" width="{window.width}" height="{thickness}" class="window"/>')
-                # Glass lines
-                windows_svg.append(f'<line x1="{win_x}" y1="{geom["start_z"]}" x2="{win_x + window.width}" y2="{geom["start_z"]}" class="window-glass"/>')
-            else:
-                win_x = geom['start_x'] - thickness/2
-                win_y = min(geom['start_z'], geom['end_z']) + window.offset - window.width/2
-                windows_svg.append(f'<rect x="{win_x}" y="{win_y}" width="{thickness}" height="{window.width}" class="window"/>')
-                # Glass lines
-                windows_svg.append(f'<line x1="{geom["start_x"]}" y1="{win_y}" x2="{geom["start_x"]}" y2="{win_y + window.width}" class="window-glass"/>')
+            # Window dimensions
+            w = window.width
+            hw = w / 2
+            ht = thickness / 2
+
+            # Build window in local coordinates then rotate
+            # Rectangle for window frame
+            rect = f'<rect x="{-hw}" y="{-ht}" width="{w}" height="{thickness}" class="window"/>'
+            # Center glass line
+            glass = f'<line x1="{-hw}" y1="0" x2="{hw}" y2="0" class="window-glass"/>'
+
+            windows_svg.append(f'<g transform="translate({cx},{cz}) rotate({angle})">{rect}{glass}</g>')
 
         return '\n'.join(windows_svg)
 
@@ -869,6 +865,8 @@ class PlanGenerator:
         or it may use 'x' and 'y' for plan coordinates. We try both.
         """
         labels = ['<!-- Room Labels -->']
+        name_size = self.room_text_size
+        area_size = self.room_area_size
 
         for room_id, room in self.rooms.items():
             if room.center:
@@ -880,9 +878,9 @@ class PlanGenerator:
                 # Convert area from mm² to m²
                 area_m2 = room.area / 1_000_000 if room.area > 10000 else room.area
 
-                labels.append(f'<text x="{cx}" y="{cz - 150}" class="room-label">{room.name.upper()}</text>')
+                labels.append(f'<text x="{cx}" y="{cz - 200}" font-family="Arial" font-size="{name_size}" font-weight="500" text-anchor="middle">{room.name.upper()}</text>')
                 if area_m2 > 0:
-                    labels.append(f'<text x="{cx}" y="{cz + 200}" class="room-area">{area_m2:.1f} m&#178;</text>')
+                    labels.append(f'<text x="{cx}" y="{cz + 300}" font-family="Arial" font-size="{area_size}" text-anchor="middle" fill="#555">{area_m2:.1f} m&#178;</text>')
 
             elif room.bounds:
                 # Calculate center from bounds
@@ -893,106 +891,280 @@ class PlanGenerator:
                 # Convert area from mm² to m²
                 area_m2 = room.area / 1_000_000 if room.area > 10000 else room.area
 
-                labels.append(f'<text x="{cx}" y="{cz - 150}" class="room-label">{room.name.upper()}</text>')
+                labels.append(f'<text x="{cx}" y="{cz - 200}" font-family="Arial" font-size="{name_size}" font-weight="500" text-anchor="middle">{room.name.upper()}</text>')
                 if area_m2 > 0:
-                    labels.append(f'<text x="{cx}" y="{cz + 200}" class="room-area">{area_m2:.1f} m&#178;</text>')
+                    labels.append(f'<text x="{cx}" y="{cz + 300}" font-family="Arial" font-size="{area_size}" text-anchor="middle" fill="#555">{area_m2:.1f} m&#178;</text>')
 
         return '\n'.join(labels)
 
-    def _generate_ladder_dimensions(self) -> str:
-        """Generate ladder dimensions (detail, wall, overall)."""
-        dims = ['<!-- Ladder Dimensions -->']
+    def _get_building_bounds(self) -> dict:
+        """Calculate actual building bounds from exterior walls."""
+        if not self.walls:
+            return {'min_x': 0, 'max_x': self.width, 'min_z': 0, 'max_z': self.depth}
 
-        # South side dimensions (3 layers)
-        # Layer 1: Detail (closest) at y = -600
-        # Layer 2: Wall-to-wall at y = -1200
-        # Layer 3: Overall at y = -1800
+        ext_walls = [w for w in self.walls if w.category == 'exterior']
+        if not ext_walls:
+            ext_walls = self.walls
 
-        # Find all break points along south wall
-        x_breaks = [0, self.width]
+        min_x = min_z = float('inf')
+        max_x = max_z = float('-inf')
 
-        # Add door/window positions
+        for wall in ext_walls:
+            geom = self._get_wall_geometry(wall)
+            min_x = min(min_x, geom['start_x'], geom['end_x'])
+            max_x = max(max_x, geom['start_x'], geom['end_x'])
+            min_z = min(min_z, geom['start_z'], geom['end_z'])
+            max_z = max(max_z, geom['start_z'], geom['end_z'])
+
+        return {'min_x': min_x, 'max_x': max_x, 'min_z': min_z, 'max_z': max_z}
+
+    def _find_walls_on_edge(self, edge: str, bounds: dict, tolerance: float = 100) -> list:
+        """Find walls along a specific edge of the building."""
+        walls_on_edge = []
+        for i, wall in enumerate(self.walls):
+            if wall.category != 'exterior':
+                continue
+            geom = self._get_wall_geometry(wall)
+
+            if edge == 'south' and abs(min(geom['start_z'], geom['end_z']) - bounds['min_z']) < tolerance:
+                walls_on_edge.append((i, wall, geom))
+            elif edge == 'north' and abs(max(geom['start_z'], geom['end_z']) - bounds['max_z']) < tolerance:
+                walls_on_edge.append((i, wall, geom))
+            elif edge == 'west' and abs(min(geom['start_x'], geom['end_x']) - bounds['min_x']) < tolerance:
+                walls_on_edge.append((i, wall, geom))
+            elif edge == 'east' and abs(max(geom['start_x'], geom['end_x']) - bounds['max_x']) < tolerance:
+                walls_on_edge.append((i, wall, geom))
+
+        return walls_on_edge
+
+    def _get_break_points_on_edge(self, edge: str, bounds: dict) -> list:
+        """Get dimension break points: corners and CENTER of openings."""
+        tolerance = 200
+        breaks = []
+
+        # Start and end of edge (corners)
+        if edge in ('south', 'north'):
+            breaks.append(bounds['min_x'])
+            breaks.append(bounds['max_x'])
+        else:  # west, east
+            breaks.append(bounds['min_z'])
+            breaks.append(bounds['max_z'])
+
+        # Find walls on this edge
+        edge_walls = self._find_walls_on_edge(edge, bounds)
+        edge_wall_indices = [i for i, w, g in edge_walls]
+
+        # Add door CENTERS on edge walls
         for door in self.doors:
-            if door.wall_index < len(self.walls):
+            if door.wall_index in edge_wall_indices:
                 wall = self.walls[door.wall_index]
                 geom = self._get_wall_geometry(wall)
-                if geom['is_horizontal'] and geom['start_z'] == 0:
-                    x_breaks.append(door.offset - door.width/2)
-                    x_breaks.append(door.offset + door.width/2)
+                if edge in ('south', 'north'):
+                    base = min(geom['start_x'], geom['end_x'])
+                    breaks.append(base + door.offset)  # Center only
+                else:
+                    base = min(geom['start_z'], geom['end_z'])
+                    breaks.append(base + door.offset)  # Center only
 
+        # Add window CENTERS on edge walls
         for window in self.windows:
-            if window.wall_index < len(self.walls):
+            if window.wall_index in edge_wall_indices:
                 wall = self.walls[window.wall_index]
                 geom = self._get_wall_geometry(wall)
-                if geom['is_horizontal'] and geom['start_z'] == 0:
-                    x_breaks.append(window.offset - window.width/2)
-                    x_breaks.append(window.offset + window.width/2)
+                if edge in ('south', 'north'):
+                    base = min(geom['start_x'], geom['end_x'])
+                    breaks.append(base + window.offset)  # Center only
+                else:
+                    base = min(geom['start_z'], geom['end_z'])
+                    breaks.append(base + window.offset)  # Center only
 
-        # Add interior wall positions
-        for wall in self.walls:
+        return sorted(set(breaks))
+
+    def _generate_ladder_dimensions(self) -> str:
+        """Generate dimension chains on each wall with openings."""
+        dims = ['<!-- Wall Dimension Chains -->']
+        dim_offset = 600  # Distance from wall to dimension line
+
+        # Process each wall
+        for wall_idx, wall in enumerate(self.walls):
             geom = self._get_wall_geometry(wall)
-            if geom['is_vertical'] and wall.category != 'exterior':
-                if geom['start_z'] <= 100:  # Connects to south wall
-                    x_breaks.append(geom['start_x'])
 
-        x_breaks = sorted(set(x_breaks))
+            # Get all openings on this wall
+            opening_centers = []
 
-        # Layer 1: Detail dimensions
-        for i in range(len(x_breaks) - 1):
-            x1, x2 = x_breaks[i], x_breaks[i + 1]
-            if x2 - x1 > 100:  # Skip tiny segments
-                dims.append(self._dim_line(x1, -600, x2, -600, x2 - x1))
+            for door in self.doors:
+                if door.wall_index == wall_idx:
+                    opening_centers.append(door.offset)
 
-        # Layer 2: Major breaks (walls)
-        wall_x = [0]
-        for wall in self.walls:
-            geom = self._get_wall_geometry(wall)
-            if geom['is_vertical']:
-                wall_x.append(geom['start_x'])
-        wall_x.append(self.width)
-        wall_x = sorted(set(wall_x))
+            for window in self.windows:
+                if window.wall_index == wall_idx:
+                    opening_centers.append(window.offset)
 
-        for i in range(len(wall_x) - 1):
-            x1, x2 = wall_x[i], wall_x[i + 1]
-            dims.append(self._dim_line(x1, -1200, x2, -1200, x2 - x1))
+            # Skip walls with no openings
+            if not opening_centers:
+                continue
 
-        # Layer 3: Overall
-        dims.append(self._dim_line(0, -1800, self.width, -1800, self.width))
+            opening_centers.sort()
 
-        # East side dimensions
-        z_breaks = [0, self.depth]
-        for wall in self.walls:
-            geom = self._get_wall_geometry(wall)
-            if geom['is_horizontal'] and wall.category != 'exterior':
-                z_breaks.append(geom['start_z'])
-        z_breaks = sorted(set(z_breaks))
+            # Wall start/end positions and length
+            if geom['is_horizontal']:
+                wall_start = min(geom['start_x'], geom['end_x'])
+                wall_end = max(geom['start_x'], geom['end_x'])
+                wall_z = geom['start_z']
 
-        # Layer 2 (walls) on east side
-        for i in range(len(z_breaks) - 1):
-            z1, z2 = z_breaks[i], z_breaks[i + 1]
-            dims.append(self._dim_line_v(self.width + 1200, z1, z2, z2 - z1))
+                # Dimension line position (offset from wall)
+                dim_y = wall_z - dim_offset if wall.category == 'exterior' else wall_z + dim_offset
 
-        # Layer 3 (overall) on east side
-        dims.append(self._dim_line_v(self.width + 1800, 0, self.depth, self.depth))
+                # Build break points: start, centers, end
+                breaks = [wall_start] + [wall_start + c for c in opening_centers] + [wall_end]
+
+                # Create dimension chain
+                for i in range(len(breaks) - 1):
+                    x1, x2 = breaks[i], breaks[i + 1]
+                    if x2 - x1 > 50:
+                        dims.append(self._dim_line(x1, dim_y, x2, dim_y, x2 - x1))
+
+            elif geom['is_vertical']:
+                wall_start = min(geom['start_z'], geom['end_z'])
+                wall_end = max(geom['start_z'], geom['end_z'])
+                wall_x = geom['start_x']
+
+                # Dimension line position (offset from wall)
+                dim_x = wall_x + dim_offset if wall.category == 'exterior' else wall_x - dim_offset
+
+                # Build break points: start, centers, end
+                breaks = [wall_start] + [wall_start + c for c in opening_centers] + [wall_end]
+
+                # Create dimension chain
+                for i in range(len(breaks) - 1):
+                    z1, z2 = breaks[i], breaks[i + 1]
+                    if z2 - z1 > 50:
+                        dims.append(self._dim_line_v(dim_x, z1, z2, z2 - z1))
+
+        # Add overall building dimensions
+        bounds = self._get_building_bounds()
+        overall_offset = 1500
+
+        # South overall
+        dims.append(self._dim_line(
+            bounds['min_x'], bounds['min_z'] - overall_offset,
+            bounds['max_x'], bounds['min_z'] - overall_offset,
+            bounds['max_x'] - bounds['min_x']
+        ))
+
+        # East overall
+        dims.append(self._dim_line_v(
+            bounds['max_x'] + overall_offset,
+            bounds['min_z'], bounds['max_z'],
+            bounds['max_z'] - bounds['min_z']
+        ))
 
         return '\n'.join(dims)
 
+    def _generate_edge_dimensions(self, edge: str, bounds: dict, breaks: list, spacing: float) -> str:
+        """Generate multi-layer dimensions for one edge."""
+        dims = []
+
+        if edge == 'south':
+            base_y = bounds['min_z']
+            # Layer 1: Detail (all breaks)
+            for i in range(len(breaks) - 1):
+                x1, x2 = breaks[i], breaks[i + 1]
+                if x2 - x1 > 50:  # Skip tiny gaps
+                    dims.append(self._dim_line(x1, base_y - spacing, x2, base_y - spacing, x2 - x1))
+
+            # Layer 2: Wall-to-wall (filter to major breaks only)
+            wall_breaks = self._filter_to_wall_breaks(breaks, 'horizontal', bounds)
+            if len(wall_breaks) > 1:
+                for i in range(len(wall_breaks) - 1):
+                    x1, x2 = wall_breaks[i], wall_breaks[i + 1]
+                    dims.append(self._dim_line(x1, base_y - spacing * 2, x2, base_y - spacing * 2, x2 - x1))
+
+            # Layer 3: Overall
+            dims.append(self._dim_line(
+                bounds['min_x'], base_y - spacing * 3,
+                bounds['max_x'], base_y - spacing * 3,
+                bounds['max_x'] - bounds['min_x']
+            ))
+
+        elif edge == 'east':
+            base_x = bounds['max_x']
+            # Layer 1: Detail
+            for i in range(len(breaks) - 1):
+                z1, z2 = breaks[i], breaks[i + 1]
+                if z2 - z1 > 50:
+                    dims.append(self._dim_line_v(base_x + spacing, z1, z2, z2 - z1))
+
+            # Layer 2: Wall-to-wall
+            wall_breaks = self._filter_to_wall_breaks(breaks, 'vertical', bounds)
+            if len(wall_breaks) > 1:
+                for i in range(len(wall_breaks) - 1):
+                    z1, z2 = wall_breaks[i], wall_breaks[i + 1]
+                    dims.append(self._dim_line_v(base_x + spacing * 2, z1, z2, z2 - z1))
+
+            # Layer 3: Overall
+            dims.append(self._dim_line_v(
+                base_x + spacing * 3,
+                bounds['min_z'], bounds['max_z'],
+                bounds['max_z'] - bounds['min_z']
+            ))
+
+        return '\n'.join(dims)
+
+    def _filter_to_wall_breaks(self, breaks: list, wall_dir: str, bounds: dict) -> list:
+        """Filter break points to only include wall intersections (not openings)."""
+        wall_positions = []
+
+        # Always include building corners
+        if wall_dir == 'horizontal':
+            wall_positions.extend([bounds['min_x'], bounds['max_x']])
+        else:
+            wall_positions.extend([bounds['min_z'], bounds['max_z']])
+
+        # Add interior wall positions
+        for wall in self.walls:
+            if wall.category == 'exterior':
+                continue
+            geom = self._get_wall_geometry(wall)
+
+            if wall_dir == 'horizontal' and geom['is_vertical']:
+                wall_positions.append(geom['start_x'])
+            elif wall_dir == 'vertical' and geom['is_horizontal']:
+                wall_positions.append(geom['start_z'])
+
+        # Filter breaks to only those near wall positions
+        tolerance = 100
+        filtered = []
+        for b in breaks:
+            for wp in wall_positions:
+                if abs(b - wp) < tolerance:
+                    filtered.append(b)
+                    break
+
+        return sorted(set(filtered))
+
     def _dim_line(self, x1: float, y: float, x2: float, y2: float, value: float) -> str:
         """Generate a horizontal dimension line with ticks and text."""
+        tick = 150  # Extension line size
+        text_offset = 120  # Small gap above line
+        font_size = self.dim_text_size
         return f'''<g>
-  <line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" class="dim-line"/>
-  <line x1="{x1}" y1="{y + 100}" x2="{x1}" y2="{y - 100}" class="dim-ext"/>
-  <line x1="{x2}" y1="{y + 100}" x2="{x2}" y2="{y - 100}" class="dim-ext"/>
-  <text x="{(x1 + x2)/2}" y="{y - 50}" class="dim-text">{int(value)}</text>
+  <line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" stroke="#000" stroke-width="3"/>
+  <line x1="{x1}" y1="{y + tick}" x2="{x1}" y2="{y - tick}" stroke="#000" stroke-width="2"/>
+  <line x1="{x2}" y1="{y + tick}" x2="{x2}" y2="{y - tick}" stroke="#000" stroke-width="2"/>
+  <text x="{(x1 + x2)/2}" y="{y - text_offset}" font-family="Arial" font-size="{font_size}" font-weight="bold" text-anchor="middle">{int(value)}</text>
 </g>'''
 
     def _dim_line_v(self, x: float, z1: float, z2: float, value: float) -> str:
         """Generate a vertical dimension line."""
+        tick = 150  # Extension line size
+        text_offset = 120  # Small gap beside line
+        font_size = self.dim_text_size
         return f'''<g>
-  <line x1="{x}" y1="{z1}" x2="{x}" y2="{z2}" class="dim-line"/>
-  <line x1="{x - 100}" y1="{z1}" x2="{x + 100}" y2="{z1}" class="dim-ext"/>
-  <line x1="{x - 100}" y1="{z2}" x2="{x + 100}" y2="{z2}" class="dim-ext"/>
-  <text x="{x + 50}" y="{(z1 + z2)/2}" class="dim-text" writing-mode="tb">{int(value)}</text>
+  <line x1="{x}" y1="{z1}" x2="{x}" y2="{z2}" stroke="#000" stroke-width="3"/>
+  <line x1="{x - tick}" y1="{z1}" x2="{x + tick}" y2="{z1}" stroke="#000" stroke-width="2"/>
+  <line x1="{x - tick}" y1="{z2}" x2="{x + tick}" y2="{z2}" stroke="#000" stroke-width="2"/>
+  <text x="{x + text_offset}" y="{(z1 + z2)/2}" font-family="Arial" font-size="{font_size}" font-weight="bold" text-anchor="start" dominant-baseline="middle">{int(value)}</text>
 </g>'''
 
     def _generate_north_arrow(self, x: float, y: float) -> str:
