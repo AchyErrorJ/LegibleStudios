@@ -154,6 +154,10 @@ class GeneratorService(QObject):
             self.generation_failed.emit(sheet.id, f"Failed to get document data: {e}")
             return
 
+        # Add text size settings to data
+        text_sizes = self._registry.text_sizes
+        data.update(text_sizes)
+
         # Generate SVG
         result: GeneratorResult = adapter.generate(data, sheet)
 

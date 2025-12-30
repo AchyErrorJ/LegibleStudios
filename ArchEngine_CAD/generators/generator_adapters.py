@@ -50,7 +50,7 @@ class GeneratorAdapter(ABC):
     def parse_scale(scale_str: str) -> float:
         """
         Parse scale string like "1:100" to a factor.
-        Returns SVG scale factor (e.g., 0.05 for 1:100 at print size).
+        Returns SVG scale factor for reasonable screen display.
         """
         try:
             if ':' in scale_str:
@@ -58,11 +58,11 @@ class GeneratorAdapter(ABC):
                 numerator = float(parts[0])
                 denominator = float(parts[1])
                 # For SVG, we use a factor that produces reasonable pixel sizes
-                # 1:100 -> 0.05 (50mm per unit becomes 2.5 pixels)
-                return numerator / denominator * 5
-            return 0.05
+                # 1:100 -> 0.15 for ~3000px output width on typical buildings
+                return numerator / denominator * 15
+            return 0.15
         except (ValueError, IndexError):
-            return 0.05
+            return 0.15
 
 
 class FloorPlanAdapter(GeneratorAdapter):
@@ -128,11 +128,23 @@ class ElevationAdapter(GeneratorAdapter):
 
     def generate(self, data: Dict[str, Any], sheet: SheetConfig) -> GeneratorResult:
         try:
-            from generate_elevations import ElevationGenerator
+            from generate_elevations import generate_elevation, render_elevation_svg, get_project_info_from_json
 
-            generator = _create_elevation_generator_from_data(data)
             scale = self.parse_scale(sheet.scale)
-            svg_content = generator.generate_elevation_svg(self.direction, scale=scale)
+
+            # Generate elevation data
+            elevation = generate_elevation(data, self.direction)
+
+            # Get project info for title block
+            project_info = get_project_info_from_json(data)
+
+            # Render to SVG
+            svg_content = render_elevation_svg(
+                elevation,
+                scale=scale,
+                project_info=project_info,
+                drawing_type=f'elevation_{self.direction}'
+            )
 
             return GeneratorResult(success=True, svg_content=svg_content)
 
@@ -162,11 +174,38 @@ class SectionAdapter(GeneratorAdapter):
 
     def generate(self, data: Dict[str, Any], sheet: SheetConfig) -> GeneratorResult:
         try:
-            from generate_sections import SectionGenerator
+            from generate_sections import (
+                generate_section, render_section_svg, SectionDirection
+            )
+            from title_block import get_project_info_from_json
 
-            generator = _create_section_generator_from_data(data)
             scale = self.parse_scale(sheet.scale)
-            svg_content = generator.generate_section_svg(self.section_id, scale=scale)
+
+            # Determine section direction based on section_id
+            # A = Transverse (cut across width), B = Longitudinal (cut along length)
+            building_width = data.get('width', 10000)
+            building_depth = data.get('depth', 10000)
+
+            if self.section_id == "A":
+                direction = SectionDirection.TRANSVERSE
+                cut_position = building_width / 2
+            else:
+                direction = SectionDirection.LONGITUDINAL
+                cut_position = building_depth / 2
+
+            # Generate section data
+            section = generate_section(data, direction, cut_position, self.section_id)
+
+            # Get project info for title block
+            project_info = get_project_info_from_json(data)
+
+            # Render to SVG
+            svg_content = render_section_svg(
+                section,
+                scale=scale,
+                project_info=project_info,
+                drawing_type=f'section_{self.section_id.lower()}'
+            )
 
             return GeneratorResult(success=True, svg_content=svg_content)
 
@@ -276,6 +315,13 @@ def _create_plan_generator_from_data(data: Dict[str, Any]):
     # Roof defaults
     generator.default_overhang = 600
     generator.default_pitch = 4
+
+    # Text sizes (in viewBox units/mm) - configurable
+    generator.dim_text_size = data.get('dim_text_size', 300)
+    generator.room_text_size = data.get('room_text_size', 500)
+    generator.room_area_size = data.get('room_area_size', 350)
+    generator.title_text_size = data.get('title_text_size', 500)
+    generator.grid_label_size = data.get('grid_label_size', 350)
 
     return generator
 

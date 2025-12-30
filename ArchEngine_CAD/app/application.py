@@ -344,6 +344,7 @@ class ArchEngineApplication(QMainWindow):
         self.sheet_properties = SheetPropertiesPanel(self.sheet_registry, self)
         self.sheet_properties.setMinimumWidth(250)
         self.sheet_properties.regenerate_requested.connect(self._on_regenerate_requested)
+        self.sheet_properties.text_sizes_changed.connect(self._on_text_sizes_changed)
         self.sheet_props_dock.setWidget(self.sheet_properties)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.sheet_props_dock)
         self.window_menu.addAction(self.sheet_props_dock.toggleViewAction())
@@ -766,6 +767,12 @@ class ArchEngineApplication(QMainWindow):
         self.status_bar.showMessage("Regenerating all sheets...", 0)
         self.generator_service.generate_all()
         self.status_bar.showMessage("All sheets regenerated", 3000)
+
+    def _on_text_sizes_changed(self, sizes: dict):
+        """Handle text size changes - regenerate all sheets."""
+        self.status_bar.showMessage("Text sizes changed, regenerating...", 0)
+        self.generator_service.generate_all()
+        self.status_bar.showMessage("Sheets regenerated with new text sizes", 3000)
 
     def _regenerate_current_sheet(self):
         """Regenerate the currently displayed sheet."""

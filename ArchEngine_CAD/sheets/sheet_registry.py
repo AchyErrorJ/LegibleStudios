@@ -75,6 +75,20 @@ class SheetRegistry(QObject):
         """Set auto-regenerate setting."""
         self._drawing_set.auto_regenerate = value
 
+    @property
+    def text_sizes(self) -> dict:
+        """Get text size settings."""
+        return getattr(self._drawing_set, '_text_sizes', {
+            'dim_text_size': 300,
+            'room_text_size': 500,
+            'room_area_size': 350,
+        })
+
+    @text_sizes.setter
+    def text_sizes(self, value: dict):
+        """Set text size settings."""
+        self._drawing_set._text_sizes = value
+
     # =========================================================================
     # Sheet Access
     # =========================================================================

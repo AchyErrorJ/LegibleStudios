@@ -9,7 +9,7 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QComboBox, QCheckBox, QPushButton,
-    QGroupBox, QTextEdit
+    QGroupBox, QTextEdit, QSpinBox, QScrollArea, QFrame
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
@@ -27,6 +27,7 @@ class SheetPropertiesPanel(QWidget):
 
     # Signals
     regenerate_requested = pyqtSignal(str)  # sheet_id
+    text_sizes_changed = pyqtSignal(dict)   # {dim_text_size, room_text_size, room_area_size}
 
     def __init__(self, registry: SheetRegistry, parent=None):
         super().__init__(parent)
@@ -39,7 +40,20 @@ class SheetPropertiesPanel(QWidget):
         self._clear()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        # Main layout with scroll area
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # Scroll area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # Content widget inside scroll area
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(12)
 
@@ -98,6 +112,34 @@ class SheetPropertiesPanel(QWidget):
 
         layout.addWidget(status_group)
 
+        # Text sizes group
+        text_group = QGroupBox("Text Sizes")
+        text_layout = QFormLayout(text_group)
+        text_layout.setSpacing(6)
+
+        self._dim_text_spin = QSpinBox()
+        self._dim_text_spin.setRange(100, 800)
+        self._dim_text_spin.setValue(300)
+        self._dim_text_spin.setSingleStep(25)
+        self._dim_text_spin.valueChanged.connect(self._on_text_size_changed)
+        text_layout.addRow("Dimensions:", self._dim_text_spin)
+
+        self._room_text_spin = QSpinBox()
+        self._room_text_spin.setRange(100, 800)
+        self._room_text_spin.setValue(500)
+        self._room_text_spin.setSingleStep(25)
+        self._room_text_spin.valueChanged.connect(self._on_text_size_changed)
+        text_layout.addRow("Room Labels:", self._room_text_spin)
+
+        self._area_text_spin = QSpinBox()
+        self._area_text_spin.setRange(100, 600)
+        self._area_text_spin.setValue(350)
+        self._area_text_spin.setSingleStep(25)
+        self._area_text_spin.valueChanged.connect(self._on_text_size_changed)
+        text_layout.addRow("Room Areas:", self._area_text_spin)
+
+        layout.addWidget(text_group)
+
         # Title block group
         title_block_group = QGroupBox("Title Block")
         tb_layout = QFormLayout(title_block_group)
@@ -122,6 +164,10 @@ class SheetPropertiesPanel(QWidget):
         layout.addWidget(title_block_group)
 
         layout.addStretch()
+
+        # Complete scroll area setup
+        scroll.setWidget(content)
+        main_layout.addWidget(scroll)
 
     def _connect_signals(self):
         """Connect registry signals."""
@@ -250,3 +296,34 @@ class SheetPropertiesPanel(QWidget):
             sheet = self._registry.get_sheet(sheet_id)
             if sheet:
                 self._update_from_sheet(sheet)
+
+    def _on_text_size_changed(self):
+        if self._updating:
+            return
+
+        sizes = {
+            'dim_text_size': self._dim_text_spin.value(),
+            'room_text_size': self._room_text_spin.value(),
+            'room_area_size': self._area_text_spin.value(),
+        }
+        self._registry.text_sizes = sizes
+        self.text_sizes_changed.emit(sizes)
+
+    def get_text_sizes(self) -> dict:
+        """Get current text size settings."""
+        return {
+            'dim_text_size': self._dim_text_spin.value(),
+            'room_text_size': self._room_text_spin.value(),
+            'room_area_size': self._area_text_spin.value(),
+        }
+
+    def set_text_sizes(self, sizes: dict):
+        """Set text size values from a dictionary."""
+        self._updating = True
+        if 'dim_text_size' in sizes:
+            self._dim_text_spin.setValue(sizes['dim_text_size'])
+        if 'room_text_size' in sizes:
+            self._room_text_spin.setValue(sizes['room_text_size'])
+        if 'room_area_size' in sizes:
+            self._area_text_spin.setValue(sizes['room_area_size'])
+        self._updating = False
