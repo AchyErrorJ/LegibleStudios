@@ -360,123 +360,261 @@ def generate_elevation(data: dict, direction: str) -> Elevation:
 # SVG RENDERER
 # =============================================================================
 
-def render_elevation_svg(elevation: Elevation, scale: float = 0.05,
-                         margin: float = 50, project_info: Dict = None,
+def render_elevation_svg(elevation: Elevation, scale: float = 0.1,
+                         margin: float = 4000, project_info: Dict = None,
                          drawing_type: str = 'elevation_south') -> str:
-    """Render an elevation to SVG format."""
+    """Render an elevation to SVG format using model-space coordinates."""
 
-    # Calculate SVG dimensions - add space for title block
-    tb_margin = 1500  # Extra margin for title block
-    svg_width = elevation.width * scale + margin * 2 + 100 + tb_margin * scale
-    svg_height = elevation.height * scale + margin * 2 + 50 + tb_margin * scale
+    # Use model-space viewBox (like floor plan) so title block works correctly
+    # Elevation is drawn with Y=0 at ground level, Y increasing upward
+    # But SVG Y increases downward, so we flip
 
-    # SVG coordinate system: Y increases downward, so we flip
-    def tx(x): return x * scale + margin + 80  # Offset for level markers
-    def ty(y): return svg_height - margin - y * scale
+    vb_x = -margin
+    vb_y = -margin
+    vb_w = elevation.width + 2 * margin
+    vb_h = elevation.height + 2 * margin + 1000  # Extra space for roof
 
     lines = []
-    lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_width:.0f} {svg_height:.0f}">')
+    lines.append(f'''<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="{int(vb_w * scale)}" height="{int(vb_h * scale)}"
+     viewBox="{vb_x} {vb_y} {vb_w} {vb_h}">''')
     lines.append(f'  <title>{elevation.direction.title()} Elevation</title>')
 
-    # Background
-    lines.append(f'  <rect width="100%" height="100%" fill="white"/>')
+    # Pattern definitions for material hatches
+    lines.append('''  <defs>
+    <!-- Brick pattern -->
+    <pattern id="brick-pattern" patternUnits="userSpaceOnUse" width="300" height="150">
+      <rect width="300" height="150" fill="#e8d4c4"/>
+      <line x1="0" y1="75" x2="300" y2="75" stroke="#c9b8a8" stroke-width="4"/>
+      <line x1="150" y1="0" x2="150" y2="75" stroke="#c9b8a8" stroke-width="4"/>
+      <line x1="0" y1="75" x2="0" y2="150" stroke="#c9b8a8" stroke-width="4"/>
+      <line x1="300" y1="75" x2="300" y2="150" stroke="#c9b8a8" stroke-width="4"/>
+    </pattern>
 
-    # Styles
+    <!-- Horizontal siding pattern -->
+    <pattern id="siding-pattern" patternUnits="userSpaceOnUse" width="400" height="150">
+      <rect width="400" height="150" fill="#f0ebe6"/>
+      <line x1="0" y1="150" x2="400" y2="150" stroke="#d4cfc8" stroke-width="4"/>
+      <line x1="0" y1="145" x2="400" y2="145" stroke="#e8e3dc" stroke-width="8"/>
+    </pattern>
+
+    <!-- Stucco/plaster pattern (subtle texture) -->
+    <pattern id="stucco-pattern" patternUnits="userSpaceOnUse" width="200" height="200">
+      <rect width="200" height="200" fill="#f5f2ef"/>
+      <circle cx="30" cy="40" r="2" fill="#e8e5e0"/>
+      <circle cx="90" cy="20" r="1.5" fill="#e8e5e0"/>
+      <circle cx="150" cy="60" r="2" fill="#e8e5e0"/>
+      <circle cx="50" cy="120" r="1.5" fill="#e8e5e0"/>
+      <circle cx="120" cy="150" r="2" fill="#e8e5e0"/>
+      <circle cx="180" cy="100" r="1.5" fill="#e8e5e0"/>
+    </pattern>
+
+    <!-- Roof shingle pattern -->
+    <pattern id="shingle-pattern" patternUnits="userSpaceOnUse" width="400" height="200">
+      <rect width="400" height="200" fill="#5a5a5a"/>
+      <line x1="0" y1="100" x2="400" y2="100" stroke="#484848" stroke-width="6"/>
+      <line x1="0" y1="200" x2="400" y2="200" stroke="#484848" stroke-width="6"/>
+      <line x1="100" y1="0" x2="100" y2="100" stroke="#4a4a4a" stroke-width="3"/>
+      <line x1="300" y1="0" x2="300" y2="100" stroke="#4a4a4a" stroke-width="3"/>
+      <line x1="0" y1="100" x2="0" y2="200" stroke="#4a4a4a" stroke-width="3"/>
+      <line x1="200" y1="100" x2="200" y2="200" stroke="#4a4a4a" stroke-width="3"/>
+    </pattern>
+
+    <!-- Ground/earth hatch -->
+    <pattern id="ground-pattern" patternUnits="userSpaceOnUse" width="100" height="100">
+      <rect width="100" height="100" fill="#d4c9b8"/>
+      <line x1="0" y1="100" x2="100" y2="0" stroke="#c4b9a8" stroke-width="3"/>
+      <line x1="50" y1="100" x2="100" y2="50" stroke="#c4b9a8" stroke-width="3"/>
+      <line x1="0" y1="50" x2="50" y2="0" stroke="#c4b9a8" stroke-width="3"/>
+    </pattern>
+
+    <!-- Shadow filter -->
+    <filter id="shadow-filter" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="200" dy="150" stdDeviation="100" flood-color="#000" flood-opacity="0.2"/>
+    </filter>
+  </defs>''')
+
+    # Background
+    lines.append(f'  <rect x="{vb_x}" y="{vb_y}" width="{vb_w}" height="{vb_h}" fill="white"/>')
+
+    # Styles - using model-space sizes (mm)
     lines.append('''  <style>
-    .wall { fill: #f5f5f5; stroke: #333; stroke-width: 1.5; }
-    .wall-outline { fill: none; stroke: #333; stroke-width: 2; }
-    .opening { fill: white; stroke: #333; stroke-width: 1; }
-    .door { fill: #d4a574; stroke: #333; stroke-width: 1; }
-    .window-frame { fill: none; stroke: #333; stroke-width: 1.5; }
-    .window-glass { fill: #cce5ff; stroke: #666; stroke-width: 0.5; }
-    .window-mullion { stroke: #333; stroke-width: 1; }
-    .roof { fill: none; stroke: #333; stroke-width: 2; }
-    .level-line { stroke: #999; stroke-width: 0.5; stroke-dasharray: 5,5; }
-    .level-line-major { stroke: #666; stroke-width: 1; stroke-dasharray: none; }
-    .level-text { font-family: Arial, sans-serif; font-size: 10px; fill: #666; }
-    .title { font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; fill: #333; }
-    .dimension { font-family: Arial, sans-serif; font-size: 9px; fill: #333; }
-    .ground { fill: #e8e8e8; }
-    .grade-line { stroke: #666; stroke-width: 2; }
+    .wall { fill: url(#siding-pattern); stroke: #333; stroke-width: 8; }
+    .wall-brick { fill: url(#brick-pattern); stroke: #333; stroke-width: 8; }
+    .wall-stucco { fill: url(#stucco-pattern); stroke: #333; stroke-width: 8; }
+    .wall-outline { fill: none; stroke: #333; stroke-width: 10; }
+    .opening { fill: white; stroke: #333; stroke-width: 4; }
+    .door { fill: #d4a574; stroke: #333; stroke-width: 4; }
+    .door-panel { fill: #c49664; stroke: #8b6e4a; stroke-width: 3; }
+    .window-frame { fill: none; stroke: #333; stroke-width: 6; }
+    .window-glass { fill: #cce5ff; stroke: #666; stroke-width: 2; }
+    .window-mullion { stroke: #333; stroke-width: 4; }
+    .roof { fill: url(#shingle-pattern); stroke: #333; stroke-width: 10; }
+    .roof-line { fill: none; stroke: #333; stroke-width: 10; }
+    .level-line { stroke: #999; stroke-width: 2; stroke-dasharray: 50,25; }
+    .level-line-major { stroke: #666; stroke-width: 4; stroke-dasharray: none; }
+    .level-text { font-family: Arial, sans-serif; font-size: 200px; fill: #666; }
+    .title { font-family: Arial, sans-serif; font-size: 400px; font-weight: bold; fill: #333; }
+    .dimension { font-family: Arial, sans-serif; font-size: 180px; fill: #333; }
+    .ground { fill: url(#ground-pattern); }
+    .grade-line { stroke: #666; stroke-width: 8; }
+    .shadow { fill: rgba(0,0,0,0.15); }
   </style>''')
 
-    # Ground indication
-    ground_y = ty(0)
-    lines.append(f'  <rect x="{tx(0) - 20}" y="{ground_y}" width="{elevation.width * scale + 40}" height="20" class="ground"/>')
-    lines.append(f'  <line x1="{tx(0) - 20}" y1="{ground_y}" x2="{tx(elevation.width) + 20}" y2="{ground_y}" class="grade-line"/>')
+    # Use a transform group to flip Y axis (SVG Y goes down, elevation Y goes up)
+    # The elevation is drawn with Y=0 at ground, positive Y going up
+    # We flip around Y=0 and then translate to position correctly
+    flip_y = elevation.height + 500  # Flip point
 
-    # Draw walls
+    lines.append(f'<!-- Elevation drawing (Y-flipped) -->')
+    lines.append(f'<g transform="translate(0, {flip_y}) scale(1, -1)">')
+
+    # Calculate shadow offset (sun from upper left)
+    shadow_dx = 300
+    shadow_dy = -200  # Negative because Y is flipped
+
+    # Draw building shadow on ground first (behind everything)
+    if elevation.walls:
+        # Get building bounds
+        min_x = min(w.start_x for w in elevation.walls)
+        max_x = max(w.end_x for w in elevation.walls)
+        max_y = max(w.top_y for w in elevation.walls)
+
+        # Shadow polygon on ground
+        shadow_points = [
+            f"{max_x:.0f},-200",  # Bottom right of building
+            f"{max_x + shadow_dx:.0f},-200",  # Shadow extends right
+            f"{max_x + shadow_dx:.0f},{-200 - shadow_dy:.0f}",  # Shadow depth
+            f"{min_x:.0f},-200"   # Back to building left
+        ]
+        lines.append(f'  <polygon points="{" ".join(shadow_points)}" class="shadow"/>')
+
+    # Ground indication
+    lines.append(f'  <rect x="-200" y="-500" width="{elevation.width + 400}" height="500" class="ground"/>')
+    lines.append(f'  <line x1="-200" y1="0" x2="{elevation.width + 200}" y2="0" class="grade-line"/>')
+
+    # Draw wall shadows (cast to the right)
     for wall in elevation.walls:
-        x1, x2 = tx(wall.start_x), tx(wall.end_x)
-        y1, y2 = ty(wall.bottom_y), ty(wall.top_y)
-        lines.append(f'  <rect x="{x1:.1f}" y="{y2:.1f}" width="{x2-x1:.1f}" height="{y1-y2:.1f}" class="wall"/>')
+        x = wall.start_x
+        y = wall.bottom_y
+        w = wall.end_x - wall.start_x
+        h = wall.top_y - wall.bottom_y
+        # Shadow offset polygon
+        shadow_points = [
+            f"{x + w:.0f},{y:.0f}",
+            f"{x + w + shadow_dx:.0f},{y + shadow_dy:.0f}",
+            f"{x + w + shadow_dx:.0f},{y + h + shadow_dy:.0f}",
+            f"{x + w:.0f},{y + h:.0f}"
+        ]
+        lines.append(f'  <polygon points="{" ".join(shadow_points)}" class="shadow"/>')
+
+    # Draw walls with material pattern
+    for wall in elevation.walls:
+        x = wall.start_x
+        y = wall.bottom_y
+        w = wall.end_x - wall.start_x
+        h = wall.top_y - wall.bottom_y
+        lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="wall"/>')
 
     # Draw openings
     for opening in elevation.openings:
-        x = tx(opening.center_x - opening.width / 2)
-        y = ty(opening.top_y)
-        w = opening.width * scale
-        h = (opening.top_y - opening.bottom_y) * scale
+        x = opening.center_x - opening.width / 2
+        y = opening.bottom_y
+        w = opening.width
+        h = opening.top_y - opening.bottom_y
 
         if opening.is_door:
-            # Door with panel indication
-            lines.append(f'  <rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" class="door"/>')
+            # Door background
+            lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="door"/>')
+            # Door panels (raised panel effect)
+            panel_margin = 60
+            panel_h = (h - 3 * panel_margin) / 2
+            lines.append(f'  <rect x="{x + panel_margin:.0f}" y="{y + panel_margin:.0f}" width="{w - 2*panel_margin:.0f}" height="{panel_h:.0f}" class="door-panel"/>')
+            lines.append(f'  <rect x="{x + panel_margin:.0f}" y="{y + 2*panel_margin + panel_h:.0f}" width="{w - 2*panel_margin:.0f}" height="{panel_h:.0f}" class="door-panel"/>')
             # Door frame
-            frame_w = 3
-            lines.append(f'  <rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" class="window-frame"/>')
+            lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="window-frame"/>')
             # Door handle
             handle_x = x + w * 0.85
             handle_y = y + h * 0.5
-            lines.append(f'  <circle cx="{handle_x:.1f}" cy="{handle_y:.1f}" r="3" fill="#666"/>')
+            lines.append(f'  <circle cx="{handle_x:.0f}" cy="{handle_y:.0f}" r="40" fill="#666"/>')
+            # Threshold
+            lines.append(f'  <rect x="{x - 30:.0f}" y="{y - 30:.0f}" width="{w + 60:.0f}" height="30" fill="#888"/>')
         else:
-            # Window with glass and frame
-            lines.append(f'  <rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" class="window-glass"/>')
-            lines.append(f'  <rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" class="window-frame"/>')
+            # Window with shadow indent effect
+            # Outer shadow (recessed look)
+            lines.append(f'  <rect x="{x - 20:.0f}" y="{y - 20:.0f}" width="{w + 40:.0f}" height="{h + 40:.0f}" fill="rgba(0,0,0,0.1)"/>')
+            # Window glass
+            lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="window-glass"/>')
+            lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="window-frame"/>')
+            # Horizontal mullion
+            mid_y = y + h / 2
+            lines.append(f'  <line x1="{x:.0f}" y1="{mid_y:.0f}" x2="{x + w:.0f}" y2="{mid_y:.0f}" class="window-mullion"/>')
+            # Vertical mullion for double-hung style
+            mid_x = x + w / 2
+            lines.append(f'  <line x1="{mid_x:.0f}" y1="{y:.0f}" x2="{mid_x:.0f}" y2="{y + h:.0f}" class="window-mullion"/>')
+            # Window sill with depth
+            lines.append(f'  <rect x="{x - 50:.0f}" y="{y - 40:.0f}" width="{w + 100:.0f}" height="40" fill="#ddd" stroke="#333" stroke-width="4"/>')
+            # Window header
+            lines.append(f'  <rect x="{x - 30:.0f}" y="{y + h:.0f}" width="{w + 60:.0f}" height="60" fill="#ddd" stroke="#333" stroke-width="4"/>')
 
-            # Mullions for double-hung windows
-            if opening.opening_type in ['double_hung', 'sliding']:
-                # Horizontal meeting rail
-                mid_y = y + h / 2
-                lines.append(f'  <line x1="{x:.1f}" y1="{mid_y:.1f}" x2="{x + w:.1f}" y2="{mid_y:.1f}" class="window-mullion"/>')
+    # Draw roof as filled polygon if we have edges
+    if elevation.roof_edges:
+        # Find roof outline by collecting unique vertices at the top
+        roof_vertices = []
+        for edge in elevation.roof_edges:
+            roof_vertices.append((edge.start.x, edge.start.y))
+            roof_vertices.append((edge.end.x, edge.end.y))
 
-            # Window sill
-            sill_y = ty(opening.bottom_y)
-            lines.append(f'  <line x1="{x - 5:.1f}" y1="{sill_y:.1f}" x2="{x + w + 5:.1f}" y2="{sill_y:.1f}" stroke="#333" stroke-width="2"/>')
+        # Get bounding vertices for roof polygon
+        # For a simple gable, find the peak and eave points
+        if roof_vertices:
+            # Get min/max X and corresponding Y values
+            min_x_vertex = min(roof_vertices, key=lambda v: v[0])
+            max_x_vertex = max(roof_vertices, key=lambda v: v[0])
+            peak_vertex = max(roof_vertices, key=lambda v: v[1])
 
-    # Draw roof profile
-    for edge in elevation.roof_edges:
-        x1, y1 = tx(edge.start.x), ty(edge.start.y)
-        x2, y2 = tx(edge.end.x), ty(edge.end.y)
-        lines.append(f'  <line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" class="roof"/>')
+            # Simple triangular roof fill
+            roof_points = [
+                f"{min_x_vertex[0]:.0f},{min_x_vertex[1]:.0f}",
+                f"{peak_vertex[0]:.0f},{peak_vertex[1]:.0f}",
+                f"{max_x_vertex[0]:.0f},{max_x_vertex[1]:.0f}"
+            ]
+            lines.append(f'  <polygon points="{" ".join(roof_points)}" class="roof"/>')
 
-    # Draw level markers
-    marker_x = margin / 2
+        # Draw roof edge lines on top
+        for edge in elevation.roof_edges:
+            lines.append(f'  <line x1="{edge.start.x:.0f}" y1="{edge.start.y:.0f}" x2="{edge.end.x:.0f}" y2="{edge.end.y:.0f}" class="roof-line"/>')
+
+    lines.append('</g>')
+
+    # Level markers (outside the flipped group so text is right-side up)
+    marker_x = -margin + 500
     for marker in elevation.level_markers:
-        y = ty(marker.y)
+        y = flip_y - marker.y  # Convert to SVG Y
         line_class = "level-line-major" if marker.is_major else "level-line"
 
         # Level line
-        lines.append(f'  <line x1="{marker_x}" y1="{y:.1f}" x2="{tx(elevation.width) + 20}" y2="{y:.1f}" class="{line_class}"/>')
+        lines.append(f'<line x1="{marker_x}" y1="{y:.0f}" x2="{elevation.width + 200}" y2="{y:.0f}" class="{line_class}"/>')
 
-        # Level symbol (circle with line)
+        # Level symbol
         if marker.is_major:
-            lines.append(f'  <circle cx="{marker_x}" cy="{y:.1f}" r="8" fill="white" stroke="#333" stroke-width="1"/>')
-            lines.append(f'  <text x="{marker_x}" y="{y + 3:.1f}" text-anchor="middle" class="dimension">{marker.y/1000:.1f}</text>')
+            lines.append(f'<circle cx="{marker_x}" cy="{y:.0f}" r="150" fill="white" stroke="#333" stroke-width="4"/>')
+            lines.append(f'<text x="{marker_x}" y="{y + 60:.0f}" text-anchor="middle" class="dimension">{marker.y/1000:.1f}</text>')
 
         # Label
-        lines.append(f'  <text x="{marker_x + 15}" y="{y - 5:.1f}" class="level-text">{marker.label}</text>')
+        lines.append(f'<text x="{marker_x + 250}" y="{y - 80:.0f}" class="level-text">{marker.label}</text>')
 
-    # Title
-    lines.append(f'  <text x="{svg_width / 2}" y="25" text-anchor="middle" class="title">{elevation.direction.upper()} ELEVATION</text>')
+    # Title (in model space)
+    lines.append(f'<text x="{elevation.width/2}" y="{-margin + 600}" text-anchor="middle" class="title">{elevation.direction.upper()} ELEVATION</text>')
 
     # Scale bar
-    scale_bar_y = svg_height - 20
-    scale_bar_x = svg_width / 2 - 50
-    scale_length = 1000 * scale  # 1 meter
-    lines.append(f'  <line x1="{scale_bar_x}" y1="{scale_bar_y}" x2="{scale_bar_x + scale_length}" y2="{scale_bar_y}" stroke="#333" stroke-width="2"/>')
-    lines.append(f'  <line x1="{scale_bar_x}" y1="{scale_bar_y - 5}" x2="{scale_bar_x}" y2="{scale_bar_y + 5}" stroke="#333" stroke-width="2"/>')
-    lines.append(f'  <line x1="{scale_bar_x + scale_length}" y1="{scale_bar_y - 5}" x2="{scale_bar_x + scale_length}" y2="{scale_bar_y + 5}" stroke="#333" stroke-width="2"/>')
-    lines.append(f'  <text x="{scale_bar_x + scale_length/2}" y="{scale_bar_y - 8}" text-anchor="middle" class="dimension">1m</text>')
+    sb_x = elevation.width / 2 - 500
+    sb_y = elevation.height + 800
+    lines.append(f'<line x1="{sb_x}" y1="{sb_y}" x2="{sb_x + 1000}" y2="{sb_y}" stroke="#333" stroke-width="8"/>')
+    lines.append(f'<line x1="{sb_x}" y1="{sb_y - 50}" x2="{sb_x}" y2="{sb_y + 50}" stroke="#333" stroke-width="8"/>')
+    lines.append(f'<line x1="{sb_x + 1000}" y1="{sb_y - 50}" x2="{sb_x + 1000}" y2="{sb_y + 50}" stroke="#333" stroke-width="8"/>')
+    lines.append(f'<text x="{sb_x + 500}" y="{sb_y - 100}" text-anchor="middle" class="dimension">1m</text>')
 
     # Title block
     if project_info:
