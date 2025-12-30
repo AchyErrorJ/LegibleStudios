@@ -5,8 +5,9 @@ Displays generated drawing sheets with:
 - SVG rendering using QSvgRenderer
 - Zoom/pan controls matching PlanView
 - Clickable reference markers for navigation
+- Editable dimension annotations
 """
-from typing import Optional
+from typing import Optional, List, Dict
 
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsRectItem,
@@ -18,6 +19,8 @@ from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtSvgWidgets import QGraphicsSvgItem
 
 from sheets.models import SheetConfig
+from sheets.dimension_item import DimensionItem, DimensionData
+from sheets.svg_parser import parse_svg_dimensions, remove_dimensions_from_svg, apply_dimension_overrides
 from app.config import Config
 
 
@@ -26,11 +29,12 @@ class SheetView(QGraphicsView):
     SVG drawing viewer with zoom/pan support.
 
     Displays generated SVG content from drawing sheets with
-    interactive navigation features.
+    interactive navigation features and editable dimensions.
     """
 
     # Signals
     reference_clicked = pyqtSignal(str)  # target_sheet_id
+    dimension_changed = pyqtSignal(str, str, str)  # sheet_id, dimension_id, new_value
 
     def __init__(self, config: Config, parent=None):
         super().__init__(parent)
@@ -38,6 +42,10 @@ class SheetView(QGraphicsView):
         self._sheet: Optional[SheetConfig] = None
         self._svg_item: Optional[QGraphicsSvgItem] = None
         self._renderer: Optional[QSvgRenderer] = None
+
+        # Editable dimensions
+        self._dimension_items: List[DimensionItem] = []
+        self._dimensions_enabled = True  # Toggle for editable dimensions
 
         # Create scene
         self._scene = QGraphicsScene(self)
@@ -111,6 +119,49 @@ class SheetView(QGraphicsView):
         self._show_placeholder("No drawing loaded")
 
     # =========================================================================
+    # Dimension Editing
+    # =========================================================================
+
+    @property
+    def dimensions_enabled(self) -> bool:
+        """Check if editable dimensions are enabled."""
+        return self._dimensions_enabled
+
+    @dimensions_enabled.setter
+    def dimensions_enabled(self, enabled: bool):
+        """Enable or disable editable dimensions."""
+        if self._dimensions_enabled != enabled:
+            self._dimensions_enabled = enabled
+            # Reload if we have content
+            if self._sheet and self._sheet.svg_content:
+                self._load_svg(self._sheet.svg_content)
+
+    @property
+    def dimension_items(self) -> List[DimensionItem]:
+        """Get list of dimension items."""
+        return list(self._dimension_items)
+
+    def get_dimension_overrides(self) -> Dict[str, str]:
+        """Get all dimension overrides for the current sheet."""
+        if self._sheet:
+            return dict(self._sheet.dimension_overrides)
+        return {}
+
+    def clear_all_overrides(self):
+        """Clear all dimension overrides and restore original values."""
+        if self._sheet:
+            self._sheet.dimension_overrides.clear()
+            # Reload to apply
+            if self._sheet.svg_content:
+                self._load_svg(self._sheet.svg_content)
+
+    def clear_selected_overrides(self):
+        """Clear overrides for selected dimension items."""
+        for item in self._dimension_items:
+            if item.isSelected():
+                item.clear_override()
+
+    # =========================================================================
     # Zoom/Pan
     # =========================================================================
 
@@ -178,6 +229,19 @@ class SheetView(QGraphicsView):
         self._clear()
 
         try:
+            # Extract dimensions for editable overlay
+            if self._dimensions_enabled:
+                dimensions = parse_svg_dimensions(svg_content)
+
+                # Apply any saved overrides
+                if self._sheet and self._sheet.dimension_overrides:
+                    apply_dimension_overrides(dimensions, self._sheet.dimension_overrides)
+
+                # Remove dimensions from base SVG to avoid double-rendering
+                svg_content = remove_dimensions_from_svg(svg_content)
+            else:
+                dimensions = []
+
             # Create renderer from SVG content
             svg_bytes = QByteArray(svg_content.encode('utf-8'))
             self._renderer = QSvgRenderer(svg_bytes)
@@ -190,6 +254,9 @@ class SheetView(QGraphicsView):
             self._svg_item = QGraphicsSvgItem()
             self._svg_item.setSharedRenderer(self._renderer)
             self._scene.addItem(self._svg_item)
+
+            # Create editable dimension items
+            self._create_dimension_items(dimensions)
 
             # Fit to view
             self.zoom_fit()
@@ -204,12 +271,44 @@ class SheetView(QGraphicsView):
             self._svg_item = None
         self._renderer = None
 
+        # Clear dimension items
+        for dim_item in self._dimension_items:
+            if dim_item.scene():
+                self._scene.removeItem(dim_item)
+        self._dimension_items.clear()
+
         # Clear placeholder if any
         if self._placeholder_text:
             self._scene.removeItem(self._placeholder_text)
             self._placeholder_text = None
 
         self._scene.clear()
+
+    def _create_dimension_items(self, dimensions: List[DimensionData]):
+        """Create editable dimension overlay items."""
+        for dim_data in dimensions:
+            dim_item = DimensionItem(dim_data, on_changed=self._on_dimension_changed)
+            self._scene.addItem(dim_item)
+            self._dimension_items.append(dim_item)
+
+    def _on_dimension_changed(self, dim_data: DimensionData):
+        """Handle dimension value change."""
+        if not self._sheet:
+            return
+
+        # Update the sheet's dimension overrides
+        if dim_data.is_overridden:
+            self._sheet.dimension_overrides[dim_data.id] = dim_data.override_text
+        else:
+            # Remove override if cleared
+            self._sheet.dimension_overrides.pop(dim_data.id, None)
+
+        # Emit signal for external handlers
+        self.dimension_changed.emit(
+            self._sheet.id,
+            dim_data.id,
+            dim_data.override_text or dim_data.original_text
+        )
 
     def _show_placeholder(self, message: str):
         """Show a placeholder message."""

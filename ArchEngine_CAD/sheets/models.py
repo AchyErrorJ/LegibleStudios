@@ -91,6 +91,7 @@ class SheetConfig:
     last_generated: Optional[datetime] = None
     references_out: List[DrawingReference] = field(default_factory=list)  # Markers on this sheet
     references_in: List[DrawingReference] = field(default_factory=list)   # Sheets referencing this
+    dimension_overrides: Dict[str, str] = field(default_factory=dict)     # Editable dimension overrides
 
     @property
     def category(self) -> str:
@@ -125,6 +126,7 @@ class SheetConfig:
             'last_generated': self.last_generated.isoformat() if self.last_generated else None,
             'references_out': [ref.to_dict() for ref in self.references_out],
             'references_in': [ref.to_dict() for ref in self.references_in],
+            'dimension_overrides': self.dimension_overrides,
             # Note: svg_content not saved - regenerated on load
         }
 
@@ -141,6 +143,7 @@ class SheetConfig:
             last_generated=datetime.fromisoformat(data['last_generated']) if data.get('last_generated') else None,
             references_out=[DrawingReference.from_dict(r) for r in data.get('references_out', [])],
             references_in=[DrawingReference.from_dict(r) for r in data.get('references_in', [])],
+            dimension_overrides=data.get('dimension_overrides', {}),
         )
 
 
