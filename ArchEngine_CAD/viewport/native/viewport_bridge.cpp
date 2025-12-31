@@ -14,6 +14,9 @@
 #ifndef GL_RGBA8
 #define GL_RGBA8 0x8058
 #endif
+#ifndef GL_SRGB8_ALPHA8
+#define GL_SRGB8_ALPHA8 0x8C43
+#endif
 #ifndef GL_TEXTURE_2D
 #define GL_TEXTURE_2D 0x0DE1
 #endif
@@ -180,6 +183,8 @@ bool ViewportBridge::openSharedTexture(const char* handleName, int w, int h)
 
     if (!d3dDevice)
     {
+        fprintf(stderr, "[ViewportBridge] No D3D device\n");
+        fflush(stderr);
         return false;
     }
 
@@ -190,11 +195,16 @@ bool ViewportBridge::openSharedTexture(const char* handleName, int w, int h)
     HRESULT hr = device->QueryInterface(__uuidof(ID3D11Device1), reinterpret_cast<void**>(&device1));
     if (FAILED(hr))
     {
+        fprintf(stderr, "[ViewportBridge] QueryInterface ID3D11Device1 failed: 0x%08X\n", hr);
+        fflush(stderr);
         return false;
     }
 
     // Build handle name
     std::wstring wHandleName(handleName, handleName + strlen(handleName));
+
+    fprintf(stderr, "[ViewportBridge] Opening shared texture: %s (%dx%d)\n", handleName, w, h);
+    fflush(stderr);
 
     // Open shared texture by name
     hr = device1->OpenSharedResourceByName(
@@ -207,18 +217,27 @@ bool ViewportBridge::openSharedTexture(const char* handleName, int w, int h)
 
     if (FAILED(hr))
     {
+        fprintf(stderr, "[ViewportBridge] OpenSharedResourceByName failed: 0x%08X\n", hr);
+        fflush(stderr);
         return false;
     }
+
+    fprintf(stderr, "[ViewportBridge] Shared texture opened successfully\n");
+    fflush(stderr);
 
     // Get keyed mutex
     ID3D11Texture2D* texture = static_cast<ID3D11Texture2D*>(sharedTexture);
     hr = texture->QueryInterface(__uuidof(IDXGIKeyedMutex), &keyedMutex);
     if (FAILED(hr))
     {
+        fprintf(stderr, "[ViewportBridge] QueryInterface IDXGIKeyedMutex failed: 0x%08X\n", hr);
+        fflush(stderr);
         texture->Release();
         sharedTexture = nullptr;
         return false;
     }
+    fprintf(stderr, "[ViewportBridge] Got keyed mutex\n");
+    fflush(stderr);
 
     width = w;
     height = h;
@@ -237,12 +256,18 @@ bool ViewportBridge::openSharedTexture(const char* handleName, int w, int h)
     device->CreateTexture2D(&stagingDesc, nullptr, reinterpret_cast<ID3D11Texture2D**>(&stagingTexture));
 
     // Create GL texture
+    fprintf(stderr, "[ViewportBridge] Creating GL texture...\n");
+    fflush(stderr);
     if (!createGLTexture())
     {
+        fprintf(stderr, "[ViewportBridge] createGLTexture failed!\n");
+        fflush(stderr);
         closeSharedTexture();
         return false;
     }
 
+    fprintf(stderr, "[ViewportBridge] openSharedTexture complete!\n");
+    fflush(stderr);
     return true;
 }
 
@@ -274,6 +299,10 @@ void ViewportBridge::closeSharedTexture()
 
 bool ViewportBridge::createGLTexture()
 {
+    fprintf(stderr, "[ViewportBridge] createGLTexture: hardwareInterop=%d, interopDevice=%p\n",
+            hardwareInterop, interopDevice);
+    fflush(stderr);
+
     // Generate OpenGL texture
     glGenTextures(1, &glTexture);
     glBindTexture(GL_TEXTURE_2D, glTexture);
@@ -285,6 +314,9 @@ bool ViewportBridge::createGLTexture()
     if (hardwareInterop && interopDevice)
     {
         // Register D3D texture with OpenGL
+        fprintf(stderr, "[ViewportBridge] Attempting hardware interop registration...\n");
+        fflush(stderr);
+
         auto registerObject = reinterpret_cast<PFNWGLDXREGISTEROBJECTNVPROC>(wglDXRegisterObjectNV);
         glHandle = registerObject(
             interopDevice,
@@ -296,18 +328,31 @@ bool ViewportBridge::createGLTexture()
 
         if (!glHandle)
         {
-            glDeleteTextures(1, &glTexture);
-            glTexture = 0;
-            return false;
+            fprintf(stderr, "[ViewportBridge] Hardware interop registration failed! Falling back to CPU copy.\n");
+            fflush(stderr);
+
+            // Fall back to CPU copy mode instead of failing
+            hardwareInterop = false;
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        }
+        else
+        {
+            fprintf(stderr, "[ViewportBridge] Hardware interop registration succeeded, glHandle=%p\n", glHandle);
+            fflush(stderr);
         }
     }
     else
     {
         // Allocate texture storage for CPU fallback
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        // Use GL_SRGB8_ALPHA8 for correct gamma handling (UE5 outputs sRGB)
+        fprintf(stderr, "[ViewportBridge] Using CPU copy mode (sRGB)\n");
+        fflush(stderr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     }
 
     glBindTexture(GL_TEXTURE_2D, 0);
+    fprintf(stderr, "[ViewportBridge] GL texture created: %u\n", glTexture);
+    fflush(stderr);
     return true;
 }
 
@@ -334,11 +379,18 @@ bool ViewportBridge::acquireTexture()
         return false;
     }
 
-    // Acquire keyed mutex (key 1 = consumer)
+    // Acquire keyed mutex (key 1 = consumer) with longer timeout
+    // UE5 releases key 1 after each frame copy, we need to catch it
     IDXGIKeyedMutex* mutex = static_cast<IDXGIKeyedMutex*>(keyedMutex);
-    HRESULT hr = mutex->AcquireSync(1, 0);
+    HRESULT hr = mutex->AcquireSync(1, 100);  // Wait up to 100ms for better sync
     if (hr == WAIT_TIMEOUT || FAILED(hr))
     {
+        static int timeoutCount = 0;
+        if (++timeoutCount % 100 == 1)
+        {
+            fprintf(stderr, "[ViewportBridge] Mutex acquire timeout #%d (hr=0x%08X)\n", timeoutCount, hr);
+            fflush(stderr);
+        }
         return false;
     }
 
@@ -351,6 +403,70 @@ bool ViewportBridge::acquireTexture()
         {
             mutex->ReleaseSync(0);
             return false;
+        }
+    }
+    else if (!hardwareInterop && stagingTexture && d3dContext)
+    {
+        // CPU fallback: copy D3D texture to staging, then upload to OpenGL
+        ID3D11DeviceContext* context = static_cast<ID3D11DeviceContext*>(d3dContext);
+        ID3D11Texture2D* src = static_cast<ID3D11Texture2D*>(sharedTexture);
+        ID3D11Texture2D* staging = static_cast<ID3D11Texture2D*>(stagingTexture);
+
+        // Copy to staging
+        context->CopyResource(staging, src);
+
+        // Map and upload to GL
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        hr = context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
+        if (SUCCEEDED(hr))
+        {
+            // Debug: log first successful copy and check data
+            static int copyCount = 0;
+            copyCount++;
+            if (copyCount <= 3 || copyCount % 100 == 0)
+            {
+                // Check first few pixels
+                uint8_t* pixels = static_cast<uint8_t*>(mapped.pData);
+                uint32_t sum = 0;
+                for (int i = 0; i < 1000 && i < width * height * 4; i++)
+                {
+                    sum += pixels[i];
+                }
+                fprintf(stderr, "[ViewportBridge] CPU copy #%d: %dx%d, pitch=%u, checksum=%u\n",
+                        copyCount, width, height, mapped.RowPitch, sum);
+                fflush(stderr);
+            }
+
+            // Handle row pitch mismatch - D3D may have padding
+            if (mapped.RowPitch == width * 4)
+            {
+                // Direct upload
+                glBindTexture(GL_TEXTURE_2D, glTexture);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height,
+                               GL_RGBA, GL_UNSIGNED_BYTE, mapped.pData);
+                glBindTexture(GL_TEXTURE_2D, 0);
+            }
+            else
+            {
+                // Row-by-row upload with pitch handling
+                glBindTexture(GL_TEXTURE_2D, glTexture);
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, mapped.RowPitch / 4);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height,
+                               GL_RGBA, GL_UNSIGNED_BYTE, mapped.pData);
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                glBindTexture(GL_TEXTURE_2D, 0);
+            }
+            context->Unmap(staging, 0);
+        }
+        else
+        {
+            static bool errorLogged = false;
+            if (!errorLogged)
+            {
+                fprintf(stderr, "[ViewportBridge] Map failed: 0x%08X\n", hr);
+                fflush(stderr);
+                errorLogged = false;
+            }
         }
     }
 

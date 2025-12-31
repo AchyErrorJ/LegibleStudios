@@ -4,6 +4,7 @@
 #include "Framework/ArchViewerPawn.h"
 #include "Framework/ArchViewerController.h"
 #include "Framework/ArchViewerHUD.h"
+#include "Integration/ArchTextureShareComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Engine/World.h"
 
@@ -27,6 +28,14 @@ void AArchViewerGameMode::BeginPlay()
 	Super::BeginPlay();
 
 	UE_LOG(LogTemp, Log, TEXT("ArchViewerGameMode: BeginPlay"));
+
+	// Create texture share component for CAD integration
+	TextureShareComponent = NewObject<UArchTextureShareComponent>(this);
+	if (TextureShareComponent)
+	{
+		TextureShareComponent->RegisterComponent();
+		UE_LOG(LogTemp, Log, TEXT("ArchViewerGameMode: Created TextureShareComponent"));
+	}
 }
 
 void AArchViewerGameMode::StartPlay()
