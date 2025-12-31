@@ -1079,6 +1079,8 @@ class WallItem(QGraphicsItem):
                 self.wall.end
             )
             self.document.undo_stack.push(cmd)
+            # Notify 3D viewport of change
+            self.document.document_changed.emit()
 
         # Clear tracking
         self._drag_old_start = None

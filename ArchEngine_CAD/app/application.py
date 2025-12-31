@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QMessageBox, QWidget, QVBoxLayout,
     QSplitter, QLabel
 )
-from PyQt6.QtCore import Qt, QSettings
+from PyQt6.QtCore import Qt, QSettings, QTimer
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 
 from app.config import Config
@@ -79,6 +79,12 @@ class ArchEngineApplication(QMainWindow):
                 print("[App] VulkanSync client initialized, connecting...")
             except Exception as e:
                 print(f"[App] VulkanSync init failed: {e}")
+
+        # Throttle timer for 3D viewport updates (prevents lag during dragging)
+        self._viewport_update_timer = QTimer(self)
+        self._viewport_update_timer.setSingleShot(True)
+        self._viewport_update_timer.setInterval(50)  # 50ms debounce
+        self._viewport_update_timer.timeout.connect(self._do_viewport_update)
 
         self._setup_window()
         self._create_actions()
@@ -642,30 +648,37 @@ class ArchEngineApplication(QMainWindow):
     def _on_document_changed_livesync(self):
         """Send document changes to UE5 via LiveSync."""
         if self._livesync_server and self._livesync_server.client_count > 0:
-            data = self.document._data  # Get raw building data
+            data = self.document.get_data()
             self._livesync_server.send_building_data(data)
 
     def _on_document_changed_vulkan(self):
         """Send document changes to Vulkan renderer via VulkanSync."""
         if self._vulkan_sync and self._vulkan_sync.is_connected:
-            data = self.document._data  # Get raw building data
+            data = self.document.get_data()
             self._vulkan_sync.send_building_data(data)
 
     def _on_vulkan_connected(self):
         """Handle Vulkan renderer connection."""
         self.status_bar.showMessage("Connected to Vulkan renderer", 5000)
         # Send current building data immediately
-        if self.document._data:
-            self._vulkan_sync.send_building_data(self.document._data)
+        data = self.document.get_data()
+        if data:
+            self._vulkan_sync.send_building_data(data)
 
     def _on_vulkan_disconnected(self):
         """Handle Vulkan renderer disconnection."""
         self.status_bar.showMessage("Vulkan renderer disconnected", 3000)
 
     def _on_document_changed_viewport(self):
-        """Send document changes to embedded Vulkan viewport."""
+        """Schedule throttled update to embedded Vulkan viewport."""
         if HAS_VIEWPORT and hasattr(self, 'viewport_3d') and self.viewport_3d.is_initialized:
-            data = self.document._data
+            # Restart timer - only update after 50ms of no changes
+            self._viewport_update_timer.start()
+
+    def _do_viewport_update(self):
+        """Actually send data to viewport (called by throttle timer)."""
+        if HAS_VIEWPORT and hasattr(self, 'viewport_3d') and self.viewport_3d.is_initialized:
+            data = self.document.get_data()
             if data:
                 self.viewport_3d.load_json(data)
 
@@ -673,8 +686,9 @@ class ArchEngineApplication(QMainWindow):
         """Handle viewport initialization complete."""
         self.status_bar.showMessage("3D Viewport ready", 3000)
         # Load current document data if available
-        if self.document._data:
-            self.viewport_3d.load_json(self.document._data)
+        data = self.document.get_data()
+        if data:
+            self.viewport_3d.load_json(data)
 
     def _on_viewport_load_complete(self, element_count: int):
         """Handle viewport loaded building data."""
