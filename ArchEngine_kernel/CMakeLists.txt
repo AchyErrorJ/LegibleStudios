@@ -13,7 +13,7 @@ endif()
 # Compiler flags
 if(MSVC)
     add_compile_options(/W4 /permissive-)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -90,6 +90,8 @@ set(ENGINE_SOURCES
     src/instance_batch.cpp
     src/shadow_map.cpp
     src/environment_map.cpp
+    src/ipc_server.cpp
+    src/post_process.cpp
 )
 
 # Header files
@@ -111,7 +113,53 @@ set(ENGINE_HEADERS
     include/instance_batch.hpp
     include/shadow_map.hpp
     include/environment_map.hpp
+    include/ipc_server.hpp
+    include/post_process.hpp
 )
+
+# Library sources (excludes main.cpp, includes arch_api.cpp)
+set(LIB_SOURCES
+    src/window.cpp
+    src/memory.cpp
+    src/vulkan_context.cpp
+    src/pipeline.cpp
+    src/mesh.cpp
+    src/csg.cpp
+    src/renderer.cpp
+    src/physics_bridge.cpp
+    src/geometry_loader.cpp
+    src/imgui_layer.cpp
+    src/obc_engine.cpp
+    src/slicer_2d.cpp
+    src/qbd_interface.cpp
+    src/descriptor_manager.cpp
+    src/instance_batch.cpp
+    src/shadow_map.cpp
+    src/environment_map.cpp
+    src/ipc_server.cpp
+    src/post_process.cpp
+    src/arch_api.cpp
+)
+
+# Shared library (DLL) for embedding in Qt/Python
+add_library(ArchEngineLib SHARED ${LIB_SOURCES} ${ENGINE_HEADERS} ${IMGUI_SOURCES})
+
+target_include_directories(ArchEngineLib PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/external
+    ${Vulkan_INCLUDE_DIRS}
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+
+target_link_libraries(ArchEngineLib PRIVATE
+    Vulkan::Vulkan
+    glfw
+    glm
+    nlohmann_json::nlohmann_json
+)
+
+target_compile_definitions(ArchEngineLib PRIVATE ARCHENGINE_EXPORTS)
 
 # Main executable
 add_executable(ArchEngine ${ENGINE_SOURCES} ${ENGINE_HEADERS} ${IMGUI_SOURCES})

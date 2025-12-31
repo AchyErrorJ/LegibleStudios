@@ -7,7 +7,7 @@
 namespace arch {
 
 VulkanContext::VulkanContext(Window& window, const VulkanConfig& config)
-    : m_config(config), m_window(window) {
+    : m_config(config), m_window(&window), m_ownsInstance(true), m_ownsSurface(true) {
 
     createInstance();
     if (m_config.enableValidation) {
@@ -40,6 +40,40 @@ VulkanContext::VulkanContext(Window& window, const VulkanConfig& config)
     }
 }
 
+// Embedded mode constructor - uses external instance and surface
+VulkanContext::VulkanContext(VkInstance instance, VkSurfaceKHR surface, u32 width, u32 height, const VulkanConfig& config)
+    : m_config(config), m_window(nullptr), m_ownsInstance(false), m_ownsSurface(false),
+      m_embeddedWidth(width), m_embeddedHeight(height) {
+
+    m_instance = instance;
+    m_surface = surface;
+
+    // Skip instance and surface creation - use provided ones
+    pickPhysicalDevice();
+    createLogicalDevice();
+    createSwapchain();
+    createImageViews();
+    createCommandPool();
+    createPipelineCache();
+
+    // Determine MSAA sample count
+    if (m_config.enableMsaa) {
+        m_msaaSamples = getMaxUsableSampleCount();
+        if (m_msaaSamples > m_config.msaaSamples) {
+            m_msaaSamples = m_config.msaaSamples;
+        }
+        std::cout << "MSAA enabled with " << m_msaaSamples << "x samples" << std::endl;
+    }
+
+    createDepthResources();
+
+    if (m_config.enableMsaa) {
+        createMsaaResources();
+    }
+
+    std::cout << "VulkanContext initialized in embedded mode (" << width << "x" << height << ")" << std::endl;
+}
+
 VulkanContext::~VulkanContext() {
     savePipelineCache();
     cleanupSwapchain();
@@ -50,16 +84,21 @@ VulkanContext::~VulkanContext() {
     vkDestroyCommandPool(m_device, m_commandPool, nullptr);
     vkDestroyDevice(m_device, nullptr);
 
-    if (m_config.enableValidation) {
+    if (m_config.enableValidation && m_ownsInstance) {
         auto func = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
             vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT"));
-        if (func) {
+        if (func && m_debugMessenger != VK_NULL_HANDLE) {
             func(m_instance, m_debugMessenger, nullptr);
         }
     }
 
-    vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
-    vkDestroyInstance(m_instance, nullptr);
+    // Only destroy surface/instance if we created them
+    if (m_ownsSurface && m_surface != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+    }
+    if (m_ownsInstance && m_instance != VK_NULL_HANDLE) {
+        vkDestroyInstance(m_instance, nullptr);
+    }
 }
 
 void VulkanContext::createInstance() {
@@ -71,7 +110,7 @@ void VulkanContext::createInstance() {
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_2;
 
-    auto extensions = m_window.getRequiredExtensions();
+    auto extensions = m_window->getRequiredExtensions();
     if (m_config.enableValidation) {
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
@@ -118,7 +157,7 @@ void VulkanContext::setupDebugMessenger() {
 }
 
 void VulkanContext::createSurface() {
-    m_surface = m_window.createSurface(m_instance);
+    m_surface = m_window->createSurface(m_instance);
 }
 
 void VulkanContext::pickPhysicalDevice() {
@@ -298,10 +337,17 @@ void VulkanContext::cleanupSwapchain() {
 }
 
 void VulkanContext::recreateSwapchain() {
-    auto [width, height] = m_window.getFramebufferSize();
-    while (width == 0 || height == 0) {
-        m_window.waitEvents();
-        std::tie(width, height) = m_window.getFramebufferSize();
+    u32 width, height;
+    if (m_window) {
+        std::tie(width, height) = m_window->getFramebufferSize();
+        while (width == 0 || height == 0) {
+            m_window->waitEvents();
+            std::tie(width, height) = m_window->getFramebufferSize();
+        }
+    } else {
+        width = m_embeddedWidth;
+        height = m_embeddedHeight;
+        if (width == 0 || height == 0) return;
     }
 
     vkDeviceWaitIdle(m_device);
@@ -413,7 +459,14 @@ VkExtent2D VulkanContext::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capab
         return capabilities.currentExtent;
     }
 
-    auto [width, height] = m_window.getFramebufferSize();
+    u32 width, height;
+    if (m_window) {
+        std::tie(width, height) = m_window->getFramebufferSize();
+    } else {
+        width = m_embeddedWidth;
+        height = m_embeddedHeight;
+    }
+
     VkExtent2D extent = {width, height};
     extent.width = std::clamp(extent.width, capabilities.minImageExtent.width,
                               capabilities.maxImageExtent.width);
