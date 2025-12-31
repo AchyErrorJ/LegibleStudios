@@ -1,5 +1,6 @@
-// ArchTextureShareComponent.h - D3D11 shared texture component for Qt integration
+// ArchTextureShareComponent.h - D3D11/D3D12 shared texture component for Qt integration
 // Captures scene to a shared GPU texture accessible from external processes
+// Supports both D3D11 and D3D12 RHI - D3D12 uses CPU readback path
 
 #pragma once
 
@@ -149,6 +150,9 @@ private:
 	void* SharedTexture = nullptr;         // ID3D11Texture2D*
 	void* SharedTextureHandle = nullptr;   // HANDLE
 	void* KeyedMutex = nullptr;            // IDXGIKeyedMutex*
+	void* StagingTexture = nullptr;        // ID3D11Texture2D* for D3D12 CPU readback path
+	bool bOwnD3D11Device = false;          // True if we created our own D3D11 device (for D3D12 mode)
+	bool bUsingD3D12 = false;              // True if UE5 is running D3D12 RHI
 
 	// Frame timing
 	double LastCaptureTime = 0.0;
@@ -158,6 +162,12 @@ private:
 	// Diagnostics
 	FArchTextureShareDiagnostics Diagnostics;
 	double CopyStartTime = 0.0;
+
+	// Remote input state
+	bool bLeftMouseDown = false;
+	bool bRightMouseDown = false;
+	bool bMiddleMouseDown = false;
+	FVector2D LastMousePosition = FVector2D::ZeroVector;
 
 	// ============= INTERNAL METHODS =============
 

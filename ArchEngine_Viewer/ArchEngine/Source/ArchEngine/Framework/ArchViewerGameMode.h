@@ -7,6 +7,8 @@
 #include "GameFramework/GameModeBase.h"
 #include "ArchViewerGameMode.generated.h"
 
+class UArchTextureShareComponent;
+
 UCLASS()
 class ARCHENGINE_API AArchViewerGameMode : public AGameModeBase
 {
@@ -21,6 +23,10 @@ public:
 	// Find and focus on the building actor in the level
 	UFUNCTION(BlueprintCallable, Category = "ArchViewer")
 	void FocusOnBuilding();
+
+	// Texture share component for CAD integration
+	UPROPERTY()
+	TObjectPtr<UArchTextureShareComponent> TextureShareComponent;
 
 protected:
 	// Called when the game starts
