@@ -7,6 +7,7 @@
 #include "mesh.hpp"
 #include "shadow_map.hpp"
 #include "environment_map.hpp"
+#include "post_process.hpp"
 
 namespace arch {
 
@@ -33,6 +34,14 @@ public:
     // Rendering commands
     void beginRenderPass(vec4 clearColor = {0.1f, 0.1f, 0.15f, 1.0f});
     void endRenderPass();
+
+    // Post-processing render path (HDR -> SSAO -> Bloom -> Composite)
+    void setPostProcessingEnabled(bool enabled) { m_postProcessingEnabled = enabled; }
+    bool isPostProcessingEnabled() const { return m_postProcessingEnabled; }
+    void beginHDRRenderPass(vec4 clearColor = {0.1f, 0.1f, 0.15f, 1.0f});
+    void endHDRRenderPass();
+    void runPostProcessing();  // Runs SSAO and bloom passes
+    void beginCompositePass(); // Composites HDR+effects to swapchain, leaves render pass open for ImGui
 
     // Shadow pass - call before beginRenderPass
     void renderShadowPass(const std::vector<StructuralElement>& elements);
@@ -73,6 +82,33 @@ public:
     void setUseHdrEnvMap(bool use) { m_useHdrEnvMap = use; }
     bool getUseHdrEnvMap() const { return m_useHdrEnvMap; }
     bool hasHdrEnvMap() const { return m_envMap && m_envMap->isLoaded(); }
+
+    // SSAO settings
+    void setSSAOEnabled(bool enabled);
+    bool getSSAOEnabled() const { return m_ssaoEnabled; }
+    void setSSAORadius(f32 radius);
+    f32 getSSAORadius() const;
+    void setSSAOIntensity(f32 intensity);
+    f32 getSSAOIntensity() const;
+    void setSSAOBias(f32 bias);
+    f32 getSSAOBias() const;
+    PostProcess* getPostProcess() { return m_postProcess.get(); }
+
+    // Bloom settings
+    void setBloomEnabled(bool enabled);
+    bool getBloomEnabled() const { return m_bloomEnabled; }
+    void setBloomThreshold(f32 threshold);
+    f32 getBloomThreshold() const;
+    void setBloomIntensity(f32 intensity);
+    f32 getBloomIntensity() const;
+    void setBloomIterations(u32 iterations);
+    u32 getBloomIterations() const;
+
+    // Tonemapping settings
+    void setExposure(f32 exposure);
+    f32 getExposure() const;
+    void setTonemapMode(u32 mode);  // 0=Reinhard, 1=ACES, 2=Uncharted2
+    u32 getTonemapMode() const;
 
     // Section clipping settings
     void setClippingEnabled(bool enabled) { m_clippingEnabled = enabled; }
@@ -119,6 +155,13 @@ public:
     void setRoofEmission(f32 emission) { m_roofEmission = emission; }
     f32 getRoofEmission() const { return m_roofEmission; }
 
+    // Material style
+    void setMaterialStyle(MaterialStyle style) { m_materialStyle = style; applyMaterialStyle(); }
+    MaterialStyle getMaterialStyle() const { return m_materialStyle; }
+
+    // Get material preset for element type (based on current style)
+    MaterialPreset getMaterialForElement(ElementType type) const;
+
     // Access render pass for ImGui integration
     VkRenderPass getRenderPass() const { return m_renderPass; }
     VkCommandBuffer getCurrentCommandBuffer() const { return m_currentCommandBuffer; }
@@ -144,6 +187,9 @@ private:
 
     // Get element color based on visualization mode
     vec3 getElementColor(const StructuralElement& element, const Building& building, size_t index) const;
+
+    // Apply material style presets to current settings
+    void applyMaterialStyle();
 
     VulkanContext& m_context;
 
@@ -175,6 +221,10 @@ private:
     std::unique_ptr<Pipeline> m_pipeline;
     std::unique_ptr<Pipeline> m_wireframePipeline;
 
+    // HDR pipelines (for post-processing path - no MSAA, HDR render pass)
+    std::unique_ptr<Pipeline> m_hdrPipeline;
+    std::unique_ptr<Pipeline> m_hdrWireframePipeline;
+
     // Sky pipeline
     VkPipelineLayout m_skyPipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_skyPipeline = VK_NULL_HANDLE;
@@ -196,6 +246,9 @@ private:
     // Visualization mode
     VisualizationMode m_vizMode = VisualizationMode::Structural;
 
+    // Material style
+    MaterialStyle m_materialStyle = MaterialStyle::Clean;
+
     // Shadow mapping
     std::unique_ptr<ShadowMap> m_shadowMap;
     bool m_shadowsEnabled = true;
@@ -206,6 +259,12 @@ private:
     VkDescriptorSetLayout m_skyDescriptorSetLayout = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> m_skyDescriptorSets;
     bool m_useHdrEnvMap = false;
+
+    // Post-processing (SSAO, bloom, etc.)
+    std::unique_ptr<PostProcess> m_postProcess;
+    bool m_ssaoEnabled = true;
+    bool m_bloomEnabled = true;
+    bool m_postProcessingEnabled = false;  // Master switch for HDR pipeline (TODO: need HDR-compatible sky pipeline)
 
     // Section clipping
     bool m_clippingEnabled = false;

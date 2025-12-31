@@ -463,90 +463,171 @@ void applyStressColoring(std::vector<Vertex>& vertices, f32 stress) {
 
 std::pair<std::vector<Vertex>, std::vector<u32>>
 createDoor(vec3 position, f32 width, f32 height, f32 depth, vec3 color) {
-    // Door is essentially a column with a wood/door color
+    // Door with frame, panels, and handle
     std::vector<Vertex> vertices;
     std::vector<u32> indices;
 
     f32 hw = width * 0.5f;
     f32 hd = depth * 0.5f;
 
-    vec3 corners[8] = {
-        position + vec3(-hw, 0, -hd),
-        position + vec3(hw, 0, -hd),
-        position + vec3(hw, 0, hd),
-        position + vec3(-hw, 0, hd),
-        position + vec3(-hw, height, -hd),
-        position + vec3(hw, height, -hd),
-        position + vec3(hw, height, hd),
-        position + vec3(-hw, height, hd),
+    // Colors for different parts
+    vec3 frameColor = vec3(0.35f, 0.22f, 0.12f);  // Dark wood frame
+    vec3 panelColor = color;                       // Door panel color (passed in)
+    vec3 handleColor = vec3(0.7f, 0.55f, 0.2f);   // Brass/gold handle
+
+    // Frame dimensions
+    f32 frameWidth = 0.25f;  // Width of frame trim
+    f32 frameDepth = depth * 0.3f;  // Frame protrudes slightly
+
+    // Helper to add a box
+    auto addBox = [&](vec3 minP, vec3 maxP, vec3 boxColor) {
+        u32 base = static_cast<u32>(vertices.size());
+
+        // 8 corners
+        vec3 c[8] = {
+            {minP.x, minP.y, minP.z}, {maxP.x, minP.y, minP.z},
+            {maxP.x, minP.y, maxP.z}, {minP.x, minP.y, maxP.z},
+            {minP.x, maxP.y, minP.z}, {maxP.x, maxP.y, minP.z},
+            {maxP.x, maxP.y, maxP.z}, {minP.x, maxP.y, maxP.z}
+        };
+
+        auto addFace = [&](int i0, int i1, int i2, int i3, vec3 n) {
+            u32 b = static_cast<u32>(vertices.size());
+            vertices.push_back({c[i0], n, boxColor});
+            vertices.push_back({c[i1], n, boxColor});
+            vertices.push_back({c[i2], n, boxColor});
+            vertices.push_back({c[i3], n, boxColor});
+            indices.insert(indices.end(), {b, b+1, b+2, b, b+2, b+3});
+        };
+
+        addFace(0, 1, 5, 4, vec3(0, 0, -1));  // Front
+        addFace(2, 3, 7, 6, vec3(0, 0, 1));   // Back
+        addFace(3, 0, 4, 7, vec3(-1, 0, 0));  // Left
+        addFace(1, 2, 6, 5, vec3(1, 0, 0));   // Right
+        addFace(4, 5, 6, 7, vec3(0, 1, 0));   // Top
+        addFace(3, 2, 1, 0, vec3(0, -1, 0));  // Bottom
     };
 
-    auto addFace = [&](u32 i0, u32 i1, u32 i2, u32 i3, vec3 normal) {
-        u32 baseIndex = static_cast<u32>(vertices.size());
-        vertices.push_back({corners[i0], normal, color});
-        vertices.push_back({corners[i1], normal, color});
-        vertices.push_back({corners[i2], normal, color});
-        vertices.push_back({corners[i3], normal, color});
-        indices.push_back(baseIndex + 0);
-        indices.push_back(baseIndex + 1);
-        indices.push_back(baseIndex + 2);
-        indices.push_back(baseIndex + 0);
-        indices.push_back(baseIndex + 2);
-        indices.push_back(baseIndex + 3);
-    };
+    // Door frame - left vertical
+    addBox(position + vec3(-hw, 0, -hd),
+           position + vec3(-hw + frameWidth, height, hd),
+           frameColor);
 
-    addFace(0, 1, 5, 4, vec3(0, 0, -1));
-    addFace(2, 3, 7, 6, vec3(0, 0, 1));
-    addFace(3, 0, 4, 7, vec3(-1, 0, 0));
-    addFace(1, 2, 6, 5, vec3(1, 0, 0));
-    addFace(4, 5, 6, 7, vec3(0, 1, 0));
-    addFace(3, 2, 1, 0, vec3(0, -1, 0));
+    // Door frame - right vertical
+    addBox(position + vec3(hw - frameWidth, 0, -hd),
+           position + vec3(hw, height, hd),
+           frameColor);
+
+    // Door frame - top horizontal
+    addBox(position + vec3(-hw + frameWidth, height - frameWidth, -hd),
+           position + vec3(hw - frameWidth, height, hd),
+           frameColor);
+
+    // Main door panel (recessed slightly)
+    f32 panelInset = frameWidth * 0.5f;
+    addBox(position + vec3(-hw + frameWidth, 0, -hd + panelInset),
+           position + vec3(hw - frameWidth, height - frameWidth, hd - panelInset),
+           panelColor);
+
+    // Door handle (right side, at typical handle height ~3ft)
+    f32 handleHeight = 3.0f;  // 3 feet from ground
+    f32 handleSize = 0.15f;
+    if (handleHeight < height - frameWidth) {
+        addBox(position + vec3(hw - frameWidth - 0.4f, handleHeight - handleSize, hd - 0.1f),
+               position + vec3(hw - frameWidth - 0.1f, handleHeight + handleSize, hd + 0.15f),
+               handleColor);
+    }
 
     return {vertices, indices};
 }
 
 std::pair<std::vector<Vertex>, std::vector<u32>>
 createWindow(vec3 position, f32 width, f32 height, f32 depth, vec3 color) {
-    // Window with glass panel (semi-transparent blue tint)
+    // Window with frame, glass panel, and mullions
     std::vector<Vertex> vertices;
     std::vector<u32> indices;
 
     f32 hw = width * 0.5f;
     f32 hd = depth * 0.5f;
 
-    vec3 glassColor = color;
+    // Colors for different parts
+    vec3 frameColor = vec3(0.9f, 0.9f, 0.92f);  // White painted frame
+    vec3 glassColor = vec3(0.7f, 0.85f, 0.95f); // Light blue tinted glass
+    vec3 sillColor = vec3(0.85f, 0.85f, 0.87f); // Slightly darker sill
 
-    vec3 corners[8] = {
-        position + vec3(-hw, 0, -hd),
-        position + vec3(hw, 0, -hd),
-        position + vec3(hw, 0, hd),
-        position + vec3(-hw, 0, hd),
-        position + vec3(-hw, height, -hd),
-        position + vec3(hw, height, -hd),
-        position + vec3(hw, height, hd),
-        position + vec3(-hw, height, hd),
+    // Frame dimensions
+    f32 frameWidth = 0.15f;  // Width of frame trim
+    f32 mullionWidth = 0.08f; // Width of mullion dividers
+
+    // Helper to add a box
+    auto addBox = [&](vec3 minP, vec3 maxP, vec3 boxColor) {
+        u32 base = static_cast<u32>(vertices.size());
+
+        vec3 c[8] = {
+            {minP.x, minP.y, minP.z}, {maxP.x, minP.y, minP.z},
+            {maxP.x, minP.y, maxP.z}, {minP.x, minP.y, maxP.z},
+            {minP.x, maxP.y, minP.z}, {maxP.x, maxP.y, minP.z},
+            {maxP.x, maxP.y, maxP.z}, {minP.x, maxP.y, maxP.z}
+        };
+
+        auto addFace = [&](int i0, int i1, int i2, int i3, vec3 n) {
+            u32 b = static_cast<u32>(vertices.size());
+            vertices.push_back({c[i0], n, boxColor});
+            vertices.push_back({c[i1], n, boxColor});
+            vertices.push_back({c[i2], n, boxColor});
+            vertices.push_back({c[i3], n, boxColor});
+            indices.insert(indices.end(), {b, b+1, b+2, b, b+2, b+3});
+        };
+
+        addFace(0, 1, 5, 4, vec3(0, 0, -1));  // Front
+        addFace(2, 3, 7, 6, vec3(0, 0, 1));   // Back
+        addFace(3, 0, 4, 7, vec3(-1, 0, 0));  // Left
+        addFace(1, 2, 6, 5, vec3(1, 0, 0));   // Right
+        addFace(4, 5, 6, 7, vec3(0, 1, 0));   // Top
+        addFace(3, 2, 1, 0, vec3(0, -1, 0));  // Bottom
     };
 
-    auto addFace = [&](u32 i0, u32 i1, u32 i2, u32 i3, vec3 normal, vec3 faceColor) {
-        u32 baseIndex = static_cast<u32>(vertices.size());
-        vertices.push_back({corners[i0], normal, faceColor});
-        vertices.push_back({corners[i1], normal, faceColor});
-        vertices.push_back({corners[i2], normal, faceColor});
-        vertices.push_back({corners[i3], normal, faceColor});
-        indices.push_back(baseIndex + 0);
-        indices.push_back(baseIndex + 1);
-        indices.push_back(baseIndex + 2);
-        indices.push_back(baseIndex + 0);
-        indices.push_back(baseIndex + 2);
-        indices.push_back(baseIndex + 3);
-    };
+    // Window frame - left vertical
+    addBox(position + vec3(-hw, 0, -hd),
+           position + vec3(-hw + frameWidth, height, hd),
+           frameColor);
 
-    addFace(0, 1, 5, 4, vec3(0, 0, -1), glassColor);
-    addFace(2, 3, 7, 6, vec3(0, 0, 1), glassColor);
-    addFace(3, 0, 4, 7, vec3(-1, 0, 0), glassColor);
-    addFace(1, 2, 6, 5, vec3(1, 0, 0), glassColor);
-    addFace(4, 5, 6, 7, vec3(0, 1, 0), glassColor);
-    addFace(3, 2, 1, 0, vec3(0, -1, 0), glassColor);
+    // Window frame - right vertical
+    addBox(position + vec3(hw - frameWidth, 0, -hd),
+           position + vec3(hw, height, hd),
+           frameColor);
+
+    // Window frame - top horizontal
+    addBox(position + vec3(-hw + frameWidth, height - frameWidth, -hd),
+           position + vec3(hw - frameWidth, height, hd),
+           frameColor);
+
+    // Window sill - bottom horizontal (slightly thicker and protruding)
+    f32 sillProtrusion = 0.1f;
+    addBox(position + vec3(-hw - sillProtrusion, 0, -hd - sillProtrusion),
+           position + vec3(hw + sillProtrusion, frameWidth * 1.2f, hd),
+           sillColor);
+
+    // Glass pane (thin, recessed slightly)
+    f32 glassInset = depth * 0.3f;
+    addBox(position + vec3(-hw + frameWidth, frameWidth * 1.2f, -glassInset),
+           position + vec3(hw - frameWidth, height - frameWidth, glassInset),
+           glassColor);
+
+    // Add mullions (cross dividers) for classic window look
+    f32 innerWidth = width - 2.0f * frameWidth;
+    f32 innerHeight = height - frameWidth - frameWidth * 1.2f;
+
+    // Horizontal mullion (middle)
+    f32 midHeight = frameWidth * 1.2f + innerHeight * 0.5f;
+    addBox(position + vec3(-hw + frameWidth, midHeight - mullionWidth * 0.5f, -hd * 0.5f),
+           position + vec3(hw - frameWidth, midHeight + mullionWidth * 0.5f, hd * 0.5f),
+           frameColor);
+
+    // Vertical mullion (middle)
+    addBox(position + vec3(-mullionWidth * 0.5f, frameWidth * 1.2f, -hd * 0.5f),
+           position + vec3(mullionWidth * 0.5f, height - frameWidth, hd * 0.5f),
+           frameColor);
 
     return {vertices, indices};
 }

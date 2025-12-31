@@ -21,6 +21,11 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
     m_envMap = std::make_unique<EnvironmentMap>(m_context);
     m_envMap->createProceduralSky();
 
+    // Create post-processing pipeline (SSAO, bloom, etc.)
+    m_postProcess = std::make_unique<PostProcess>(m_context);
+    auto extent = m_context.getSwapchainExtent();
+    m_postProcess->initialize(extent.width, extent.height);
+
     createDescriptorPool();
     createUniformBuffers();
     createDescriptorSets();
@@ -34,6 +39,7 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
 Renderer::~Renderer() {
     m_context.waitIdle();
 
+    m_postProcess.reset();
     m_envMap.reset();
     m_shadowMap.reset();
     m_gridMesh.reset();
@@ -422,6 +428,29 @@ void Renderer::createPipeline() {
 
     m_wireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                                       "shaders/structural.frag.spv", wireframeConfig);
+
+    // Create HDR pipelines (no MSAA, uses HDR render pass from PostProcess)
+    if (m_postProcess) {
+        PipelineConfig hdrConfig = PipelineConfig::defaultConfig();
+        hdrConfig.renderPass = m_postProcess->getHDRRenderPass();
+        hdrConfig.pipelineLayout = m_pipelineLayout;
+        hdrConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;  // No MSAA for HDR
+
+        m_hdrPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                   "shaders/structural.frag.spv", hdrConfig);
+
+        // HDR wireframe pipeline
+        PipelineConfig hdrWireframeConfig = PipelineConfig::defaultConfig();
+        hdrWireframeConfig.renderPass = m_postProcess->getHDRRenderPass();
+        hdrWireframeConfig.pipelineLayout = m_pipelineLayout;
+        hdrWireframeConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        hdrWireframeConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+        hdrWireframeConfig.rasterization.lineWidth = 1.5f;
+        hdrWireframeConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+
+        m_hdrWireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                            "shaders/structural.frag.spv", hdrWireframeConfig);
+    }
 
     // Sky pipeline - renders fullscreen triangle behind everything
     createSkyPipeline();
@@ -842,6 +871,98 @@ void Renderer::endRenderPass() {
     vkCmdEndRenderPass(m_currentCommandBuffer);
 }
 
+void Renderer::beginHDRRenderPass(vec4 clearColor) {
+    if (!m_postProcess || !m_hdrPipeline) return;
+
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = m_postProcess->getHDRRenderPass();
+    renderPassInfo.framebuffer = m_postProcess->getHDRFramebuffer();
+    renderPassInfo.renderArea.offset = {0, 0};
+    renderPassInfo.renderArea.extent = m_context.getSwapchainExtent();
+
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{clearColor.r, clearColor.g, clearColor.b, clearColor.a}};
+    clearValues[1].depthStencil = {1.0f, 0};
+
+    renderPassInfo.clearValueCount = static_cast<u32>(clearValues.size());
+    renderPassInfo.pClearValues = clearValues.data();
+
+    vkCmdBeginRenderPass(m_currentCommandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    auto extent = m_context.getSwapchainExtent();
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<f32>(extent.width);
+    viewport.height = static_cast<f32>(extent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(m_currentCommandBuffer, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = extent;
+    vkCmdSetScissor(m_currentCommandBuffer, 0, 1, &scissor);
+
+    // Bind HDR-compatible pipeline based on visualization mode
+    if (m_vizMode == VisualizationMode::Wireframe) {
+        m_hdrWireframePipeline->bind(m_currentCommandBuffer);
+    } else {
+        m_hdrPipeline->bind(m_currentCommandBuffer);
+    }
+    vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
+}
+
+void Renderer::endHDRRenderPass() {
+    vkCmdEndRenderPass(m_currentCommandBuffer);
+}
+
+void Renderer::runPostProcessing() {
+    if (!m_postProcess) return;
+
+    auto extent = m_context.getSwapchainExtent();
+    f32 aspectRatio = static_cast<f32>(extent.width) / static_cast<f32>(extent.height);
+
+    // Compute view and projection matrices for SSAO
+    mat4 view = m_camera.getViewMatrix();
+    mat4 proj = m_camera.getProjectionMatrix(aspectRatio);
+    proj[1][1] *= -1;  // Flip Y for Vulkan
+
+    // Generate SSAO from HDR depth buffer
+    if (m_ssaoEnabled) {
+        m_postProcess->generateSSAO(
+            m_currentCommandBuffer,
+            m_postProcess->getHDRDepthView(),
+            nullptr,  // No separate normal buffer yet
+            proj,
+            view
+        );
+    }
+
+    // Generate bloom from HDR color buffer
+    if (m_bloomEnabled) {
+        m_postProcess->generateBloom(m_currentCommandBuffer);
+    }
+}
+
+void Renderer::beginCompositePass() {
+    if (!m_postProcess) return;
+
+    auto extent = m_context.getSwapchainExtent();
+
+    // Run composite pass - begins swapchain render pass but doesn't end it (for ImGui)
+    m_postProcess->composite(
+        m_currentCommandBuffer,
+        m_renderPass,
+        m_framebuffers[m_imageIndex],
+        extent,
+        true,   // Begin render pass
+        false   // Don't end render pass (ImGui will render, then endRenderPass)
+    );
+}
+
 void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) {
     if (!m_shadowMap || !m_shadowsEnabled || elements.empty()) {
         return;
@@ -1064,9 +1185,154 @@ vec3 Renderer::getElementColor(const StructuralElement& element, const Building&
         
         case VisualizationMode::Wireframe:
             return vec3(0.2f, 0.8f, 0.4f);
-            
+
         default:
             return StressColors::fromStress(element.stress);
+    }
+}
+
+void Renderer::applyMaterialStyle() {
+    switch (m_materialStyle) {
+        case MaterialStyle::Realistic: {
+            // Full PBR materials with realistic properties
+            auto wall = Materials::Drywall();
+            m_wallMetallic = wall.metallic;
+            m_wallRoughness = wall.roughness;
+            m_wallAO = wall.ao;
+            m_wallEmission = wall.emission;
+
+            auto roof = Materials::Asphalt();
+            m_roofMetallic = roof.metallic;
+            m_roofRoughness = roof.roughness;
+            m_roofAO = roof.ao;
+            m_roofEmission = roof.emission;
+
+            m_defaultMetallic = 0.0f;
+            m_defaultRoughness = 0.5f;
+            m_defaultAO = 1.0f;
+            m_defaultEmission = 0.0f;
+            break;
+        }
+        case MaterialStyle::Clean: {
+            // Clean matte surfaces
+            m_wallMetallic = 0.0f;
+            m_wallRoughness = 0.9f;
+            m_wallAO = 1.0f;
+            m_wallEmission = 0.0f;
+
+            m_roofMetallic = 0.0f;
+            m_roofRoughness = 0.85f;
+            m_roofAO = 1.0f;
+            m_roofEmission = 0.0f;
+
+            m_defaultMetallic = 0.0f;
+            m_defaultRoughness = 0.7f;
+            m_defaultAO = 1.0f;
+            m_defaultEmission = 0.0f;
+            break;
+        }
+        case MaterialStyle::Schematic: {
+            // Flat colors, no PBR effects
+            m_wallMetallic = 0.0f;
+            m_wallRoughness = 1.0f;
+            m_wallAO = 1.0f;
+            m_wallEmission = 0.0f;
+
+            m_roofMetallic = 0.0f;
+            m_roofRoughness = 1.0f;
+            m_roofAO = 1.0f;
+            m_roofEmission = 0.0f;
+
+            m_defaultMetallic = 0.0f;
+            m_defaultRoughness = 1.0f;
+            m_defaultAO = 1.0f;
+            m_defaultEmission = 0.0f;
+            break;
+        }
+        case MaterialStyle::Blueprint: {
+            // Blueprint style - all surfaces flat
+            m_wallMetallic = 0.0f;
+            m_wallRoughness = 1.0f;
+            m_wallAO = 1.0f;
+            m_wallEmission = 0.1f;  // Slight emission for blueprint glow
+
+            m_roofMetallic = 0.0f;
+            m_roofRoughness = 1.0f;
+            m_roofAO = 1.0f;
+            m_roofEmission = 0.1f;
+
+            m_defaultMetallic = 0.0f;
+            m_defaultRoughness = 1.0f;
+            m_defaultAO = 1.0f;
+            m_defaultEmission = 0.1f;
+            break;
+        }
+    }
+}
+
+MaterialPreset Renderer::getMaterialForElement(ElementType type) const {
+    switch (m_materialStyle) {
+        case MaterialStyle::Realistic:
+            switch (type) {
+                case ElementType::Beam:    return Materials::Steel();
+                case ElementType::Column:  return Materials::Concrete();
+                case ElementType::Floor:   return Materials::Hardwood();
+                case ElementType::Wall:    return Materials::Drywall();
+                case ElementType::Foundation: return Materials::Concrete();
+                case ElementType::Connection: return Materials::Steel();
+                case ElementType::Door:    return Materials::OakWood();
+                case ElementType::Window:  return Materials::Glass();
+                case ElementType::Roof:    return Materials::Asphalt();
+                default: return Materials::Concrete();
+            }
+
+        case MaterialStyle::Clean:
+            // Clean style: same colors but more matte
+            switch (type) {
+                case ElementType::Beam:    return {{0.6f, 0.65f, 0.7f}, 0.0f, 0.7f, 1.0f, 0.0f};
+                case ElementType::Column:  return {{0.6f, 0.6f, 0.6f}, 0.0f, 0.8f, 1.0f, 0.0f};
+                case ElementType::Floor:   return {{0.5f, 0.4f, 0.3f}, 0.0f, 0.7f, 1.0f, 0.0f};
+                case ElementType::Wall:    return {{0.9f, 0.88f, 0.85f}, 0.0f, 0.9f, 1.0f, 0.0f};
+                case ElementType::Foundation: return {{0.5f, 0.5f, 0.5f}, 0.0f, 0.85f, 1.0f, 0.0f};
+                case ElementType::Connection: return {{0.5f, 0.5f, 0.55f}, 0.0f, 0.6f, 1.0f, 0.0f};
+                case ElementType::Door:    return {{0.55f, 0.35f, 0.2f}, 0.0f, 0.75f, 1.0f, 0.0f};
+                case ElementType::Window:  return {{0.7f, 0.85f, 0.95f}, 0.0f, 0.3f, 1.0f, 0.0f};
+                case ElementType::Roof:    return {{0.35f, 0.35f, 0.38f}, 0.0f, 0.85f, 1.0f, 0.0f};
+                default: return {{0.6f, 0.6f, 0.6f}, 0.0f, 0.8f, 1.0f, 0.0f};
+            }
+
+        case MaterialStyle::Schematic:
+            // Schematic: flat colors for technical drawings
+            switch (type) {
+                case ElementType::Beam:    return {{0.3f, 0.3f, 0.8f}, 0.0f, 1.0f, 1.0f, 0.0f};  // Blue
+                case ElementType::Column:  return {{0.8f, 0.3f, 0.3f}, 0.0f, 1.0f, 1.0f, 0.0f};  // Red
+                case ElementType::Floor:   return {{0.7f, 0.7f, 0.7f}, 0.0f, 1.0f, 1.0f, 0.0f};  // Gray
+                case ElementType::Wall:    return {{0.95f, 0.95f, 0.9f}, 0.0f, 1.0f, 1.0f, 0.0f}; // Off-white
+                case ElementType::Foundation: return {{0.5f, 0.5f, 0.5f}, 0.0f, 1.0f, 1.0f, 0.0f}; // Dark gray
+                case ElementType::Connection: return {{0.8f, 0.8f, 0.3f}, 0.0f, 1.0f, 1.0f, 0.0f}; // Yellow
+                case ElementType::Door:    return {{0.6f, 0.4f, 0.2f}, 0.0f, 1.0f, 1.0f, 0.0f};  // Brown
+                case ElementType::Window:  return {{0.6f, 0.8f, 1.0f}, 0.0f, 1.0f, 1.0f, 0.0f};  // Light blue
+                case ElementType::Roof:    return {{0.4f, 0.4f, 0.45f}, 0.0f, 1.0f, 1.0f, 0.0f}; // Dark gray
+                default: return {{0.6f, 0.6f, 0.6f}, 0.0f, 1.0f, 1.0f, 0.0f};
+            }
+
+        case MaterialStyle::Blueprint:
+            // Blueprint: blue/white technical style
+            switch (type) {
+                case ElementType::Beam:    return {{0.2f, 0.4f, 0.8f}, 0.0f, 1.0f, 1.0f, 0.15f};
+                case ElementType::Column:  return {{0.2f, 0.5f, 0.9f}, 0.0f, 1.0f, 1.0f, 0.15f};
+                case ElementType::Floor:   return {{0.15f, 0.35f, 0.7f}, 0.0f, 1.0f, 1.0f, 0.1f};
+                case ElementType::Wall:    return {{0.25f, 0.45f, 0.85f}, 0.0f, 1.0f, 1.0f, 0.12f};
+                case ElementType::Foundation: return {{0.1f, 0.3f, 0.6f}, 0.0f, 1.0f, 1.0f, 0.1f};
+                case ElementType::Connection: return {{0.95f, 0.95f, 1.0f}, 0.0f, 1.0f, 1.0f, 0.2f}; // White
+                case ElementType::Door:    return {{0.3f, 0.5f, 0.8f}, 0.0f, 1.0f, 1.0f, 0.12f};
+                case ElementType::Window:  return {{0.4f, 0.6f, 0.95f}, 0.0f, 1.0f, 1.0f, 0.15f};
+                case ElementType::Roof:    return {{0.18f, 0.38f, 0.75f}, 0.0f, 1.0f, 1.0f, 0.1f};
+                default: return {{0.2f, 0.45f, 0.85f}, 0.0f, 1.0f, 1.0f, 0.12f};
+            }
+
+        default:
+            return Materials::Concrete();
     }
 }
 
@@ -1422,13 +1688,26 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                     float doorHeight = element.end.y - element.start.y;
 
                     float doorWidth = std::max(std::abs(xExtent), std::abs(zExtent));
-                    float doorDepth = std::min(std::abs(xExtent), std::abs(zExtent));
-                    if (doorDepth < 0.1f) doorDepth = element.depth;
+                    float doorDepth = element.depth > 0.1f ? element.depth : 100.0f;
 
                     glm::vec3 center = (element.start + element.end) * 0.5f;
                     center.y = element.start.y;
 
-                    drawDoor(center, doorWidth, doorHeight, doorDepth, color, stressForShader);
+                    // Determine rotation based on wall orientation
+                    float rotation = 0.0f;
+                    if (std::abs(zExtent) > std::abs(xExtent)) {
+                        rotation = glm::radians(90.0f);
+                    }
+
+                    std::string key = "door_" + std::to_string(doorWidth) + "_" + std::to_string(doorHeight) + "_" + std::to_string(doorDepth);
+                    if (m_meshCache.find(key) == m_meshCache.end()) {
+                        auto [verts, indices] = Geometry::createDoor(vec3(0), doorWidth, doorHeight, doorDepth, color);
+                        m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                    }
+
+                    mat4 transform = glm::translate(mat4(1.0f), center);
+                    transform = glm::rotate(transform, rotation, vec3(0.0f, 1.0f, 0.0f));
+                    drawMesh(*m_meshCache[key], transform, color, stressForShader);
                 }
                 break;
             }
@@ -1444,13 +1723,27 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                     float windowHeight = element.end.y - element.start.y;
 
                     float windowWidth = std::max(std::abs(xExtent), std::abs(zExtent));
-                    float windowDepth = std::min(std::abs(xExtent), std::abs(zExtent));
-                    if (windowDepth < 0.1f) windowDepth = element.depth;
+                    float windowDepth = element.depth > 0.1f ? element.depth : 100.0f;
 
                     glm::vec3 center = (element.start + element.end) * 0.5f;
                     center.y = element.start.y;
 
-                    drawWindow(center, windowWidth, windowHeight, windowDepth, color, stressForShader);
+                    // Determine rotation based on wall orientation
+                    // If wall runs primarily along Z axis, rotate window 90 degrees
+                    float rotation = 0.0f;
+                    if (std::abs(zExtent) > std::abs(xExtent)) {
+                        rotation = glm::radians(90.0f);
+                    }
+
+                    std::string key = "window_" + std::to_string(windowWidth) + "_" + std::to_string(windowHeight) + "_" + std::to_string(windowDepth);
+                    if (m_meshCache.find(key) == m_meshCache.end()) {
+                        auto [verts, indices] = Geometry::createWindow(vec3(0), windowWidth, windowHeight, windowDepth, color);
+                        m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                    }
+
+                    mat4 transform = glm::translate(mat4(1.0f), center);
+                    transform = glm::rotate(transform, rotation, vec3(0.0f, 1.0f, 0.0f));
+                    drawMesh(*m_meshCache[key], transform, color, stressForShader);
                 }
                 break;
             }
@@ -1519,6 +1812,123 @@ bool Renderer::loadHdrEnvironment(const std::string& filepath) {
         m_useHdrEnvMap = true;
     }
     return success;
+}
+
+// SSAO settings
+void Renderer::setSSAOEnabled(bool enabled) {
+    m_ssaoEnabled = enabled;
+    if (m_postProcess) {
+        auto config = m_postProcess->getSSAOConfig();
+        config.enabled = enabled;
+        m_postProcess->setSSAOConfig(config);
+    }
+}
+
+void Renderer::setSSAORadius(f32 radius) {
+    if (m_postProcess) {
+        auto config = m_postProcess->getSSAOConfig();
+        config.radius = radius;
+        m_postProcess->setSSAOConfig(config);
+    }
+}
+
+f32 Renderer::getSSAORadius() const {
+    return m_postProcess ? m_postProcess->getSSAOConfig().radius : 0.5f;
+}
+
+void Renderer::setSSAOIntensity(f32 intensity) {
+    if (m_postProcess) {
+        auto config = m_postProcess->getSSAOConfig();
+        config.intensity = intensity;
+        m_postProcess->setSSAOConfig(config);
+    }
+}
+
+f32 Renderer::getSSAOIntensity() const {
+    return m_postProcess ? m_postProcess->getSSAOConfig().intensity : 1.5f;
+}
+
+void Renderer::setSSAOBias(f32 bias) {
+    if (m_postProcess) {
+        auto config = m_postProcess->getSSAOConfig();
+        config.bias = bias;
+        m_postProcess->setSSAOConfig(config);
+    }
+}
+
+f32 Renderer::getSSAOBias() const {
+    return m_postProcess ? m_postProcess->getSSAOConfig().bias : 0.025f;
+}
+
+// Bloom settings
+void Renderer::setBloomEnabled(bool enabled) {
+    m_bloomEnabled = enabled;
+    if (m_postProcess) {
+        auto config = m_postProcess->getBloomConfig();
+        config.enabled = enabled;
+        m_postProcess->setBloomConfig(config);
+    }
+}
+
+void Renderer::setBloomThreshold(f32 threshold) {
+    if (m_postProcess) {
+        auto config = m_postProcess->getBloomConfig();
+        config.threshold = threshold;
+        m_postProcess->setBloomConfig(config);
+    }
+}
+
+f32 Renderer::getBloomThreshold() const {
+    return m_postProcess ? m_postProcess->getBloomConfig().threshold : 1.0f;
+}
+
+void Renderer::setBloomIntensity(f32 intensity) {
+    if (m_postProcess) {
+        auto config = m_postProcess->getBloomConfig();
+        config.intensity = intensity;
+        m_postProcess->setBloomConfig(config);
+    }
+}
+
+f32 Renderer::getBloomIntensity() const {
+    return m_postProcess ? m_postProcess->getBloomConfig().intensity : 0.3f;
+}
+
+void Renderer::setBloomIterations(u32 iterations) {
+    if (m_postProcess) {
+        auto config = m_postProcess->getBloomConfig();
+        config.iterations = iterations;
+        m_postProcess->setBloomConfig(config);
+    }
+}
+
+u32 Renderer::getBloomIterations() const {
+    return m_postProcess ? m_postProcess->getBloomConfig().iterations : 5;
+}
+
+// Tonemapping settings
+void Renderer::setExposure(f32 exposure) {
+    if (m_postProcess) {
+        auto config = m_postProcess->getCompositeConfig();
+        config.exposure = exposure;
+        m_postProcess->setCompositeConfig(config);
+    }
+}
+
+f32 Renderer::getExposure() const {
+    return m_postProcess ? m_postProcess->getCompositeConfig().exposure : 1.0f;
+}
+
+void Renderer::setTonemapMode(u32 mode) {
+    if (m_postProcess) {
+        auto config = m_postProcess->getCompositeConfig();
+        config.tonemapMode = mode;
+        m_postProcess->setCompositeConfig(config);
+    }
+}
+
+u32 Renderer::getTonemapMode() const {
+    return m_postProcess ? m_postProcess->getCompositeConfig().tonemapMode : 1;
 }
 
 } // namespace arch
