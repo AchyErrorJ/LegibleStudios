@@ -75,6 +75,27 @@ ArchEngine/
 └── CMakeLists.txt    # Build configuration
 ```
 
+## CAD Integration (Embeddable DLL)
+
+The renderer can be built as a DLL for embedding in the CAD application:
+
+```bash
+cd build
+
+# Build Release DLL
+cmake --build . --config Release
+
+# Output: build/Release/ArchEngineLib.dll
+```
+
+The CAD app (`ArchEngine_CAD`) automatically loads the DLL from:
+- `../ArchEngine_kernel/build/Release/`
+- `../ArchEngine_kernel/build/Debug/`
+
+After rebuilding, restart the CAD app to load the updated DLL.
+
+See `include/arch_api.h` for the C API used by Python/ctypes.
+
 ## Dependencies (auto-downloaded by CMake)
 
 - GLFW 3.3.8 - Window management

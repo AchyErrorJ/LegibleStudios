@@ -91,13 +91,8 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UCameraComponent* Camera;
 
-protected:
-	// Input handlers
-	void HandleOrbitInput(const FVector2D& Delta);
-	void HandlePanInput(const FVector2D& Delta);
-	void HandleZoomInput(float Delta);
-
-	// Camera state
+public:
+	// Camera state - public for remote control
 	FVector FocusPoint = FVector::ZeroVector;
 	float CameraDistance = 10000.0f;
 	float TargetCameraDistance = 10000.0f;
@@ -105,6 +100,12 @@ protected:
 	float CameraPitch = -30.0f;
 	float TargetCameraYaw = -45.0f;
 	float TargetCameraPitch = -30.0f;
+
+protected:
+	// Input handlers
+	void HandleOrbitInput(const FVector2D& Delta);
+	void HandlePanInput(const FVector2D& Delta);
+	void HandleZoomInput(float Delta);
 
 	// Input state
 	bool bIsOrbiting = false;

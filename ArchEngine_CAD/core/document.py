@@ -473,6 +473,15 @@ class ArchDocument(QObject):
             }
         self._data['rooms'] = rooms
 
+    def get_data(self) -> dict:
+        """Get current document data as JSON-serializable dict.
+
+        Syncs internal state to _data before returning.
+        Use this instead of accessing _data directly.
+        """
+        self._update_data()
+        return self._data
+
     # =========================================================================
     # Element Modification
     # =========================================================================
@@ -501,6 +510,9 @@ class ArchDocument(QObject):
             self.set_modified(True)
             self.element_modified.emit('wall', str(index))
             event_bus.element_modified.emit('wall', str(index), changes)
+            # Note: Don't emit document_changed here - this is called during drag
+            # and would trigger full refresh, destroying grips mid-drag.
+            # document_changed is emitted by undoable versions at end of operation.
 
     def modify_wall_undoable(self, index: int, **changes):
         """
@@ -529,6 +541,7 @@ class ArchDocument(QObject):
             self.set_modified(True)
             self.element_modified.emit('wall', str(index))
             event_bus.element_modified.emit('wall', str(index), changes)
+            self.document_changed.emit()
 
             # Push command to undo stack
             cmd = ModifyWallCommand(self, index, old_values, changes)
@@ -551,6 +564,7 @@ class ArchDocument(QObject):
             self.element_modified.emit('wall', str(index))
             event_bus.element_modified.emit('wall', str(index),
                                            {'start': new_start, 'end': new_end})
+            self.document_changed.emit()
 
             # Push command (will merge with previous if same wall)
             cmd = MoveWallCommand(self, index, grip_type,

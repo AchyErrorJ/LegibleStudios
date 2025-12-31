@@ -1,7 +1,10 @@
-// ArchTextureShareComponent.cpp - D3D11 shared texture implementation
+// ArchTextureShareComponent.cpp - D3D11/D3D12 shared texture implementation
+// D3D11: Direct GPU copy between render target and shared texture
+// D3D12: Creates standalone D3D11 device and uses CPU readback path
 
 #include "Integration/ArchTextureShareComponent.h"
 #include "Integration/ArchIPCServer.h"
+#include "Framework/ArchViewerPawn.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/World.h"
@@ -311,25 +314,75 @@ FArchSharedTextureInfo UArchTextureShareComponent::GetTextureInfo() const
 bool UArchTextureShareComponent::InitializeD3D11()
 {
 #if PLATFORM_WINDOWS
-	// Get D3D11 device from RHI
-	if (GDynamicRHI)
-	{
-		D3D11Device = GDynamicRHI->RHIGetNativeDevice();
-		if (D3D11Device)
-		{
-			ID3D11Device* Device = static_cast<ID3D11Device*>(D3D11Device);
-			Device->GetImmediateContext(reinterpret_cast<ID3D11DeviceContext**>(&D3D11Context));
+	// Check what RHI we're running
+	FString RHIName = GDynamicRHI ? GDynamicRHI->GetName() : TEXT("Unknown");
+	UE_LOG(LogTemp, Log, TEXT("ArchTextureShare: Detected RHI: %s"), *RHIName);
 
-			if (D3D11Context)
+	bUsingD3D12 = RHIName.Contains(TEXT("D3D12"));
+
+	if (!bUsingD3D12)
+	{
+		// D3D11 mode - get device directly from RHI
+		if (GDynamicRHI)
+		{
+			D3D11Device = GDynamicRHI->RHIGetNativeDevice();
+			if (D3D11Device)
 			{
-				UE_LOG(LogTemp, Log, TEXT("ArchTextureShare: D3D11 initialized"));
-				return true;
+				ID3D11Device* Device = static_cast<ID3D11Device*>(D3D11Device);
+				Device->GetImmediateContext(reinterpret_cast<ID3D11DeviceContext**>(&D3D11Context));
+
+				if (D3D11Context)
+				{
+					bOwnD3D11Device = false;
+					UE_LOG(LogTemp, Log, TEXT("ArchTextureShare: D3D11 initialized (native RHI)"));
+					return true;
+				}
 			}
 		}
+		UE_LOG(LogTemp, Error, TEXT("ArchTextureShare: Failed to get D3D11 device from RHI"));
+		return false;
 	}
+	else
+	{
+		// D3D12 mode - create our own D3D11 device for the shared texture
+		UE_LOG(LogTemp, Log, TEXT("ArchTextureShare: Creating standalone D3D11 device for D3D12 interop"));
 
-	UE_LOG(LogTemp, Error, TEXT("ArchTextureShare: Failed to get D3D11 device from RHI"));
-	return false;
+		D3D_FEATURE_LEVEL FeatureLevels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
+		D3D_FEATURE_LEVEL SelectedLevel;
+		UINT Flags = 0;
+#if UE_BUILD_DEBUG
+		Flags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+
+		ID3D11Device* NewDevice = nullptr;
+		ID3D11DeviceContext* NewContext = nullptr;
+
+		HRESULT hr = D3D11CreateDevice(
+			nullptr,                    // Use default adapter
+			D3D_DRIVER_TYPE_HARDWARE,
+			nullptr,
+			Flags,
+			FeatureLevels,
+			2,
+			D3D11_SDK_VERSION,
+			&NewDevice,
+			&SelectedLevel,
+			&NewContext
+		);
+
+		if (FAILED(hr))
+		{
+			UE_LOG(LogTemp, Error, TEXT("ArchTextureShare: Failed to create standalone D3D11 device, hr=0x%08X"), hr);
+			return false;
+		}
+
+		D3D11Device = NewDevice;
+		D3D11Context = NewContext;
+		bOwnD3D11Device = true;
+
+		UE_LOG(LogTemp, Log, TEXT("ArchTextureShare: D3D11 initialized (standalone device for D3D12 mode)"));
+		return true;
+	}
 #else
 	return false;
 #endif
@@ -338,12 +391,36 @@ bool UArchTextureShareComponent::InitializeD3D11()
 void UArchTextureShareComponent::ShutdownD3D11()
 {
 #if PLATFORM_WINDOWS
-	if (D3D11Context)
+	// Release staging texture if we created one
+	if (StagingTexture)
+	{
+		static_cast<ID3D11Texture2D*>(StagingTexture)->Release();
+		StagingTexture = nullptr;
+	}
+
+	if (bOwnD3D11Device)
+	{
+		// We created our own device - release it
+		if (D3D11Context)
+		{
+			static_cast<ID3D11DeviceContext*>(D3D11Context)->Release();
+			D3D11Context = nullptr;
+		}
+		if (D3D11Device)
+		{
+			static_cast<ID3D11Device*>(D3D11Device)->Release();
+			D3D11Device = nullptr;
+		}
+	}
+	else
 	{
 		// Don't release - we don't own it
 		D3D11Context = nullptr;
+		D3D11Device = nullptr;
 	}
-	D3D11Device = nullptr;
+
+	bOwnD3D11Device = false;
+	bUsingD3D12 = false;
 #endif
 }
 
@@ -357,6 +434,7 @@ bool UArchTextureShareComponent::CreateSharedTexture()
 
 	ID3D11Device* Device = static_cast<ID3D11Device*>(D3D11Device);
 	FIntPoint OutputRes = ViewportConfig.GetOutputResolution();
+	HRESULT hr;
 
 	// Create shared texture
 	D3D11_TEXTURE2D_DESC Desc = {};
@@ -373,7 +451,7 @@ bool UArchTextureShareComponent::CreateSharedTexture()
 	Desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
 
 	ID3D11Texture2D* Texture = nullptr;
-	HRESULT hr = Device->CreateTexture2D(&Desc, nullptr, &Texture);
+	hr = Device->CreateTexture2D(&Desc, nullptr, &Texture);
 	if (FAILED(hr))
 	{
 		UE_LOG(LogTemp, Error, TEXT("ArchTextureShare: Failed to create shared texture, hr=0x%08X"), hr);
@@ -425,8 +503,38 @@ bool UArchTextureShareComponent::CreateSharedTexture()
 		return false;
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("ArchTextureShare: Created shared texture %dx%d, handle='%s'"),
-		OutputRes.X, OutputRes.Y, *HandleName);
+	// If using D3D12, create a staging texture for CPU readback
+	if (bUsingD3D12)
+	{
+		D3D11_TEXTURE2D_DESC StagingDesc = {};
+		StagingDesc.Width = OutputRes.X;
+		StagingDesc.Height = OutputRes.Y;
+		StagingDesc.MipLevels = 1;
+		StagingDesc.ArraySize = 1;
+		StagingDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		StagingDesc.SampleDesc.Count = 1;
+		StagingDesc.SampleDesc.Quality = 0;
+		StagingDesc.Usage = D3D11_USAGE_DYNAMIC;
+		StagingDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		StagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		StagingDesc.MiscFlags = 0;
+
+		ID3D11Texture2D* Staging = nullptr;
+		hr = Device->CreateTexture2D(&StagingDesc, nullptr, &Staging);
+		if (FAILED(hr))
+		{
+			UE_LOG(LogTemp, Error, TEXT("ArchTextureShare: Failed to create staging texture for D3D12, hr=0x%08X"), hr);
+			// Continue without staging - we'll try direct copy anyway
+		}
+		else
+		{
+			StagingTexture = Staging;
+			UE_LOG(LogTemp, Log, TEXT("ArchTextureShare: Created staging texture for D3D12 CPU readback"));
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("ArchTextureShare: Created shared texture %dx%d, handle='%s' (D3D12 mode: %s)"),
+		OutputRes.X, OutputRes.Y, *HandleName, bUsingD3D12 ? TEXT("yes") : TEXT("no"));
 	return true;
 #else
 	return false;
@@ -567,38 +675,95 @@ void UArchTextureShareComponent::CopyToSharedTexture()
 		return;
 	}
 
-	// Get source texture from render target
-	FTextureRenderTargetResource* RTResource = RenderTarget->GameThread_GetRenderTargetResource();
-	if (RTResource)
+	if (bUsingD3D12)
 	{
-		FRHITexture2D* RHITexture = RTResource->GetRenderTargetTexture();
-		if (RHITexture)
+		// D3D12 mode: Use CPU readback path
+		// Read pixels from UE render target and upload to our D3D11 texture
+		FTextureRenderTargetResource* RTResource = RenderTarget->GameThread_GetRenderTargetResource();
+		if (RTResource && StagingTexture)
 		{
-			// Get native D3D11 texture
-			void* NativeResource = RHITexture->GetNativeResource();
-			if (NativeResource)
+			FIntPoint OutputRes = ViewportConfig.GetOutputResolution();
+			TArray<FColor> Pixels;
+			Pixels.SetNumUninitialized(OutputRes.X * OutputRes.Y);
+
+			// ReadPixels is synchronous and works regardless of RHI
+			FReadSurfaceDataFlags ReadFlags(RCM_UNorm, CubeFace_MAX);
+			RTResource->ReadPixels(Pixels, ReadFlags);
+
+			// Upload to our D3D11 staging texture
+			ID3D11Texture2D* Staging = static_cast<ID3D11Texture2D*>(StagingTexture);
+			D3D11_MAPPED_SUBRESOURCE MappedResource;
+			hr = Context->Map(Staging, 0, D3D11_MAP_WRITE_DISCARD, 0, &MappedResource);
+			if (SUCCEEDED(hr))
 			{
-				ID3D11Texture2D* SrcTexture = static_cast<ID3D11Texture2D*>(NativeResource);
+				// FColor is BGRA, DXGI_FORMAT_R8G8B8A8_UNORM expects RGBA
+				// Need to swizzle the pixels
+				uint8* DstPtr = static_cast<uint8*>(MappedResource.pData);
+				const FColor* SrcPtr = Pixels.GetData();
+				const int32 NumPixels = OutputRes.X * OutputRes.Y;
 
-				// Copy (handles resolution mismatch with stretch if needed)
-				D3D11_TEXTURE2D_DESC SrcDesc, DstDesc;
-				SrcTexture->GetDesc(&SrcDesc);
-				DstTexture->GetDesc(&DstDesc);
-
-				if (SrcDesc.Width == DstDesc.Width && SrcDesc.Height == DstDesc.Height)
+				// Copy with BGRA to RGBA swizzle
+				for (int32 Row = 0; Row < OutputRes.Y; ++Row)
 				{
-					// Direct copy
-					Context->CopyResource(DstTexture, SrcTexture);
+					uint8* RowDst = DstPtr + Row * MappedResource.RowPitch;
+					const FColor* RowSrc = SrcPtr + Row * OutputRes.X;
+
+					for (int32 Col = 0; Col < OutputRes.X; ++Col)
+					{
+						const FColor& Src = RowSrc[Col];
+						RowDst[Col * 4 + 0] = Src.R;  // R
+						RowDst[Col * 4 + 1] = Src.G;  // G
+						RowDst[Col * 4 + 2] = Src.B;  // B
+						RowDst[Col * 4 + 3] = Src.A;  // A
+					}
 				}
-				else
+
+				Context->Unmap(Staging, 0);
+
+				// Copy from staging to shared texture
+				Context->CopyResource(DstTexture, Staging);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("ArchTextureShare: Failed to map staging texture, hr=0x%08X"), hr);
+			}
+		}
+	}
+	else
+	{
+		// D3D11 mode: Direct GPU copy
+		FTextureRenderTargetResource* RTResource = RenderTarget->GameThread_GetRenderTargetResource();
+		if (RTResource)
+		{
+			FRHITexture2D* RHITexture = RTResource->GetRenderTargetTexture();
+			if (RHITexture)
+			{
+				// Get native D3D11 texture
+				void* NativeResource = RHITexture->GetNativeResource();
+				if (NativeResource)
 				{
-					// Need to handle resolution mismatch
-					// For now, copy what we can
-					D3D11_BOX SrcBox = {};
-					SrcBox.right = FMath::Min(SrcDesc.Width, DstDesc.Width);
-					SrcBox.bottom = FMath::Min(SrcDesc.Height, DstDesc.Height);
-					SrcBox.back = 1;
-					Context->CopySubresourceRegion(DstTexture, 0, 0, 0, 0, SrcTexture, 0, &SrcBox);
+					ID3D11Texture2D* SrcTexture = static_cast<ID3D11Texture2D*>(NativeResource);
+
+					// Copy (handles resolution mismatch with stretch if needed)
+					D3D11_TEXTURE2D_DESC SrcDesc, DstDesc;
+					SrcTexture->GetDesc(&SrcDesc);
+					DstTexture->GetDesc(&DstDesc);
+
+					if (SrcDesc.Width == DstDesc.Width && SrcDesc.Height == DstDesc.Height)
+					{
+						// Direct copy
+						Context->CopyResource(DstTexture, SrcTexture);
+					}
+					else
+					{
+						// Need to handle resolution mismatch
+						// For now, copy what we can
+						D3D11_BOX SrcBox = {};
+						SrcBox.right = FMath::Min(SrcDesc.Width, DstDesc.Width);
+						SrcBox.bottom = FMath::Min(SrcDesc.Height, DstDesc.Height);
+						SrcBox.back = 1;
+						Context->CopySubresourceRegion(DstTexture, 0, 0, 0, 0, SrcTexture, 0, &SrcBox);
+					}
 				}
 			}
 		}
@@ -675,31 +840,123 @@ void UArchTextureShareComponent::HandleClientConnected(bool bConnected)
 
 void UArchTextureShareComponent::HandleMouseMove(const FArchInputMouseMove& Input)
 {
-	// Forward to input system
 	OnInputReceived.Broadcast(TEXT("MouseMove"));
 
-	// TODO: Inject into Slate/viewport
+	// Get the viewer pawn and apply orbit/pan based on button state
+	APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+	if (!PC) return;
+
+	AArchViewerPawn* ViewerPawn = Cast<AArchViewerPawn>(PC->GetPawn());
+	if (!ViewerPawn) return;
+
+	// If right mouse is held, orbit camera
+	if (bRightMouseDown)
+	{
+		// Apply orbit rotation - delta from CAD app in pixels, convert to rotation
+		float YawDelta = Input.Delta.X * 0.3f;
+		float PitchDelta = Input.Delta.Y * 0.3f;
+
+		// Directly manipulate the pawn's target rotation
+		ViewerPawn->TargetCameraYaw += YawDelta;
+		ViewerPawn->TargetCameraPitch = FMath::Clamp(
+			ViewerPawn->TargetCameraPitch - PitchDelta,
+			ViewerPawn->MinPitchAngle,
+			ViewerPawn->MaxPitchAngle
+		);
+	}
+	// If middle mouse is held, pan camera
+	else if (bMiddleMouseDown)
+	{
+		// Pan is handled via delta in screen space
+		// For now just log - proper implementation would move focus point
+		UE_LOG(LogTemp, Verbose, TEXT("ArchTextureShare: Pan delta: %f, %f"), Input.Delta.X, Input.Delta.Y);
+	}
+
+	LastMousePosition = Input.Position;
 }
 
 void UArchTextureShareComponent::HandleMouseButton(const FArchInputMouseButton& Input)
 {
 	OnInputReceived.Broadcast(Input.bPressed ? TEXT("MouseDown") : TEXT("MouseUp"));
 
-	// TODO: Inject into Slate/viewport
+	// Track button state
+	switch (Input.Button)
+	{
+		case 0: bLeftMouseDown = Input.bPressed; break;
+		case 1: bRightMouseDown = Input.bPressed; break;
+		case 2: bMiddleMouseDown = Input.bPressed; break;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("ArchTextureShare: Mouse button %d %s at (%f, %f)"),
+		Input.Button, Input.bPressed ? TEXT("down") : TEXT("up"), Input.Position.X, Input.Position.Y);
 }
 
 void UArchTextureShareComponent::HandleMouseWheel(const FArchInputMouseWheel& Input)
 {
 	OnInputReceived.Broadcast(TEXT("MouseWheel"));
 
-	// TODO: Inject into Slate/viewport
+	// Get the viewer pawn and apply zoom
+	APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+	if (!PC) return;
+
+	AArchViewerPawn* ViewerPawn = Cast<AArchViewerPawn>(PC->GetPawn());
+	if (ViewerPawn)
+	{
+		// Zoom - negative delta zooms in (closer)
+		ViewerPawn->ApplyZoomInput(-Input.Delta * 100.0f);
+	}
 }
 
 void UArchTextureShareComponent::HandleKeyboard(const FArchInputKeyboard& Input)
 {
 	OnInputReceived.Broadcast(Input.bPressed ? TEXT("KeyDown") : TEXT("KeyUp"));
 
-	// TODO: Inject into Slate/viewport
+	UE_LOG(LogTemp, Log, TEXT("ArchTextureShare: Key %d %s (Shift:%d Ctrl:%d Alt:%d)"),
+		Input.KeyCode, Input.bPressed ? TEXT("down") : TEXT("up"),
+		Input.bShift, Input.bCtrl, Input.bAlt);
+
+	// Handle specific keys
+	if (Input.bPressed)
+	{
+		APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+		if (!PC) return;
+
+		AArchViewerPawn* ViewerPawn = Cast<AArchViewerPawn>(PC->GetPawn());
+		if (!ViewerPawn) return;
+
+		// F key - focus on building
+		if (Input.KeyCode == 'F' || Input.KeyCode == 70)
+		{
+			// Find building actor and focus
+			TArray<AActor*> FoundActors;
+			UGameplayStatics::GetAllActorsOfClass(GetWorld(), AActor::StaticClass(), FoundActors);
+			for (AActor* Actor : FoundActors)
+			{
+				if (Actor->GetClass()->GetName().Contains(TEXT("ArchBuilding")))
+				{
+					ViewerPawn->FocusOnActor(Actor);
+					break;
+				}
+			}
+		}
+		// R key - reset camera
+		else if (Input.KeyCode == 'R' || Input.KeyCode == 82)
+		{
+			ViewerPawn->ResetCamera();
+		}
+		// Number keys 1-5 for view presets
+		else if (Input.KeyCode >= '1' && Input.KeyCode <= '5')
+		{
+			static const FName ViewPresets[] = {
+				TEXT("Top"), TEXT("Front"), TEXT("Right"), TEXT("Perspective"), TEXT("Isometric")
+			};
+			int32 Index = Input.KeyCode - '1';
+			if (Index >= 0 && Index < 5)
+			{
+				ViewerPawn->SetViewPreset(ViewPresets[Index]);
+			}
+		}
+	}
 }
 
 void UArchTextureShareComponent::HandleSelectionChanged(const TArray<FString>& SelectedIds)

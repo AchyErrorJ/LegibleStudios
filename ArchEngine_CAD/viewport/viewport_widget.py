@@ -86,10 +86,15 @@ class UE5ViewportWidget(QOpenGLWidget):
             self._ipc_client.on_frame_ready = self._on_frame_ready
             self._ipc_client.on_connection_changed = self._on_connection_changed
 
-        if self._ipc_client.connect(pipe_name):
-            self._update_timer.start()
-            return True
-        return False
+        # Connect in background thread to avoid freezing UI
+        import threading
+        def do_connect():
+            if self._ipc_client.connect(pipe_name):
+                self._update_timer.start()
+
+        thread = threading.Thread(target=do_connect, daemon=True)
+        thread.start()
+        return True  # Always return True since connection is async
 
     def disconnect_from_ue5(self):
         """Disconnect from UE5."""
@@ -107,12 +112,15 @@ class UE5ViewportWidget(QOpenGLWidget):
 
     def initializeGL(self):
         """Initialize OpenGL resources."""
+        print("[VIEWPORT DEBUG] initializeGL called")
         # Initialize viewport bridge
         self._viewport_bridge = ViewportBridge()
         if not self._viewport_bridge.initialize():
+            print("[VIEWPORT DEBUG] Failed to initialize viewport bridge!")
             logger.error("Failed to initialize viewport bridge")
             return
 
+        print(f"[VIEWPORT DEBUG] Viewport bridge initialized (hardware interop: {self._viewport_bridge.has_hardware_interop})")
         logger.info(f"Viewport bridge initialized (hardware interop: {self._viewport_bridge.has_hardware_interop})")
 
         # Create shader program
@@ -137,8 +145,35 @@ class UE5ViewportWidget(QOpenGLWidget):
         in vec2 TexCoord;
         out vec4 FragColor;
         uniform sampler2D uTexture;
+        uniform vec2 uViewportSize;
+        uniform vec2 uTextureSize;
         void main() {
-            FragColor = texture(uTexture, TexCoord);
+            // Calculate aspect ratios
+            float texAspect = uTextureSize.x / uTextureSize.y;
+            float viewAspect = uViewportSize.x / uViewportSize.y;
+
+            vec2 uv = TexCoord;
+
+            // FIT MODE: Show entire texture with letterboxing (black bars)
+            if (viewAspect > texAspect) {
+                // Viewport wider - add black bars on sides
+                float scale = texAspect / viewAspect;
+                uv.x = (TexCoord.x - 0.5) / scale + 0.5;
+                if (uv.x < 0.0 || uv.x > 1.0) {
+                    FragColor = vec4(0.1, 0.1, 0.1, 1.0);
+                    return;
+                }
+            } else {
+                // Viewport taller - add black bars top/bottom
+                float scale = viewAspect / texAspect;
+                uv.y = (TexCoord.y - 0.5) / scale + 0.5;
+                if (uv.y < 0.0 || uv.y > 1.0) {
+                    FragColor = vec4(0.1, 0.1, 0.1, 1.0);
+                    return;
+                }
+            }
+
+            FragColor = texture(uTexture, uv);
         }
         """
 
@@ -147,15 +182,35 @@ class UE5ViewportWidget(QOpenGLWidget):
         glShaderSource(vs, vertex_shader)
         glCompileShader(vs)
 
+        # Check vertex shader compilation
+        status = glGetShaderiv(vs, GL_COMPILE_STATUS)
+        if not status:
+            log = glGetShaderInfoLog(vs)
+            print(f"[VIEWPORT DEBUG] Vertex shader compilation failed: {log}")
+
         fs = glCreateShader(GL_FRAGMENT_SHADER)
         glShaderSource(fs, fragment_shader)
         glCompileShader(fs)
+
+        # Check fragment shader compilation
+        status = glGetShaderiv(fs, GL_COMPILE_STATUS)
+        if not status:
+            log = glGetShaderInfoLog(fs)
+            print(f"[VIEWPORT DEBUG] Fragment shader compilation failed: {log}")
 
         # Link program
         self._shader_program = glCreateProgram()
         glAttachShader(self._shader_program, vs)
         glAttachShader(self._shader_program, fs)
         glLinkProgram(self._shader_program)
+
+        # Check program linking
+        status = glGetProgramiv(self._shader_program, GL_LINK_STATUS)
+        if not status:
+            log = glGetProgramInfoLog(self._shader_program)
+            print(f"[VIEWPORT DEBUG] Shader program linking failed: {log}")
+        else:
+            print(f"[VIEWPORT DEBUG] Shader program created: {self._shader_program}")
 
         glDeleteShader(vs)
         glDeleteShader(fs)
@@ -177,6 +232,7 @@ class UE5ViewportWidget(QOpenGLWidget):
 
         self._vao = glGenVertexArrays(1)
         self._vbo = glGenBuffers(1)
+        print(f"[VIEWPORT DEBUG] Created VAO={self._vao}, VBO={self._vbo}")
 
         glBindVertexArray(self._vao)
         glBindBuffer(GL_ARRAY_BUFFER, self._vbo)
@@ -194,15 +250,55 @@ class UE5ViewportWidget(QOpenGLWidget):
 
     def paintGL(self):
         """Render the UE5 texture."""
+        # Enable sRGB framebuffer for correct color output
+        glEnable(GL_FRAMEBUFFER_SRGB)
+
         glClearColor(0.1, 0.1, 0.1, 1.0)
         glClear(GL_COLOR_BUFFER_BIT)
 
-        if not self._viewport_bridge or not self._viewport_bridge.has_texture:
+        if not self._viewport_bridge:
             return
 
-        # Try to acquire texture
-        if not self._viewport_bridge.acquire():
+        # Check if we need to open a texture (must happen on GL thread)
+        if hasattr(self, '_pending_texture_open') and self._pending_texture_open:
+            handle_name, w, h = self._pending_texture_open
+            self._pending_texture_open = None
+            print(f"[VIEWPORT DEBUG] Opening texture on GL thread: {handle_name}")
+            result = self._viewport_bridge.open_texture(handle_name, w, h)
+            print(f"[VIEWPORT DEBUG] open_texture result: {result}, has_texture: {self._viewport_bridge.has_texture}")
+
+        if not self._viewport_bridge.has_texture:
             return
+
+        # Try to acquire texture - track success rate
+        acquired = self._viewport_bridge.acquire()
+        if not hasattr(self, '_acquire_stats'):
+            self._acquire_stats = [0, 0]  # [success, fail]
+        if acquired:
+            self._acquire_stats[0] += 1
+        else:
+            self._acquire_stats[1] += 1
+            # DEBUG: Draw anyway to test shader (bypass acquire)
+            # return
+
+        # Debug: track paint calls
+        if not hasattr(self, '_paint_count'):
+            self._paint_count = 0
+            self._last_paint_log = 0
+        self._paint_count += 1
+
+        # Log periodically to verify paintGL is being called
+        import time
+        now = time.time()
+        if now - self._last_paint_log > 2.0:  # Log every 2 seconds
+            acq_success = self._acquire_stats[0] if hasattr(self, '_acquire_stats') else 0
+            acq_fail = self._acquire_stats[1] if hasattr(self, '_acquire_stats') else 0
+            print(f"[VIEWPORT DEBUG] paintGL called {self._paint_count} times, acquire success={acq_success} fail={acq_fail}, shader={self._shader_program}")
+            # Check for GL errors
+            err = glGetError()
+            if err != GL_NO_ERROR:
+                print(f"[VIEWPORT DEBUG] GL Error before draw: {err}")
+            self._last_paint_log = now
 
         try:
             # Bind shader and texture
@@ -210,13 +306,43 @@ class UE5ViewportWidget(QOpenGLWidget):
             glActiveTexture(GL_TEXTURE0)
             glBindTexture(GL_TEXTURE_2D, self._viewport_bridge.gl_texture)
 
+            # Set texture uniform (important!)
+            tex_loc = glGetUniformLocation(self._shader_program, "uTexture")
+            if tex_loc >= 0:
+                glUniform1i(tex_loc, 0)
+
+            # Set viewport and texture size uniforms for aspect ratio correction
+            viewport_loc = glGetUniformLocation(self._shader_program, "uViewportSize")
+            if viewport_loc >= 0:
+                glUniform2f(viewport_loc, float(self.width()), float(self.height()))
+
+            texture_loc = glGetUniformLocation(self._shader_program, "uTextureSize")
+            if texture_loc >= 0:
+                tex_w = self._viewport_bridge.width if self._viewport_bridge else 1920
+                tex_h = self._viewport_bridge.height if self._viewport_bridge else 1080
+                glUniform2f(texture_loc, float(tex_w), float(tex_h))
+
+                # Debug aspect ratio info
+                if not hasattr(self, '_aspect_logged') or now - self._aspect_logged > 5.0:
+                    view_aspect = self.width() / max(self.height(), 1)
+                    tex_aspect = tex_w / max(tex_h, 1)
+                    print(f"[VIEWPORT DEBUG] Viewport: {self.width()}x{self.height()} ({view_aspect:.2f}), Texture: {tex_w}x{tex_h} ({tex_aspect:.2f})")
+                    self._aspect_logged = now
+
             # Draw quad
             glBindVertexArray(self._vao)
             glDrawArrays(GL_TRIANGLES, 0, 6)
             glBindVertexArray(0)
 
+            # Check for GL errors after draw
+            err = glGetError()
+            if err != GL_NO_ERROR and not hasattr(self, '_gl_error_logged'):
+                print(f"[VIEWPORT DEBUG] GL Error after draw: {err}")
+                self._gl_error_logged = True
+
         finally:
-            self._viewport_bridge.release()
+            if acquired:
+                self._viewport_bridge.release()
 
         self._frame_pending = False
 
@@ -304,13 +430,14 @@ class UE5ViewportWidget(QOpenGLWidget):
     def _on_texture_ready(self, info: TextureInfo):
         """Handle texture ready notification from UE5."""
         self._texture_info = info
-        handle_name = info.handleName.decode('utf-8')
+        handle_name = info.handleName.decode('utf-8').rstrip('\x00')
+        print(f"[VIEWPORT DEBUG] Texture ready: {info.width}x{info.height}, handle: '{handle_name}'")
         logger.info(f"Texture ready: {info.width}x{info.height}, handle: {handle_name}")
 
-        # Open the shared texture
-        if self._viewport_bridge:
-            self._viewport_bridge.open_texture(handle_name, info.width, info.height)
+        # Store info for opening on main thread (OpenGL context required)
+        self._pending_texture_open = (handle_name, info.width, info.height)
 
+        # Signal main thread to open texture
         self.texture_ready.emit(info.width, info.height)
 
     def _on_texture_resized(self, info: TextureInfo):
@@ -336,19 +463,33 @@ class UE5ViewportWidget(QOpenGLWidget):
     def _on_frame_ready(self, frame_number: int):
         """Handle new frame notification."""
         self._frame_pending = True
+        # Track frames for debugging
+        if not hasattr(self, '_frame_count'):
+            self._frame_count = 0
+            self._last_frame_log = 0
+        self._frame_count += 1
+        import time
+        now = time.time()
+        if now - self._last_frame_log > 2.0:  # Log every 2 seconds
+            print(f"[VIEWPORT DEBUG] Frames received: {self._frame_count}")
+            self._last_frame_log = now
 
     def _on_connection_changed(self, connected: bool):
         """Handle connection state change."""
         self._is_connected = connected
         if connected:
+            print("[VIEWPORT DEBUG] Connected to UE5!")
             logger.info("Connected to UE5")
             self.connected.emit()
         else:
+            print("[VIEWPORT DEBUG] Disconnected from UE5")
             logger.info("Disconnected from UE5")
             self.disconnected.emit()
 
     def _check_frame(self):
         """Timer callback to check for new frames."""
+        # Always update to ensure viewport refreshes
+        self.update()  # Trigger repaint
         if self._frame_pending:
-            self.update()  # Trigger repaint
+            self._frame_pending = False
             self.frame_updated.emit()
