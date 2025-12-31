@@ -43,7 +43,7 @@ public:
     void drawMainMenuBar(VisualizationMode& mode, bool& showDemo, bool& showMetrics);
     void drawBuildingPanel(const Building& building, size_t currentIndex, size_t totalBuildings);
     void drawPhysicsPanel(const FrameAnalysis& analysis, bool physicsAvailable);
-    void drawVisualizationPanel(VisualizationMode& mode);
+    void drawVisualizationPanel(VisualizationMode& mode, Renderer& renderer);
     void drawHelpPanel(bool& show);
     void drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles);
     void drawRenderSettingsPanel(Renderer& renderer, bool& show);

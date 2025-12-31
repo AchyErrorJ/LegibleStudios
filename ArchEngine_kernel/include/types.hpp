@@ -206,6 +206,57 @@ enum class VisualizationMode : u32 {
     Wireframe     // Wireframe overlay
 };
 
+// Material styles for visual appearance
+enum class MaterialStyle : u32 {
+    Realistic,    // Full PBR materials (wood grain, metal, glass reflections)
+    Clean,        // Clean matte surfaces with subtle shading
+    Schematic,    // Flat colors for technical drawings
+    Blueprint     // Blue/white blueprint style
+};
+
+// Material preset for PBR rendering
+struct MaterialPreset {
+    vec3 baseColor = vec3(0.8f);
+    f32 metallic = 0.0f;
+    f32 roughness = 0.5f;
+    f32 ao = 1.0f;
+    f32 emission = 0.0f;
+};
+
+// Predefined material presets
+namespace Materials {
+    // Wood materials
+    inline MaterialPreset OakWood() { return {{0.55f, 0.35f, 0.18f}, 0.0f, 0.7f, 1.0f, 0.0f}; }
+    inline MaterialPreset DarkWood() { return {{0.35f, 0.22f, 0.12f}, 0.0f, 0.65f, 1.0f, 0.0f}; }
+    inline MaterialPreset PineWood() { return {{0.75f, 0.6f, 0.4f}, 0.0f, 0.75f, 1.0f, 0.0f}; }
+
+    // Metal materials
+    inline MaterialPreset Steel() { return {{0.56f, 0.57f, 0.58f}, 0.9f, 0.3f, 1.0f, 0.0f}; }
+    inline MaterialPreset Aluminum() { return {{0.91f, 0.92f, 0.92f}, 0.85f, 0.35f, 1.0f, 0.0f}; }
+    inline MaterialPreset Brass() { return {{0.7f, 0.55f, 0.2f}, 0.8f, 0.25f, 1.0f, 0.0f}; }
+    inline MaterialPreset Copper() { return {{0.72f, 0.45f, 0.2f}, 0.85f, 0.25f, 1.0f, 0.0f}; }
+
+    // Wall materials
+    inline MaterialPreset Drywall() { return {{0.9f, 0.88f, 0.85f}, 0.0f, 0.95f, 1.0f, 0.0f}; }
+    inline MaterialPreset Brick() { return {{0.6f, 0.25f, 0.15f}, 0.0f, 0.85f, 0.9f, 0.0f}; }
+    inline MaterialPreset Concrete() { return {{0.55f, 0.55f, 0.55f}, 0.0f, 0.9f, 0.85f, 0.0f}; }
+    inline MaterialPreset Stucco() { return {{0.85f, 0.82f, 0.75f}, 0.0f, 0.92f, 0.95f, 0.0f}; }
+
+    // Glass materials
+    inline MaterialPreset Glass() { return {{0.7f, 0.85f, 0.95f}, 0.1f, 0.05f, 1.0f, 0.0f}; }
+    inline MaterialPreset TintedGlass() { return {{0.3f, 0.4f, 0.5f}, 0.1f, 0.08f, 1.0f, 0.0f}; }
+
+    // Roof materials
+    inline MaterialPreset Asphalt() { return {{0.2f, 0.2f, 0.22f}, 0.0f, 0.85f, 0.8f, 0.0f}; }
+    inline MaterialPreset TerracottaTile() { return {{0.7f, 0.35f, 0.2f}, 0.0f, 0.7f, 0.9f, 0.0f}; }
+    inline MaterialPreset MetalRoof() { return {{0.4f, 0.42f, 0.45f}, 0.7f, 0.4f, 1.0f, 0.0f}; }
+
+    // Floor materials
+    inline MaterialPreset Hardwood() { return {{0.45f, 0.3f, 0.15f}, 0.0f, 0.6f, 1.0f, 0.0f}; }
+    inline MaterialPreset Tile() { return {{0.8f, 0.8f, 0.8f}, 0.1f, 0.3f, 1.0f, 0.0f}; }
+    inline MaterialPreset Carpet() { return {{0.3f, 0.35f, 0.4f}, 0.0f, 0.98f, 0.9f, 0.0f}; }
+}
+
 // Thermal data for elements
 struct ThermalData {
     f32 temperature;        // Temperature in F or C

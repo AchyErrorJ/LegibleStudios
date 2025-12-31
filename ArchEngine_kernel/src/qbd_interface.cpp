@@ -594,6 +594,67 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
         }
     }
 
+    // Convert doors to structural elements
+    for (const auto& door : layout.doors) {
+        if (door.wallIndex < 0 || door.wallIndex >= static_cast<i32>(layout.walls.size())) continue;
+
+        const auto& wall = layout.walls[door.wallIndex];
+        vec3 wallStart = wall.start;
+        vec3 wallEnd = wall.end;
+        vec3 wallDir = glm::normalize(wallEnd - wallStart);
+        f32 wallLength = glm::length(vec2(wallEnd.x - wallStart.x, wallEnd.z - wallStart.z));
+
+        // Position door along wall at offset
+        f32 doorOffset = glm::clamp(door.offset, 0.0f, wallLength - door.width);
+        vec3 doorCenter = wallStart + wallDir * (doorOffset + door.width * 0.5f);
+        doorCenter.y = wall.start.y;  // Door starts at floor level
+
+        StructuralElement elem;
+        elem.type = ElementType::Door;
+        elem.start = doorCenter - wallDir * (door.width * 0.5f);
+        elem.end = doorCenter + wallDir * (door.width * 0.5f);
+        elem.end.y = wall.start.y + door.height;
+        elem.width = door.width;
+        elem.depth = 100.0f;  // Door thickness ~100mm
+        elem.material = "door";
+        elem.stress = 0.0f;
+        elem.deflection = 0.0f;
+        elem.failed = false;
+
+        building.elements.push_back(elem);
+    }
+
+    // Convert windows to structural elements
+    for (const auto& window : layout.windows) {
+        if (window.wallIndex < 0 || window.wallIndex >= static_cast<i32>(layout.walls.size())) continue;
+
+        const auto& wall = layout.walls[window.wallIndex];
+        vec3 wallStart = wall.start;
+        vec3 wallEnd = wall.end;
+        vec3 wallDir = glm::normalize(wallEnd - wallStart);
+        f32 wallLength = glm::length(vec2(wallEnd.x - wallStart.x, wallEnd.z - wallStart.z));
+
+        // Position window along wall at offset
+        f32 windowOffset = glm::clamp(window.offset, 0.0f, wallLength - window.width);
+        vec3 windowCenter = wallStart + wallDir * (windowOffset + window.width * 0.5f);
+        windowCenter.y = wall.start.y + window.sillHeight;  // Window starts at sill height
+
+        StructuralElement elem;
+        elem.type = ElementType::Window;
+        elem.start = windowCenter - wallDir * (window.width * 0.5f);
+        elem.start.y = wall.start.y + window.sillHeight;
+        elem.end = windowCenter + wallDir * (window.width * 0.5f);
+        elem.end.y = wall.start.y + window.sillHeight + window.height;
+        elem.width = window.width;
+        elem.depth = 100.0f;  // Window thickness ~100mm
+        elem.material = "window";
+        elem.stress = 0.0f;
+        elem.deflection = 0.0f;
+        elem.failed = false;
+
+        building.elements.push_back(elem);
+    }
+
     // Add wall types
     building.wallTypes = {m_exteriorWallType, m_interiorWallType, m_wetWallType};
 

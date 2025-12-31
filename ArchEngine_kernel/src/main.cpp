@@ -838,23 +838,42 @@ int main(int argc, char* argv[]) {
                 // Render shadow pass first
                 renderer.renderShadowPass(buildings[currentBuilding].elements);
 
-                renderer.beginRenderPass(clearColor);
+                // Use HDR render path for post-processing (SSAO, bloom, tonemapping)
+                if (renderer.isPostProcessingEnabled()) {
+                    // Render scene to HDR framebuffer
+                    renderer.beginHDRRenderPass(clearColor);
 
-                // Draw sky background (renders behind everything)
-                renderer.drawSky();
+                    renderer.drawSky();
+                    renderer.drawGrid(150.0f, 5.0f);
+                    renderer.drawStructuralFrame(buildings[currentBuilding].elements, buildings[currentBuilding], imgui.getSelectedElements());
 
-                // Draw reference grid
-                renderer.drawGrid(150.0f, 5.0f);
+                    renderer.endHDRRenderPass();
 
-                // Draw current building with visualization mode coloring
-                // Highlight all selected elements
-                renderer.drawStructuralFrame(buildings[currentBuilding].elements, buildings[currentBuilding], imgui.getSelectedElements());
+                    // Run post-processing passes (SSAO, bloom)
+                    renderer.runPostProcessing();
+
+                    // Composite to swapchain (leaves render pass open for ImGui)
+                    renderer.beginCompositePass();
+                } else {
+                    // Direct rendering to swapchain (no post-processing)
+                    renderer.beginRenderPass(clearColor);
+
+                    // Draw sky background (renders behind everything)
+                    renderer.drawSky();
+
+                    // Draw reference grid
+                    renderer.drawGrid(150.0f, 5.0f);
+
+                    // Draw current building with visualization mode coloring
+                    // Highlight all selected elements
+                    renderer.drawStructuralFrame(buildings[currentBuilding].elements, buildings[currentBuilding], imgui.getSelectedElements());
+                }
 
                 // Draw ImGui panels
                 imgui.drawMainMenuBar(vizMode, showDemo, showMetrics);
                 imgui.drawBuildingPanel(buildings[currentBuilding], currentBuilding, buildings.size());
                 imgui.drawPhysicsPanel(lastAnalysis, physics.isAvailable());
-                imgui.drawVisualizationPanel(vizMode);
+                imgui.drawVisualizationPanel(vizMode, renderer);
                 renderer.setVisualizationMode(vizMode);  // Update renderer when UI changes mode
                 imgui.drawGeometryEditor(showGeometryEditor);
 

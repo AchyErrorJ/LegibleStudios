@@ -208,9 +208,9 @@ void ImGuiLayer::drawPhysicsPanel(const FrameAnalysis& analysis, bool physicsAva
     ImGui::End();
 }
 
-void ImGuiLayer::drawVisualizationPanel(VisualizationMode& mode) {
+void ImGuiLayer::drawVisualizationPanel(VisualizationMode& mode, Renderer& renderer) {
     ImGui::SetNextWindowPos(ImVec2(10, 430), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(280, 220), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(280, 280), ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin("Visualization Mode")) {
         // Camera view buttons
@@ -234,7 +234,7 @@ void ImGuiLayer::drawVisualizationPanel(VisualizationMode& mode) {
             m_cameraViewRequested = true;
             m_requestedCameraView = CameraView::Right;
         }
-        
+
         ImGui::Separator();
 
         const char* modeNames[] = { "Structural", "Thermal", "Lighting", "Acoustic", "Material", "Wireframe" };
@@ -242,6 +242,14 @@ void ImGuiLayer::drawVisualizationPanel(VisualizationMode& mode) {
 
         if (ImGui::Combo("Mode", &currentMode, modeNames, IM_ARRAYSIZE(modeNames))) {
             mode = static_cast<VisualizationMode>(currentMode);
+        }
+
+        // Material style selector
+        const char* styleNames[] = { "Realistic", "Clean", "Schematic", "Blueprint" };
+        int currentStyle = static_cast<int>(renderer.getMaterialStyle());
+
+        if (ImGui::Combo("Style", &currentStyle, styleNames, IM_ARRAYSIZE(styleNames))) {
+            renderer.setMaterialStyle(static_cast<MaterialStyle>(currentStyle));
         }
 
         ImGui::Separator();
@@ -722,6 +730,127 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                     int minute = static_cast<int>((hours - hour) * 60.0f) % 60;
                     ImGui::Text("Time: %02d:%02d", (hour + 6) % 24, minute);
                 }
+            }
+        }
+
+        ImGui::Separator();
+
+        // SSAO Settings
+        if (ImGui::CollapsingHeader("Ambient Occlusion (SSAO)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            bool ssaoEnabled = renderer.getSSAOEnabled();
+            if (ImGui::Checkbox("Enable SSAO", &ssaoEnabled)) {
+                renderer.setSSAOEnabled(ssaoEnabled);
+            }
+
+            if (ssaoEnabled) {
+                float ssaoRadius = renderer.getSSAORadius();
+                if (ImGui::SliderFloat("Radius", &ssaoRadius, 0.1f, 2.0f, "%.2f")) {
+                    renderer.setSSAORadius(ssaoRadius);
+                }
+
+                float ssaoIntensity = renderer.getSSAOIntensity();
+                if (ImGui::SliderFloat("Intensity", &ssaoIntensity, 0.5f, 4.0f, "%.1f")) {
+                    renderer.setSSAOIntensity(ssaoIntensity);
+                }
+
+                float ssaoBias = renderer.getSSAOBias();
+                if (ImGui::SliderFloat("Bias", &ssaoBias, 0.001f, 0.1f, "%.3f")) {
+                    renderer.setSSAOBias(ssaoBias);
+                }
+
+                // Presets
+                ImGui::Text("Presets:");
+                if (ImGui::Button("Subtle")) {
+                    renderer.setSSAORadius(0.3f);
+                    renderer.setSSAOIntensity(1.0f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Medium")) {
+                    renderer.setSSAORadius(0.5f);
+                    renderer.setSSAOIntensity(1.5f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Strong")) {
+                    renderer.setSSAORadius(0.8f);
+                    renderer.setSSAOIntensity(2.5f);
+                }
+            }
+        }
+
+        ImGui::Separator();
+
+        // Bloom Settings
+        if (ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen)) {
+            bool bloomEnabled = renderer.getBloomEnabled();
+            if (ImGui::Checkbox("Enable Bloom", &bloomEnabled)) {
+                renderer.setBloomEnabled(bloomEnabled);
+            }
+
+            if (bloomEnabled) {
+                float bloomThreshold = renderer.getBloomThreshold();
+                if (ImGui::SliderFloat("Threshold", &bloomThreshold, 0.1f, 3.0f, "%.2f")) {
+                    renderer.setBloomThreshold(bloomThreshold);
+                }
+
+                float bloomIntensity = renderer.getBloomIntensity();
+                if (ImGui::SliderFloat("Bloom Intensity", &bloomIntensity, 0.0f, 1.0f, "%.2f")) {
+                    renderer.setBloomIntensity(bloomIntensity);
+                }
+
+                int bloomIterations = static_cast<int>(renderer.getBloomIterations());
+                if (ImGui::SliderInt("Blur Iterations", &bloomIterations, 1, 10)) {
+                    renderer.setBloomIterations(static_cast<u32>(bloomIterations));
+                }
+
+                // Presets
+                ImGui::Text("Presets:");
+                if (ImGui::Button("Subtle##bloom")) {
+                    renderer.setBloomThreshold(1.5f);
+                    renderer.setBloomIntensity(0.15f);
+                    renderer.setBloomIterations(3);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Medium##bloom")) {
+                    renderer.setBloomThreshold(1.0f);
+                    renderer.setBloomIntensity(0.3f);
+                    renderer.setBloomIterations(5);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Strong##bloom")) {
+                    renderer.setBloomThreshold(0.5f);
+                    renderer.setBloomIntensity(0.5f);
+                    renderer.setBloomIterations(7);
+                }
+            }
+        }
+
+        ImGui::Separator();
+
+        // Tonemapping Settings
+        if (ImGui::CollapsingHeader("Tonemapping", ImGuiTreeNodeFlags_DefaultOpen)) {
+            float exposure = renderer.getExposure();
+            if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f")) {
+                renderer.setExposure(exposure);
+            }
+
+            const char* tonemapModes[] = { "Reinhard", "ACES Filmic", "Uncharted 2" };
+            int currentMode = static_cast<int>(renderer.getTonemapMode());
+            if (ImGui::Combo("Tonemap Mode", &currentMode, tonemapModes, IM_ARRAYSIZE(tonemapModes))) {
+                renderer.setTonemapMode(static_cast<u32>(currentMode));
+            }
+
+            // Exposure presets
+            ImGui::Text("Exposure Presets:");
+            if (ImGui::Button("Indoor")) {
+                renderer.setExposure(1.5f);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Outdoor")) {
+                renderer.setExposure(1.0f);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Bright")) {
+                renderer.setExposure(0.7f);
             }
         }
 
