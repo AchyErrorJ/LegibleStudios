@@ -193,6 +193,87 @@ class ModifyWindowCommand(QUndoCommand):
         self.document.element_modified.emit('window', str(self.window_index))
 
 
+class AddDoorCommand(QUndoCommand):
+    """Command for adding a new door."""
+
+    def __init__(self, document, door_data: Dict):
+        super().__init__("Add Door")
+        self.document = document
+        self.door_data = door_data
+        self.door_index = -1
+
+    def redo(self):
+        """Add the door."""
+        from core.document import Door
+
+        self.door_index = len(self.document._doors)
+        door = Door(
+            index=self.door_index,
+            wall_index=self.door_data.get('wall_index', 0),
+            offset=self.door_data.get('offset', 0),
+            width=self.door_data.get('width', 914),
+            height=self.door_data.get('height', 2134),
+            door_type=self.door_data.get('type', 'swing'),
+            swing=self.door_data.get('swing', 'left_in')
+        )
+        self.document._doors.append(door)
+
+        self.document.set_modified(True)
+        self.document.element_added.emit('door', str(self.door_index))
+        self.document.document_changed.emit()
+
+    def undo(self):
+        """Remove the door."""
+        if self.door_index >= 0 and self.door_index < len(self.document._doors):
+            self.document._doors.pop(self.door_index)
+            # Update indices
+            for i, door in enumerate(self.document._doors):
+                door.index = i
+            self.document.set_modified(True)
+            self.document.element_removed.emit('door', str(self.door_index))
+            self.document.document_changed.emit()
+
+
+class AddWindowCommand(QUndoCommand):
+    """Command for adding a new window."""
+
+    def __init__(self, document, window_data: Dict):
+        super().__init__("Add Window")
+        self.document = document
+        self.window_data = window_data
+        self.window_index = -1
+
+    def redo(self):
+        """Add the window."""
+        from core.document import Window
+
+        self.window_index = len(self.document._windows)
+        window = Window(
+            index=self.window_index,
+            wall_index=self.window_data.get('wall_index', 0),
+            offset=self.window_data.get('offset', 0),
+            width=self.window_data.get('width', 1200),
+            height=self.window_data.get('height', 1200),
+            sill_height=self.window_data.get('sill_height', 900)
+        )
+        self.document._windows.append(window)
+
+        self.document.set_modified(True)
+        self.document.element_added.emit('window', str(self.window_index))
+        self.document.document_changed.emit()
+
+    def undo(self):
+        """Remove the window."""
+        if self.window_index >= 0 and self.window_index < len(self.document._windows):
+            self.document._windows.pop(self.window_index)
+            # Update indices
+            for i, window in enumerate(self.document._windows):
+                window.index = i
+            self.document.set_modified(True)
+            self.document.element_removed.emit('window', str(self.window_index))
+            self.document.document_changed.emit()
+
+
 class MoveWallCommand(QUndoCommand):
     """
     Specialized command for moving walls via grip drag.

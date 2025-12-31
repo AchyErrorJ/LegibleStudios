@@ -587,6 +587,22 @@ class ArchDocument(QObject):
             cmd = DeleteWallCommand(self, index)
             self._undo_stack.push(cmd)
 
+    def add_door_undoable(self, door_data: Dict) -> int:
+        """Add a door with undo support. Returns door index."""
+        from core.commands import AddDoorCommand
+
+        cmd = AddDoorCommand(self, door_data)
+        self._undo_stack.push(cmd)
+        return len(self._doors) - 1
+
+    def add_window_undoable(self, window_data: Dict) -> int:
+        """Add a window with undo support. Returns window index."""
+        from core.commands import AddWindowCommand
+
+        cmd = AddWindowCommand(self, window_data)
+        self._undo_stack.push(cmd)
+        return len(self._windows) - 1
+
     def modify_door(self, index: int, **changes):
         """Modify a door's properties (direct, no undo)."""
         if 0 <= index < len(self._doors):

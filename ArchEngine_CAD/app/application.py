@@ -412,6 +412,8 @@ class ArchEngineApplication(QMainWindow):
         from tools.tool_manager import ToolManager
         from tools.base_tool import ToolType
         from tools.wall_tool import WallTool
+        from tools.door_tool import DoorTool
+        from tools.window_tool import WindowTool
 
         # Create the main plan view
         self.plan_view = PlanView(self.document, self.config, self)
@@ -443,9 +445,17 @@ class ArchEngineApplication(QMainWindow):
         wall_tool = WallTool(self.plan_view, self.document, self.config)
         self.tool_manager.register_tool(ToolType.WALL, wall_tool)
 
+        door_tool = DoorTool(self.plan_view, self.document, self.config)
+        self.tool_manager.register_tool(ToolType.DOOR, door_tool)
+
+        window_tool = WindowTool(self.plan_view, self.document, self.config)
+        self.tool_manager.register_tool(ToolType.WINDOW, window_tool)
+
         # Connect tool actions
         self.action_select.triggered.connect(lambda: self._set_tool(ToolType.SELECT))
         self.action_wall.triggered.connect(lambda: self._set_tool(ToolType.WALL))
+        self.action_door.triggered.connect(lambda: self._set_tool(ToolType.DOOR))
+        self.action_window.triggered.connect(lambda: self._set_tool(ToolType.WINDOW))
 
         # Connect zoom actions
         self.action_zoom_in.triggered.connect(self.plan_view.zoom_in)
@@ -464,6 +474,8 @@ class ArchEngineApplication(QMainWindow):
         """Update action check states when tool changes."""
         self.action_select.setChecked(tool_name == "SelectTool")
         self.action_wall.setChecked(tool_name == "WallTool")
+        self.action_door.setChecked(tool_name == "DoorTool")
+        self.action_window.setChecked(tool_name == "WindowTool")
 
     def _connect_signals(self):
         """Connect document and event signals."""
