@@ -7,6 +7,7 @@
 #include "imgui_layer.hpp"
 #include "mesh.hpp"
 #include "qbd_interface.hpp"
+#include "ipc_server.hpp"
 #include <iostream>
 #include <algorithm>
 #include <chrono>
@@ -253,6 +254,29 @@ int main(int argc, char* argv[]) {
             std::cout << "Physics engine connected\n";
         } else {
             std::cout << "Running without physics engine\n";
+        }
+
+        // Initialize IPC server for CAD app sync
+        IPCServer ipcServer;
+        bool ipcBuildingDirty = false;
+        std::string ipcBuildingJson;
+        std::mutex ipcMutex;
+
+        ipcServer.onBuildingData = [&](const std::string& json) {
+            std::lock_guard<std::mutex> lock(ipcMutex);
+            ipcBuildingJson = json;
+            ipcBuildingDirty = true;
+            std::cout << "[IPC] Building data received (" << json.size() << " bytes)\n";
+        };
+
+        ipcServer.onClientConnected = [](bool connected) {
+            std::cout << "[IPC] CAD app " << (connected ? "connected" : "disconnected") << "\n";
+        };
+
+        if (ipcServer.start("ArchEngine_Kernel")) {
+            std::cout << "[IPC] Server listening on \\\\.\\pipe\\ArchEngine_Kernel\n";
+        } else {
+            std::cout << "[IPC] Failed to start server - CAD sync disabled\n";
         }
 
         // Create ImGui layer
@@ -712,6 +736,58 @@ int main(int argc, char* argv[]) {
             }
 
             window.pollEvents();
+
+            // Poll IPC server for CAD app updates
+            ipcServer.poll();
+
+            // Check if new building data was received from CAD app
+            {
+                std::lock_guard<std::mutex> lock(ipcMutex);
+                if (ipcBuildingDirty) {
+                    ipcBuildingDirty = false;
+                    std::cout << "[IPC] Reloading building from CAD...\n";
+
+                    auto& qbd = qbd::getQBDInterface();
+                    auto layoutOpt = qbd.loadFromJSON(ipcBuildingJson);
+
+                    if (layoutOpt.has_value()) {
+                        Building qbdBuilding = qbd.toBuilding(*layoutOpt);
+                        qbdBuilding.name = "CAD Live Sync";
+
+                        // Scale from mm to feet
+                        const float mmToFeet = 1.0f / 304.8f;
+                        for (auto& elem : qbdBuilding.elements) {
+                            elem.start *= mmToFeet;
+                            elem.end *= mmToFeet;
+                            elem.width *= mmToFeet;
+                            elem.depth *= mmToFeet;
+                            for (auto& v : elem.mesh.vertices) {
+                                v *= mmToFeet;
+                            }
+                        }
+
+                        // Add or update the live building
+                        bool found = false;
+                        for (size_t i = 0; i < buildings.size(); i++) {
+                            if (buildings[i].name == "CAD Live Sync") {
+                                buildings[i] = qbdBuilding;
+                                currentBuilding = i;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            buildings.push_back(qbdBuilding);
+                            currentBuilding = buildings.size() - 1;
+                        }
+
+                        resetCamera();
+                        std::cout << "[IPC] Building updated: " << qbdBuilding.elements.size() << " elements\n";
+                    } else {
+                        std::cerr << "[IPC] Failed to parse building JSON\n";
+                    }
+                }
+            }
 
             // Begin ImGui frame
             imgui.beginFrame();
