@@ -319,10 +319,11 @@ def render_schedules_svg(
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     lines.append(f'<svg xmlns="http://www.w3.org/2000/svg"')
     lines.append(f'     width="1000" height="750"')
-    lines.append(f'     viewBox="0 0 {sheet_width} {sheet_height}">')
+    # Extend viewBox to include title block border at negative coordinates
+    lines.append(f'     viewBox="-300 -300 {sheet_width + 600} {sheet_height + 600}">')
 
-    # Background
-    lines.append('<rect width="100%" height="100%" fill="white"/>')
+    # Background (covers entire viewBox including negative area)
+    lines.append(f'<rect x="-300" y="-300" width="{sheet_width + 600}" height="{sheet_height + 600}" fill="white"/>')
 
     # Styles
     lines.append('''<style>
@@ -382,7 +383,7 @@ def render_schedules_svg(
     # Title block
     if project_info:
         drawing_info = {
-            'title': 'DOOR, WINDOW & FINISH SCHEDULES',
+            'title': 'DOOR, WINDOW &amp; FINISH SCHEDULES',
             'number': 'A-601',
             'scale': 'NOT TO SCALE',
             'sheet': '1 OF 1',

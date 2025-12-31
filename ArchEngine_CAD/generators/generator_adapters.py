@@ -226,11 +226,31 @@ class DetailAdapter(GeneratorAdapter):
 
     def generate(self, data: Dict[str, Any], sheet: SheetConfig) -> GeneratorResult:
         try:
-            from generate_details import DetailGenerator
+            from generate_details import (
+                generate_wall_section_detail,
+                generate_eave_detail,
+                generate_window_detail,
+                generate_door_detail,
+                render_details_svg
+            )
+            from title_block import get_project_info_from_json
 
-            generator = _create_detail_generator_from_data(data)
-            scale = self.parse_scale(sheet.scale)
-            svg_content = generator.generate_details_svg(scale=scale)
+            # Get wall types from data
+            wall_types = data.get('wall_types', [])
+
+            # Generate all details
+            details = [
+                generate_wall_section_detail(wall_types),
+                generate_eave_detail(),
+                generate_window_detail(),
+                generate_door_detail(),
+            ]
+
+            # Get project info for title block
+            project_info = get_project_info_from_json(data)
+
+            # Render to SVG
+            svg_content = render_details_svg(details, project_info)
 
             return GeneratorResult(success=True, svg_content=svg_content)
 
@@ -251,11 +271,29 @@ class ScheduleAdapter(GeneratorAdapter):
 
     def generate(self, data: Dict[str, Any], sheet: SheetConfig) -> GeneratorResult:
         try:
-            from generate_schedules import ScheduleGenerator
+            from generate_schedules import (
+                extract_door_schedule,
+                extract_window_schedule,
+                extract_room_finish_schedule,
+                render_schedules_svg
+            )
+            from title_block import get_project_info_from_json
 
-            generator = _create_schedule_generator_from_data(data)
-            scale = self.parse_scale(sheet.scale)
-            svg_content = generator.generate_schedules_svg(scale=scale)
+            # Extract schedules from data
+            door_schedule = extract_door_schedule(data)
+            window_schedule = extract_window_schedule(data)
+            room_schedule = extract_room_finish_schedule(data)
+
+            # Get project info for title block
+            project_info = get_project_info_from_json(data)
+
+            # Render to SVG
+            svg_content = render_schedules_svg(
+                door_schedule,
+                window_schedule,
+                room_schedule,
+                project_info
+            )
 
             return GeneratorResult(success=True, svg_content=svg_content)
 
