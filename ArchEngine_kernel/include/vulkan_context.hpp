@@ -45,7 +45,12 @@ struct VulkanConfig {
 
 class VulkanContext {
 public:
+    // Standard constructor with GLFW window
     VulkanContext(Window& window, const VulkanConfig& config = {});
+
+    // Embedded mode constructor - accepts external instance and surface
+    VulkanContext(VkInstance instance, VkSurfaceKHR surface, u32 width, u32 height, const VulkanConfig& config = {});
+
     ~VulkanContext();
 
     // Non-copyable
@@ -152,7 +157,11 @@ private:
 
     // Configuration
     VulkanConfig m_config;
-    Window& m_window;
+    Window* m_window = nullptr;  // nullptr in embedded mode
+    bool m_ownsInstance = true;  // false if using external instance
+    bool m_ownsSurface = true;   // false if using external surface
+    u32 m_embeddedWidth = 0;     // Used in embedded mode
+    u32 m_embeddedHeight = 0;    // Used in embedded mode
 
     // Core Vulkan objects
     VkInstance m_instance = VK_NULL_HANDLE;
