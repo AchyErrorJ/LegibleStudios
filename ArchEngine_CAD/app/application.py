@@ -7,7 +7,7 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QMainWindow, QDockWidget, QToolBar, QStatusBar,
     QFileDialog, QMessageBox, QWidget, QVBoxLayout,
-    QSplitter, QLabel
+    QSplitter, QLabel, QTabWidget
 )
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
@@ -15,6 +15,11 @@ from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from app.config import Config
 from core.document import ArchDocument
 from core.events import event_bus
+
+# Sheet system imports
+from sheets.sheet_registry import SheetRegistry
+from panels.sheet_manager import SheetManagerPanel
+from generators.generator_service import GeneratorService
 
 # Optional viewport imports
 try:
@@ -79,6 +84,14 @@ class ArchEngineApplication(QMainWindow):
                 print("[App] VulkanSync client initialized, connecting...")
             except Exception as e:
                 print(f"[App] VulkanSync init failed: {e}")
+
+        # Initialize sheet system
+        self._sheet_registry = SheetRegistry(self)
+        self._generator_service = GeneratorService(
+            self._sheet_registry,
+            lambda: self.document.to_dict(),
+            self
+        )
 
         self._setup_window()
         self._create_actions()
@@ -155,6 +168,11 @@ class ArchEngineApplication(QMainWindow):
         self.action_window = QAction("W&indow", self)
         self.action_window.setCheckable(True)
         self.action_window.setShortcut(QKeySequence("I"))
+
+        # Sheet actions
+        self.action_regenerate_sheets = QAction("Regenerate Sheets", self)
+        self.action_regenerate_sheets.setShortcut(QKeySequence("F4"))
+        self.action_regenerate_sheets.triggered.connect(lambda: self._on_regenerate_sheet(""))
 
         # Toggle actions
         self.action_ortho = QAction("&Ortho", self)
@@ -248,6 +266,8 @@ class ArchEngineApplication(QMainWindow):
         view_menu.addAction(self.action_zoom_fit)
         view_menu.addSeparator()
         view_menu.addAction(self.action_grid)
+        view_menu.addSeparator()
+        view_menu.addAction(self.action_regenerate_sheets)
 
         # Draw menu
         draw_menu = menubar.addMenu("&Draw")
@@ -293,6 +313,8 @@ class ArchEngineApplication(QMainWindow):
         main_toolbar.addSeparator()
         main_toolbar.addAction(self.action_undo)
         main_toolbar.addAction(self.action_redo)
+        main_toolbar.addSeparator()
+        main_toolbar.addAction(self.action_regenerate_sheets)
         self.addToolBar(main_toolbar)
 
         # Tools toolbar
@@ -362,6 +384,36 @@ class ArchEngineApplication(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.properties_dock)
         self.window_menu.addAction(self.properties_dock.toggleViewAction())
 
+        # Sheet Manager dock (left side, tabbed with project browser)
+        self.sheets_dock = QDockWidget("Sheets", self)
+        self.sheets_dock.setObjectName("sheets_dock")
+        self.sheets_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea |
+            Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.sheet_manager = SheetManagerPanel(self._sheet_registry, self)
+        self.sheet_manager.setMinimumWidth(200)
+        self.sheet_manager.regenerate_requested.connect(self._on_regenerate_sheet)
+        self.sheet_manager.sheet_double_clicked.connect(self._on_open_sheet)
+        self.sheets_dock.setWidget(self.sheet_manager)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.sheets_dock)
+        self.tabifyDockWidget(self.project_dock, self.sheets_dock)
+        self.sheets_dock.raise_()  # Show sheets dock by default
+        self.window_menu.addAction(self.sheets_dock.toggleViewAction())
+
+        # Connect generator service signals
+        self._generator_service.generation_started.connect(
+            lambda sid: self.status_bar.showMessage(f"Generating {sid}...")
+        )
+        self._generator_service.generation_completed.connect(
+            lambda sid: self.status_bar.showMessage(f"Generated {sid}", 3000)
+        )
+        self._generator_service.generation_failed.connect(
+            lambda sid, err: self.status_bar.showMessage(f"Generation failed: {err}", 5000)
+        )
+        self._generator_service.progress_updated.connect(self.sheet_manager.show_progress)
+        self._generator_service.all_generation_completed.connect(self.sheet_manager.hide_progress)
+
         # Version History dock (right side, tabbed with properties)
         self.history_dock = QDockWidget("Version History", self)
         self.history_dock.setObjectName("history_dock")
@@ -401,11 +453,17 @@ class ArchEngineApplication(QMainWindow):
             self.document.document_changed.connect(self._on_document_changed_viewport)
 
     def _create_central_widget(self):
-        """Create the central plan view widget with optional split view."""
+        """Create the central tabbed widget with plan view and sheet views."""
         from views.plan_view import PlanView
         from tools.tool_manager import ToolManager
         from tools.base_tool import ToolType
         from tools.wall_tool import WallTool
+
+        # Create central tab widget
+        self.central_tabs = QTabWidget(self)
+        self.central_tabs.setTabsClosable(True)
+        self.central_tabs.setMovable(True)
+        self.central_tabs.tabCloseRequested.connect(self._on_tab_close_requested)
 
         # Create the main plan view
         self.plan_view = PlanView(self.document, self.config, self)
@@ -425,9 +483,17 @@ class ArchEngineApplication(QMainWindow):
             self.central_splitter.addWidget(self._split_viewport)
             self._split_viewport.hide()  # Hidden by default
             self.central_splitter.setSizes([700, 0])  # Start with plan view full
-            self.setCentralWidget(self.central_splitter)
+            self.central_tabs.addTab(self.central_splitter, "Editor")
         else:
-            self.setCentralWidget(self.plan_view)
+            self.central_tabs.addTab(self.plan_view, "Editor")
+
+        # Don't allow closing the Editor tab
+        self.central_tabs.tabBar().setTabButton(0, self.central_tabs.tabBar().ButtonPosition.RightSide, None)
+
+        self.setCentralWidget(self.central_tabs)
+
+        # Track open sheet tabs
+        self._sheet_tabs: dict = {}  # sheet_id -> tab index
 
         # Create tool manager
         self.tool_manager = ToolManager(self.plan_view, self.document, self)
@@ -464,6 +530,11 @@ class ArchEngineApplication(QMainWindow):
         self.document.document_changed.connect(self._update_title)
         event_bus.document_loaded.connect(self._on_document_loaded)
         event_bus.document_modified.connect(self._on_document_modified)
+
+        # Connect generator service to document changes (disabled by default to avoid blocking)
+        # Users can enable auto-regenerate in the sheets panel
+        self._sheet_registry.auto_regenerate = False
+        self._generator_service.connect_to_document(self.document)
 
     def _restore_state(self):
         """Restore window geometry and state."""
@@ -663,18 +734,32 @@ class ArchEngineApplication(QMainWindow):
         self.status_bar.showMessage("Vulkan renderer disconnected", 3000)
 
     def _on_document_changed_viewport(self):
-        """Send document changes to embedded Vulkan viewport."""
-        if HAS_VIEWPORT and hasattr(self, 'viewport_3d') and self.viewport_3d.is_initialized:
-            data = self.document._data
-            if data:
-                self.viewport_3d.load_json(data)
+        """Send document changes to embedded Vulkan viewport(s)."""
+        if not HAS_VIEWPORT:
+            return
+
+        data = self.document._data
+        if not data:
+            return
+
+        # Update dock viewport
+        if hasattr(self, 'viewport_3d') and self.viewport_3d.is_initialized:
+            self.viewport_3d.load_json(data)
+
+        # Update split viewport if in split mode
+        if self._split_viewport and self._split_viewport.is_initialized:
+            self._split_viewport.load_json(data)
 
     def _on_viewport_initialized(self):
         """Handle viewport initialization complete."""
         self.status_bar.showMessage("3D Viewport ready", 3000)
         # Load current document data if available
         if self.document._data:
-            self.viewport_3d.load_json(self.document._data)
+            # Update whichever viewport just initialized
+            if hasattr(self, 'viewport_3d') and self.viewport_3d.is_initialized:
+                self.viewport_3d.load_json(self.document._data)
+            if self._split_viewport and self._split_viewport.is_initialized:
+                self._split_viewport.load_json(self.document._data)
 
     def _on_viewport_load_complete(self, element_count: int):
         """Handle viewport loaded building data."""
@@ -775,3 +860,69 @@ class ArchEngineApplication(QMainWindow):
             return self._split_viewport
 
         return getattr(self, 'viewport_3d', None)
+
+    # =========================================================================
+    # Sheet Operations
+    # =========================================================================
+
+    def _on_regenerate_sheet(self, sheet_id: str):
+        """Handle sheet regeneration request."""
+        if sheet_id:
+            # Regenerate single sheet
+            self._generator_service.generate_sheet(sheet_id)
+        else:
+            # Regenerate all sheets
+            self._generator_service.generate_all()
+
+    def _on_open_sheet(self, sheet_id: str):
+        """Open a sheet in a new tab in the central area."""
+        from views.sheet_view import SheetViewContainer
+
+        sheet = self._sheet_registry.get_sheet(sheet_id)
+        if not sheet:
+            return
+
+        # Check if already open - switch to that tab
+        if sheet_id in self._sheet_tabs:
+            tab_index = self._sheet_tabs[sheet_id]
+            if tab_index < self.central_tabs.count():
+                self.central_tabs.setCurrentIndex(tab_index)
+                return
+
+        # Generate if needed
+        if not sheet.has_content:
+            self._generator_service.generate_sheet(sheet_id)
+
+        # Create sheet view container
+        view_container = SheetViewContainer(self.config, self)
+        view_container.set_sheet(sheet)
+
+        # Add as new tab
+        tab_title = f"{sheet.number}"
+        tab_index = self.central_tabs.addTab(view_container, tab_title)
+        self.central_tabs.setTabToolTip(tab_index, f"{sheet.number} - {sheet.title}")
+        self._sheet_tabs[sheet_id] = tab_index
+
+        # Switch to the new tab
+        self.central_tabs.setCurrentIndex(tab_index)
+
+    def _on_tab_close_requested(self, index: int):
+        """Handle tab close request."""
+        # Don't close the Editor tab (index 0)
+        if index == 0:
+            return
+
+        # Find and remove from sheet_tabs tracking
+        widget = self.central_tabs.widget(index)
+        for sheet_id, tab_idx in list(self._sheet_tabs.items()):
+            if tab_idx == index:
+                del self._sheet_tabs[sheet_id]
+                break
+
+        # Update indices for tabs after the removed one
+        for sheet_id, tab_idx in self._sheet_tabs.items():
+            if tab_idx > index:
+                self._sheet_tabs[sheet_id] = tab_idx - 1
+
+        # Remove the tab
+        self.central_tabs.removeTab(index)
