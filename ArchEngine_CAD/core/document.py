@@ -97,9 +97,11 @@ class Room:
     id: str
     name: str
     room_type: str
-    bounds: Dict[str, float]  # x, y, width, height
+    bounds: Dict[str, float]  # x, y, width, height (bounding box)
     area: float = 0
     center: Optional[Dict[str, float]] = None
+    vertices: Optional[List[List[float]]] = None  # Polygon vertices [[x,z], ...]
+    index: int = -1  # Index in rooms list
 
 
 class ArchDocument(QObject):
@@ -602,6 +604,46 @@ class ArchDocument(QObject):
         cmd = AddWindowCommand(self, window_data)
         self._undo_stack.push(cmd)
         return len(self._windows) - 1
+
+    def add_room_undoable(self, room_data: Dict) -> str:
+        """Add a room with undo support. Returns room ID."""
+        from core.commands import AddRoomCommand
+
+        cmd = AddRoomCommand(self, room_data)
+        self._undo_stack.push(cmd)
+        return cmd.room_id
+
+    def delete_wall_undoable(self, wall_index: int):
+        """Delete a wall with undo support."""
+        from core.commands import DeleteWallCommand
+
+        if 0 <= wall_index < len(self._walls):
+            cmd = DeleteWallCommand(self, wall_index)
+            self._undo_stack.push(cmd)
+
+    def delete_door_undoable(self, door_index: int):
+        """Delete a door with undo support."""
+        from core.commands import DeleteDoorCommand
+
+        if 0 <= door_index < len(self._doors):
+            cmd = DeleteDoorCommand(self, door_index)
+            self._undo_stack.push(cmd)
+
+    def delete_window_undoable(self, window_index: int):
+        """Delete a window with undo support."""
+        from core.commands import DeleteWindowCommand
+
+        if 0 <= window_index < len(self._windows):
+            cmd = DeleteWindowCommand(self, window_index)
+            self._undo_stack.push(cmd)
+
+    def delete_room_undoable(self, room_id: str):
+        """Delete a room with undo support."""
+        from core.commands import DeleteRoomCommand
+
+        if room_id in self._rooms:
+            cmd = DeleteRoomCommand(self, room_id)
+            self._undo_stack.push(cmd)
 
     def modify_door(self, index: int, **changes):
         """Modify a door's properties (direct, no undo)."""

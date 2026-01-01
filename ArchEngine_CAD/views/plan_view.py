@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QGraphicsTextItem, QGraphicsEllipseItem
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QLineF, pyqtSignal
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPainterPath, QFont
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPainterPath, QFont, QPolygonF
 
 from views.base_view import BaseView
 from core.document import ArchDocument, Wall, Door, Window, Room
@@ -1524,8 +1524,21 @@ class DoorItem(QGraphicsItem):
             return QRectF()
 
         pos = self._get_position()
-        margin = 200
-        return QRectF(pos.x() - margin, pos.y() - margin, margin * 2, margin * 2)
+        # Make bounding rect large enough for door swing arc
+        size = self.door.width + 100
+        return QRectF(pos.x() - size, pos.y() - size, size * 2, size * 2)
+
+    def shape(self) -> QPainterPath:
+        """Return shape for hit testing - larger clickable area."""
+        path = QPainterPath()
+        if not self._wall:
+            return path
+
+        pos = self._get_position()
+        # Create a larger clickable area around the door
+        click_size = max(self.door.width / 2, 300)
+        path.addEllipse(pos, click_size, click_size)
+        return path
 
     def _get_position(self) -> QPointF:
         """Calculate door position along wall."""
@@ -1572,29 +1585,100 @@ class DoorItem(QGraphicsItem):
             QPointF(pos.x() + ux * half_width, pos.y() + uz * half_width)
         )
 
-        # Draw door swing arc
+        # Draw door swing symbol
+        # 4 configurations: left_in, left_out, right_in, right_out
+        # Symbol: hinge at one edge, panel line perpendicular to wall,
+        # arc from closed position sweeping to open position
+
+        import math
+
         pen = QPen(Qt.GlobalColor.cyan if self.isSelected() else Qt.GlobalColor.darkGray)
-        pen.setWidth(2)
+        pen.setWidth(30)
         painter.setPen(pen)
 
-        # Door panel line
-        swing_dir = 1 if "left" in self.door.swing else -1
-        panel_end = QPointF(
-            pos.x() + px * self.door.width * swing_dir,
-            pos.y() + pz * self.door.width * swing_dir
-        )
-        painter.drawLine(pos, panel_end)
+        # Parse swing setting
+        swing = self.door.swing.lower() if self.door.swing else "left_in"
+        is_left = "left" in swing
+        is_in = "in" in swing
 
-        # Swing arc
-        painter.drawArc(
-            QRectF(
-                pos.x() - self.door.width,
-                pos.y() - self.door.width,
-                self.door.width * 2,
-                self.door.width * 2
-            ),
-            0, 90 * 16  # Start angle, span (in 1/16 degree units)
-        )
+        # Calculate hinge and free edge positions in world coordinates
+        # Hinge is at one edge of opening, free edge at other edge when closed
+        if is_left:
+            # Hinge at "start" side of opening (negative offset direction)
+            hinge_x = pos.x() - ux * half_width
+            hinge_y = pos.y() - uz * half_width
+            free_closed_x = pos.x() + ux * half_width
+            free_closed_y = pos.y() + uz * half_width
+        else:
+            # Hinge at "end" side of opening (positive offset direction)
+            hinge_x = pos.x() + ux * half_width
+            hinge_y = pos.y() + uz * half_width
+            free_closed_x = pos.x() - ux * half_width
+            free_closed_y = pos.y() - uz * half_width
+
+        # Perpendicular direction for swing (px, pz = -uz, ux)
+        # "in" swings in +perpendicular direction, "out" in -perpendicular
+        swing_mult = 1 if is_in else -1
+
+        # Free edge when door is open (90 degrees from closed)
+        # Panel length = door width = opening width
+        free_open_x = hinge_x + px * self.door.width * swing_mult
+        free_open_y = hinge_y + pz * self.door.width * swing_mult
+
+        # Draw door panel line from hinge to open free edge position
+        painter.drawLine(QPointF(hinge_x, hinge_y), QPointF(free_open_x, free_open_y))
+
+        # Draw swing arc from closed position to open position
+        # Use QPainterPath for more control
+        path = QPainterPath()
+        path.moveTo(free_closed_x, free_closed_y)
+
+        # Arc needs control point - approximate with quadratic bezier
+        # Control point is at the corner of the swing rectangle
+        ctrl_x = hinge_x + ux * self.door.width * (1 if is_left else -1) * 0.55 + px * self.door.width * swing_mult * 0.55
+        ctrl_y = hinge_y + uz * self.door.width * (1 if is_left else -1) * 0.55 + pz * self.door.width * swing_mult * 0.55
+
+        # Actually, let's just draw a proper arc using multiple line segments
+        num_segments = 16
+        for i in range(1, num_segments + 1):
+            t = i / num_segments
+            # Interpolate angle from 0 (closed) to 90 degrees (open)
+            angle = t * math.pi / 2
+
+            # Position along arc: rotate from closed position around hinge
+            if is_left:
+                # Rotate closed_to_hinge vector by angle
+                dx_ch = free_closed_x - hinge_x
+                dy_ch = free_closed_y - hinge_y
+            else:
+                dx_ch = free_closed_x - hinge_x
+                dy_ch = free_closed_y - hinge_y
+
+            # Rotation matrix (swing direction affects rotation sign)
+            cos_a = math.cos(angle * swing_mult)
+            sin_a = math.sin(angle * swing_mult)
+
+            # For perpendicular calculation, we need to rotate in the plane perpendicular to wall
+            # The perpendicular axis is (px, pz), wall axis is (ux, uz)
+            # Rotate the vector from hinge to closed free edge
+            # New position = hinge + rotated(closed_to_hinge)
+
+            # Using 2D rotation in the wall's local coordinate system
+            # Project onto wall and perp axes
+            wall_component = dx_ch * ux + dy_ch * uz  # Component along wall
+            perp_component = dx_ch * px + dy_ch * pz  # Component perpendicular
+
+            # Rotate in wall-perp plane
+            new_wall = wall_component * cos_a - perp_component * sin_a * swing_mult
+            new_perp = wall_component * sin_a * swing_mult + perp_component * cos_a
+
+            # Convert back to world coordinates
+            arc_x = hinge_x + new_wall * ux + new_perp * px
+            arc_y = hinge_y + new_wall * uz + new_perp * pz
+
+            path.lineTo(arc_x, arc_y)
+
+        painter.drawPath(path)
 
 
 class WindowItem(QGraphicsItem):
@@ -1727,6 +1811,103 @@ class WindowItem(QGraphicsItem):
             painter.drawLine(p1, p2)
 
 
+class RoomItem(QGraphicsItem):
+    """Graphics item representing a room."""
+
+    def __init__(self, room: Room, document=None, parent=None):
+        super().__init__(parent)
+        self.room = room
+        self.document = document
+
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setZValue(-10)  # Draw rooms behind walls
+
+    def boundingRect(self) -> QRectF:
+        """Return bounding rectangle."""
+        if not self.room.vertices:
+            # Fallback to bounds
+            b = self.room.bounds
+            return QRectF(b['x'], b['y'], b['width'], b['height'])
+
+        # Calculate bounding rect from vertices
+        xs = [v[0] for v in self.room.vertices]
+        zs = [v[1] for v in self.room.vertices]
+        margin = 100
+        return QRectF(
+            min(xs) - margin, min(zs) - margin,
+            max(xs) - min(xs) + margin * 2,
+            max(zs) - min(zs) + margin * 2
+        )
+
+    def shape(self) -> QPainterPath:
+        """Return shape for hit testing."""
+        path = QPainterPath()
+        if self.room.vertices:
+            polygon = QPolygonF()
+            for v in self.room.vertices:
+                polygon.append(QPointF(v[0], v[1]))
+            path.addPolygon(polygon)
+        return path
+
+    def paint(self, painter: QPainter, option, widget):
+        """Paint the room."""
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Room fill color based on type
+        room_colors = {
+            'living': QColor(200, 230, 200, 60),
+            'bedroom': QColor(200, 200, 230, 60),
+            'kitchen': QColor(230, 220, 200, 60),
+            'bathroom': QColor(200, 220, 230, 60),
+            'dining': QColor(230, 230, 200, 60),
+            'office': QColor(220, 220, 220, 60),
+            'garage': QColor(180, 180, 180, 60),
+            'generic': QColor(210, 210, 210, 40),
+        }
+
+        fill_color = room_colors.get(self.room.room_type, room_colors['generic'])
+        if self.isSelected():
+            fill_color = QColor(100, 200, 255, 80)
+
+        # Draw room polygon
+        if self.room.vertices:
+            polygon = QPolygonF()
+            for v in self.room.vertices:
+                polygon.append(QPointF(v[0], v[1]))
+
+            # Fill
+            painter.setBrush(QBrush(fill_color))
+            pen = QPen(QColor(100, 200, 255) if self.isSelected() else QColor(100, 100, 100), 20, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawPolygon(polygon)
+
+            # Draw room label at center
+            if self.room.center:
+                cx, cz = self.room.center['x'], self.room.center['z']
+            else:
+                xs = [v[0] for v in self.room.vertices]
+                zs = [v[1] for v in self.room.vertices]
+                cx = (min(xs) + max(xs)) / 2
+                cz = (min(zs) + max(zs)) / 2
+
+            # Room name
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            font = painter.font()
+            font.setPointSize(100)
+            font.setBold(True)
+            painter.setFont(font)
+
+            name_text = self.room.name or self.room.room_type.capitalize()
+            painter.drawText(QPointF(cx - 400, cz), name_text)
+
+            # Area text
+            font.setPointSize(80)
+            font.setBold(False)
+            painter.setFont(font)
+            area_m2 = self.room.area / 1e6 if self.room.area else 0
+            painter.drawText(QPointF(cx - 300, cz + 200), f"{area_m2:.1f} m²")
+
+
 class PlanView(BaseView):
     """
     Main 2D floor plan view.
@@ -1742,6 +1923,7 @@ class PlanView(BaseView):
         self._wall_items: List[WallItem] = []
         self._door_items: List[DoorItem] = []
         self._window_items: List[WindowItem] = []
+        self._room_items: List[RoomItem] = []
         self._room_labels: List[RoomLabelItem] = []
 
         # Snap system
@@ -1794,12 +1976,15 @@ class PlanView(BaseView):
             if hasattr(item, '_remove_grips'):
                 item._remove_grips()
             self.scene.removeItem(item)
+        for item in self._room_items:
+            self.scene.removeItem(item)
         for item in self._room_labels:
             self.scene.removeItem(item)
 
         self._wall_items.clear()
         self._door_items.clear()
         self._window_items.clear()
+        self._room_items.clear()
         self._room_labels.clear()
 
         # Add walls
@@ -1826,11 +2011,18 @@ class PlanView(BaseView):
             self.scene.addItem(item)
             self._window_items.append(item)
 
-        # Add room labels
+        # Add rooms (polygon rooms with RoomItem, bounds-only with RoomLabelItem)
         for room_id, room in self.document.rooms.items():
-            label = RoomLabelItem(room)
-            self.scene.addItem(label)
-            self._room_labels.append(label)
+            if room.vertices:
+                # Polygon room - use RoomItem
+                item = RoomItem(room, document=self.document)
+                self.scene.addItem(item)
+                self._room_items.append(item)
+            else:
+                # Bounds-only room - use legacy label
+                label = RoomLabelItem(room)
+                self.scene.addItem(label)
+                self._room_labels.append(label)
 
         self.viewport().update()
 

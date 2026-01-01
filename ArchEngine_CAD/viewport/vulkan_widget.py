@@ -18,12 +18,15 @@ from PyQt6.QtGui import QPainter, QColor
 
 # Find the DLL
 def _find_dll() -> Optional[Path]:
-    """Search for ArchEngineLib.dll - prioritize UE5 worktree."""
+    """Search for ArchEngineLib.dll - prioritize kernel worktree."""
     search_paths = [
-        # Primary: UE5 worktree (where we work)
+        # Primary: Kernel worktree (dedicated engine development)
+        Path(r"X:\ARCH\Software\ArchEngine_Suite_Kernel\ArchEngine_kernel\build\Release"),
+        Path(r"X:\ARCH\Software\ArchEngine_Suite_Kernel\ArchEngine_kernel\build\Debug"),
+        # Relative paths from CAD app
         Path(__file__).parent.parent.parent / "ArchEngine_kernel" / "build" / "Release",
         Path(__file__).parent.parent.parent / "ArchEngine_kernel" / "build" / "Debug",
-        # Absolute UE5 worktree paths
+        # UE5 worktree paths
         Path(r"X:\ARCH\Software\ArchEngine_suite_ue5\ArchEngine_kernel\build\Release"),
         Path(r"X:\ARCH\Software\ArchEngine_suite_ue5\ArchEngine_kernel\build\Debug"),
     ]
@@ -182,15 +185,27 @@ class VulkanViewportWidget(QWidget):
         if not self._initialized or self._lib is None:
             return
 
-        # Update camera
-        self._lib.arch_set_camera(
-            ctypes.c_float(self._camera_yaw),
-            ctypes.c_float(self._camera_pitch),
-            ctypes.c_float(self._camera_distance)
-        )
+        try:
+            # Update camera
+            self._lib.arch_set_camera(
+                ctypes.c_float(self._camera_yaw),
+                ctypes.c_float(self._camera_pitch),
+                ctypes.c_float(self._camera_distance)
+            )
 
-        # Render
-        self._lib.arch_render_frame()
+            # Render
+            result = self._lib.arch_render_frame()
+            if result != 0:
+                # Render failed - stop the render loop
+                print("[VulkanWidget] Render failed, stopping render loop")
+                if self._render_timer:
+                    self._render_timer.stop()
+                self._initialized = False
+        except Exception as e:
+            print(f"[VulkanWidget] Render exception: {e}")
+            if self._render_timer:
+                self._render_timer.stop()
+            self._initialized = False
 
     def resizeEvent(self, event):
         """Handle widget resize."""
