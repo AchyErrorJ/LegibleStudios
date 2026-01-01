@@ -179,11 +179,41 @@ class SelectTool(BaseTool):
         if not selected:
             return
 
-        # TODO: Implement actual deletion through document
-        # For now, just emit status
-        event_bus.status_message.emit(f"Delete: {len(selected)} items (not implemented)", 3000)
+        # Group items by type and collect indices (delete in reverse order to avoid index shifts)
+        walls_to_delete = []
+        doors_to_delete = []
+        windows_to_delete = []
+        rooms_to_delete = []
+
+        for item in selected:
+            item_type = type(item).__name__
+            if item_type == "WallItem":
+                walls_to_delete.append(item.wall.index)
+            elif item_type == "DoorItem":
+                doors_to_delete.append(item.door.index)
+            elif item_type == "WindowItem":
+                windows_to_delete.append(item.window.index)
+            elif item_type == "RoomItem":
+                rooms_to_delete.append(item.room.id)
+
+        # Delete in reverse index order to avoid index shifting issues
+        for idx in sorted(walls_to_delete, reverse=True):
+            self.document.delete_wall_undoable(idx)
+
+        for idx in sorted(doors_to_delete, reverse=True):
+            self.document.delete_door_undoable(idx)
+
+        for idx in sorted(windows_to_delete, reverse=True):
+            self.document.delete_window_undoable(idx)
+
+        for room_id in rooms_to_delete:
+            self.document.delete_room_undoable(room_id)
+
+        total_deleted = len(walls_to_delete) + len(doors_to_delete) + len(windows_to_delete) + len(rooms_to_delete)
+        event_bus.status_message.emit(f"Deleted {total_deleted} item(s)", 3000)
+        self._emit_selection_changed()
 
     def _emit_selection_changed(self):
         """Emit selection changed signal."""
         selected = self.view.scene.selectedItems()
-        event_bus.selection_changed.emit([id(item) for item in selected])
+        event_bus.selection_changed.emit(selected)

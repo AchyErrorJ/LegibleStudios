@@ -18,6 +18,7 @@ class ToolType(Enum):
     WALL = "wall"
     DOOR = "door"
     WINDOW = "window"
+    ROOM = "room"
     PAN = "pan"
     ZOOM = "zoom"
 

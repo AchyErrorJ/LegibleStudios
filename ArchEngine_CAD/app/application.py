@@ -147,6 +147,10 @@ class ArchEngineApplication(QMainWindow):
         self.action_redo.setShortcut(QKeySequence.StandardKey.Redo)
         self.action_redo.triggered.connect(self._on_redo)
 
+        self.action_delete = QAction("&Delete", self)
+        self.action_delete.setShortcut(QKeySequence.StandardKey.Delete)
+        self.action_delete.triggered.connect(self._on_delete)
+
         # View actions
         self.action_zoom_in = QAction("Zoom &In", self)
         self.action_zoom_in.setShortcut(QKeySequence.StandardKey.ZoomIn)
@@ -174,6 +178,10 @@ class ArchEngineApplication(QMainWindow):
         self.action_window = QAction("W&indow", self)
         self.action_window.setCheckable(True)
         self.action_window.setShortcut(QKeySequence("I"))
+
+        self.action_room = QAction("&Room", self)
+        self.action_room.setCheckable(True)
+        self.action_room.setShortcut(QKeySequence("R"))
 
         # Sheet actions
         self.action_regenerate_sheets = QAction("Regenerate Sheets", self)
@@ -264,6 +272,8 @@ class ArchEngineApplication(QMainWindow):
         edit_menu = menubar.addMenu("&Edit")
         edit_menu.addAction(self.action_undo)
         edit_menu.addAction(self.action_redo)
+        edit_menu.addSeparator()
+        edit_menu.addAction(self.action_delete)
 
         # View menu
         view_menu = menubar.addMenu("&View")
@@ -280,6 +290,7 @@ class ArchEngineApplication(QMainWindow):
         draw_menu.addAction(self.action_wall)
         draw_menu.addAction(self.action_door)
         draw_menu.addAction(self.action_window)
+        draw_menu.addAction(self.action_room)
 
         # Tools menu
         tools_menu = menubar.addMenu("&Tools")
@@ -330,6 +341,7 @@ class ArchEngineApplication(QMainWindow):
         tools_toolbar.addAction(self.action_wall)
         tools_toolbar.addAction(self.action_door)
         tools_toolbar.addAction(self.action_window)
+        tools_toolbar.addAction(self.action_room)
         self.addToolBar(tools_toolbar)
 
         # Options toolbar
@@ -361,6 +373,7 @@ class ArchEngineApplication(QMainWindow):
     def _create_dock_widgets(self):
         """Create dockable panels."""
         from panels.version_history import VersionHistoryPanel
+        from panels.properties_panel import PropertiesPanel
 
         # Project Browser dock (left side)
         self.project_dock = QDockWidget("Project Browser", self)
@@ -383,10 +396,9 @@ class ArchEngineApplication(QMainWindow):
             Qt.DockWidgetArea.LeftDockWidgetArea |
             Qt.DockWidgetArea.RightDockWidgetArea
         )
-        # Placeholder widget for now
-        properties_widget = QWidget()
-        properties_widget.setMinimumWidth(250)
-        self.properties_dock.setWidget(properties_widget)
+        self.properties_panel = PropertiesPanel(self.document)
+        self.properties_panel.setMinimumWidth(250)
+        self.properties_dock.setWidget(self.properties_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.properties_dock)
         self.window_menu.addAction(self.properties_dock.toggleViewAction())
 
@@ -464,6 +476,9 @@ class ArchEngineApplication(QMainWindow):
         from tools.tool_manager import ToolManager
         from tools.base_tool import ToolType
         from tools.wall_tool import WallTool
+        from tools.door_tool import DoorTool
+        from tools.window_tool import WindowTool
+        from tools.room_tool import RoomTool
 
         # Create central tab widget
         self.central_tabs = QTabWidget(self)
@@ -509,9 +524,21 @@ class ArchEngineApplication(QMainWindow):
         wall_tool = WallTool(self.plan_view, self.document, self.config)
         self.tool_manager.register_tool(ToolType.WALL, wall_tool)
 
+        door_tool = DoorTool(self.plan_view, self.document, self.config)
+        self.tool_manager.register_tool(ToolType.DOOR, door_tool)
+
+        window_tool = WindowTool(self.plan_view, self.document, self.config)
+        self.tool_manager.register_tool(ToolType.WINDOW, window_tool)
+
+        room_tool = RoomTool(self.plan_view, self.document, self.config)
+        self.tool_manager.register_tool(ToolType.ROOM, room_tool)
+
         # Connect tool actions
         self.action_select.triggered.connect(lambda: self._set_tool(ToolType.SELECT))
         self.action_wall.triggered.connect(lambda: self._set_tool(ToolType.WALL))
+        self.action_door.triggered.connect(lambda: self._set_tool(ToolType.DOOR))
+        self.action_window.triggered.connect(lambda: self._set_tool(ToolType.WINDOW))
+        self.action_room.triggered.connect(lambda: self._set_tool(ToolType.ROOM))
 
         # Connect zoom actions
         self.action_zoom_in.triggered.connect(self.plan_view.zoom_in)
@@ -530,6 +557,9 @@ class ArchEngineApplication(QMainWindow):
         """Update action check states when tool changes."""
         self.action_select.setChecked(tool_name == "SelectTool")
         self.action_wall.setChecked(tool_name == "WallTool")
+        self.action_door.setChecked(tool_name == "DoorTool")
+        self.action_window.setChecked(tool_name == "WindowTool")
+        self.action_room.setChecked(tool_name == "RoomTool")
 
     def _connect_signals(self):
         """Connect document and event signals."""
@@ -651,6 +681,13 @@ class ArchEngineApplication(QMainWindow):
     def _on_redo(self):
         """Redo last undone action."""
         self.document.undo_stack.redo()
+
+    def _on_delete(self):
+        """Delete selected elements."""
+        if self.tool_manager and self.tool_manager.current_tool:
+            tool = self.tool_manager.current_tool
+            if hasattr(tool, '_delete_selected'):
+                tool._delete_selected()
 
     # =========================================================================
     # Toggle Operations
