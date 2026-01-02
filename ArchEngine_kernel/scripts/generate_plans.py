@@ -242,46 +242,47 @@ class PlanGenerator:
 .dim-ext {{ stroke: #000; stroke-width: 2; }}
 .dim-text {{ font: bold {self.dim_text_size}px Arial; text-anchor: middle; }}
 .title {{ font: bold {self.title_text_size}px Arial; }}
+/* LOD visibility control - hidden by viewer based on zoom */
+.lod-hide {{ opacity: 0; pointer-events: none; }}
 </style>
 </defs>
 <rect x="{vb_x}" y="{vb_y}" width="{vb_w}" height="{vb_h}" fill="white"/>
 ''')
 
-        # Title
-        svg.append(f'<text x="{self.width/2}" y="{-margin + 400}" class="title" text-anchor="middle">FLOOR PLAN - LEVEL 1</text>')
+        # === LOD 0: Basic geometry (walls, structure) ===
+        svg.append('<g id="lod-0" data-lod="0">')
+        svg.append(self._generate_walls())
+        svg.append(self._generate_openings())
+        svg.append('</g>')
 
+        # === LOD 1: Doors, windows, room names, navigation ===
+        svg.append('<g id="lod-1" data-lod="1">')
+        svg.append(self._generate_door_symbols())
+        svg.append(self._generate_window_symbols())
+        svg.append(self._generate_room_labels(names_only=True))
         # Grid lines (only for commercial/non-residential)
         if not self.is_residential:
             svg.append(self._generate_grid_lines())
-
-        # Walls
-        svg.append(self._generate_walls())
-
-        # Openings (doors and windows cut through walls)
-        svg.append(self._generate_openings())
-
-        # Door symbols
-        svg.append(self._generate_door_symbols())
-
-        # Window symbols
-        svg.append(self._generate_window_symbols())
-
-        # Room labels
-        svg.append(self._generate_room_labels())
-
-        # Ladder dimensions
-        svg.append(self._generate_ladder_dimensions())
-
-        # North arrow
         svg.append(self._generate_north_arrow(-margin + 800, 1500))
-
-        # Scale bar
-        svg.append(self._generate_scale_bar(-margin + 500, self.depth - 500))
-
+        # Title
+        svg.append(f'<text x="{self.width/2}" y="{-margin + 400}" class="title" text-anchor="middle">FLOOR PLAN - LEVEL 1</text>')
         # Title block
         project_info = get_project_info_from_json(self.data)
         drawing_info = get_drawing_info('floor_plan', '1:100')
         svg.append(generate_title_block(self.width, self.depth, project_info, drawing_info, scale, margin))
+        svg.append('</g>')
+
+        # === LOD 2: Dimensions, areas, scale ===
+        svg.append('<g id="lod-2" data-lod="2">')
+        svg.append(self._generate_room_labels(areas_only=True))
+        svg.append(self._generate_ladder_dimensions())
+        svg.append(self._generate_scale_bar(-margin + 500, self.depth - 500))
+        svg.append('</g>')
+
+        # === LOD 3: Notes, detail callouts (future) ===
+        svg.append('<g id="lod-3" data-lod="3">')
+        svg.append('<!-- Notes and detail callouts go here -->')
+        svg.append('</g>')
 
         svg.append('</svg>')
         return '\n'.join(svg)
@@ -347,61 +348,56 @@ class PlanGenerator:
 .dim-text {{ font: bold {self.dim_text_size}px Arial; text-anchor: middle; }}
 .legend-text {{ font: {self.dim_text_size}px Arial; }}
 .legend-title {{ font: bold {self.room_text_size}px Arial; }}
+/* LOD visibility control - hidden by viewer based on zoom */
+.lod-hide {{ opacity: 0; pointer-events: none; }}
 </style>
 </defs>
 <rect x="{vb_x}" y="{vb_y}" width="{vb_w}" height="{vb_h}" fill="white"/>
 ''')
 
-        # Title
-        svg.append(f'<text x="{self.width/2}" y="{-overhang - margin + 500}" class="title" text-anchor="middle">ROOF PLAN</text>')
-        svg.append(f'<text x="{self.width/2}" y="{-overhang - margin + 900}" class="subtitle" text-anchor="middle">Scale: 1:100 | {roof_type.title()} Roof - {pitch}:12 Pitch</text>')
-
-        # Grid lines (only for commercial/non-residential)
-        if not self.is_residential:
-            svg.append(self._generate_roof_grid_lines())
-
-        # Roof outline with overhang
+        # === LOD 0: Basic geometry (roof outline, building outline) ===
+        svg.append('<g id="lod-0" data-lod="0">')
         svg.append(f'''<!-- Roof Outline -->
 <rect x="{-overhang}" y="{-overhang}" width="{roof_width}" height="{roof_depth}" class="roof-outline"/>''')
-
-        # Building outline (dashed, inside roof)
         svg.append(f'''<!-- Building Outline -->
 <rect x="0" y="0" width="{self.width}" height="{self.depth}" class="building-outline"/>''')
-
         # Roof elements based on type
         if roof_type == 'gable':
             svg.append(self._generate_gable_roof(overhang, pitch))
         elif roof_type == 'hip':
             svg.append(self._generate_hip_roof(overhang, pitch))
         else:
-            # Default to gable
             svg.append(self._generate_gable_roof(overhang, pitch))
+        svg.append('</g>')
 
-        # Skylights
+        # === LOD 1: Features, navigation, titles ===
+        svg.append('<g id="lod-1" data-lod="1">')
         svg.append(self._generate_skylights())
-
-        # Gutters and downspouts
         svg.append(self._generate_gutters(overhang))
-
-        # Dimensions
-        svg.append(self._generate_roof_dimensions(overhang))
-
-        # North arrow
+        # Grid lines (only for commercial/non-residential)
+        if not self.is_residential:
+            svg.append(self._generate_roof_grid_lines())
         svg.append(self._generate_north_arrow(self.width + overhang + margin - 1000, 1500))
-
-        # Legend
-        svg.append(self._generate_roof_legend(-overhang - margin + 500, self.depth + overhang + 800))
-
-        # Roof areas
-        svg.append(self._generate_roof_areas(overhang, pitch))
-
-        # Scale bar
-        svg.append(self._generate_scale_bar(self.width/2 - 1000, self.depth + overhang + 2500))
-
+        # Title
+        svg.append(f'<text x="{self.width/2}" y="{-overhang - margin + 500}" class="title" text-anchor="middle">ROOF PLAN</text>')
+        svg.append(f'<text x="{self.width/2}" y="{-overhang - margin + 900}" class="subtitle" text-anchor="middle">Scale: 1:100 | {roof_type.title()} Roof - {pitch}:12 Pitch</text>')
         # Title block
         project_info = get_project_info_from_json(self.data)
         drawing_info = get_drawing_info('roof_plan', '1:100')
         svg.append(generate_title_block(roof_width, roof_depth, project_info, drawing_info, scale, margin))
+        svg.append('</g>')
+
+        # === LOD 2: Dimensions, areas, scale ===
+        svg.append('<g id="lod-2" data-lod="2">')
+        svg.append(self._generate_roof_dimensions(overhang))
+        svg.append(self._generate_roof_areas(overhang, pitch))
+        svg.append(self._generate_scale_bar(self.width/2 - 1000, self.depth + overhang + 2500))
+        svg.append('</g>')
+
+        # === LOD 3: Legend, notes, details ===
+        svg.append('<g id="lod-3" data-lod="3">')
+        svg.append(self._generate_roof_legend(-overhang - margin + 500, self.depth + overhang + 800))
+        svg.append('</g>')
 
         svg.append('</svg>')
         return '\n'.join(svg)
@@ -857,14 +853,24 @@ class PlanGenerator:
 
         return '\n'.join(windows_svg)
 
-    def _generate_room_labels(self) -> str:
+    def _generate_room_labels(self, names_only: bool = False, areas_only: bool = False) -> str:
         """Generate room labels with areas.
 
         Room centers use x and z coordinates (plan view coordinates).
         In the JSON, 'center' may have 'x', 'y' (height), and 'z' keys,
         or it may use 'x' and 'y' for plan coordinates. We try both.
+
+        Args:
+            names_only: If True, only render room names (for LOD 1)
+            areas_only: If True, only render room areas (for LOD 2)
         """
-        labels = ['<!-- Room Labels -->']
+        if names_only:
+            labels = ['<!-- Room Names (LOD 1) -->']
+        elif areas_only:
+            labels = ['<!-- Room Areas (LOD 2) -->']
+        else:
+            labels = ['<!-- Room Labels -->']
+
         name_size = self.room_text_size
         area_size = self.room_area_size
 
@@ -878,9 +884,10 @@ class PlanGenerator:
                 # Convert area from mm² to m²
                 area_m2 = room.area / 1_000_000 if room.area > 10000 else room.area
 
-                labels.append(f'<text x="{cx}" y="{cz - 200}" font-family="Arial" font-size="{name_size}" font-weight="500" text-anchor="middle">{room.name.upper()}</text>')
-                if area_m2 > 0:
-                    labels.append(f'<text x="{cx}" y="{cz + 300}" font-family="Arial" font-size="{area_size}" text-anchor="middle" fill="#555">{area_m2:.1f} m&#178;</text>')
+                if not areas_only:
+                    labels.append(f'<text x="{cx}" y="{cz - 200}" font-family="Arial" font-size="{name_size}" font-weight="500" text-anchor="middle" class="room-label">{room.name.upper()}</text>')
+                if not names_only and area_m2 > 0:
+                    labels.append(f'<text x="{cx}" y="{cz + 300}" font-family="Arial" font-size="{area_size}" text-anchor="middle" fill="#555" class="room-area">{area_m2:.1f} m&#178;</text>')
 
             elif room.bounds:
                 # Calculate center from bounds
@@ -891,9 +898,10 @@ class PlanGenerator:
                 # Convert area from mm² to m²
                 area_m2 = room.area / 1_000_000 if room.area > 10000 else room.area
 
-                labels.append(f'<text x="{cx}" y="{cz - 200}" font-family="Arial" font-size="{name_size}" font-weight="500" text-anchor="middle">{room.name.upper()}</text>')
-                if area_m2 > 0:
-                    labels.append(f'<text x="{cx}" y="{cz + 300}" font-family="Arial" font-size="{area_size}" text-anchor="middle" fill="#555">{area_m2:.1f} m&#178;</text>')
+                if not areas_only:
+                    labels.append(f'<text x="{cx}" y="{cz - 200}" font-family="Arial" font-size="{name_size}" font-weight="500" text-anchor="middle" class="room-label">{room.name.upper()}</text>')
+                if not names_only and area_m2 > 0:
+                    labels.append(f'<text x="{cx}" y="{cz + 300}" font-family="Arial" font-size="{area_size}" text-anchor="middle" fill="#555" class="room-area">{area_m2:.1f} m&#178;</text>')
 
         return '\n'.join(labels)
 

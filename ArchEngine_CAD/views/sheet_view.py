@@ -220,12 +220,26 @@ class SheetView(QGraphicsView):
                 self._zoom = new_zoom
                 self.scale(factor, factor)
 
+
     # =========================================================================
     # Internal Methods
     # =========================================================================
 
-    def _load_svg(self, svg_content: str):
-        """Load SVG content into the view."""
+    def _load_svg(self, svg_content: str, preserve_transform: bool = False):
+        """Load SVG content into the view.
+
+        Args:
+            svg_content: Raw SVG string
+            preserve_transform: If True, maintain current zoom/pan (for LOD reload)
+        """
+        # Store raw content for LOD re-injection
+        self._raw_svg_content = svg_content
+
+        # Save current transform if preserving
+        old_transform = self.transform() if preserve_transform else None
+        old_scroll_h = self.horizontalScrollBar().value() if preserve_transform else 0
+        old_scroll_v = self.verticalScrollBar().value() if preserve_transform else 0
+
         self._clear()
 
         try:
@@ -241,6 +255,7 @@ class SheetView(QGraphicsView):
                 svg_content = remove_dimensions_from_svg(svg_content)
             else:
                 dimensions = []
+
 
             # Create renderer from SVG content
             svg_bytes = QByteArray(svg_content.encode('utf-8'))
@@ -258,8 +273,14 @@ class SheetView(QGraphicsView):
             # Create editable dimension items
             self._create_dimension_items(dimensions)
 
-            # Fit to view
-            self.zoom_fit()
+            # Restore transform or fit to view
+            if preserve_transform and old_transform:
+                self.setTransform(old_transform)
+                self.horizontalScrollBar().setValue(old_scroll_h)
+                self.verticalScrollBar().setValue(old_scroll_v)
+            else:
+                self.zoom_fit()
+
 
         except Exception as e:
             self._show_placeholder(f"Error loading SVG: {e}")
