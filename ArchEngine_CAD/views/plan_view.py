@@ -1454,6 +1454,25 @@ class WallItem(QGraphicsItem):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(sel_path)
 
+        # Draw pin indicator if pinned
+        if self.wall.is_pinned:
+            self._draw_pin_indicator(painter, x1, z1, x2, z2)
+
+    def _draw_pin_indicator(self, painter: QPainter, x1: float, z1: float, x2: float, z2: float):
+        """Draw a pin icon at the center of the wall."""
+        # Calculate wall center
+        cx = (x1 + x2) / 2
+        cz = (z1 + z2) / 2
+
+        # Draw pin icon (red circle with white dot)
+        painter.save()
+        painter.setPen(QPen(QColor(255, 100, 100), 30))
+        painter.setBrush(QBrush(QColor(255, 100, 100, 180)))
+        painter.drawEllipse(QPointF(cx, cz), 120, 120)
+        painter.setPen(QPen(Qt.GlobalColor.white, 40))
+        painter.drawPoint(QPointF(cx, cz))
+        painter.restore()
+
 
 class DoorItem(QGraphicsItem):
     """Graphics item representing a door."""
@@ -1680,6 +1699,16 @@ class DoorItem(QGraphicsItem):
 
         painter.drawPath(path)
 
+        # Draw pin indicator if pinned
+        if self.door.is_pinned:
+            painter.save()
+            painter.setPen(QPen(QColor(255, 100, 100), 30))
+            painter.setBrush(QBrush(QColor(255, 100, 100, 180)))
+            painter.drawEllipse(pos, 100, 100)
+            painter.setPen(QPen(Qt.GlobalColor.white, 40))
+            painter.drawPoint(pos)
+            painter.restore()
+
 
 class WindowItem(QGraphicsItem):
     """Graphics item representing a window."""
@@ -1810,6 +1839,16 @@ class WindowItem(QGraphicsItem):
             )
             painter.drawLine(p1, p2)
 
+        # Draw pin indicator if pinned
+        if self.window.is_pinned:
+            painter.save()
+            painter.setPen(QPen(QColor(255, 100, 100), 30))
+            painter.setBrush(QBrush(QColor(255, 100, 100, 180)))
+            painter.drawEllipse(pos, 100, 100)
+            painter.setPen(QPen(Qt.GlobalColor.white, 40))
+            painter.drawPoint(pos)
+            painter.restore()
+
 
 class RoomItem(QGraphicsItem):
     """Graphics item representing a room."""
@@ -1906,6 +1945,16 @@ class RoomItem(QGraphicsItem):
             painter.setFont(font)
             area_m2 = self.room.area / 1e6 if self.room.area else 0
             painter.drawText(QPointF(cx - 300, cz + 200), f"{area_m2:.1f} m²")
+
+            # Draw pin indicator if pinned
+            if self.room.is_pinned:
+                painter.save()
+                painter.setPen(QPen(QColor(255, 100, 100), 30))
+                painter.setBrush(QBrush(QColor(255, 100, 100, 180)))
+                painter.drawEllipse(QPointF(cx, cz - 300), 120, 120)
+                painter.setPen(QPen(Qt.GlobalColor.white, 40))
+                painter.drawPoint(QPointF(cx, cz - 300))
+                painter.restore()
 
 
 class PlanView(BaseView):

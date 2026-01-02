@@ -26,6 +26,9 @@ class Wall:
     height: float = 2700
     category: str = "interior"  # exterior, interior, wet_wall
     wall_type: str = ""
+    # Constraint fields
+    is_pinned: bool = False
+    locked_properties: List[str] = field(default_factory=list)
 
     @property
     def start_2d(self) -> Tuple[float, float]:
@@ -55,6 +58,9 @@ class Door:
     height: float = 2134
     door_type: str = "swing"
     swing: str = "left_in"
+    # Constraint fields
+    is_pinned: bool = False
+    locked_properties: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -66,6 +72,9 @@ class Window:
     width: float = 1200
     height: float = 1200
     sill_height: float = 900
+    # Constraint fields
+    is_pinned: bool = False
+    locked_properties: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -102,6 +111,9 @@ class Room:
     center: Optional[Dict[str, float]] = None
     vertices: Optional[List[List[float]]] = None  # Polygon vertices [[x,z], ...]
     index: int = -1  # Index in rooms list
+    # Constraint fields
+    is_pinned: bool = False
+    locked_properties: List[str] = field(default_factory=list)
 
 
 class ArchDocument(QObject):
@@ -115,6 +127,7 @@ class ArchDocument(QObject):
     element_added = pyqtSignal(str, str)      # element_type, element_id
     element_modified = pyqtSignal(str, str)   # element_type, element_id
     element_removed = pyqtSignal(str, str)    # element_type, element_id
+    element_pinned = pyqtSignal(str, str, bool)  # element_type, element_id, is_pinned
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -369,7 +382,9 @@ class ArchDocument(QObject):
                 end=tuple(w.get('end', [0, 0, 0])),
                 height=w.get('height', 2700),
                 category=w.get('category', 'interior'),
-                wall_type=w.get('wall_type', '')
+                wall_type=w.get('wall_type', ''),
+                is_pinned=w.get('is_pinned', False),
+                locked_properties=w.get('locked_properties', [])
             )
             self._walls.append(wall)
 
@@ -382,7 +397,9 @@ class ArchDocument(QObject):
                 width=d.get('width', 914),
                 height=d.get('height', 2134),
                 door_type=d.get('type', 'swing'),
-                swing=d.get('swing', 'left_in')
+                swing=d.get('swing', 'left_in'),
+                is_pinned=d.get('is_pinned', False),
+                locked_properties=d.get('locked_properties', [])
             )
             self._doors.append(door)
 
@@ -394,7 +411,9 @@ class ArchDocument(QObject):
                 offset=w.get('offset', 0),
                 width=w.get('width', 1200),
                 height=w.get('height', 1200),
-                sill_height=w.get('sill_height', 900)
+                sill_height=w.get('sill_height', 900),
+                is_pinned=w.get('is_pinned', False),
+                locked_properties=w.get('locked_properties', [])
             )
             self._windows.append(window)
 
@@ -406,7 +425,9 @@ class ArchDocument(QObject):
                 room_type=r.get('room_type', 'room'),
                 bounds=r.get('bounds', {'x': 0, 'y': 0, 'width': 0, 'height': 0}),
                 area=r.get('area', 0),
-                center=r.get('center')
+                center=r.get('center'),
+                is_pinned=r.get('is_pinned', False),
+                locked_properties=r.get('locked_properties', [])
             )
             self._rooms[room_id] = room
 
@@ -427,6 +448,9 @@ class ArchDocument(QObject):
             wall_data['height'] = wall.height
             wall_data['category'] = wall.category
             wall_data['wall_type'] = wall.wall_type
+            # Constraint fields
+            wall_data['is_pinned'] = wall.is_pinned
+            wall_data['locked_properties'] = wall.locked_properties
             walls_batch.append(wall_data)
         self._data['walls_batch'] = walls_batch
 
@@ -444,6 +468,9 @@ class ArchDocument(QObject):
             door_data['height'] = door.height
             door_data['type'] = door.door_type
             door_data['swing'] = door.swing
+            # Constraint fields
+            door_data['is_pinned'] = door.is_pinned
+            door_data['locked_properties'] = door.locked_properties
             doors.append(door_data)
         self._data['doors'] = doors
 
@@ -460,6 +487,9 @@ class ArchDocument(QObject):
             window_data['width'] = window.width
             window_data['height'] = window.height
             window_data['sill_height'] = window.sill_height
+            # Constraint fields
+            window_data['is_pinned'] = window.is_pinned
+            window_data['locked_properties'] = window.locked_properties
             windows.append(window_data)
         self._data['windows'] = windows
 
@@ -471,7 +501,10 @@ class ArchDocument(QObject):
                 'room_type': room.room_type,
                 'bounds': room.bounds,
                 'area': room.area,
-                'center': room.center
+                'center': room.center,
+                # Constraint fields
+                'is_pinned': room.is_pinned,
+                'locked_properties': room.locked_properties
             }
         self._data['rooms'] = rooms
 
@@ -773,3 +806,126 @@ class ArchDocument(QObject):
 
         # Return a copy to prevent external modification
         return copy.deepcopy(self._data)
+
+    # =========================================================================
+    # Constraint System (Pin/Lock)
+    # =========================================================================
+
+    def get_element(self, element_type: str, element_id: str):
+        """
+        Get an element by type and ID.
+
+        Args:
+            element_type: 'wall', 'door', 'window', or 'room'
+            element_id: Element index (as string) or room ID
+
+        Returns:
+            The element or None if not found
+        """
+        try:
+            if element_type == 'wall':
+                idx = int(element_id)
+                if 0 <= idx < len(self._walls):
+                    return self._walls[idx]
+            elif element_type == 'door':
+                idx = int(element_id)
+                if 0 <= idx < len(self._doors):
+                    return self._doors[idx]
+            elif element_type == 'window':
+                idx = int(element_id)
+                if 0 <= idx < len(self._windows):
+                    return self._windows[idx]
+            elif element_type == 'room':
+                return self._rooms.get(element_id)
+        except (ValueError, IndexError):
+            pass
+        return None
+
+    def pin_element(self, element_type: str, element_id: str, pinned: bool = True):
+        """
+        Pin or unpin an element.
+
+        Args:
+            element_type: 'wall', 'door', 'window', or 'room'
+            element_id: Element index (as string) or room ID
+            pinned: True to pin, False to unpin
+        """
+        element = self.get_element(element_type, element_id)
+        if element:
+            element.is_pinned = pinned
+            self.element_pinned.emit(element_type, element_id, pinned)
+            self.element_modified.emit(element_type, element_id)
+            self._modified = True
+
+    def lock_property(self, element_type: str, element_id: str, property_name: str):
+        """
+        Lock a specific property on an element.
+
+        Args:
+            element_type: 'wall', 'door', 'window', or 'room'
+            element_id: Element index (as string) or room ID
+            property_name: Name of the property to lock
+        """
+        element = self.get_element(element_type, element_id)
+        if element and property_name not in element.locked_properties:
+            element.locked_properties.append(property_name)
+            self.element_modified.emit(element_type, element_id)
+            self._modified = True
+
+    def unlock_property(self, element_type: str, element_id: str, property_name: str):
+        """
+        Unlock a specific property on an element.
+
+        Args:
+            element_type: 'wall', 'door', 'window', or 'room'
+            element_id: Element index (as string) or room ID
+            property_name: Name of the property to unlock
+        """
+        element = self.get_element(element_type, element_id)
+        if element and property_name in element.locked_properties:
+            element.locked_properties.remove(property_name)
+            self.element_modified.emit(element_type, element_id)
+            self._modified = True
+
+    def get_pinned_elements(self) -> Dict[str, List[str]]:
+        """
+        Get all pinned elements by type.
+
+        Returns:
+            Dictionary with lists of pinned element IDs by type
+        """
+        pinned = {"walls": [], "doors": [], "windows": [], "rooms": []}
+        for wall in self._walls:
+            if wall.is_pinned:
+                pinned["walls"].append(str(wall.index))
+        for door in self._doors:
+            if door.is_pinned:
+                pinned["doors"].append(str(door.index))
+        for window in self._windows:
+            if window.is_pinned:
+                pinned["windows"].append(str(window.index))
+        for room_id, room in self._rooms.items():
+            if room.is_pinned:
+                pinned["rooms"].append(room_id)
+        return pinned
+
+    def is_property_locked(self, element_type: str, element_id: str, property_name: str) -> bool:
+        """
+        Check if a property is locked.
+
+        A property is considered locked if:
+        - The element is pinned (all properties locked), OR
+        - The specific property is in locked_properties
+
+        Args:
+            element_type: 'wall', 'door', 'window', or 'room'
+            element_id: Element index (as string) or room ID
+            property_name: Name of the property to check
+
+        Returns:
+            True if the property is locked, False otherwise
+        """
+        element = self.get_element(element_type, element_id)
+        if element:
+            return element.is_pinned or property_name in element.locked_properties
+        return False

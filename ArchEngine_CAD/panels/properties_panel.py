@@ -72,6 +72,16 @@ class PropertiesPanel(QWidget):
         layout = QFormLayout(self.wall_group)
         layout.setSpacing(5)
 
+        # Pin toggle at top
+        pin_layout = QHBoxLayout()
+        self.wall_pin_btn = QPushButton("Pin")
+        self.wall_pin_btn.setCheckable(True)
+        self.wall_pin_btn.setToolTip("Pin this wall to prevent LLM modifications")
+        self.wall_pin_btn.toggled.connect(self._on_wall_pin_toggled)
+        pin_layout.addWidget(self.wall_pin_btn)
+        pin_layout.addStretch()
+        layout.addRow("", pin_layout)
+
         # Start X
         self.wall_start_x = QDoubleSpinBox()
         self.wall_start_x.setRange(-1e9, 1e9)
@@ -130,6 +140,16 @@ class PropertiesPanel(QWidget):
         layout = QFormLayout(self.door_group)
         layout.setSpacing(5)
 
+        # Pin toggle at top
+        pin_layout = QHBoxLayout()
+        self.door_pin_btn = QPushButton("Pin")
+        self.door_pin_btn.setCheckable(True)
+        self.door_pin_btn.setToolTip("Pin this door to prevent LLM modifications")
+        self.door_pin_btn.toggled.connect(self._on_door_pin_toggled)
+        pin_layout.addWidget(self.door_pin_btn)
+        pin_layout.addStretch()
+        layout.addRow("", pin_layout)
+
         # Wall index (read-only)
         self.door_wall = QLabel("0")
         layout.addRow("Wall:", self.door_wall)
@@ -170,6 +190,16 @@ class PropertiesPanel(QWidget):
         self.window_group = QGroupBox("Window Properties")
         layout = QFormLayout(self.window_group)
         layout.setSpacing(5)
+
+        # Pin toggle at top
+        pin_layout = QHBoxLayout()
+        self.window_pin_btn = QPushButton("Pin")
+        self.window_pin_btn.setCheckable(True)
+        self.window_pin_btn.setToolTip("Pin this window to prevent LLM modifications")
+        self.window_pin_btn.toggled.connect(self._on_window_pin_toggled)
+        pin_layout.addWidget(self.window_pin_btn)
+        pin_layout.addStretch()
+        layout.addRow("", pin_layout)
 
         # Wall index (read-only)
         self.window_wall = QLabel("0")
@@ -212,6 +242,16 @@ class PropertiesPanel(QWidget):
         self.room_group = QGroupBox("Room Properties")
         layout = QFormLayout(self.room_group)
         layout.setSpacing(5)
+
+        # Pin toggle at top
+        pin_layout = QHBoxLayout()
+        self.room_pin_btn = QPushButton("Pin")
+        self.room_pin_btn.setCheckable(True)
+        self.room_pin_btn.setToolTip("Pin this room to prevent LLM modifications")
+        self.room_pin_btn.toggled.connect(self._on_room_pin_toggled)
+        pin_layout.addWidget(self.room_pin_btn)
+        pin_layout.addStretch()
+        layout.addRow("", pin_layout)
 
         # Name
         self.room_name = QLineEdit()
@@ -275,6 +315,10 @@ class PropertiesPanel(QWidget):
         """Display wall properties."""
         self._updating = True
 
+        # Update pin button state
+        self.wall_pin_btn.setChecked(wall.is_pinned)
+        self.wall_pin_btn.setText("Pinned" if wall.is_pinned else "Pin")
+
         self.wall_start_x.setValue(wall.start[0])
         self.wall_start_z.setValue(wall.start[2])
         self.wall_end_x.setValue(wall.end[0])
@@ -286,12 +330,25 @@ class PropertiesPanel(QWidget):
         if idx >= 0:
             self.wall_category.setCurrentIndex(idx)
 
+        # Disable editing if pinned
+        pinned = wall.is_pinned
+        self.wall_start_x.setEnabled(not pinned)
+        self.wall_start_z.setEnabled(not pinned)
+        self.wall_end_x.setEnabled(not pinned)
+        self.wall_end_z.setEnabled(not pinned)
+        self.wall_height.setEnabled(not pinned)
+        self.wall_category.setEnabled(not pinned)
+
         self._updating = False
         self.wall_group.show()
 
     def _show_door_properties(self, door: Door):
         """Display door properties."""
         self._updating = True
+
+        # Update pin button state
+        self.door_pin_btn.setChecked(door.is_pinned)
+        self.door_pin_btn.setText("Pinned" if door.is_pinned else "Pin")
 
         self.door_wall.setText(str(door.wall_index))
         self.door_offset.setValue(door.offset)
@@ -302,6 +359,13 @@ class PropertiesPanel(QWidget):
         if idx >= 0:
             self.door_swing.setCurrentIndex(idx)
 
+        # Disable editing if pinned
+        pinned = door.is_pinned
+        self.door_offset.setEnabled(not pinned)
+        self.door_width.setEnabled(not pinned)
+        self.door_height.setEnabled(not pinned)
+        self.door_swing.setEnabled(not pinned)
+
         self._updating = False
         self.door_group.show()
 
@@ -309,11 +373,22 @@ class PropertiesPanel(QWidget):
         """Display window properties."""
         self._updating = True
 
+        # Update pin button state
+        self.window_pin_btn.setChecked(window.is_pinned)
+        self.window_pin_btn.setText("Pinned" if window.is_pinned else "Pin")
+
         self.window_wall.setText(str(window.wall_index))
         self.window_offset.setValue(window.offset)
         self.window_width.setValue(int(window.width))
         self.window_height.setValue(int(window.height))
         self.window_sill.setValue(int(window.sill_height))
+
+        # Disable editing if pinned
+        pinned = window.is_pinned
+        self.window_offset.setEnabled(not pinned)
+        self.window_width.setEnabled(not pinned)
+        self.window_height.setEnabled(not pinned)
+        self.window_sill.setEnabled(not pinned)
 
         self._updating = False
         self.window_group.show()
@@ -321,6 +396,10 @@ class PropertiesPanel(QWidget):
     def _show_room_properties(self, room: Room):
         """Display room properties."""
         self._updating = True
+
+        # Update pin button state
+        self.room_pin_btn.setChecked(room.is_pinned)
+        self.room_pin_btn.setText("Pinned" if room.is_pinned else "Pin")
 
         self.room_name.setText(room.name or "")
 
@@ -330,6 +409,11 @@ class PropertiesPanel(QWidget):
 
         area_m2 = room.area / 1e6 if room.area else 0
         self.room_area.setText(f"{area_m2:.2f} m²")
+
+        # Disable editing if pinned
+        pinned = room.is_pinned
+        self.room_name.setEnabled(not pinned)
+        self.room_type.setEnabled(not pinned)
 
         self._updating = False
         self.room_group.show()
@@ -410,6 +494,62 @@ class PropertiesPanel(QWidget):
         # Room modifications would go here
         # For now, rooms are read-only since they're defined by vertices
         pass
+
+    def _on_wall_pin_toggled(self, checked: bool):
+        """Handle wall pin toggle."""
+        if self._updating or not self._selected_items:
+            return
+
+        item = self._selected_items[0]
+        if type(item).__name__ != "WallItem":
+            return
+
+        self.document.pin_element("wall", str(item.wall.index), checked)
+        self.wall_pin_btn.setText("Pinned" if checked else "Pin")
+        # Update field enabled states
+        self._show_wall_properties(item.wall)
+
+    def _on_door_pin_toggled(self, checked: bool):
+        """Handle door pin toggle."""
+        if self._updating or not self._selected_items:
+            return
+
+        item = self._selected_items[0]
+        if type(item).__name__ != "DoorItem":
+            return
+
+        self.document.pin_element("door", str(item.door.index), checked)
+        self.door_pin_btn.setText("Pinned" if checked else "Pin")
+        # Update field enabled states
+        self._show_door_properties(item.door)
+
+    def _on_window_pin_toggled(self, checked: bool):
+        """Handle window pin toggle."""
+        if self._updating or not self._selected_items:
+            return
+
+        item = self._selected_items[0]
+        if type(item).__name__ != "WindowItem":
+            return
+
+        self.document.pin_element("window", str(item.window.index), checked)
+        self.window_pin_btn.setText("Pinned" if checked else "Pin")
+        # Update field enabled states
+        self._show_window_properties(item.window)
+
+    def _on_room_pin_toggled(self, checked: bool):
+        """Handle room pin toggle."""
+        if self._updating or not self._selected_items:
+            return
+
+        item = self._selected_items[0]
+        if type(item).__name__ != "RoomItem":
+            return
+
+        self.document.pin_element("room", item.room.id, checked)
+        self.room_pin_btn.setText("Pinned" if checked else "Pin")
+        # Update field enabled states
+        self._show_room_properties(item.room)
 
     def _on_element_modified(self, element_type: str, element_id: str, changes: dict):
         """Handle external element modification."""
