@@ -12,18 +12,21 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt6.QtGui import QPainter, QColor
 
 # Find the DLL
 def _find_dll() -> Optional[Path]:
-    """Search for ArchEngineLib.dll - prioritize UE5 worktree."""
+    """Search for ArchEngineLib.dll - prioritize kernel worktree."""
     search_paths = [
-        # Primary: UE5 worktree (where we work)
+        # Primary: Kernel worktree (dedicated engine development)
+        Path(r"X:\ARCH\Software\ArchEngine_Suite_Kernel\ArchEngine_kernel\build\Release"),
+        Path(r"X:\ARCH\Software\ArchEngine_Suite_Kernel\ArchEngine_kernel\build\Debug"),
+        # Relative paths from CAD app
         Path(__file__).parent.parent.parent / "ArchEngine_kernel" / "build" / "Release",
         Path(__file__).parent.parent.parent / "ArchEngine_kernel" / "build" / "Debug",
-        # Absolute UE5 worktree paths
+        # UE5 worktree paths
         Path(r"X:\ARCH\Software\ArchEngine_suite_ue5\ArchEngine_kernel\build\Release"),
         Path(r"X:\ARCH\Software\ArchEngine_suite_ue5\ArchEngine_kernel\build\Debug"),
     ]
@@ -69,6 +72,7 @@ class VulkanViewportWidget(QWidget):
         self._camera_distance = 60.0
         self._last_mouse_pos = None
         self._dragging = False
+        self._rendering = False  # Prevent concurrent renders
 
         # Widget setup
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
@@ -170,27 +174,57 @@ class VulkanViewportWidget(QWidget):
         self._initialized = True
         print("[VulkanWidget] Renderer initialized")
 
-        # Start render loop
+        # Start render loop using single-shot pattern to avoid blocking
         self._render_timer = QTimer(self)
+        self._render_timer.setSingleShot(True)
         self._render_timer.timeout.connect(self._render_frame)
-        self._render_timer.start(16)  # ~60 FPS
+        self._schedule_next_frame()
 
         self.initialized.emit()
+
+    def _schedule_next_frame(self):
+        """Schedule the next frame render."""
+        if self._initialized and self._render_timer:
+            # 100ms = 10 FPS - give Qt plenty of time to process events
+            self._render_timer.start(100)
 
     def _render_frame(self):
         """Render a single frame."""
         if not self._initialized or self._lib is None:
             return
 
-        # Update camera
-        self._lib.arch_set_camera(
-            ctypes.c_float(self._camera_yaw),
-            ctypes.c_float(self._camera_pitch),
-            ctypes.c_float(self._camera_distance)
-        )
+        # Skip if already rendering (shouldn't happen with single-shot, but safety)
+        if self._rendering:
+            return
 
-        # Render
-        self._lib.arch_render_frame()
+        # Skip if widget not visible
+        if not self.isVisible():
+            self._schedule_next_frame()
+            return
+
+        try:
+            self._rendering = True
+
+            # Process any pending Qt events before rendering
+            QApplication.processEvents()
+
+            # Update camera
+            self._lib.arch_set_camera(
+                ctypes.c_float(self._camera_yaw),
+                ctypes.c_float(self._camera_pitch),
+                ctypes.c_float(self._camera_distance)
+            )
+
+            # Render
+            self._lib.arch_render_frame()
+
+            # Process events after rendering too
+            QApplication.processEvents()
+        finally:
+            self._rendering = False
+
+        # Schedule next frame after this one completes
+        self._schedule_next_frame()
 
     def resizeEvent(self, event):
         """Handle widget resize."""

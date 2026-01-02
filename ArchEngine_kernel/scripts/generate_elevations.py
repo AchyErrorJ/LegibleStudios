@@ -474,6 +474,9 @@ def render_elevation_svg(elevation: Elevation, scale: float = 0.1,
     shadow_dx = 300
     shadow_dy = -200  # Negative because Y is flipped
 
+    # === LOD 0: Basic geometry (ground, walls, roof outline) ===
+    lines.append('<g id="lod-0" data-lod="0">')
+
     # Draw building shadow on ground first (behind everything)
     if elevation.walls:
         # Get building bounds
@@ -509,15 +512,42 @@ def render_elevation_svg(elevation: Elevation, scale: float = 0.1,
         ]
         lines.append(f'  <polygon points="{" ".join(shadow_points)}" class="shadow"/>')
 
-    # Draw walls with material pattern
+    # Draw walls as outlines only (LOD 0 - no fill pattern)
     for wall in elevation.walls:
         x = wall.start_x
         y = wall.bottom_y
         w = wall.end_x - wall.start_x
         h = wall.top_y - wall.bottom_y
-        lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="wall"/>')
+        lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="wall-outline" fill="white"/>')
 
-    # Draw openings
+    # Draw roof outline only (LOD 0 - no fill pattern)
+    if elevation.roof_edges:
+        # Find roof outline by collecting unique vertices at the top
+        roof_vertices = []
+        for edge in elevation.roof_edges:
+            roof_vertices.append((edge.start.x, edge.start.y))
+            roof_vertices.append((edge.end.x, edge.end.y))
+
+        # Get bounding vertices for roof polygon
+        if roof_vertices:
+            min_x_vertex = min(roof_vertices, key=lambda v: v[0])
+            max_x_vertex = max(roof_vertices, key=lambda v: v[0])
+            peak_vertex = max(roof_vertices, key=lambda v: v[1])
+
+            # Simple triangular roof outline only
+            roof_points = [
+                f"{min_x_vertex[0]:.0f},{min_x_vertex[1]:.0f}",
+                f"{peak_vertex[0]:.0f},{peak_vertex[1]:.0f}",
+                f"{max_x_vertex[0]:.0f},{max_x_vertex[1]:.0f}"
+            ]
+            lines.append(f'  <polygon points="{" ".join(roof_points)}" fill="white" stroke="#333" stroke-width="10"/>')
+
+    lines.append('</g>')  # End LOD 0
+
+    # === LOD 1: Doors, windows (navigation level) ===
+    lines.append('<g id="lod-1" data-lod="1">')
+
+    # Draw openings (basic shapes)
     for opening in elevation.openings:
         x = opening.center_x - opening.width / 2
         y = opening.bottom_y
@@ -527,26 +557,48 @@ def render_elevation_svg(elevation: Elevation, scale: float = 0.1,
         if opening.is_door:
             # Door background
             lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="door"/>')
+            # Door frame
+            lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="window-frame"/>')
+            # Threshold
+            lines.append(f'  <rect x="{x - 30:.0f}" y="{y - 30:.0f}" width="{w + 60:.0f}" height="30" fill="#888"/>')
+        else:
+            # Window basic
+            lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="window-glass"/>')
+            lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="window-frame"/>')
+
+    lines.append('</g>')  # End LOD 1
+
+    # === LOD 2: Material patterns, details, level markers ===
+    lines.append('<g id="lod-2" data-lod="2">')
+
+    # Draw walls with material pattern (overlay on LOD 0 outline)
+    for wall in elevation.walls:
+        x = wall.start_x
+        y = wall.bottom_y
+        w = wall.end_x - wall.start_x
+        h = wall.top_y - wall.bottom_y
+        lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="wall"/>')
+
+    # Opening details
+    for opening in elevation.openings:
+        x = opening.center_x - opening.width / 2
+        y = opening.bottom_y
+        w = opening.width
+        h = opening.top_y - opening.bottom_y
+
+        if opening.is_door:
             # Door panels (raised panel effect)
             panel_margin = 60
             panel_h = (h - 3 * panel_margin) / 2
             lines.append(f'  <rect x="{x + panel_margin:.0f}" y="{y + panel_margin:.0f}" width="{w - 2*panel_margin:.0f}" height="{panel_h:.0f}" class="door-panel"/>')
             lines.append(f'  <rect x="{x + panel_margin:.0f}" y="{y + 2*panel_margin + panel_h:.0f}" width="{w - 2*panel_margin:.0f}" height="{panel_h:.0f}" class="door-panel"/>')
-            # Door frame
-            lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="window-frame"/>')
             # Door handle
             handle_x = x + w * 0.85
             handle_y = y + h * 0.5
             lines.append(f'  <circle cx="{handle_x:.0f}" cy="{handle_y:.0f}" r="40" fill="#666"/>')
-            # Threshold
-            lines.append(f'  <rect x="{x - 30:.0f}" y="{y - 30:.0f}" width="{w + 60:.0f}" height="30" fill="#888"/>')
         else:
             # Window with shadow indent effect
-            # Outer shadow (recessed look)
             lines.append(f'  <rect x="{x - 20:.0f}" y="{y - 20:.0f}" width="{w + 40:.0f}" height="{h + 40:.0f}" fill="rgba(0,0,0,0.1)"/>')
-            # Window glass
-            lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="window-glass"/>')
-            lines.append(f'  <rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{h:.0f}" class="window-frame"/>')
             # Horizontal mullion
             mid_y = y + h / 2
             lines.append(f'  <line x1="{x:.0f}" y1="{mid_y:.0f}" x2="{x + w:.0f}" y2="{mid_y:.0f}" class="window-mullion"/>')
@@ -558,23 +610,18 @@ def render_elevation_svg(elevation: Elevation, scale: float = 0.1,
             # Window header
             lines.append(f'  <rect x="{x - 30:.0f}" y="{y + h:.0f}" width="{w + 60:.0f}" height="60" fill="#ddd" stroke="#333" stroke-width="4"/>')
 
-    # Draw roof as filled polygon if we have edges
+    # Draw roof with pattern
     if elevation.roof_edges:
-        # Find roof outline by collecting unique vertices at the top
         roof_vertices = []
         for edge in elevation.roof_edges:
             roof_vertices.append((edge.start.x, edge.start.y))
             roof_vertices.append((edge.end.x, edge.end.y))
 
-        # Get bounding vertices for roof polygon
-        # For a simple gable, find the peak and eave points
         if roof_vertices:
-            # Get min/max X and corresponding Y values
             min_x_vertex = min(roof_vertices, key=lambda v: v[0])
             max_x_vertex = max(roof_vertices, key=lambda v: v[0])
             peak_vertex = max(roof_vertices, key=lambda v: v[1])
 
-            # Simple triangular roof fill
             roof_points = [
                 f"{min_x_vertex[0]:.0f},{min_x_vertex[1]:.0f}",
                 f"{peak_vertex[0]:.0f},{peak_vertex[1]:.0f}",
@@ -586,9 +633,12 @@ def render_elevation_svg(elevation: Elevation, scale: float = 0.1,
         for edge in elevation.roof_edges:
             lines.append(f'  <line x1="{edge.start.x:.0f}" y1="{edge.start.y:.0f}" x2="{edge.end.x:.0f}" y2="{edge.end.y:.0f}" class="roof-line"/>')
 
-    lines.append('</g>')
+    lines.append('</g>')  # End LOD 2
 
-    # Level markers (outside the flipped group so text is right-side up)
+    lines.append('</g>')  # End Y-flipped group
+
+    # === LOD 2: Level markers (outside the flipped group so text is right-side up) ===
+    lines.append('<g id="lod-2-markers" data-lod="2">')
     marker_x = -margin + 500
     for marker in elevation.level_markers:
         y = flip_y - marker.y  # Convert to SVG Y
@@ -605,9 +655,6 @@ def render_elevation_svg(elevation: Elevation, scale: float = 0.1,
         # Label
         lines.append(f'<text x="{marker_x + 250}" y="{y - 80:.0f}" class="level-text">{marker.label}</text>')
 
-    # Title (in model space)
-    lines.append(f'<text x="{elevation.width/2}" y="{-margin + 600}" text-anchor="middle" class="title">{elevation.direction.upper()} ELEVATION</text>')
-
     # Scale bar
     sb_x = elevation.width / 2 - 500
     sb_y = elevation.height + 800
@@ -615,6 +662,10 @@ def render_elevation_svg(elevation: Elevation, scale: float = 0.1,
     lines.append(f'<line x1="{sb_x}" y1="{sb_y - 50}" x2="{sb_x}" y2="{sb_y + 50}" stroke="#333" stroke-width="8"/>')
     lines.append(f'<line x1="{sb_x + 1000}" y1="{sb_y - 50}" x2="{sb_x + 1000}" y2="{sb_y + 50}" stroke="#333" stroke-width="8"/>')
     lines.append(f'<text x="{sb_x + 500}" y="{sb_y - 100}" text-anchor="middle" class="dimension">1m</text>')
+    lines.append('</g>')  # End LOD 2 markers
+
+    # === LOD 1: Title (navigation level - visible when zoomed out) ===
+    lines.append(f'<text x="{elevation.width/2}" y="{-margin + 600}" text-anchor="middle" class="title" data-lod="1">{elevation.direction.upper()} ELEVATION</text>')
 
     # Title block
     if project_info:
