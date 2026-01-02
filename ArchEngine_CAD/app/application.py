@@ -65,7 +65,6 @@ class ArchEngineApplication(QMainWindow):
             try:
                 self._livesync_server = get_livesync_server()
                 self._livesync_server.start()
-                # Connect document changes to LiveSync
                 self.document.document_changed.connect(self._on_document_changed_livesync)
             except Exception as e:
                 print(f"[App] LiveSync init failed: {e}")
@@ -77,11 +76,8 @@ class ArchEngineApplication(QMainWindow):
                 self._vulkan_sync = get_vulkan_sync_client()
                 self._vulkan_sync.connected.connect(self._on_vulkan_connected)
                 self._vulkan_sync.disconnected.connect(self._on_vulkan_disconnected)
-                # Connect document changes to VulkanSync
                 self.document.document_changed.connect(self._on_document_changed_vulkan)
-                # Try to connect immediately
                 self._vulkan_sync.connect_to_renderer()
-                print("[App] VulkanSync client initialized, connecting...")
             except Exception as e:
                 print(f"[App] VulkanSync init failed: {e}")
 
@@ -464,7 +460,7 @@ class ArchEngineApplication(QMainWindow):
             self.viewport_3d.error_occurred.connect(self._on_viewport_error)
             self.viewport_dock.setWidget(self.viewport_3d)
             self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.viewport_dock)
-            self.viewport_dock.show()  # Show by default for integrated experience
+            self.viewport_dock.show()  # Show 3D viewport by default
             self.window_menu.addAction(self.viewport_dock.toggleViewAction())
 
             # Connect document changes to viewport
@@ -493,20 +489,8 @@ class ArchEngineApplication(QMainWindow):
         self._split_mode = False
         self._split_viewport: Optional[VulkanViewportWidget] = None
 
-        if HAS_VIEWPORT:
-            self.central_splitter = QSplitter(Qt.Orientation.Horizontal, self)
-            self.central_splitter.addWidget(self.plan_view)
-            # Create a separate Vulkan viewport for split mode
-            self._split_viewport = VulkanViewportWidget()
-            self._split_viewport.setMinimumWidth(400)
-            self._split_viewport.initialized.connect(self._on_viewport_initialized)
-            self._split_viewport.load_complete.connect(self._on_viewport_load_complete)
-            self.central_splitter.addWidget(self._split_viewport)
-            self._split_viewport.hide()  # Hidden by default
-            self.central_splitter.setSizes([700, 0])  # Start with plan view full
-            self.central_tabs.addTab(self.central_splitter, "Editor")
-        else:
-            self.central_tabs.addTab(self.plan_view, "Editor")
+        # Disable split viewport for now to simplify (use dock viewport only)
+        self.central_tabs.addTab(self.plan_view, "Editor")
 
         # Don't allow closing the Editor tab
         self.central_tabs.tabBar().setTabButton(0, self.central_tabs.tabBar().ButtonPosition.RightSide, None)
