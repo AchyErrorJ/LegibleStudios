@@ -158,13 +158,22 @@ class VulkanSyncClient(QObject):
         self._send_message(IPCMessageType.SelectElement, payload)
 
     def _flush_pending_data(self):
-        """Actually send the pending building data."""
+        """Actually send the pending building data (async via thread)."""
         if self._pending_data and self._connected:
             json_str = json.dumps(self._pending_data)
             payload = json_str.encode('utf-8')
-            if self._send_message(IPCMessageType.BuildingData, payload):
-                print(f"[VulkanSync] Sent building data ({len(payload)} bytes)")
+            # Send in background thread to avoid blocking UI
+            threading.Thread(
+                target=self._send_message_async,
+                args=(IPCMessageType.BuildingData, payload),
+                daemon=True
+            ).start()
         self._pending_data = None
+
+    def _send_message_async(self, msg_type: IPCMessageType, payload: bytes):
+        """Send message in background thread."""
+        if self._send_message(msg_type, payload):
+            print(f"[VulkanSync] Sent {msg_type.name} ({len(payload)} bytes)")
 
     def _send_message(self, msg_type: IPCMessageType, payload: bytes) -> bool:
         """

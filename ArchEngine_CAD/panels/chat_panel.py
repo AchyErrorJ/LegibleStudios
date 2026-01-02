@@ -1,0 +1,363 @@
+"""
+Chat Panel - Interface for LLM-driven design
+
+Provides a conversational interface for modifying building designs.
+When LLM layer is available, connects to providers for AI-assisted design.
+"""
+from typing import Optional, List, Dict, Any
+from pathlib import Path
+
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
+    QLineEdit, QPushButton, QLabel, QComboBox, QProgressBar
+)
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSlot
+
+from core.document import ArchDocument
+from core.events import event_bus
+
+
+# Try to import LLM layer (may not be available)
+LLM_AVAILABLE = False
+try:
+    import sys
+    llm_path = Path(__file__).parent.parent.parent / "ArchEngine_kernel" / "scripts"
+    if llm_path.exists():
+        sys.path.insert(0, str(llm_path))
+        from llm import LLMConfig, SchemaModifier, SchemaGenerator
+        LLM_AVAILABLE = True
+except ImportError:
+    pass
+
+
+class LLMWorker(QThread):
+    """Background thread for LLM calls."""
+    finished = pyqtSignal(dict)  # modified schema
+    response = pyqtSignal(str)   # text response
+    error = pyqtSignal(str)      # error message
+
+    def __init__(self, modifier, schema, message, pinned):
+        super().__init__()
+        self.modifier = modifier
+        self.schema = schema
+        self.message = message
+        self.pinned = pinned
+
+    def run(self):
+        try:
+            modified = self.modifier.modify(
+                self.schema,
+                self.message,
+                pinned_elements=self.pinned
+            )
+            self.finished.emit(modified)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class ChatPanel(QWidget):
+    """Panel for conversational design with LLM."""
+
+    # Signals
+    message_sent = pyqtSignal(str)  # user message
+    schema_updated = pyqtSignal(dict)  # Emitted when LLM updates schema
+
+    def __init__(self, document: ArchDocument, parent=None):
+        super().__init__(parent)
+        self.document = document
+        self._selected_items: List[Any] = []
+        self._worker: Optional[LLMWorker] = None
+
+        # LLM components (initialized if available)
+        self.modifier = None
+        self.generator = None
+
+        self._setup_ui()
+        self._connect_signals()
+        self._init_llm()
+
+    def _setup_ui(self):
+        """Set up the panel UI."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+
+        # Header with provider selector
+        header = QHBoxLayout()
+        header.addWidget(QLabel("Design Chat"))
+        header.addStretch()
+
+        self.provider_combo = QComboBox()
+        self.provider_combo.setMinimumWidth(120)
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        header.addWidget(self.provider_combo)
+
+        # Status indicator
+        self.status_label = QLabel("●")
+        self.status_label.setStyleSheet("color: gray;")
+        self.status_label.setToolTip("Status")
+        header.addWidget(self.status_label)
+
+        layout.addLayout(header)
+
+        # Chat history
+        self.chat_history = QTextEdit()
+        self.chat_history.setReadOnly(True)
+        self.chat_history.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                border: 1px solid #333;
+                border-radius: 4px;
+                padding: 5px;
+                font-family: Consolas, monospace;
+                font-size: 11px;
+            }
+        """)
+        layout.addWidget(self.chat_history, stretch=1)
+
+        # Progress bar (hidden by default)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # Indeterminate
+        self.progress.setVisible(False)
+        self.progress.setMaximumHeight(3)
+        layout.addWidget(self.progress)
+
+        # Input area
+        input_layout = QHBoxLayout()
+
+        self.input_field = QLineEdit()
+        self.input_field.setPlaceholderText("Describe design changes...")
+        self.input_field.returnPressed.connect(self._on_send)
+        self.input_field.setStyleSheet("""
+            QLineEdit {
+                padding: 8px;
+                border: 1px solid #555;
+                border-radius: 4px;
+                background: #2d2d2d;
+                color: #fff;
+            }
+        """)
+        input_layout.addWidget(self.input_field, stretch=1)
+
+        self.send_btn = QPushButton("Send")
+        self.send_btn.clicked.connect(self._on_send)
+        self.send_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px;
+                background: #0078d4;
+                color: white;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background: #1084d8; }
+            QPushButton:disabled { background: #555; }
+        """)
+        input_layout.addWidget(self.send_btn)
+
+        layout.addLayout(input_layout)
+
+        # Context indicator
+        self.context_label = QLabel("No selection | None pinned")
+        self.context_label.setStyleSheet("color: #888; font-size: 10px;")
+        layout.addWidget(self.context_label)
+
+    def _init_llm(self):
+        """Initialize LLM if available."""
+        self.provider_combo.clear()
+
+        if not LLM_AVAILABLE:
+            self.provider_combo.addItem("LLM not available")
+            self.provider_combo.setEnabled(False)
+            self._set_status("gray", "LLM layer not found")
+            self._add_message("System",
+                "LLM integration not available. Messages will show debug info only.",
+                "#888")
+            return
+
+        try:
+            LLMConfig.register_defaults()
+            available = LLMConfig.get_available()
+
+            if not available:
+                self.provider_combo.addItem("No providers")
+                self.provider_combo.setEnabled(False)
+                self._set_status("orange", "No LLM providers configured")
+                self._add_message("System",
+                    "No LLM providers available. Start LM Studio or set API keys.",
+                    "#ffaa00")
+                return
+
+            for name, provider in available.items():
+                self.provider_combo.addItem(provider.name, name)
+
+            self.provider_combo.setEnabled(True)
+            self._set_status("green", "Ready")
+
+            # Initialize modifier with default provider
+            self.modifier = SchemaModifier()
+            self.generator = SchemaGenerator()
+
+        except Exception as e:
+            self.provider_combo.addItem("Error")
+            self.provider_combo.setEnabled(False)
+            self._set_status("red", f"Init error: {e}")
+
+    def _connect_signals(self):
+        """Connect to document and event signals."""
+        self.document.element_pinned.connect(self._update_context)
+        self.document.document_changed.connect(self._update_context)
+        event_bus.selection_changed.connect(self._on_selection_changed)
+
+    def _on_selection_changed(self, selected_items: List):
+        """Handle selection change from event bus."""
+        self._selected_items = selected_items
+        self._update_context()
+
+    def _on_provider_changed(self, display_name: str):
+        """Handle provider selection change."""
+        if not LLM_AVAILABLE:
+            return
+
+        idx = self.provider_combo.currentIndex()
+        provider_key = self.provider_combo.itemData(idx)
+        if provider_key:
+            try:
+                LLMConfig.set_active(provider_key)
+                self.modifier = SchemaModifier()
+                self.generator = SchemaGenerator()
+                self._set_status("green", f"Using {display_name}")
+            except Exception as e:
+                self._set_status("red", f"Error: {e}")
+
+    def _set_status(self, color: str, tooltip: str):
+        """Set status indicator."""
+        self.status_label.setStyleSheet(f"color: {color};")
+        self.status_label.setToolTip(tooltip)
+
+    def _on_send(self):
+        """Handle send button click."""
+        message = self.input_field.text().strip()
+        if not message:
+            return
+
+        # Add user message to history
+        self._add_message("You", message, "#6baaff")
+        self.input_field.clear()
+
+        # Emit signal for external handlers
+        self.message_sent.emit(message)
+
+        # Get current state
+        pinned = self.document.get_pinned_elements()
+        pinned_count = sum(len(v) for v in pinned.values())
+
+        if LLM_AVAILABLE and self.modifier:
+            # Run LLM in background
+            self._run_llm(message, pinned)
+        else:
+            # Debug mode - show what would happen
+            self._show_debug_response(message, pinned, pinned_count)
+
+    def _run_llm(self, message: str, pinned: Dict):
+        """Run LLM modification in background thread."""
+        self._set_processing(True)
+
+        pinned_count = sum(len(v) for v in pinned.values())
+        if pinned_count > 0:
+            self._add_message("System", f"Respecting {pinned_count} pinned element(s)", "#888")
+
+        schema = self.document.to_json()
+        self._worker = LLMWorker(self.modifier, schema, message, pinned)
+        self._worker.finished.connect(self._on_llm_success)
+        self._worker.error.connect(self._on_llm_error)
+        self._worker.start()
+
+    def _show_debug_response(self, message: str, pinned: Dict, pinned_count: int):
+        """Show debug response when LLM not available."""
+        response = f"[Debug] Would process: '{message}'\n"
+        response += f"Pinned elements: {pinned_count}\n"
+
+        if pinned_count > 0:
+            for elem_type, ids in pinned.items():
+                if ids:
+                    response += f"  - {elem_type}: {', '.join(ids)}\n"
+
+        # Show selection context
+        if self._selected_items:
+            response += f"Selected: {len(self._selected_items)} item(s)"
+
+        self._add_message("Assistant", response.strip(), "#aaa")
+
+    @pyqtSlot(dict)
+    def _on_llm_success(self, modified_schema: dict):
+        """Handle successful LLM response."""
+        self._set_processing(False)
+
+        # Update document
+        self.document.load_from_dict(modified_schema)
+
+        # Notify success
+        self._add_message("Assistant", "Design updated.", "#6bff6b")
+
+        # Emit signal for other components
+        self.schema_updated.emit(modified_schema)
+
+    @pyqtSlot(str)
+    def _on_llm_error(self, error: str):
+        """Handle LLM error."""
+        self._set_processing(False)
+        self._add_message("Error", error, "#ff6b6b")
+        self._set_status("red", f"Error: {error[:50]}")
+
+    def _set_processing(self, processing: bool):
+        """Set UI processing state."""
+        self.input_field.setEnabled(not processing)
+        self.send_btn.setEnabled(not processing)
+        self.progress.setVisible(processing)
+
+        if processing:
+            self._set_status("yellow", "Processing...")
+        else:
+            self._set_status("green", "Ready")
+
+    def _add_message(self, sender: str, message: str, color: str = "#d4d4d4"):
+        """Add a message to the chat history."""
+        # Escape HTML in message but preserve newlines
+        escaped = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        escaped = escaped.replace("\n", "<br>")
+        self.chat_history.append(
+            f'<span style="color: {color};"><b>{sender}:</b> {escaped}</span>'
+        )
+
+    def add_response(self, message: str):
+        """Add assistant response to chat (public API)."""
+        self._add_message("Assistant", message, "#6bff6b")
+
+    def set_context(self, context: str):
+        """Update context indicator (public API)."""
+        self.context_label.setText(context)
+
+    def update_selection_context(self, selected_items: List):
+        """Update context based on selection (public API)."""
+        self._selected_items = selected_items
+        self._update_context()
+
+    def _update_context(self):
+        """Update the context label."""
+        # Selection info
+        if not self._selected_items:
+            select_str = "No selection"
+        elif len(self._selected_items) == 1:
+            item = self._selected_items[0]
+            item_type = type(item).__name__.replace("Item", "")
+            select_str = f"{item_type} selected"
+        else:
+            select_str = f"{len(self._selected_items)} elements selected"
+
+        # Pinned info
+        pinned = self.document.get_pinned_elements()
+        pinned_count = sum(len(v) for v in pinned.values())
+        pin_str = f"{pinned_count} pinned" if pinned_count > 0 else "None pinned"
+
+        self.context_label.setText(f"{select_str} | {pin_str}")

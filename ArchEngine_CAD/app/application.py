@@ -19,6 +19,7 @@ from core.events import event_bus
 # Sheet system imports
 from sheets.sheet_registry import SheetRegistry
 from panels.sheet_manager import SheetManagerPanel
+from panels.chat_panel import ChatPanel
 from generators.generator_service import GeneratorService
 
 # Optional viewport imports
@@ -234,6 +235,13 @@ class ArchEngineApplication(QMainWindow):
         self.action_snap_angular.setChecked(self.config.snap_angular)
         self.action_snap_angular.triggered.connect(lambda: self._toggle_snap_type('angular'))
 
+        # Pin action for LLM workflow
+        self.action_pin = QAction("Pin", self)
+        self.action_pin.setCheckable(True)
+        self.action_pin.setToolTip("Pin selected elements (protected from LLM changes)")
+        self.action_pin.setShortcut(QKeySequence("P"))
+        self.action_pin.toggled.connect(self._on_pin_toggle)
+
         # 3D Viewport actions (only if viewport module available)
         if HAS_VIEWPORT:
             self.action_reset_camera = QAction("&Reset Camera", self)
@@ -346,6 +354,8 @@ class ArchEngineApplication(QMainWindow):
         options_toolbar.addAction(self.action_ortho)
         options_toolbar.addAction(self.action_grid)
         options_toolbar.addAction(self.action_snap)
+        options_toolbar.addSeparator()
+        options_toolbar.addAction(self.action_pin)
         self.addToolBar(options_toolbar)
 
         # 3D Viewport toolbar (only if viewport module available)
@@ -442,6 +452,23 @@ class ArchEngineApplication(QMainWindow):
         # Tab it with properties dock
         self.tabifyDockWidget(self.properties_dock, self.history_dock)
         self.window_menu.addAction(self.history_dock.toggleViewAction())
+
+        # Chat panel dock (right side, tabbed with properties)
+        self.chat_dock = QDockWidget("Design Chat", self)
+        self.chat_dock.setObjectName("chat_dock")
+        self.chat_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea |
+            Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.chat_panel = ChatPanel(self.document)
+        self.chat_panel.setMinimumWidth(280)
+        self.chat_panel.message_sent.connect(self._on_chat_message)
+        self.chat_panel.schema_updated.connect(self._on_schema_updated)
+        self.chat_dock.setWidget(self.chat_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
+        # Tab it with properties dock
+        self.tabifyDockWidget(self.properties_dock, self.chat_dock)
+        self.window_menu.addAction(self.chat_dock.toggleViewAction())
 
         # 3D Viewport dock (Vulkan renderer)
         if HAS_VIEWPORT:
@@ -550,11 +577,43 @@ class ArchEngineApplication(QMainWindow):
         self.document.document_changed.connect(self._update_title)
         event_bus.document_loaded.connect(self._on_document_loaded)
         event_bus.document_modified.connect(self._on_document_modified)
+        event_bus.selection_changed.connect(self._on_selection_changed)
 
         # Connect generator service to document changes (disabled by default to avoid blocking)
         # Users can enable auto-regenerate in the sheets panel
         self._sheet_registry.auto_regenerate = False
         self._generator_service.connect_to_document(self.document)
+
+    def _on_selection_changed(self, selected_items):
+        """Handle selection change - update pin button state."""
+        if not selected_items:
+            self.action_pin.setChecked(False)
+            self.action_pin.setEnabled(False)
+            return
+
+        self.action_pin.setEnabled(True)
+
+        # Check if any selected item is pinned
+        any_pinned = False
+        for item in selected_items:
+            item_type = type(item).__name__
+            if item_type == "WallItem" and hasattr(item, 'wall') and item.wall.is_pinned:
+                any_pinned = True
+                break
+            elif item_type == "DoorItem" and hasattr(item, 'door') and item.door.is_pinned:
+                any_pinned = True
+                break
+            elif item_type == "WindowItem" and hasattr(item, 'window') and item.window.is_pinned:
+                any_pinned = True
+                break
+            elif item_type == "RoomItem" and hasattr(item, 'room') and item.room.is_pinned:
+                any_pinned = True
+                break
+
+        # Block signal to prevent triggering toggle while updating
+        self.action_pin.blockSignals(True)
+        self.action_pin.setChecked(any_pinned)
+        self.action_pin.blockSignals(False)
 
     def _restore_state(self):
         """Restore window geometry and state."""
@@ -713,6 +772,60 @@ class ArchEngineApplication(QMainWindow):
                 self.plan_view._snap_manager.collect_snap_points()
 
             self.status_bar.showMessage(f"Snap {snap_type.title()}: {'On' if new_value else 'Off'}", 2000)
+
+    # =========================================================================
+    # Pin/LLM Operations
+    # =========================================================================
+
+    def _on_pin_toggle(self, checked: bool):
+        """Toggle pin state on selected elements."""
+        selected = self.plan_view.scene.selectedItems() if hasattr(self, 'plan_view') else []
+        if not selected:
+            self.status_bar.showMessage("No elements selected to pin", 2000)
+            return
+
+        count = 0
+        for item in selected:
+            item_type = type(item).__name__
+
+            if item_type == "WallItem" and hasattr(item, 'wall'):
+                self.document.pin_element("wall", str(item.wall.index), checked)
+                count += 1
+            elif item_type == "DoorItem" and hasattr(item, 'door'):
+                self.document.pin_element("door", str(item.door.index), checked)
+                count += 1
+            elif item_type == "WindowItem" and hasattr(item, 'window'):
+                self.document.pin_element("window", str(item.window.index), checked)
+                count += 1
+            elif item_type == "RoomItem" and hasattr(item, 'room'):
+                self.document.pin_element("room", item.room.id, checked)
+                count += 1
+
+        if count > 0:
+            action = "Pinned" if checked else "Unpinned"
+            self.status_bar.showMessage(f"{action} {count} element(s)", 2000)
+            # Refresh view to show pin indicators
+            if hasattr(self, 'plan_view'):
+                self.plan_view.refresh()
+
+    def _on_chat_message(self, message: str):
+        """Handle chat message from chat panel."""
+        # This is called when user sends a message
+        # The chat panel handles LLM integration internally
+        self.status_bar.showMessage(f"Processing: {message[:30]}...", 2000)
+
+    def _on_schema_updated(self, schema: dict):
+        """Handle schema update from LLM."""
+        # Refresh all views
+        if hasattr(self, 'plan_view'):
+            self.plan_view.refresh()
+
+        # Update 3D viewport
+        if HAS_VIEWPORT and hasattr(self, 'viewport_3d'):
+            if self.viewport_3d.is_initialized:
+                self.viewport_3d.load_json(schema)
+
+        self.status_bar.showMessage("Design updated by LLM", 3000)
 
     # =========================================================================
     # Event Handlers

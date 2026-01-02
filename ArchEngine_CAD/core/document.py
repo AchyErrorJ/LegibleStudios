@@ -807,6 +807,23 @@ class ArchDocument(QObject):
         # Return a copy to prevent external modification
         return copy.deepcopy(self._data)
 
+    def to_json(self) -> Dict[str, Any]:
+        """Alias for to_dict() - returns document as JSON-serializable dict."""
+        return self.to_dict()
+
+    def load_from_dict(self, data: Dict[str, Any]):
+        """
+        Load document from dictionary (used by LLM updates).
+
+        Args:
+            data: Dictionary containing building data
+        """
+        self._data = copy.deepcopy(data)
+        self._parse_data()
+        self._modified = True
+        self.document_changed.emit()
+        event_bus.document_loaded.emit("")
+
     # =========================================================================
     # Constraint System (Pin/Lock)
     # =========================================================================
