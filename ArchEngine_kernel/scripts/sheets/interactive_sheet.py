@@ -10,9 +10,9 @@ Generates complete architectural floor plan sheets with:
 
 import json
 from pathlib import Path
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List, Callable
 from datetime import datetime
-from xml.etree.ElementTree import Element
+from xml.etree.ElementTree import Element, SubElement
 
 from .sheet_sizes import get_sheet_size, get_scale_factor, SheetSize, TITLE_BLOCK
 from .svg_builder import SVGBuilder
@@ -30,17 +30,28 @@ from .elements.dimensions import (
     render_opening_dimensions,
 )
 from .viewport import Viewport, ViewportBounds, ViewportRenderer, create_standard_layout
-
-from typing import List
+from .sheet_types import (
+    DrawingType,
+    SheetType,
+    ViewportContent,
+    ViewportConfig,
+    SheetPreset,
+    get_preset,
+)
+from .generators.elevation_renderer import render_elevation
+from .generators.section_renderer import render_section
+from .generators.schedule_renderer import render_schedule
+from .generators.detail_renderer import render_detail
 
 
 class InteractiveSheet:
     """
-    Generates architectural floor plan sheets as SVG.
+    Generates architectural drawing sheets as SVG.
 
     Supports single or multi-viewport layouts:
         - Single viewport (default): One drawing fills the sheet
         - Multi-viewport: Multiple drawings with independent scales
+        - Sheet presets: Pre-configured layouts with content assignments
 
     Usage:
         # Single viewport
@@ -57,6 +68,16 @@ class InteractiveSheet:
             layout="main_with_details"
         )
 
+        # Sheet preset with content assignments
+        from sheets import get_preset, DrawingType, ViewportContent
+        preset = get_preset("elevations", 1296, 864)  # ARCH_D size
+        preset.set_content("vp-elev-north", ViewportContent(DrawingType.SECTION))
+        sheet = InteractiveSheet(
+            json_path="path/to/building.json",
+            sheet_size="ARCH_D",
+            preset=preset
+        )
+
         svg_content = sheet.generate()
     """
 
@@ -71,6 +92,7 @@ class InteractiveSheet:
         sheet_number: str = "A-001",
         layout: Optional[str] = None,
         viewports: Optional[List[Viewport]] = None,
+        preset: Optional[SheetPreset] = None,
     ):
         """
         Initialize the sheet generator.
@@ -86,6 +108,8 @@ class InteractiveSheet:
             layout: Preset layout name ("single", "split_horizontal",
                     "main_with_details", "quad") - overrides scale
             viewports: Custom viewport list - overrides layout and scale
+            preset: SheetPreset with ViewportConfig content assignments -
+                    overrides layout and viewports
         """
         self.sheet_size: SheetSize = get_sheet_size(sheet_size)
         self.scale_factor = get_scale_factor(scale)
@@ -95,6 +119,10 @@ class InteractiveSheet:
         self.sheet_number = sheet_number
         self.layout_name = layout
         self.custom_viewports = viewports
+        self.preset = preset
+
+        # Store viewport configs for content-aware rendering
+        self.viewport_configs: Dict[str, ViewportConfig] = {}
 
         # Load building data
         if json_path:
@@ -123,8 +151,14 @@ class InteractiveSheet:
             return json.load(f)
 
     def _setup_viewports(self) -> None:
-        """Setup viewports based on layout or custom viewports."""
-        if self.custom_viewports:
+        """Setup viewports based on preset, layout, or custom viewports."""
+        if self.preset:
+            # Use preset with content assignments
+            self.viewports = [vc.viewport for vc in self.preset.viewports]
+            self.viewport_configs = {
+                vc.viewport.id: vc for vc in self.preset.viewports
+            }
+        elif self.custom_viewports:
             self.viewports = self.custom_viewports
         elif self.layout_name:
             layouts = create_standard_layout(
@@ -482,22 +516,198 @@ class InteractiveSheet:
                 height=0,
             )
 
+    def _get_content_renderer(
+        self,
+        drawing_type: DrawingType,
+        content: ViewportContent,
+    ) -> Callable[[SVGBuilder, Element, float, float, float], None]:
+        """
+        Get the appropriate content renderer for a drawing type.
+
+        Args:
+            drawing_type: Type of drawing to render
+            content: Content configuration with filters/options
+
+        Returns:
+            Renderer callback function
+        """
+        # Floor plan renderer - full LOD layers
+        if drawing_type == DrawingType.FLOOR_PLAN:
+            def render_floor_plan(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                for level in LODLevel:
+                    self._render_lod_layer(b, level, scale, ox, oy, 0, parent=parent)
+            return render_floor_plan
+
+        # Roof plan - show roof outline (placeholder)
+        if drawing_type == DrawingType.ROOF_PLAN:
+            def render_roof_plan(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                self._render_placeholder(b, parent, "Roof Plan", scale, ox, oy)
+            return render_roof_plan
+
+        # Key plan - simplified overview
+        if drawing_type == DrawingType.KEY_PLAN:
+            def render_key_plan(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                self._render_lod_layer(b, LODLevel.OVERVIEW, scale, ox, oy, 0, parent=parent)
+            return render_key_plan
+
+        # Elevations - use real elevation renderer
+        if drawing_type == DrawingType.ELEVATION_NORTH:
+            def render_elev_n(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_elevation(b, parent, self.data, "north", scale, ox, oy)
+            return render_elev_n
+
+        if drawing_type == DrawingType.ELEVATION_SOUTH:
+            def render_elev_s(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_elevation(b, parent, self.data, "south", scale, ox, oy)
+            return render_elev_s
+
+        if drawing_type == DrawingType.ELEVATION_EAST:
+            def render_elev_e(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_elevation(b, parent, self.data, "east", scale, ox, oy)
+            return render_elev_e
+
+        if drawing_type == DrawingType.ELEVATION_WEST:
+            def render_elev_w(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_elevation(b, parent, self.data, "west", scale, ox, oy)
+            return render_elev_w
+
+        # Sections - use real section renderer
+        if drawing_type == DrawingType.SECTION:
+            section_id = content.section_id or "A"
+            direction = "transverse" if section_id.upper() == "A" else "longitudinal"
+            def render_sec(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_section(b, parent, self.data, direction, section_id, scale, ox, oy)
+            return render_sec
+
+        # Details - use real detail renderer
+        if drawing_type == DrawingType.DETAIL:
+            detail_id = content.detail_id or "1"
+            def render_det(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_detail(b, parent, self.data, detail_id, scale, ox, oy)
+            return render_det
+
+        # Schedules - use real schedule renderer
+        if drawing_type == DrawingType.DOOR_SCHEDULE:
+            def render_door_sch(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_schedule(b, parent, self.data, "door", scale, ox, oy)
+            return render_door_sch
+
+        if drawing_type == DrawingType.WINDOW_SCHEDULE:
+            def render_win_sch(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_schedule(b, parent, self.data, "window", scale, ox, oy)
+            return render_win_sch
+
+        if drawing_type == DrawingType.ROOM_SCHEDULE:
+            def render_room_sch(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_schedule(b, parent, self.data, "room", scale, ox, oy)
+            return render_room_sch
+
+        if drawing_type == DrawingType.FINISH_SCHEDULE:
+            def render_finish_sch(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_schedule(b, parent, self.data, "room", scale, ox, oy)  # Use room for finish
+            return render_finish_sch
+
+        # Legend - placeholder
+        if drawing_type == DrawingType.LEGEND:
+            def render_legend(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                self._render_placeholder(b, parent, "Legend", scale, ox, oy)
+            return render_legend
+
+        # Notes - placeholder
+        if drawing_type == DrawingType.NOTES:
+            def render_notes(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                self._render_placeholder(b, parent, "General Notes", scale, ox, oy)
+            return render_notes
+
+        # Custom - use custom renderer if provided
+        if drawing_type == DrawingType.CUSTOM and content.custom_renderer:
+            return content.custom_renderer
+
+        # Default - floor plan rendering
+        def render_default(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+            for level in LODLevel:
+                self._render_lod_layer(b, level, scale, ox, oy, 0, parent=parent)
+        return render_default
+
+    def _render_placeholder(
+        self,
+        builder: SVGBuilder,
+        parent: Element,
+        label: str,
+        scale: float,
+        ox: float,
+        oy: float,
+        is_table: bool = False,
+    ) -> None:
+        """
+        Render a placeholder for drawing types not yet implemented.
+
+        Shows a labeled box indicating what content would appear.
+        """
+        g = SubElement(parent, "g")
+        g.set("class", "placeholder-content")
+
+        # Get viewport bounds from parent clip path
+        # For now, use a centered approach
+        if is_table:
+            # Table placeholder - show grid lines
+            builder.text(
+                content=f"[ {label} ]",
+                x=ox + 50,
+                y=oy + 30,
+                parent=g,
+                font_size=14,
+                font_weight="bold",
+                fill="#999999",
+                font_style="italic",
+            )
+            # Add table header line indication
+            builder.line(
+                ox + 20, oy + 50,
+                ox + 400, oy + 50,
+                parent=g,
+                stroke="#cccccc",
+                stroke_width=1,
+            )
+        else:
+            # Drawing placeholder
+            builder.text(
+                content=f"[ {label} ]",
+                x=ox + 50,
+                y=oy + 50,
+                parent=g,
+                font_size=16,
+                font_weight="bold",
+                fill="#999999",
+                font_style="italic",
+            )
+
     def _render_viewports(self, builder: SVGBuilder) -> None:
         """
         Render all viewports with their content.
 
         Each viewport is clipped and can have independent scale.
+        Content is rendered based on DrawingType when using presets.
         """
         vp_renderer = ViewportRenderer(builder)
 
         for viewport in self.viewports:
-            def render_content(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
-                """Render building content for this viewport."""
-                # Render each LOD level
-                for level in LODLevel:
-                    self._render_lod_layer(b, level, scale, ox, oy, 0, parent=parent)
+            # Get content configuration if using preset
+            config = self.viewport_configs.get(viewport.id)
 
-            vp_renderer.render_viewport(viewport, render_content)
+            if config:
+                # Content-aware rendering
+                renderer = self._get_content_renderer(
+                    config.content.drawing_type,
+                    config.content,
+                )
+                vp_renderer.render_viewport(viewport, renderer)
+            else:
+                # Default floor plan rendering (legacy mode)
+                def render_content(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                    for level in LODLevel:
+                        self._render_lod_layer(b, level, scale, ox, oy, 0, parent=parent)
+                vp_renderer.render_viewport(viewport, render_content)
 
     def _render_lod_controls(self, builder: SVGBuilder) -> None:
         """
