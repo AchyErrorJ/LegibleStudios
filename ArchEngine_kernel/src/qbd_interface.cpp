@@ -6,6 +6,7 @@
 #include <chrono>
 #include <iomanip>
 #include <nlohmann/json.hpp>
+#include "mesh.hpp"
 
 using json = nlohmann::json;
 
@@ -196,6 +197,7 @@ std::optional<QBDLayout> QBDInterface::loadFromJSON(const std::string& jsonStrin
         //   level_name: string
         //   room: string (optional)
         if (j.contains("floors_batch") && j["floors_batch"].is_array()) {
+            std::cout << "[QBD] Found floors_batch with " << j["floors_batch"].size() << " entries\n";
             for (const auto& fj : j["floors_batch"]) {
                 QBDFloor floor;
 
@@ -219,7 +221,11 @@ std::optional<QBDLayout> QBDInterface::loadFromJSON(const std::string& jsonStrin
 
                 floor.thickness = fj.value("thickness", 300.0f);  // Default 300mm
                 floor.levelName = fj.value("level_name", "Level 1");
-                floor.room = fj.value("room", "");
+                if (fj.contains("room") && !fj["room"].is_null()) {
+                    floor.room = fj["room"].get<std::string>();
+                } else {
+                    floor.room = "";
+                }
 
                 layout.floors.push_back(floor);
             }
@@ -507,13 +513,14 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
     Building building;
     building.name = "QBD Generated Building";
 
-    // Convert walls to structural elements
-    for (const auto& wall : layout.walls) {
+    // Convert walls to structural elements (with door/window cutouts)
+    for (size_t wallIdx = 0; wallIdx < layout.walls.size(); ++wallIdx) {
+        const auto& wall = layout.walls[wallIdx];
         StructuralElement elem;
         elem.type = ElementType::Wall;
         elem.start = wall.start;
         elem.end = vec3(wall.end.x, wall.start.y + wall.height, wall.end.z);
-        elem.width = 0.5f;  // Will be set by wall type
+        elem.width = 0.5f;
         elem.depth = 0.5f;
 
         switch (wall.category) {
@@ -529,6 +536,38 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
                 elem.depth = m_interiorWallType.getTotalThickness();
                 elem.material = "interior_wall";
                 break;
+        }
+
+        // Collect all openings (doors and windows) for this wall
+        std::vector<std::array<f32, 4>> openings;  // {offset, width, bottom, height}
+
+        for (const auto& door : layout.doors) {
+            if (door.wallIndex == static_cast<i32>(wallIdx)) {
+                openings.push_back({door.offset, door.width, 0.0f, door.height});
+            }
+        }
+        for (const auto& window : layout.windows) {
+            if (window.wallIndex == static_cast<i32>(wallIdx)) {
+                openings.push_back({window.offset, window.width, window.sillHeight, window.height});
+            }
+        }
+
+        // Generate wall mesh with all cutouts
+        if (!openings.empty()) {
+            auto [verts, indices] = Geometry::CSG::wallWithMultipleOpenings(
+                wall.start, wall.end, wall.height, elem.depth,
+                openings, vec3(0.9f, 0.88f, 0.85f)
+            );
+            if (!verts.empty() && !indices.empty()) {
+                elem.mesh.vertices.clear();
+                elem.mesh.faces.clear();
+                for (const auto& v : verts) {
+                    elem.mesh.vertices.push_back(v.position);
+                }
+                for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+                    elem.mesh.faces.push_back({indices[i], indices[i+1], indices[i+2]});
+                }
+            }
         }
 
         building.elements.push_back(elem);

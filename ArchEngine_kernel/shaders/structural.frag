@@ -124,8 +124,8 @@ const vec2 poissonDisk[16] = vec2[](
     vec2( 0.14383161, -0.14100790)
 );
 
-// Soft shadow calculation with Poisson disk PCF
-float calculateShadow(vec4 lightSpacePos) {
+// Soft shadow with slope-scaled bias for grazing angles
+float calculateShadow(vec4 lightSpacePos, vec3 normal, vec3 lightDir) {
     // Perspective divide
     vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
 
@@ -139,18 +139,29 @@ float calculateShadow(vec4 lightSpacePos) {
         return 1.0;  // Fully lit outside bounds
     }
 
-    // Soft PCF with Poisson disk sampling
-    float shadow = 0.0;
+    // Slope-scaled bias: more bias at grazing angles (roof problem fix)
+    float NdotL = max(dot(normal, lightDir), 0.0);
+    float slopeBias = ubo.shadowBias * sqrt(1.0 - NdotL * NdotL) / max(NdotL, 0.1);
+    float totalBias = ubo.shadowBias + clamp(slopeBias, 0.0, 0.05);
+
     vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0));
-    float spreadRadius = 2.5;  // Spread of the soft shadow (in texels)
+    float shadow = 0.0;
 
-    for (int i = 0; i < 16; i++) {
-        vec2 offset = poissonDisk[i] * texelSize * spreadRadius;
-        shadow += texture(shadowMap, vec3(projCoords.xy + offset, projCoords.z - ubo.shadowBias));
+    // Spread factor for shadow edges (lower = sharper, less bleeding)
+    float spread = 1.0;
+
+    // 5x5 PCF for smooth shadow edges
+    for (int x = -2; x <= 2; x++) {
+        for (int y = -2; y <= 2; y++) {
+            vec2 offset = vec2(float(x), float(y)) * texelSize * spread;
+            shadow += texture(shadowMap, vec3(projCoords.xy + offset, projCoords.z - totalBias));
+        }
     }
-    shadow /= 16.0;
+    shadow /= 25.0;
 
-    // Return shadow factor (1.0 = fully lit, 0.0 = fully in shadow)
+    // Clean up near-lit areas to avoid subtle artifacts
+    if (shadow > 0.95) shadow = 1.0;
+
     return shadow;
 }
 
@@ -193,10 +204,10 @@ void main() {
     vec3 F0 = vec3(0.04);
     F0 = mix(F0, albedo, metallic);
 
-    // Calculate shadow factor
+    // Calculate shadow factor (with slope-scaled bias for grazing angles)
     float shadow = 1.0;
     if (ubo.enableShadows != 0u) {
-        shadow = calculateShadow(fragLightSpacePos);
+        shadow = calculateShadow(fragLightSpacePos, N, L);
     }
 
     // Calculate geometric ambient occlusion
@@ -245,6 +256,21 @@ void main() {
 
     // Add emission
     result += albedo * emission;
+
+    // DEBUG: Uncomment one to visualize components
+    // outColor = vec4(N * 0.5 + 0.5, 1.0); return;  // Normals
+    // outColor = vec4(vec3(NdotL), 1.0); return;    // Light angle
+    // outColor = vec4(specular * 10.0, 1.0); return; // Specular (amplified)
+    // outColor = vec4(Lo, 1.0); return;              // Direct lighting only
+    // outColor = vec4(ambient, 1.0); return;         // Ambient only
+    // outColor = vec4(vec3(ao), 1.0); return;        // AO
+    // outColor = vec4(result, 1.0); return;          // Before tone mapping
+
+    // SHADOW DEBUG: Uncomment one to diagnose shadow issues
+    // outColor = vec4(vec3(shadow), 1.0); return;     // Shadow factor (white=lit, black=shadow)
+    // vec3 lsPos = fragLightSpacePos.xyz / fragLightSpacePos.w;
+    // outColor = vec4(lsPos * 0.5 + 0.5, 1.0); return;  // Light space position (RGB=XYZ)
+    // outColor = vec4(vec3(lsPos.z), 1.0); return;      // Light space depth (closer=darker)
 
     // Tone mapping (ACES-ish)
     result = result / (result + vec3(1.0));
