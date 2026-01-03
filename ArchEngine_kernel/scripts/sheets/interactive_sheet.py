@@ -38,6 +38,10 @@ from .sheet_types import (
     SheetPreset,
     get_preset,
 )
+from .generators.elevation_renderer import render_elevation
+from .generators.section_renderer import render_section
+from .generators.schedule_renderer import render_schedule
+from .generators.detail_renderer import render_detail
 
 
 class InteractiveSheet:
@@ -546,35 +550,62 @@ class InteractiveSheet:
                 self._render_lod_layer(b, LODLevel.OVERVIEW, scale, ox, oy, 0, parent=parent)
             return render_key_plan
 
-        # Elevations - placeholder for now
-        if drawing_type in (DrawingType.ELEVATION_NORTH, DrawingType.ELEVATION_SOUTH,
-                            DrawingType.ELEVATION_EAST, DrawingType.ELEVATION_WEST):
-            direction = drawing_type.name.replace("ELEVATION_", "").title()
-            def render_elevation(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
-                self._render_placeholder(b, parent, f"{direction} Elevation", scale, ox, oy)
-            return render_elevation
+        # Elevations - use real elevation renderer
+        if drawing_type == DrawingType.ELEVATION_NORTH:
+            def render_elev_n(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_elevation(b, parent, self.data, "north", scale, ox, oy)
+            return render_elev_n
 
-        # Sections - placeholder
+        if drawing_type == DrawingType.ELEVATION_SOUTH:
+            def render_elev_s(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_elevation(b, parent, self.data, "south", scale, ox, oy)
+            return render_elev_s
+
+        if drawing_type == DrawingType.ELEVATION_EAST:
+            def render_elev_e(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_elevation(b, parent, self.data, "east", scale, ox, oy)
+            return render_elev_e
+
+        if drawing_type == DrawingType.ELEVATION_WEST:
+            def render_elev_w(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_elevation(b, parent, self.data, "west", scale, ox, oy)
+            return render_elev_w
+
+        # Sections - use real section renderer
         if drawing_type == DrawingType.SECTION:
             section_id = content.section_id or "A"
-            def render_section(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
-                self._render_placeholder(b, parent, f"Section {section_id}-{section_id}", scale, ox, oy)
-            return render_section
+            direction = "transverse" if section_id.upper() == "A" else "longitudinal"
+            def render_sec(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_section(b, parent, self.data, direction, section_id, scale, ox, oy)
+            return render_sec
 
-        # Details - placeholder
+        # Details - use real detail renderer
         if drawing_type == DrawingType.DETAIL:
             detail_id = content.detail_id or "1"
-            def render_detail(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
-                self._render_placeholder(b, parent, f"Detail {detail_id}", scale, ox, oy)
-            return render_detail
+            def render_det(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_detail(b, parent, self.data, detail_id, scale, ox, oy)
+            return render_det
 
-        # Schedules - placeholder with table indication
-        if drawing_type in (DrawingType.DOOR_SCHEDULE, DrawingType.WINDOW_SCHEDULE,
-                            DrawingType.ROOM_SCHEDULE, DrawingType.FINISH_SCHEDULE):
-            schedule_name = drawing_type.name.replace("_", " ").title()
-            def render_schedule(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
-                self._render_placeholder(b, parent, schedule_name, scale, ox, oy, is_table=True)
-            return render_schedule
+        # Schedules - use real schedule renderer
+        if drawing_type == DrawingType.DOOR_SCHEDULE:
+            def render_door_sch(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_schedule(b, parent, self.data, "door", scale, ox, oy)
+            return render_door_sch
+
+        if drawing_type == DrawingType.WINDOW_SCHEDULE:
+            def render_win_sch(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_schedule(b, parent, self.data, "window", scale, ox, oy)
+            return render_win_sch
+
+        if drawing_type == DrawingType.ROOM_SCHEDULE:
+            def render_room_sch(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_schedule(b, parent, self.data, "room", scale, ox, oy)
+            return render_room_sch
+
+        if drawing_type == DrawingType.FINISH_SCHEDULE:
+            def render_finish_sch(b: SVGBuilder, parent: Element, scale: float, ox: float, oy: float):
+                render_schedule(b, parent, self.data, "room", scale, ox, oy)  # Use room for finish
+            return render_finish_sch
 
         # Legend - placeholder
         if drawing_type == DrawingType.LEGEND:
