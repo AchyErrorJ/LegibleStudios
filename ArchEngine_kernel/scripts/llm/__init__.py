@@ -28,6 +28,7 @@ from .provider import LLMProvider, Message, LLMResponse
 from .config import LLMConfig
 from .schema_generator import SchemaGenerator
 from .schema_modifier import SchemaModifier
+from .action_parser import TemplateModifier, ActionParser, ActionApplier
 
 # Initialize defaults on import
 LLMConfig.register_defaults()
@@ -40,6 +41,9 @@ __all__ = [
     "LLMConfig",
     "SchemaGenerator",
     "SchemaModifier",
+    "TemplateModifier",  # Fast template-based modifier
+    "ActionParser",
+    "ActionApplier",
     # Helper functions
     "generate_building",
     "modify_building",

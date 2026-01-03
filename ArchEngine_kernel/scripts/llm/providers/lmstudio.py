@@ -80,7 +80,7 @@ class LMStudioProvider(LLMProvider):
         response = requests.post(
             f"{self.base_url}/chat/completions",
             json=payload,
-            timeout=kwargs.get("timeout", 120)
+            timeout=kwargs.get("timeout", 300)  # 5 minutes for large schemas
         )
         response.raise_for_status()
         data = response.json()

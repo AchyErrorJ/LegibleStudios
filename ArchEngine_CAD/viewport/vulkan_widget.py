@@ -9,6 +9,7 @@ import ctypes
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -73,6 +74,7 @@ class VulkanViewportWidget(QWidget):
         self._last_mouse_pos = None
         self._dragging = False
         self._rendering = False  # Prevent concurrent renders
+        self._api_lock = threading.Lock()  # Prevent load during render
 
         # Widget setup
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
@@ -204,6 +206,10 @@ class VulkanViewportWidget(QWidget):
         if not self.isVisible():
             return
 
+        # Try to acquire lock (non-blocking) - skip frame if load_json is running
+        if not self._api_lock.acquire(blocking=False):
+            return
+
         # Track render count for diagnostics
         if not hasattr(self, '_render_count'):
             self._render_count = 0
@@ -242,13 +248,15 @@ class VulkanViewportWidget(QWidget):
             return
         finally:
             self._rendering = False
+            self._api_lock.release()
 
     def resizeEvent(self, event):
         """Handle widget resize."""
         super().resizeEvent(event)
 
         if self._initialized and self._lib is not None:
-            self._lib.arch_resize(event.size().width(), event.size().height())
+            with self._api_lock:
+                self._lib.arch_resize(event.size().width(), event.size().height())
 
     def closeEvent(self, event):
         """Cleanup on close."""
@@ -283,19 +291,21 @@ class VulkanViewportWidget(QWidget):
         if not self._initialized or self._lib is None:
             return False
 
-        json_str = json.dumps(data).encode('utf-8')
-        result = self._lib.arch_load_json(json_str)
+        # Acquire lock to prevent render during load
+        with self._api_lock:
+            json_str = json.dumps(data).encode('utf-8')
+            result = self._lib.arch_load_json(json_str)
 
-        if result == 0:
-            count = self._lib.arch_get_element_count()
-            print(f"[VulkanWidget] Loaded {count} elements")
-            self.load_complete.emit(count)
-            return True
-        else:
-            error = self._lib.arch_get_error().decode('utf-8')
-            print(f"[VulkanWidget] Load failed: {error}")
-            self.error_occurred.emit(error)
-            return False
+            if result == 0:
+                count = self._lib.arch_get_element_count()
+                print(f"[VulkanWidget] Loaded {count} elements")
+                self.load_complete.emit(count)
+                return True
+            else:
+                error = self._lib.arch_get_error().decode('utf-8')
+                print(f"[VulkanWidget] Load failed: {error}")
+                self.error_occurred.emit(error)
+                return False
 
     def load_file(self, file_path: str) -> bool:
         """
@@ -310,19 +320,21 @@ class VulkanViewportWidget(QWidget):
         if not self._initialized or self._lib is None:
             return False
 
-        path_bytes = file_path.encode('utf-8')
-        result = self._lib.arch_load_file(path_bytes)
+        # Acquire lock to prevent render during load
+        with self._api_lock:
+            path_bytes = file_path.encode('utf-8')
+            result = self._lib.arch_load_file(path_bytes)
 
-        if result == 0:
-            count = self._lib.arch_get_element_count()
-            print(f"[VulkanWidget] Loaded {count} elements from {file_path}")
-            self.load_complete.emit(count)
-            return True
-        else:
-            error = self._lib.arch_get_error().decode('utf-8')
-            print(f"[VulkanWidget] Load failed: {error}")
-            self.error_occurred.emit(error)
-            return False
+            if result == 0:
+                count = self._lib.arch_get_element_count()
+                print(f"[VulkanWidget] Loaded {count} elements from {file_path}")
+                self.load_complete.emit(count)
+                return True
+            else:
+                error = self._lib.arch_get_error().decode('utf-8')
+                print(f"[VulkanWidget] Load failed: {error}")
+                self.error_occurred.emit(error)
+                return False
 
     def reset_camera(self):
         """Reset camera to fit the building."""

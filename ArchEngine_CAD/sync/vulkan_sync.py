@@ -232,7 +232,9 @@ class VulkanSyncClient(QObject):
                     self._pipe = pipe
                     self._connected = True
 
-                print(f"[VulkanSync] Connected to {self._pipe_path}")
+                if not hasattr(self, '_connection_logged'):
+                    print(f"[VulkanSync] Connected to {self._pipe_path}")
+                    self._connection_logged = True
                 QTimer.singleShot(0, self.connected.emit)
 
                 # Read loop (for responses from renderer)
@@ -306,7 +308,10 @@ class VulkanSyncClient(QObject):
                 self._pipe = None
 
         if was_connected:
-            print("[VulkanSync] Connection lost")
+            # Only log first disconnect to reduce spam
+            if not hasattr(self, '_disconnect_logged'):
+                print("[VulkanSync] Connection lost (kernel not running)")
+                self._disconnect_logged = True
             QTimer.singleShot(0, self.disconnected.emit)
 
             # Start auto-reconnect if enabled

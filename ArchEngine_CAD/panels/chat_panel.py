@@ -24,7 +24,7 @@ try:
     llm_path = Path(__file__).parent.parent.parent / "ArchEngine_kernel" / "scripts"
     if llm_path.exists():
         sys.path.insert(0, str(llm_path))
-        from llm import LLMConfig, SchemaModifier, SchemaGenerator
+        from llm import LLMConfig, TemplateModifier, SchemaGenerator
         LLM_AVAILABLE = True
 except ImportError:
     pass
@@ -32,9 +32,8 @@ except ImportError:
 
 class LLMWorker(QThread):
     """Background thread for LLM calls."""
-    finished = pyqtSignal(dict)  # modified schema
-    response = pyqtSignal(str)   # text response
-    error = pyqtSignal(str)      # error message
+    finished = pyqtSignal(dict, str)  # modified schema, description
+    error = pyqtSignal(str)           # error message
 
     def __init__(self, modifier, schema, message, pinned):
         super().__init__()
@@ -45,12 +44,13 @@ class LLMWorker(QThread):
 
     def run(self):
         try:
-            modified = self.modifier.modify(
+            # TemplateModifier returns (schema, description)
+            modified, description = self.modifier.modify(
                 self.schema,
                 self.message,
                 pinned_elements=self.pinned
             )
-            self.finished.emit(modified)
+            self.finished.emit(modified, description)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -194,8 +194,8 @@ class ChatPanel(QWidget):
             self.provider_combo.setEnabled(True)
             self._set_status("green", "Ready")
 
-            # Initialize modifier with default provider
-            self.modifier = SchemaModifier()
+            # Initialize modifier with default provider (TemplateModifier is faster)
+            self.modifier = TemplateModifier()
             self.generator = SchemaGenerator()
 
         except Exception as e:
@@ -289,16 +289,16 @@ class ChatPanel(QWidget):
 
         self._add_message("Assistant", response.strip(), "#aaa")
 
-    @pyqtSlot(dict)
-    def _on_llm_success(self, modified_schema: dict):
+    @pyqtSlot(dict, str)
+    def _on_llm_success(self, modified_schema: dict, description: str):
         """Handle successful LLM response."""
         self._set_processing(False)
 
         # Update document
         self.document.load_from_dict(modified_schema)
 
-        # Notify success
-        self._add_message("Assistant", "Design updated.", "#6bff6b")
+        # Notify success with LLM's description of what changed
+        self._add_message("Assistant", description or "Design updated.", "#6bff6b")
 
         # Emit signal for other components
         self.schema_updated.emit(modified_schema)
