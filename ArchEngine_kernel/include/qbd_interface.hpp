@@ -7,6 +7,13 @@
 #include <vector>
 #include <unordered_map>
 #include <optional>
+#include <memory>
+
+// Forward declare archgeometry types for optional integration
+namespace archgeometry {
+    class SchemaDocument;
+    class QueryAPI;
+}
 
 namespace arch {
 namespace qbd {
@@ -501,6 +508,21 @@ public:
     // Set climate zone for thermal calculations
     void setClimateZone(const std::string& zone);
 
+    // ========================================================================
+    // ARCHGEOMETRY INTEGRATION (shared geometry library)
+    // ========================================================================
+
+    // Get archgeometry QueryAPI for unified geometry queries
+    // Returns nullptr if archgeometry parsing failed or was not used
+    archgeometry::QueryAPI* getArchGeometryQuery();
+
+    // Parse JSON using archgeometry library (alternative to loadFromJSON)
+    // Stores result internally for later QueryAPI access
+    bool parseWithArchGeometry(const std::string& jsonString);
+
+    // Check if archgeometry parsing is available
+    bool hasArchGeometryDoc() const { return m_archDoc != nullptr; }
+
 private:
     std::string m_obcLibraryPath;
     std::string m_climateZone = "Zone 6";
@@ -511,6 +533,10 @@ private:
     WallType m_wetWallType;
 
     bool m_initialized = false;
+
+    // ArchGeometry integration (shared library for unified schema interpretation)
+    std::unique_ptr<archgeometry::SchemaDocument> m_archDoc;
+    std::unique_ptr<archgeometry::QueryAPI> m_archQuery;
 
     // Initialize default wall types
     void initDefaultWallTypes();

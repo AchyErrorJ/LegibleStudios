@@ -3,16 +3,32 @@
 ArchEngine Plan Generator
 Generates annotated floor plans and roof plans from QBD JSON output.
 Plans update automatically when JSON changes.
+
+Now uses shared ArchGeometry library for consistent geometry interpretation.
 """
 
 import json
 import math
+import sys
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
 
 from title_block import generate_title_block, get_project_info_from_json, get_drawing_info
 
+# Try to import shared geometry library
+_ARCHGEOMETRY_AVAILABLE = False
+try:
+    # Add shared library path
+    _lib_path = Path(__file__).parent.parent.parent / "Shared" / "ArchGeometry" / "python"
+    if _lib_path.exists() and str(_lib_path) not in sys.path:
+        sys.path.insert(0, str(_lib_path))
+    import archgeometry_py as archgeometry
+    _ARCHGEOMETRY_AVAILABLE = True
+except ImportError:
+    archgeometry = None
+
+# Local dataclasses (kept for compatibility, will be replaced by archgeometry types when available)
 @dataclass
 class Wall:
     start: Tuple[float, float, float]
@@ -63,6 +79,21 @@ class PlanGenerator:
         with open(json_path, 'r') as f:
             self.data = json.load(f)
 
+        # Try to use archgeometry for parsing (provides consistent interpretation)
+        self._schema_doc = None
+        self._query_api = None
+        if _ARCHGEOMETRY_AVAILABLE and archgeometry is not None:
+            try:
+                with open(json_path, 'r') as f:
+                    json_str = f.read()
+                self._schema_doc = archgeometry.parse_json(json_str)
+                self._query_api = archgeometry.QueryAPI(self._schema_doc)
+            except Exception as e:
+                print(f"Warning: archgeometry parsing failed, using fallback: {e}")
+                self._schema_doc = None
+                self._query_api = None
+
+        # Parse elements (uses archgeometry types if available, falls back to local)
         self.walls = self._parse_walls()
         self.doors = self._parse_doors()
         self.windows = self._parse_windows()
