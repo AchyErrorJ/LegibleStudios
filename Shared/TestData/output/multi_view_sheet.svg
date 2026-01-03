@@ -1,0 +1,1248 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="2592" height="1728" viewBox="0 0 2592 1728">
+  <defs>
+    <style type="text/css">
+/* LOD Layer visibility - toggle via JavaScript */
+.lod-layer { opacity: 1; transition: opacity 0.2s; }
+
+/* Default: show all layers (no show-lod-* class) */
+.lod-1, .lod-2, .lod-3, .lod-4 { opacity: 1; }
+
+/* Show ONLY selected LOD level */
+.show-lod-1 .lod-2, .show-lod-1 .lod-3, .show-lod-1 .lod-4 { opacity: 0; pointer-events: none; }
+.show-lod-2 .lod-1, .show-lod-2 .lod-3, .show-lod-2 .lod-4 { opacity: 0; pointer-events: none; }
+.show-lod-3 .lod-1, .show-lod-3 .lod-2, .show-lod-3 .lod-4 { opacity: 0; pointer-events: none; }
+.show-lod-4 .lod-1, .show-lod-4 .lod-2, .show-lod-4 .lod-3 { opacity: 0; pointer-events: none; }
+
+/* Interactive hover effects */
+[data-wall-id]:hover, [data-door-id]:hover, [data-window-id]:hover, [data-room-id]:hover {
+  stroke: #0066cc !important;
+  stroke-width: 2 !important;
+  cursor: pointer;
+}
+</style>
+    <symbol id="door-symbol" viewBox="0 0 100 100">
+      <line x1="0" y1="0" x2="100" y2="0" stroke="#000000" stroke-width="3" />
+      <path d="M 100,0 A 100,100 0 0,1 0,100" stroke="#666666" stroke-width="1" stroke-dasharray="4,2" fill="none" />
+    </symbol>
+    <symbol id="window-symbol" viewBox="0 0 100 20">
+      <rect x="0" y="0" width="100" height="20" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+      <line x1="50" y1="0" x2="50" y2="20" stroke="#000000" stroke-width="0.5" />
+    </symbol>
+    <clipPath id="clip-vp-tl">
+      <rect x="36" y="36" width="1250.0" height="782.0" />
+    </clipPath>
+    <clipPath id="clip-vp-tr">
+      <rect x="1306.0" y="36" width="1250.0" height="782.0" />
+    </clipPath>
+    <clipPath id="clip-vp-bl">
+      <rect x="36" y="838.0" width="1250.0" height="782.0" />
+    </clipPath>
+    <clipPath id="clip-vp-br">
+      <rect x="1306.0" y="838.0" width="1250.0" height="782.0" />
+    </clipPath>
+  </defs>
+  <rect x="36" y="36" width="2520" height="1656" stroke="#000000" stroke-width="2" fill="none" id="sheet-border" />
+  <g id="title-block">
+    <rect x="36" y="1620" width="2520" height="72" stroke="#000000" stroke-width="2" fill="#ffffff" />
+    <line x1="666.0" y1="1620" x2="666.0" y2="1692" stroke="#000000" stroke-width="0.5" />
+    <line x1="1296.0" y1="1620" x2="1296.0" y2="1692" stroke="#000000" stroke-width="0.5" />
+    <line x1="1926.0" y1="1620" x2="1926.0" y2="1692" stroke="#000000" stroke-width="0.5" />
+    <text x="351.0" y="1648.0" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#000000" text-anchor="middle" dominant-baseline="middle">Test Project</text>
+    <text x="351.0" y="1666.0" font-family="Arial, sans-serif" font-size="8" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">PROJECT</text>
+    <text x="981.0" y="1648.0" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#000000" text-anchor="middle" dominant-baseline="middle">Multi-View Sheet</text>
+    <text x="981.0" y="1666.0" font-family="Arial, sans-serif" font-size="8" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">TITLE</text>
+    <text x="1611.0" y="1648.0" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#000000" text-anchor="middle" dominant-baseline="middle">1:50</text>
+    <text x="1611.0" y="1666.0" font-family="Arial, sans-serif" font-size="8" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">SCALE</text>
+    <text x="2241.0" y="1648.0" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#000000" text-anchor="middle" dominant-baseline="middle">A-002</text>
+    <text x="2241.0" y="1666.0" font-family="Arial, sans-serif" font-size="8" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">2026-01-02</text>
+  </g>
+  <g id="vp-tl" class="viewport" data-viewport-id="vp-tl" data-scale="1:50">
+    <rect x="36" y="36" width="1250.0" height="782.0" stroke="#000000" stroke-width="0.5" fill="none" />
+    <g clip-path="url(#clip-vp-tl)" class="viewport-content">
+      <g id="lod-1" class="lod-layer lod-1" transform="translate(371.3566855466273, 89.08279980439852)" data-lod="1">
+        <g class="rooms">
+          <g class="room-fills">
+            <rect x="0.0" y="0.0" width="217.2324858400295" height="241.3694287111439" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-living" class="room-fill" data-room-id="living" />
+            <rect x="217.2324858400295" y="0.0" width="115.85732578134909" height="144.82165722668634" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bathroom_1" class="room-fill" data-room-id="bathroom_1" />
+            <rect x="333.0898116213786" y="0.0" width="173.7859886720236" height="202.7503201173609" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-kitchen" class="room-fill" data-room-id="kitchen" />
+            <rect x="0.0" y="241.3694287111439" width="231.71465156269818" height="260.67898300803546" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-master_bedroom" class="room-fill" data-room-id="master_bedroom" />
+            <rect x="231.71465156269818" y="241.3694287111439" width="173.7859886720236" height="193.09554296891514" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bedroom_4" class="room-fill" data-room-id="bedroom_4" />
+            <rect x="405.5006402347218" y="241.3694287111439" width="173.7859886720236" height="193.09554296891514" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bedroom_5" class="room-fill" data-room-id="bedroom_5" />
+            <rect x="0.0" y="502.04841171917934" width="144.82165722668634" height="173.7859886720236" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-master_bath" class="room-fill" data-room-id="master_bath" />
+            <rect x="144.82165722668634" y="502.04841171917934" width="57.928662890674545" height="173.7859886720236" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-hallway_7" class="room-fill" data-room-id="hallway_7" />
+          </g>
+          <g class="room-labels">
+            <g id="living" class="room-label" data-room-id="living" data-name="Living Room" data-area="32770800.62794349">
+              <text x="108.61624292001476" y="120.68471435557196" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Living Room</text>
+              <text x="108.61624292001476" y="136.68471435557194" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">32.8 sqm</text>
+            </g>
+            <g id="bathroom_1" class="room-label" data-room-id="bathroom_1" data-name="Bathroom" data-area="10486656.200941917">
+              <text x="275.16114873070404" y="72.41082861334317" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bathroom</text>
+              <text x="275.16114873070404" y="88.41082861334317" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">10.5 sqm</text>
+            </g>
+            <g id="kitchen" class="room-label" data-room-id="kitchen" data-name="Kitchen" data-area="22021978.021978024">
+              <text x="419.9828059573904" y="101.37516005868045" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Kitchen</text>
+              <text x="419.9828059573904" y="117.37516005868045" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">22.0 sqm</text>
+            </g>
+            <g id="master_bedroom" class="room-label" data-room-id="master_bedroom" data-name="Primary Bedroom" data-area="37751962.3233909">
+              <text x="115.85732578134909" y="371.70892021516164" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Primary Bedroom</text>
+              <text x="115.85732578134909" y="387.70892021516164" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">37.8 sqm</text>
+            </g>
+            <g id="bedroom_4" class="room-label" data-room-id="bedroom_4" data-name="Bedroom 2" data-area="20973312.401883833">
+              <text x="318.60764589870996" y="337.9172001956015" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bedroom 2</text>
+              <text x="318.60764589870996" y="353.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">21.0 sqm</text>
+            </g>
+            <g id="bedroom_5" class="room-label" data-room-id="bedroom_5" data-name="Bedroom 3" data-area="20973312.401883833">
+              <text x="492.3936345707336" y="337.9172001956015" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bedroom 3</text>
+              <text x="492.3936345707336" y="353.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">21.0 sqm</text>
+            </g>
+            <g id="master_bath" class="room-label" data-room-id="master_bath" data-name="Primary Bath" data-area="15729984.301412873">
+              <text x="72.41082861334317" y="588.9414060551912" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Primary Bath</text>
+              <text x="72.41082861334317" y="604.9414060551912" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">15.7 sqm</text>
+            </g>
+            <g id="hallway_7" class="room-label" data-room-id="hallway_7" data-name="Hallway" data-area="6291993.72056515">
+              <text x="173.78598867202365" y="588.9414060551912" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Hallway</text>
+              <text x="173.78598867202365" y="604.9414060551912" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">6.3 sqm</text>
+            </g>
+          </g>
+        </g>
+        <g class="building-outline">
+          <line x1="0.0" y1="0.0" x2="579.2866289067454" y2="0.0" stroke="#333333" stroke-width="2" />
+          <line x1="579.2866289067454" y1="0.0" x2="579.2866289067454" y2="675.834400391203" stroke="#333333" stroke-width="2" />
+          <line x1="579.2866289067454" y1="675.834400391203" x2="0.0" y2="675.834400391203" stroke="#333333" stroke-width="2" />
+          <line x1="0.0" y1="675.834400391203" x2="0.0" y2="0.0" stroke="#333333" stroke-width="2" />
+        </g>
+      </g>
+      <g id="lod-2" class="lod-layer lod-2" transform="translate(371.3566855466273, 89.08279980439852)" data-lod="2">
+        <g class="walls">
+          <polygon points="0.0,4.0 0.0,-4.0 579.2866289067454,-4.0 579.2866289067454,4.0" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-0" class="wall wall-exterior" data-wall-id="wall-0" data-category="exterior" data-start-x="0" data-start-z="0" data-end-x="14482.165722668635" data-end-z="0" />
+          <polygon points="575.2866289067454,0.0 583.2866289067454,0.0 583.2866289067454,675.834400391203 575.2866289067454,675.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-1" class="wall wall-exterior" data-wall-id="wall-1" data-category="exterior" data-start-x="14482.165722668635" data-start-z="0" data-end-x="14482.165722668635" data-end-z="16895.860009780074" />
+          <polygon points="579.2866289067454,671.834400391203 579.2866289067454,679.834400391203 0.0,679.834400391203 0.0,671.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-2" class="wall wall-exterior" data-wall-id="wall-2" data-category="exterior" data-start-x="14482.165722668635" data-start-z="16895.860009780074" data-end-x="0" data-end-z="16895.860009780074" />
+          <polygon points="4.0,675.834400391203 -4.0,675.834400391203 -4.0,0.0 4.0,0.0" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-3" class="wall wall-exterior" data-wall-id="wall-3" data-category="exterior" data-start-x="0" data-start-z="16895.860009780074" data-end-x="0" data-end-z="0" />
+          <polygon points="215.2324858400295,0.0 219.2324858400295,0.0 219.2324858400295,241.3694287111439 215.2324858400295,241.3694287111439" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-4" class="wall wall-interior" data-wall-id="wall-4" data-category="interior" data-start-x="5430.812146000738" data-start-z="0" data-end-x="5430.812146000738" data-end-z="6034.235717778598" />
+          <polygon points="0.0,243.3694287111439 0.0,239.3694287111439 217.2324858400295,239.3694287111439 217.2324858400295,243.3694287111439" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-5" class="wall wall-interior" data-wall-id="wall-5" data-category="interior" data-start-x="0" data-start-z="6034.235717778598" data-end-x="5430.812146000738" data-end-z="6034.235717778598" />
+          <polygon points="331.0898116213786,0.0 335.0898116213786,0.0 335.0898116213786,144.82165722668634 331.0898116213786,144.82165722668634" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-6" class="wall wall-wet_wall" data-wall-id="wall-6" data-category="wet_wall" data-start-x="8327.245290534465" data-start-z="0" data-end-x="8327.245290534465" data-end-z="3620.5414306671587" />
+          <polygon points="229.71465156269818,241.3694287111439 233.71465156269818,241.3694287111439 233.71465156269818,502.04841171917934 229.71465156269818,502.04841171917934" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-7" class="wall wall-interior" data-wall-id="wall-7" data-category="interior" data-start-x="5792.866289067454" data-start-z="6034.235717778598" data-end-x="5792.866289067454" data-end-z="12551.210292979484" />
+          <polygon points="0.0,504.04841171917934 0.0,500.04841171917934 231.71465156269818,500.04841171917934 231.71465156269818,504.04841171917934" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-8" class="wall wall-interior" data-wall-id="wall-8" data-category="interior" data-start-x="0" data-start-z="12551.210292979484" data-end-x="5792.866289067454" data-end-z="12551.210292979484" />
+          <polygon points="403.5006402347218,241.3694287111439 407.5006402347218,241.3694287111439 407.5006402347218,434.4649716800591 403.5006402347218,434.4649716800591" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-9" class="wall wall-interior" data-wall-id="wall-9" data-category="interior" data-start-x="10137.516005868045" data-start-z="6034.235717778598" data-end-x="10137.516005868045" data-end-z="10861.624292001477" />
+          <polygon points="142.82165722668634,502.04841171917934 146.82165722668634,502.04841171917934 146.82165722668634,675.834400391203 142.82165722668634,675.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-10" class="wall wall-interior" data-wall-id="wall-10" data-category="interior" data-start-x="3620.5414306671587" data-start-z="12551.210292979484" data-end-x="3620.5414306671587" data-end-z="16895.860009780074" />
+        </g>
+        <g class="doors">
+          <g id="door-0" class="door" transform="translate(80.0, 0.0) rotate(0.0)" data-door-id="door-0" data-wall-index="0" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-1" class="door" transform="translate(217.2324858400295, 120.68471435557196) rotate(90.0)" data-door-id="door-1" data-wall-index="4" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-2" class="door" transform="translate(108.61624292001476, 241.3694287111439) rotate(0.0)" data-door-id="door-2" data-wall-index="5" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-3" class="door" transform="translate(333.0898116213786, 72.41082861334317) rotate(90.0)" data-door-id="door-3" data-wall-index="6" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-4" class="door" transform="translate(231.71465156269818, 371.70892021516164) rotate(90.0)" data-door-id="door-4" data-wall-index="7" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-5" class="door" transform="translate(115.85732578134909, 502.04841171917934) rotate(0.0)" data-door-id="door-5" data-wall-index="8" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-6" class="door" transform="translate(405.5006402347218, 337.9172001956015) rotate(90.0)" data-door-id="door-6" data-wall-index="9" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-7" class="door" transform="translate(144.82165722668634, 588.9414060551912) rotate(90.0)" data-door-id="door-7" data-wall-index="10" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+        </g>
+        <g class="windows">
+          <g id="window-0" class="window" transform="translate(115.85732578134909, 0.0) rotate(0.0)" data-window-id="window-0" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-1" class="window" transform="translate(231.71465156269818, 0.0) rotate(0.0)" data-window-id="window-1" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-2" class="window" transform="translate(347.5719773440473, 0.0) rotate(0.0)" data-window-id="window-2" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-3" class="window" transform="translate(463.42930312539636, 0.0) rotate(0.0)" data-window-id="window-3" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-4" class="window" transform="translate(463.42930312539636, 675.834400391203) rotate(180.0)" data-window-id="window-4" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-5" class="window" transform="translate(347.5719773440472, 675.834400391203) rotate(180.0)" data-window-id="window-5" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-6" class="window" transform="translate(231.71465156269812, 675.834400391203) rotate(180.0)" data-window-id="window-6" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-7" class="window" transform="translate(115.85732578134906, 675.834400391203) rotate(180.0)" data-window-id="window-7" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-8" class="window" transform="translate(0.0, 563.1953336593358) rotate(-90.0)" data-window-id="window-8" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-9" class="window" transform="translate(0.0, 450.5562669274687) rotate(-90.0)" data-window-id="window-9" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-10" class="window" transform="translate(0.0, 337.9172001956015) rotate(-90.0)" data-window-id="window-10" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-11" class="window" transform="translate(0.0, 225.27813346373435) rotate(-90.0)" data-window-id="window-11" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-12" class="window" transform="translate(0.0, 112.6390667318672) rotate(-90.0)" data-window-id="window-12" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+        </g>
+      </g>
+      <g id="lod-3" class="lod-layer lod-3" transform="translate(371.3566855466273, 89.08279980439852)" data-lod="3">
+        <g class="centerline-chain-x">
+          <line x1="0.0" y1="676.6344003912029" x2="0.0" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="144.84" y1="676.6344003912029" x2="144.84" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="217.24" y1="676.6344003912029" x2="217.24" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="333.08" y1="676.6344003912029" x2="333.08" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="405.52" y1="676.6344003912029" x2="405.52" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="579.28" y1="676.6344003912029" x2="579.28" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="0.0" y1="680.6344003912029" x2="144.84" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="72.42" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">3.62</text>
+          <line x1="144.84" y1="680.6344003912029" x2="217.24" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="181.04000000000002" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">1.81</text>
+          <line x1="217.24" y1="680.6344003912029" x2="333.08" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="275.15999999999997" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">2.90</text>
+          <line x1="333.08" y1="680.6344003912029" x2="405.52" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="369.29999999999995" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">1.81</text>
+          <line x1="405.52" y1="680.6344003912029" x2="579.28" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="492.4" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">4.34</text>
+        </g>
+        <g class="centerline-chain-z">
+          <line x1="-8.8" y1="0.0" x2="-0.7999999999999998" y2="0.0" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="144.84" x2="-0.7999999999999998" y2="144.84" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="241.36" x2="-0.7999999999999998" y2="241.36" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="434.48" x2="-0.7999999999999998" y2="434.48" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="502.04" x2="-0.7999999999999998" y2="502.04" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="675.84" x2="-0.7999999999999998" y2="675.84" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-4.8" y1="0.0" x2="-4.8" y2="144.84" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="72.42" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 72.42)">3.62</text>
+          <line x1="-4.8" y1="144.84" x2="-4.8" y2="241.36" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="193.10000000000002" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 193.10000000000002)">2.41</text>
+          <line x1="-4.8" y1="241.36" x2="-4.8" y2="434.48" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="337.92" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 337.92)">4.83</text>
+          <line x1="-4.8" y1="434.48" x2="-4.8" y2="502.04" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="468.26" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 468.26)">1.69</text>
+          <line x1="-4.8" y1="502.04" x2="-4.8" y2="675.84" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="588.94" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 588.94)">4.34</text>
+        </g>
+        <g class="overall-dimensions">
+          <g id="dim-overall-x" class="dimension" data-dim-id="dim-overall-x" data-length="14482.165722668633">
+            <line x1="0.0" y1="685.034400391203" x2="0.0" y2="696.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="579.2866289067454" y1="685.034400391203" x2="579.2866289067454" y2="696.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="0.0" y1="693.034400391203" x2="579.2866289067454" y2="693.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <polygon points="0.0,693.034400391203 -0.16,692.970400391203 -0.16,693.098400391203" stroke="none" stroke-width="1" fill="#0066cc" />
+            <polygon points="579.2866289067454,693.034400391203 579.4466289067453,693.098400391203 579.4466289067453,692.970400391203" stroke="none" stroke-width="1" fill="#0066cc" />
+            <text x="289.6433144533727" y="699.034400391203" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="middle" transform="rotate(0.0, 289.6433144533727, 699.034400391203)">14.48m</text>
+          </g>
+          <g id="dim-overall-z" class="dimension" data-dim-id="dim-overall-z" data-length="16895.860009780074">
+            <line x1="-9.2" y1="0.0" x2="-20.2" y2="0.0" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="-9.2" y1="675.834400391203" x2="-20.2" y2="675.834400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="-17.2" y1="0.0" x2="-17.2" y2="675.834400391203" stroke="#0066cc" stroke-width="0.5" />
+            <polygon points="-17.2,0.0 -17.136,-0.16 -17.264,-0.16" stroke="none" stroke-width="1" fill="#0066cc" />
+            <polygon points="-17.2,675.834400391203 -17.264,675.9944003912029 -17.136,675.9944003912029" stroke="none" stroke-width="1" fill="#0066cc" />
+            <text x="-23.2" y="337.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="middle" transform="rotate(90.0, -23.2, 337.9172001956015)">16.90m</text>
+          </g>
+        </g>
+      </g>
+      <g id="lod-4" class="lod-layer lod-4" transform="translate(371.3566855466273, 89.08279980439852)" data-lod="4">
+        <g class="coordinate-markers">
+          <circle cx="0.0" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="0">(0.00, 0.00)</text>
+          <circle cx="579.2866289067454" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="584.2866289067454" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="14482.165722668635" data-coord-z="0">(14.48, 0.00)</text>
+          <circle cx="579.2866289067454" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="584.2866289067454" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="14482.165722668635" data-coord-z="16895.860009780074">(14.48, 16.90)</text>
+          <circle cx="0.0" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="16895.860009780074">(0.00, 16.90)</text>
+          <circle cx="217.2324858400295" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="222.2324858400295" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5430.812146000738" data-coord-z="0">(5.43, 0.00)</text>
+          <circle cx="217.2324858400295" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="222.2324858400295" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5430.812146000738" data-coord-z="6034.235717778598">(5.43, 6.03)</text>
+          <circle cx="0.0" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="6034.235717778598">(0.00, 6.03)</text>
+          <circle cx="333.0898116213786" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="338.0898116213786" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="8327.245290534465" data-coord-z="0">(8.33, 0.00)</text>
+          <circle cx="333.0898116213786" cy="144.82165722668634" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="338.0898116213786" y="139.82165722668634" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="8327.245290534465" data-coord-z="3620.5414306671587">(8.33, 3.62)</text>
+          <circle cx="231.71465156269818" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="236.71465156269818" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5792.866289067454" data-coord-z="6034.235717778598">(5.79, 6.03)</text>
+          <circle cx="231.71465156269818" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="236.71465156269818" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5792.866289067454" data-coord-z="12551.210292979484">(5.79, 12.55)</text>
+          <circle cx="0.0" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="12551.210292979484">(0.00, 12.55)</text>
+          <circle cx="405.5006402347218" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="410.5006402347218" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="10137.516005868045" data-coord-z="6034.235717778598">(10.14, 6.03)</text>
+          <circle cx="405.5006402347218" cy="434.4649716800591" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="410.5006402347218" y="429.4649716800591" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="10137.516005868045" data-coord-z="10861.624292001477">(10.14, 10.86)</text>
+          <circle cx="144.82165722668634" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="149.82165722668634" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="3620.5414306671587" data-coord-z="12551.210292979484">(3.62, 12.55)</text>
+          <circle cx="144.82165722668634" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="149.82165722668634" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="3620.5414306671587" data-coord-z="16895.860009780074">(3.62, 16.90)</text>
+        </g>
+      </g>
+    </g>
+    <text x="661.0" y="833.0" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#000000" text-anchor="middle" dominant-baseline="auto">Floor Plan</text>
+    <text x="661.0" y="845.0" font-family="Arial, sans-serif" font-size="8" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="auto">Scale 1:50</text>
+  </g>
+  <g id="vp-tr" class="viewport" data-viewport-id="vp-tr" data-scale="1:50">
+    <rect x="1306.0" y="36" width="1250.0" height="782.0" stroke="#000000" stroke-width="0.5" fill="none" />
+    <g clip-path="url(#clip-vp-tr)" class="viewport-content">
+      <g id="lod-1" class="lod-layer lod-1" transform="translate(1641.3566855466274, 89.08279980439852)" data-lod="1">
+        <g class="rooms">
+          <g class="room-fills">
+            <rect x="0.0" y="0.0" width="217.2324858400295" height="241.3694287111439" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-living" class="room-fill" data-room-id="living" />
+            <rect x="217.2324858400295" y="0.0" width="115.85732578134909" height="144.82165722668634" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bathroom_1" class="room-fill" data-room-id="bathroom_1" />
+            <rect x="333.0898116213786" y="0.0" width="173.7859886720236" height="202.7503201173609" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-kitchen" class="room-fill" data-room-id="kitchen" />
+            <rect x="0.0" y="241.3694287111439" width="231.71465156269818" height="260.67898300803546" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-master_bedroom" class="room-fill" data-room-id="master_bedroom" />
+            <rect x="231.71465156269818" y="241.3694287111439" width="173.7859886720236" height="193.09554296891514" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bedroom_4" class="room-fill" data-room-id="bedroom_4" />
+            <rect x="405.5006402347218" y="241.3694287111439" width="173.7859886720236" height="193.09554296891514" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bedroom_5" class="room-fill" data-room-id="bedroom_5" />
+            <rect x="0.0" y="502.04841171917934" width="144.82165722668634" height="173.7859886720236" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-master_bath" class="room-fill" data-room-id="master_bath" />
+            <rect x="144.82165722668634" y="502.04841171917934" width="57.928662890674545" height="173.7859886720236" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-hallway_7" class="room-fill" data-room-id="hallway_7" />
+          </g>
+          <g class="room-labels">
+            <g id="living" class="room-label" data-room-id="living" data-name="Living Room" data-area="32770800.62794349">
+              <text x="108.61624292001476" y="120.68471435557196" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Living Room</text>
+              <text x="108.61624292001476" y="136.68471435557194" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">32.8 sqm</text>
+            </g>
+            <g id="bathroom_1" class="room-label" data-room-id="bathroom_1" data-name="Bathroom" data-area="10486656.200941917">
+              <text x="275.16114873070404" y="72.41082861334317" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bathroom</text>
+              <text x="275.16114873070404" y="88.41082861334317" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">10.5 sqm</text>
+            </g>
+            <g id="kitchen" class="room-label" data-room-id="kitchen" data-name="Kitchen" data-area="22021978.021978024">
+              <text x="419.9828059573904" y="101.37516005868045" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Kitchen</text>
+              <text x="419.9828059573904" y="117.37516005868045" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">22.0 sqm</text>
+            </g>
+            <g id="master_bedroom" class="room-label" data-room-id="master_bedroom" data-name="Primary Bedroom" data-area="37751962.3233909">
+              <text x="115.85732578134909" y="371.70892021516164" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Primary Bedroom</text>
+              <text x="115.85732578134909" y="387.70892021516164" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">37.8 sqm</text>
+            </g>
+            <g id="bedroom_4" class="room-label" data-room-id="bedroom_4" data-name="Bedroom 2" data-area="20973312.401883833">
+              <text x="318.60764589870996" y="337.9172001956015" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bedroom 2</text>
+              <text x="318.60764589870996" y="353.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">21.0 sqm</text>
+            </g>
+            <g id="bedroom_5" class="room-label" data-room-id="bedroom_5" data-name="Bedroom 3" data-area="20973312.401883833">
+              <text x="492.3936345707336" y="337.9172001956015" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bedroom 3</text>
+              <text x="492.3936345707336" y="353.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">21.0 sqm</text>
+            </g>
+            <g id="master_bath" class="room-label" data-room-id="master_bath" data-name="Primary Bath" data-area="15729984.301412873">
+              <text x="72.41082861334317" y="588.9414060551912" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Primary Bath</text>
+              <text x="72.41082861334317" y="604.9414060551912" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">15.7 sqm</text>
+            </g>
+            <g id="hallway_7" class="room-label" data-room-id="hallway_7" data-name="Hallway" data-area="6291993.72056515">
+              <text x="173.78598867202365" y="588.9414060551912" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Hallway</text>
+              <text x="173.78598867202365" y="604.9414060551912" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">6.3 sqm</text>
+            </g>
+          </g>
+        </g>
+        <g class="building-outline">
+          <line x1="0.0" y1="0.0" x2="579.2866289067454" y2="0.0" stroke="#333333" stroke-width="2" />
+          <line x1="579.2866289067454" y1="0.0" x2="579.2866289067454" y2="675.834400391203" stroke="#333333" stroke-width="2" />
+          <line x1="579.2866289067454" y1="675.834400391203" x2="0.0" y2="675.834400391203" stroke="#333333" stroke-width="2" />
+          <line x1="0.0" y1="675.834400391203" x2="0.0" y2="0.0" stroke="#333333" stroke-width="2" />
+        </g>
+      </g>
+      <g id="lod-2" class="lod-layer lod-2" transform="translate(1641.3566855466274, 89.08279980439852)" data-lod="2">
+        <g class="walls">
+          <polygon points="0.0,4.0 0.0,-4.0 579.2866289067454,-4.0 579.2866289067454,4.0" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-0" class="wall wall-exterior" data-wall-id="wall-0" data-category="exterior" data-start-x="0" data-start-z="0" data-end-x="14482.165722668635" data-end-z="0" />
+          <polygon points="575.2866289067454,0.0 583.2866289067454,0.0 583.2866289067454,675.834400391203 575.2866289067454,675.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-1" class="wall wall-exterior" data-wall-id="wall-1" data-category="exterior" data-start-x="14482.165722668635" data-start-z="0" data-end-x="14482.165722668635" data-end-z="16895.860009780074" />
+          <polygon points="579.2866289067454,671.834400391203 579.2866289067454,679.834400391203 0.0,679.834400391203 0.0,671.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-2" class="wall wall-exterior" data-wall-id="wall-2" data-category="exterior" data-start-x="14482.165722668635" data-start-z="16895.860009780074" data-end-x="0" data-end-z="16895.860009780074" />
+          <polygon points="4.0,675.834400391203 -4.0,675.834400391203 -4.0,0.0 4.0,0.0" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-3" class="wall wall-exterior" data-wall-id="wall-3" data-category="exterior" data-start-x="0" data-start-z="16895.860009780074" data-end-x="0" data-end-z="0" />
+          <polygon points="215.2324858400295,0.0 219.2324858400295,0.0 219.2324858400295,241.3694287111439 215.2324858400295,241.3694287111439" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-4" class="wall wall-interior" data-wall-id="wall-4" data-category="interior" data-start-x="5430.812146000738" data-start-z="0" data-end-x="5430.812146000738" data-end-z="6034.235717778598" />
+          <polygon points="0.0,243.3694287111439 0.0,239.3694287111439 217.2324858400295,239.3694287111439 217.2324858400295,243.3694287111439" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-5" class="wall wall-interior" data-wall-id="wall-5" data-category="interior" data-start-x="0" data-start-z="6034.235717778598" data-end-x="5430.812146000738" data-end-z="6034.235717778598" />
+          <polygon points="331.0898116213786,0.0 335.0898116213786,0.0 335.0898116213786,144.82165722668634 331.0898116213786,144.82165722668634" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-6" class="wall wall-wet_wall" data-wall-id="wall-6" data-category="wet_wall" data-start-x="8327.245290534465" data-start-z="0" data-end-x="8327.245290534465" data-end-z="3620.5414306671587" />
+          <polygon points="229.71465156269818,241.3694287111439 233.71465156269818,241.3694287111439 233.71465156269818,502.04841171917934 229.71465156269818,502.04841171917934" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-7" class="wall wall-interior" data-wall-id="wall-7" data-category="interior" data-start-x="5792.866289067454" data-start-z="6034.235717778598" data-end-x="5792.866289067454" data-end-z="12551.210292979484" />
+          <polygon points="0.0,504.04841171917934 0.0,500.04841171917934 231.71465156269818,500.04841171917934 231.71465156269818,504.04841171917934" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-8" class="wall wall-interior" data-wall-id="wall-8" data-category="interior" data-start-x="0" data-start-z="12551.210292979484" data-end-x="5792.866289067454" data-end-z="12551.210292979484" />
+          <polygon points="403.5006402347218,241.3694287111439 407.5006402347218,241.3694287111439 407.5006402347218,434.4649716800591 403.5006402347218,434.4649716800591" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-9" class="wall wall-interior" data-wall-id="wall-9" data-category="interior" data-start-x="10137.516005868045" data-start-z="6034.235717778598" data-end-x="10137.516005868045" data-end-z="10861.624292001477" />
+          <polygon points="142.82165722668634,502.04841171917934 146.82165722668634,502.04841171917934 146.82165722668634,675.834400391203 142.82165722668634,675.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-10" class="wall wall-interior" data-wall-id="wall-10" data-category="interior" data-start-x="3620.5414306671587" data-start-z="12551.210292979484" data-end-x="3620.5414306671587" data-end-z="16895.860009780074" />
+        </g>
+        <g class="doors">
+          <g id="door-0" class="door" transform="translate(80.0, 0.0) rotate(0.0)" data-door-id="door-0" data-wall-index="0" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-1" class="door" transform="translate(217.2324858400295, 120.68471435557196) rotate(90.0)" data-door-id="door-1" data-wall-index="4" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-2" class="door" transform="translate(108.61624292001476, 241.3694287111439) rotate(0.0)" data-door-id="door-2" data-wall-index="5" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-3" class="door" transform="translate(333.0898116213786, 72.41082861334317) rotate(90.0)" data-door-id="door-3" data-wall-index="6" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-4" class="door" transform="translate(231.71465156269818, 371.70892021516164) rotate(90.0)" data-door-id="door-4" data-wall-index="7" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-5" class="door" transform="translate(115.85732578134909, 502.04841171917934) rotate(0.0)" data-door-id="door-5" data-wall-index="8" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-6" class="door" transform="translate(405.5006402347218, 337.9172001956015) rotate(90.0)" data-door-id="door-6" data-wall-index="9" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-7" class="door" transform="translate(144.82165722668634, 588.9414060551912) rotate(90.0)" data-door-id="door-7" data-wall-index="10" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+        </g>
+        <g class="windows">
+          <g id="window-0" class="window" transform="translate(115.85732578134909, 0.0) rotate(0.0)" data-window-id="window-0" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-1" class="window" transform="translate(231.71465156269818, 0.0) rotate(0.0)" data-window-id="window-1" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-2" class="window" transform="translate(347.5719773440473, 0.0) rotate(0.0)" data-window-id="window-2" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-3" class="window" transform="translate(463.42930312539636, 0.0) rotate(0.0)" data-window-id="window-3" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-4" class="window" transform="translate(463.42930312539636, 675.834400391203) rotate(180.0)" data-window-id="window-4" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-5" class="window" transform="translate(347.5719773440472, 675.834400391203) rotate(180.0)" data-window-id="window-5" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-6" class="window" transform="translate(231.71465156269812, 675.834400391203) rotate(180.0)" data-window-id="window-6" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-7" class="window" transform="translate(115.85732578134906, 675.834400391203) rotate(180.0)" data-window-id="window-7" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-8" class="window" transform="translate(0.0, 563.1953336593358) rotate(-90.0)" data-window-id="window-8" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-9" class="window" transform="translate(0.0, 450.5562669274687) rotate(-90.0)" data-window-id="window-9" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-10" class="window" transform="translate(0.0, 337.9172001956015) rotate(-90.0)" data-window-id="window-10" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-11" class="window" transform="translate(0.0, 225.27813346373435) rotate(-90.0)" data-window-id="window-11" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-12" class="window" transform="translate(0.0, 112.6390667318672) rotate(-90.0)" data-window-id="window-12" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+        </g>
+      </g>
+      <g id="lod-3" class="lod-layer lod-3" transform="translate(1641.3566855466274, 89.08279980439852)" data-lod="3">
+        <g class="centerline-chain-x">
+          <line x1="0.0" y1="676.6344003912029" x2="0.0" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="144.84" y1="676.6344003912029" x2="144.84" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="217.24" y1="676.6344003912029" x2="217.24" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="333.08" y1="676.6344003912029" x2="333.08" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="405.52" y1="676.6344003912029" x2="405.52" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="579.28" y1="676.6344003912029" x2="579.28" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="0.0" y1="680.6344003912029" x2="144.84" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="72.42" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">3.62</text>
+          <line x1="144.84" y1="680.6344003912029" x2="217.24" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="181.04000000000002" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">1.81</text>
+          <line x1="217.24" y1="680.6344003912029" x2="333.08" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="275.15999999999997" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">2.90</text>
+          <line x1="333.08" y1="680.6344003912029" x2="405.52" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="369.29999999999995" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">1.81</text>
+          <line x1="405.52" y1="680.6344003912029" x2="579.28" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="492.4" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">4.34</text>
+        </g>
+        <g class="centerline-chain-z">
+          <line x1="-8.8" y1="0.0" x2="-0.7999999999999998" y2="0.0" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="144.84" x2="-0.7999999999999998" y2="144.84" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="241.36" x2="-0.7999999999999998" y2="241.36" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="434.48" x2="-0.7999999999999998" y2="434.48" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="502.04" x2="-0.7999999999999998" y2="502.04" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="675.84" x2="-0.7999999999999998" y2="675.84" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-4.8" y1="0.0" x2="-4.8" y2="144.84" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="72.42" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 72.42)">3.62</text>
+          <line x1="-4.8" y1="144.84" x2="-4.8" y2="241.36" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="193.10000000000002" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 193.10000000000002)">2.41</text>
+          <line x1="-4.8" y1="241.36" x2="-4.8" y2="434.48" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="337.92" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 337.92)">4.83</text>
+          <line x1="-4.8" y1="434.48" x2="-4.8" y2="502.04" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="468.26" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 468.26)">1.69</text>
+          <line x1="-4.8" y1="502.04" x2="-4.8" y2="675.84" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="588.94" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 588.94)">4.34</text>
+        </g>
+        <g class="overall-dimensions">
+          <g id="dim-overall-x" class="dimension" data-dim-id="dim-overall-x" data-length="14482.165722668633">
+            <line x1="0.0" y1="685.034400391203" x2="0.0" y2="696.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="579.2866289067454" y1="685.034400391203" x2="579.2866289067454" y2="696.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="0.0" y1="693.034400391203" x2="579.2866289067454" y2="693.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <polygon points="0.0,693.034400391203 -0.16,692.970400391203 -0.16,693.098400391203" stroke="none" stroke-width="1" fill="#0066cc" />
+            <polygon points="579.2866289067454,693.034400391203 579.4466289067453,693.098400391203 579.4466289067453,692.970400391203" stroke="none" stroke-width="1" fill="#0066cc" />
+            <text x="289.6433144533727" y="699.034400391203" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="middle" transform="rotate(0.0, 289.6433144533727, 699.034400391203)">14.48m</text>
+          </g>
+          <g id="dim-overall-z" class="dimension" data-dim-id="dim-overall-z" data-length="16895.860009780074">
+            <line x1="-9.2" y1="0.0" x2="-20.2" y2="0.0" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="-9.2" y1="675.834400391203" x2="-20.2" y2="675.834400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="-17.2" y1="0.0" x2="-17.2" y2="675.834400391203" stroke="#0066cc" stroke-width="0.5" />
+            <polygon points="-17.2,0.0 -17.136,-0.16 -17.264,-0.16" stroke="none" stroke-width="1" fill="#0066cc" />
+            <polygon points="-17.2,675.834400391203 -17.264,675.9944003912029 -17.136,675.9944003912029" stroke="none" stroke-width="1" fill="#0066cc" />
+            <text x="-23.2" y="337.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="middle" transform="rotate(90.0, -23.2, 337.9172001956015)">16.90m</text>
+          </g>
+        </g>
+      </g>
+      <g id="lod-4" class="lod-layer lod-4" transform="translate(1641.3566855466274, 89.08279980439852)" data-lod="4">
+        <g class="coordinate-markers">
+          <circle cx="0.0" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="0">(0.00, 0.00)</text>
+          <circle cx="579.2866289067454" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="584.2866289067454" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="14482.165722668635" data-coord-z="0">(14.48, 0.00)</text>
+          <circle cx="579.2866289067454" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="584.2866289067454" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="14482.165722668635" data-coord-z="16895.860009780074">(14.48, 16.90)</text>
+          <circle cx="0.0" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="16895.860009780074">(0.00, 16.90)</text>
+          <circle cx="217.2324858400295" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="222.2324858400295" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5430.812146000738" data-coord-z="0">(5.43, 0.00)</text>
+          <circle cx="217.2324858400295" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="222.2324858400295" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5430.812146000738" data-coord-z="6034.235717778598">(5.43, 6.03)</text>
+          <circle cx="0.0" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="6034.235717778598">(0.00, 6.03)</text>
+          <circle cx="333.0898116213786" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="338.0898116213786" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="8327.245290534465" data-coord-z="0">(8.33, 0.00)</text>
+          <circle cx="333.0898116213786" cy="144.82165722668634" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="338.0898116213786" y="139.82165722668634" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="8327.245290534465" data-coord-z="3620.5414306671587">(8.33, 3.62)</text>
+          <circle cx="231.71465156269818" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="236.71465156269818" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5792.866289067454" data-coord-z="6034.235717778598">(5.79, 6.03)</text>
+          <circle cx="231.71465156269818" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="236.71465156269818" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5792.866289067454" data-coord-z="12551.210292979484">(5.79, 12.55)</text>
+          <circle cx="0.0" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="12551.210292979484">(0.00, 12.55)</text>
+          <circle cx="405.5006402347218" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="410.5006402347218" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="10137.516005868045" data-coord-z="6034.235717778598">(10.14, 6.03)</text>
+          <circle cx="405.5006402347218" cy="434.4649716800591" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="410.5006402347218" y="429.4649716800591" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="10137.516005868045" data-coord-z="10861.624292001477">(10.14, 10.86)</text>
+          <circle cx="144.82165722668634" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="149.82165722668634" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="3620.5414306671587" data-coord-z="12551.210292979484">(3.62, 12.55)</text>
+          <circle cx="144.82165722668634" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="149.82165722668634" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="3620.5414306671587" data-coord-z="16895.860009780074">(3.62, 16.90)</text>
+        </g>
+      </g>
+    </g>
+    <text x="1931.0" y="833.0" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#000000" text-anchor="middle" dominant-baseline="auto">North Elevation</text>
+    <text x="1931.0" y="845.0" font-family="Arial, sans-serif" font-size="8" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="auto">Scale 1:50</text>
+  </g>
+  <g id="vp-bl" class="viewport" data-viewport-id="vp-bl" data-scale="1:50">
+    <rect x="36" y="838.0" width="1250.0" height="782.0" stroke="#000000" stroke-width="0.5" fill="none" />
+    <g clip-path="url(#clip-vp-bl)" class="viewport-content">
+      <g id="lod-1" class="lod-layer lod-1" transform="translate(371.3566855466273, 891.0827998043985)" data-lod="1">
+        <g class="rooms">
+          <g class="room-fills">
+            <rect x="0.0" y="0.0" width="217.2324858400295" height="241.3694287111439" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-living" class="room-fill" data-room-id="living" />
+            <rect x="217.2324858400295" y="0.0" width="115.85732578134909" height="144.82165722668634" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bathroom_1" class="room-fill" data-room-id="bathroom_1" />
+            <rect x="333.0898116213786" y="0.0" width="173.7859886720236" height="202.7503201173609" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-kitchen" class="room-fill" data-room-id="kitchen" />
+            <rect x="0.0" y="241.3694287111439" width="231.71465156269818" height="260.67898300803546" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-master_bedroom" class="room-fill" data-room-id="master_bedroom" />
+            <rect x="231.71465156269818" y="241.3694287111439" width="173.7859886720236" height="193.09554296891514" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bedroom_4" class="room-fill" data-room-id="bedroom_4" />
+            <rect x="405.5006402347218" y="241.3694287111439" width="173.7859886720236" height="193.09554296891514" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bedroom_5" class="room-fill" data-room-id="bedroom_5" />
+            <rect x="0.0" y="502.04841171917934" width="144.82165722668634" height="173.7859886720236" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-master_bath" class="room-fill" data-room-id="master_bath" />
+            <rect x="144.82165722668634" y="502.04841171917934" width="57.928662890674545" height="173.7859886720236" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-hallway_7" class="room-fill" data-room-id="hallway_7" />
+          </g>
+          <g class="room-labels">
+            <g id="living" class="room-label" data-room-id="living" data-name="Living Room" data-area="32770800.62794349">
+              <text x="108.61624292001476" y="120.68471435557196" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Living Room</text>
+              <text x="108.61624292001476" y="136.68471435557194" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">32.8 sqm</text>
+            </g>
+            <g id="bathroom_1" class="room-label" data-room-id="bathroom_1" data-name="Bathroom" data-area="10486656.200941917">
+              <text x="275.16114873070404" y="72.41082861334317" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bathroom</text>
+              <text x="275.16114873070404" y="88.41082861334317" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">10.5 sqm</text>
+            </g>
+            <g id="kitchen" class="room-label" data-room-id="kitchen" data-name="Kitchen" data-area="22021978.021978024">
+              <text x="419.9828059573904" y="101.37516005868045" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Kitchen</text>
+              <text x="419.9828059573904" y="117.37516005868045" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">22.0 sqm</text>
+            </g>
+            <g id="master_bedroom" class="room-label" data-room-id="master_bedroom" data-name="Primary Bedroom" data-area="37751962.3233909">
+              <text x="115.85732578134909" y="371.70892021516164" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Primary Bedroom</text>
+              <text x="115.85732578134909" y="387.70892021516164" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">37.8 sqm</text>
+            </g>
+            <g id="bedroom_4" class="room-label" data-room-id="bedroom_4" data-name="Bedroom 2" data-area="20973312.401883833">
+              <text x="318.60764589870996" y="337.9172001956015" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bedroom 2</text>
+              <text x="318.60764589870996" y="353.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">21.0 sqm</text>
+            </g>
+            <g id="bedroom_5" class="room-label" data-room-id="bedroom_5" data-name="Bedroom 3" data-area="20973312.401883833">
+              <text x="492.3936345707336" y="337.9172001956015" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bedroom 3</text>
+              <text x="492.3936345707336" y="353.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">21.0 sqm</text>
+            </g>
+            <g id="master_bath" class="room-label" data-room-id="master_bath" data-name="Primary Bath" data-area="15729984.301412873">
+              <text x="72.41082861334317" y="588.9414060551912" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Primary Bath</text>
+              <text x="72.41082861334317" y="604.9414060551912" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">15.7 sqm</text>
+            </g>
+            <g id="hallway_7" class="room-label" data-room-id="hallway_7" data-name="Hallway" data-area="6291993.72056515">
+              <text x="173.78598867202365" y="588.9414060551912" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Hallway</text>
+              <text x="173.78598867202365" y="604.9414060551912" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">6.3 sqm</text>
+            </g>
+          </g>
+        </g>
+        <g class="building-outline">
+          <line x1="0.0" y1="0.0" x2="579.2866289067454" y2="0.0" stroke="#333333" stroke-width="2" />
+          <line x1="579.2866289067454" y1="0.0" x2="579.2866289067454" y2="675.834400391203" stroke="#333333" stroke-width="2" />
+          <line x1="579.2866289067454" y1="675.834400391203" x2="0.0" y2="675.834400391203" stroke="#333333" stroke-width="2" />
+          <line x1="0.0" y1="675.834400391203" x2="0.0" y2="0.0" stroke="#333333" stroke-width="2" />
+        </g>
+      </g>
+      <g id="lod-2" class="lod-layer lod-2" transform="translate(371.3566855466273, 891.0827998043985)" data-lod="2">
+        <g class="walls">
+          <polygon points="0.0,4.0 0.0,-4.0 579.2866289067454,-4.0 579.2866289067454,4.0" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-0" class="wall wall-exterior" data-wall-id="wall-0" data-category="exterior" data-start-x="0" data-start-z="0" data-end-x="14482.165722668635" data-end-z="0" />
+          <polygon points="575.2866289067454,0.0 583.2866289067454,0.0 583.2866289067454,675.834400391203 575.2866289067454,675.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-1" class="wall wall-exterior" data-wall-id="wall-1" data-category="exterior" data-start-x="14482.165722668635" data-start-z="0" data-end-x="14482.165722668635" data-end-z="16895.860009780074" />
+          <polygon points="579.2866289067454,671.834400391203 579.2866289067454,679.834400391203 0.0,679.834400391203 0.0,671.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-2" class="wall wall-exterior" data-wall-id="wall-2" data-category="exterior" data-start-x="14482.165722668635" data-start-z="16895.860009780074" data-end-x="0" data-end-z="16895.860009780074" />
+          <polygon points="4.0,675.834400391203 -4.0,675.834400391203 -4.0,0.0 4.0,0.0" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-3" class="wall wall-exterior" data-wall-id="wall-3" data-category="exterior" data-start-x="0" data-start-z="16895.860009780074" data-end-x="0" data-end-z="0" />
+          <polygon points="215.2324858400295,0.0 219.2324858400295,0.0 219.2324858400295,241.3694287111439 215.2324858400295,241.3694287111439" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-4" class="wall wall-interior" data-wall-id="wall-4" data-category="interior" data-start-x="5430.812146000738" data-start-z="0" data-end-x="5430.812146000738" data-end-z="6034.235717778598" />
+          <polygon points="0.0,243.3694287111439 0.0,239.3694287111439 217.2324858400295,239.3694287111439 217.2324858400295,243.3694287111439" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-5" class="wall wall-interior" data-wall-id="wall-5" data-category="interior" data-start-x="0" data-start-z="6034.235717778598" data-end-x="5430.812146000738" data-end-z="6034.235717778598" />
+          <polygon points="331.0898116213786,0.0 335.0898116213786,0.0 335.0898116213786,144.82165722668634 331.0898116213786,144.82165722668634" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-6" class="wall wall-wet_wall" data-wall-id="wall-6" data-category="wet_wall" data-start-x="8327.245290534465" data-start-z="0" data-end-x="8327.245290534465" data-end-z="3620.5414306671587" />
+          <polygon points="229.71465156269818,241.3694287111439 233.71465156269818,241.3694287111439 233.71465156269818,502.04841171917934 229.71465156269818,502.04841171917934" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-7" class="wall wall-interior" data-wall-id="wall-7" data-category="interior" data-start-x="5792.866289067454" data-start-z="6034.235717778598" data-end-x="5792.866289067454" data-end-z="12551.210292979484" />
+          <polygon points="0.0,504.04841171917934 0.0,500.04841171917934 231.71465156269818,500.04841171917934 231.71465156269818,504.04841171917934" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-8" class="wall wall-interior" data-wall-id="wall-8" data-category="interior" data-start-x="0" data-start-z="12551.210292979484" data-end-x="5792.866289067454" data-end-z="12551.210292979484" />
+          <polygon points="403.5006402347218,241.3694287111439 407.5006402347218,241.3694287111439 407.5006402347218,434.4649716800591 403.5006402347218,434.4649716800591" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-9" class="wall wall-interior" data-wall-id="wall-9" data-category="interior" data-start-x="10137.516005868045" data-start-z="6034.235717778598" data-end-x="10137.516005868045" data-end-z="10861.624292001477" />
+          <polygon points="142.82165722668634,502.04841171917934 146.82165722668634,502.04841171917934 146.82165722668634,675.834400391203 142.82165722668634,675.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-10" class="wall wall-interior" data-wall-id="wall-10" data-category="interior" data-start-x="3620.5414306671587" data-start-z="12551.210292979484" data-end-x="3620.5414306671587" data-end-z="16895.860009780074" />
+        </g>
+        <g class="doors">
+          <g id="door-0" class="door" transform="translate(80.0, 0.0) rotate(0.0)" data-door-id="door-0" data-wall-index="0" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-1" class="door" transform="translate(217.2324858400295, 120.68471435557196) rotate(90.0)" data-door-id="door-1" data-wall-index="4" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-2" class="door" transform="translate(108.61624292001476, 241.3694287111439) rotate(0.0)" data-door-id="door-2" data-wall-index="5" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-3" class="door" transform="translate(333.0898116213786, 72.41082861334317) rotate(90.0)" data-door-id="door-3" data-wall-index="6" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-4" class="door" transform="translate(231.71465156269818, 371.70892021516164) rotate(90.0)" data-door-id="door-4" data-wall-index="7" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-5" class="door" transform="translate(115.85732578134909, 502.04841171917934) rotate(0.0)" data-door-id="door-5" data-wall-index="8" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-6" class="door" transform="translate(405.5006402347218, 337.9172001956015) rotate(90.0)" data-door-id="door-6" data-wall-index="9" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-7" class="door" transform="translate(144.82165722668634, 588.9414060551912) rotate(90.0)" data-door-id="door-7" data-wall-index="10" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+        </g>
+        <g class="windows">
+          <g id="window-0" class="window" transform="translate(115.85732578134909, 0.0) rotate(0.0)" data-window-id="window-0" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-1" class="window" transform="translate(231.71465156269818, 0.0) rotate(0.0)" data-window-id="window-1" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-2" class="window" transform="translate(347.5719773440473, 0.0) rotate(0.0)" data-window-id="window-2" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-3" class="window" transform="translate(463.42930312539636, 0.0) rotate(0.0)" data-window-id="window-3" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-4" class="window" transform="translate(463.42930312539636, 675.834400391203) rotate(180.0)" data-window-id="window-4" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-5" class="window" transform="translate(347.5719773440472, 675.834400391203) rotate(180.0)" data-window-id="window-5" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-6" class="window" transform="translate(231.71465156269812, 675.834400391203) rotate(180.0)" data-window-id="window-6" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-7" class="window" transform="translate(115.85732578134906, 675.834400391203) rotate(180.0)" data-window-id="window-7" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-8" class="window" transform="translate(0.0, 563.1953336593358) rotate(-90.0)" data-window-id="window-8" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-9" class="window" transform="translate(0.0, 450.5562669274687) rotate(-90.0)" data-window-id="window-9" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-10" class="window" transform="translate(0.0, 337.9172001956015) rotate(-90.0)" data-window-id="window-10" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-11" class="window" transform="translate(0.0, 225.27813346373435) rotate(-90.0)" data-window-id="window-11" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-12" class="window" transform="translate(0.0, 112.6390667318672) rotate(-90.0)" data-window-id="window-12" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+        </g>
+      </g>
+      <g id="lod-3" class="lod-layer lod-3" transform="translate(371.3566855466273, 891.0827998043985)" data-lod="3">
+        <g class="centerline-chain-x">
+          <line x1="0.0" y1="676.6344003912029" x2="0.0" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="144.84" y1="676.6344003912029" x2="144.84" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="217.24" y1="676.6344003912029" x2="217.24" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="333.08" y1="676.6344003912029" x2="333.08" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="405.52" y1="676.6344003912029" x2="405.52" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="579.28" y1="676.6344003912029" x2="579.28" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="0.0" y1="680.6344003912029" x2="144.84" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="72.42" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">3.62</text>
+          <line x1="144.84" y1="680.6344003912029" x2="217.24" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="181.04000000000002" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">1.81</text>
+          <line x1="217.24" y1="680.6344003912029" x2="333.08" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="275.15999999999997" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">2.90</text>
+          <line x1="333.08" y1="680.6344003912029" x2="405.52" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="369.29999999999995" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">1.81</text>
+          <line x1="405.52" y1="680.6344003912029" x2="579.28" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="492.4" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">4.34</text>
+        </g>
+        <g class="centerline-chain-z">
+          <line x1="-8.8" y1="0.0" x2="-0.7999999999999998" y2="0.0" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="144.84" x2="-0.7999999999999998" y2="144.84" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="241.36" x2="-0.7999999999999998" y2="241.36" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="434.48" x2="-0.7999999999999998" y2="434.48" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="502.04" x2="-0.7999999999999998" y2="502.04" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="675.84" x2="-0.7999999999999998" y2="675.84" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-4.8" y1="0.0" x2="-4.8" y2="144.84" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="72.42" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 72.42)">3.62</text>
+          <line x1="-4.8" y1="144.84" x2="-4.8" y2="241.36" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="193.10000000000002" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 193.10000000000002)">2.41</text>
+          <line x1="-4.8" y1="241.36" x2="-4.8" y2="434.48" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="337.92" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 337.92)">4.83</text>
+          <line x1="-4.8" y1="434.48" x2="-4.8" y2="502.04" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="468.26" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 468.26)">1.69</text>
+          <line x1="-4.8" y1="502.04" x2="-4.8" y2="675.84" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="588.94" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 588.94)">4.34</text>
+        </g>
+        <g class="overall-dimensions">
+          <g id="dim-overall-x" class="dimension" data-dim-id="dim-overall-x" data-length="14482.165722668633">
+            <line x1="0.0" y1="685.034400391203" x2="0.0" y2="696.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="579.2866289067454" y1="685.034400391203" x2="579.2866289067454" y2="696.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="0.0" y1="693.034400391203" x2="579.2866289067454" y2="693.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <polygon points="0.0,693.034400391203 -0.16,692.970400391203 -0.16,693.098400391203" stroke="none" stroke-width="1" fill="#0066cc" />
+            <polygon points="579.2866289067454,693.034400391203 579.4466289067453,693.098400391203 579.4466289067453,692.970400391203" stroke="none" stroke-width="1" fill="#0066cc" />
+            <text x="289.6433144533727" y="699.034400391203" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="middle" transform="rotate(0.0, 289.6433144533727, 699.034400391203)">14.48m</text>
+          </g>
+          <g id="dim-overall-z" class="dimension" data-dim-id="dim-overall-z" data-length="16895.860009780074">
+            <line x1="-9.2" y1="0.0" x2="-20.2" y2="0.0" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="-9.2" y1="675.834400391203" x2="-20.2" y2="675.834400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="-17.2" y1="0.0" x2="-17.2" y2="675.834400391203" stroke="#0066cc" stroke-width="0.5" />
+            <polygon points="-17.2,0.0 -17.136,-0.16 -17.264,-0.16" stroke="none" stroke-width="1" fill="#0066cc" />
+            <polygon points="-17.2,675.834400391203 -17.264,675.9944003912029 -17.136,675.9944003912029" stroke="none" stroke-width="1" fill="#0066cc" />
+            <text x="-23.2" y="337.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="middle" transform="rotate(90.0, -23.2, 337.9172001956015)">16.90m</text>
+          </g>
+        </g>
+      </g>
+      <g id="lod-4" class="lod-layer lod-4" transform="translate(371.3566855466273, 891.0827998043985)" data-lod="4">
+        <g class="coordinate-markers">
+          <circle cx="0.0" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="0">(0.00, 0.00)</text>
+          <circle cx="579.2866289067454" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="584.2866289067454" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="14482.165722668635" data-coord-z="0">(14.48, 0.00)</text>
+          <circle cx="579.2866289067454" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="584.2866289067454" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="14482.165722668635" data-coord-z="16895.860009780074">(14.48, 16.90)</text>
+          <circle cx="0.0" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="16895.860009780074">(0.00, 16.90)</text>
+          <circle cx="217.2324858400295" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="222.2324858400295" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5430.812146000738" data-coord-z="0">(5.43, 0.00)</text>
+          <circle cx="217.2324858400295" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="222.2324858400295" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5430.812146000738" data-coord-z="6034.235717778598">(5.43, 6.03)</text>
+          <circle cx="0.0" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="6034.235717778598">(0.00, 6.03)</text>
+          <circle cx="333.0898116213786" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="338.0898116213786" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="8327.245290534465" data-coord-z="0">(8.33, 0.00)</text>
+          <circle cx="333.0898116213786" cy="144.82165722668634" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="338.0898116213786" y="139.82165722668634" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="8327.245290534465" data-coord-z="3620.5414306671587">(8.33, 3.62)</text>
+          <circle cx="231.71465156269818" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="236.71465156269818" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5792.866289067454" data-coord-z="6034.235717778598">(5.79, 6.03)</text>
+          <circle cx="231.71465156269818" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="236.71465156269818" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5792.866289067454" data-coord-z="12551.210292979484">(5.79, 12.55)</text>
+          <circle cx="0.0" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="12551.210292979484">(0.00, 12.55)</text>
+          <circle cx="405.5006402347218" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="410.5006402347218" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="10137.516005868045" data-coord-z="6034.235717778598">(10.14, 6.03)</text>
+          <circle cx="405.5006402347218" cy="434.4649716800591" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="410.5006402347218" y="429.4649716800591" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="10137.516005868045" data-coord-z="10861.624292001477">(10.14, 10.86)</text>
+          <circle cx="144.82165722668634" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="149.82165722668634" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="3620.5414306671587" data-coord-z="12551.210292979484">(3.62, 12.55)</text>
+          <circle cx="144.82165722668634" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="149.82165722668634" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="3620.5414306671587" data-coord-z="16895.860009780074">(3.62, 16.90)</text>
+        </g>
+      </g>
+    </g>
+    <text x="661.0" y="1635.0" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#000000" text-anchor="middle" dominant-baseline="auto">East Elevation</text>
+    <text x="661.0" y="1647.0" font-family="Arial, sans-serif" font-size="8" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="auto">Scale 1:50</text>
+  </g>
+  <g id="vp-br" class="viewport" data-viewport-id="vp-br" data-scale="1:50">
+    <rect x="1306.0" y="838.0" width="1250.0" height="782.0" stroke="#000000" stroke-width="0.5" fill="none" />
+    <g clip-path="url(#clip-vp-br)" class="viewport-content">
+      <g id="lod-1" class="lod-layer lod-1" transform="translate(1641.3566855466274, 891.0827998043985)" data-lod="1">
+        <g class="rooms">
+          <g class="room-fills">
+            <rect x="0.0" y="0.0" width="217.2324858400295" height="241.3694287111439" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-living" class="room-fill" data-room-id="living" />
+            <rect x="217.2324858400295" y="0.0" width="115.85732578134909" height="144.82165722668634" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bathroom_1" class="room-fill" data-room-id="bathroom_1" />
+            <rect x="333.0898116213786" y="0.0" width="173.7859886720236" height="202.7503201173609" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-kitchen" class="room-fill" data-room-id="kitchen" />
+            <rect x="0.0" y="241.3694287111439" width="231.71465156269818" height="260.67898300803546" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-master_bedroom" class="room-fill" data-room-id="master_bedroom" />
+            <rect x="231.71465156269818" y="241.3694287111439" width="173.7859886720236" height="193.09554296891514" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bedroom_4" class="room-fill" data-room-id="bedroom_4" />
+            <rect x="405.5006402347218" y="241.3694287111439" width="173.7859886720236" height="193.09554296891514" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-bedroom_5" class="room-fill" data-room-id="bedroom_5" />
+            <rect x="0.0" y="502.04841171917934" width="144.82165722668634" height="173.7859886720236" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-master_bath" class="room-fill" data-room-id="master_bath" />
+            <rect x="144.82165722668634" y="502.04841171917934" width="57.928662890674545" height="173.7859886720236" stroke="none" stroke-width="1" fill="#f5f5f5" id="room-fill-hallway_7" class="room-fill" data-room-id="hallway_7" />
+          </g>
+          <g class="room-labels">
+            <g id="living" class="room-label" data-room-id="living" data-name="Living Room" data-area="32770800.62794349">
+              <text x="108.61624292001476" y="120.68471435557196" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Living Room</text>
+              <text x="108.61624292001476" y="136.68471435557194" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">32.8 sqm</text>
+            </g>
+            <g id="bathroom_1" class="room-label" data-room-id="bathroom_1" data-name="Bathroom" data-area="10486656.200941917">
+              <text x="275.16114873070404" y="72.41082861334317" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bathroom</text>
+              <text x="275.16114873070404" y="88.41082861334317" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">10.5 sqm</text>
+            </g>
+            <g id="kitchen" class="room-label" data-room-id="kitchen" data-name="Kitchen" data-area="22021978.021978024">
+              <text x="419.9828059573904" y="101.37516005868045" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Kitchen</text>
+              <text x="419.9828059573904" y="117.37516005868045" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">22.0 sqm</text>
+            </g>
+            <g id="master_bedroom" class="room-label" data-room-id="master_bedroom" data-name="Primary Bedroom" data-area="37751962.3233909">
+              <text x="115.85732578134909" y="371.70892021516164" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Primary Bedroom</text>
+              <text x="115.85732578134909" y="387.70892021516164" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">37.8 sqm</text>
+            </g>
+            <g id="bedroom_4" class="room-label" data-room-id="bedroom_4" data-name="Bedroom 2" data-area="20973312.401883833">
+              <text x="318.60764589870996" y="337.9172001956015" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bedroom 2</text>
+              <text x="318.60764589870996" y="353.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">21.0 sqm</text>
+            </g>
+            <g id="bedroom_5" class="room-label" data-room-id="bedroom_5" data-name="Bedroom 3" data-area="20973312.401883833">
+              <text x="492.3936345707336" y="337.9172001956015" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Bedroom 3</text>
+              <text x="492.3936345707336" y="353.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">21.0 sqm</text>
+            </g>
+            <g id="master_bath" class="room-label" data-room-id="master_bath" data-name="Primary Bath" data-area="15729984.301412873">
+              <text x="72.41082861334317" y="588.9414060551912" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Primary Bath</text>
+              <text x="72.41082861334317" y="604.9414060551912" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">15.7 sqm</text>
+            </g>
+            <g id="hallway_7" class="room-label" data-room-id="hallway_7" data-name="Hallway" data-area="6291993.72056515">
+              <text x="173.78598867202365" y="588.9414060551912" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333333" text-anchor="middle" dominant-baseline="middle">Hallway</text>
+              <text x="173.78598867202365" y="604.9414060551912" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="middle">6.3 sqm</text>
+            </g>
+          </g>
+        </g>
+        <g class="building-outline">
+          <line x1="0.0" y1="0.0" x2="579.2866289067454" y2="0.0" stroke="#333333" stroke-width="2" />
+          <line x1="579.2866289067454" y1="0.0" x2="579.2866289067454" y2="675.834400391203" stroke="#333333" stroke-width="2" />
+          <line x1="579.2866289067454" y1="675.834400391203" x2="0.0" y2="675.834400391203" stroke="#333333" stroke-width="2" />
+          <line x1="0.0" y1="675.834400391203" x2="0.0" y2="0.0" stroke="#333333" stroke-width="2" />
+        </g>
+      </g>
+      <g id="lod-2" class="lod-layer lod-2" transform="translate(1641.3566855466274, 891.0827998043985)" data-lod="2">
+        <g class="walls">
+          <polygon points="0.0,4.0 0.0,-4.0 579.2866289067454,-4.0 579.2866289067454,4.0" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-0" class="wall wall-exterior" data-wall-id="wall-0" data-category="exterior" data-start-x="0" data-start-z="0" data-end-x="14482.165722668635" data-end-z="0" />
+          <polygon points="575.2866289067454,0.0 583.2866289067454,0.0 583.2866289067454,675.834400391203 575.2866289067454,675.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-1" class="wall wall-exterior" data-wall-id="wall-1" data-category="exterior" data-start-x="14482.165722668635" data-start-z="0" data-end-x="14482.165722668635" data-end-z="16895.860009780074" />
+          <polygon points="579.2866289067454,671.834400391203 579.2866289067454,679.834400391203 0.0,679.834400391203 0.0,671.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-2" class="wall wall-exterior" data-wall-id="wall-2" data-category="exterior" data-start-x="14482.165722668635" data-start-z="16895.860009780074" data-end-x="0" data-end-z="16895.860009780074" />
+          <polygon points="4.0,675.834400391203 -4.0,675.834400391203 -4.0,0.0 4.0,0.0" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-3" class="wall wall-exterior" data-wall-id="wall-3" data-category="exterior" data-start-x="0" data-start-z="16895.860009780074" data-end-x="0" data-end-z="0" />
+          <polygon points="215.2324858400295,0.0 219.2324858400295,0.0 219.2324858400295,241.3694287111439 215.2324858400295,241.3694287111439" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-4" class="wall wall-interior" data-wall-id="wall-4" data-category="interior" data-start-x="5430.812146000738" data-start-z="0" data-end-x="5430.812146000738" data-end-z="6034.235717778598" />
+          <polygon points="0.0,243.3694287111439 0.0,239.3694287111439 217.2324858400295,239.3694287111439 217.2324858400295,243.3694287111439" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-5" class="wall wall-interior" data-wall-id="wall-5" data-category="interior" data-start-x="0" data-start-z="6034.235717778598" data-end-x="5430.812146000738" data-end-z="6034.235717778598" />
+          <polygon points="331.0898116213786,0.0 335.0898116213786,0.0 335.0898116213786,144.82165722668634 331.0898116213786,144.82165722668634" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-6" class="wall wall-wet_wall" data-wall-id="wall-6" data-category="wet_wall" data-start-x="8327.245290534465" data-start-z="0" data-end-x="8327.245290534465" data-end-z="3620.5414306671587" />
+          <polygon points="229.71465156269818,241.3694287111439 233.71465156269818,241.3694287111439 233.71465156269818,502.04841171917934 229.71465156269818,502.04841171917934" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-7" class="wall wall-interior" data-wall-id="wall-7" data-category="interior" data-start-x="5792.866289067454" data-start-z="6034.235717778598" data-end-x="5792.866289067454" data-end-z="12551.210292979484" />
+          <polygon points="0.0,504.04841171917934 0.0,500.04841171917934 231.71465156269818,500.04841171917934 231.71465156269818,504.04841171917934" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-8" class="wall wall-interior" data-wall-id="wall-8" data-category="interior" data-start-x="0" data-start-z="12551.210292979484" data-end-x="5792.866289067454" data-end-z="12551.210292979484" />
+          <polygon points="403.5006402347218,241.3694287111439 407.5006402347218,241.3694287111439 407.5006402347218,434.4649716800591 403.5006402347218,434.4649716800591" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-9" class="wall wall-interior" data-wall-id="wall-9" data-category="interior" data-start-x="10137.516005868045" data-start-z="6034.235717778598" data-end-x="10137.516005868045" data-end-z="10861.624292001477" />
+          <polygon points="142.82165722668634,502.04841171917934 146.82165722668634,502.04841171917934 146.82165722668634,675.834400391203 142.82165722668634,675.834400391203" stroke="#000000" stroke-width="1.5" fill="#cccccc" id="wall-10" class="wall wall-interior" data-wall-id="wall-10" data-category="interior" data-start-x="3620.5414306671587" data-start-z="12551.210292979484" data-end-x="3620.5414306671587" data-end-z="16895.860009780074" />
+        </g>
+        <g class="doors">
+          <g id="door-0" class="door" transform="translate(80.0, 0.0) rotate(0.0)" data-door-id="door-0" data-wall-index="0" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-1" class="door" transform="translate(217.2324858400295, 120.68471435557196) rotate(90.0)" data-door-id="door-1" data-wall-index="4" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-2" class="door" transform="translate(108.61624292001476, 241.3694287111439) rotate(0.0)" data-door-id="door-2" data-wall-index="5" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-3" class="door" transform="translate(333.0898116213786, 72.41082861334317) rotate(90.0)" data-door-id="door-3" data-wall-index="6" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-4" class="door" transform="translate(231.71465156269818, 371.70892021516164) rotate(90.0)" data-door-id="door-4" data-wall-index="7" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-5" class="door" transform="translate(115.85732578134909, 502.04841171917934) rotate(0.0)" data-door-id="door-5" data-wall-index="8" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-6" class="door" transform="translate(405.5006402347218, 337.9172001956015) rotate(90.0)" data-door-id="door-6" data-wall-index="9" data-width="914" data-swing="left_in">
+            <line x1="-18.28" y1="0" x2="18.28" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-18.28" y1="0" x2="-18.28" y2="-32.904" stroke="#000000" stroke-width="2" />
+            <path d="M 14.624000000000002,0.0 A 32.904,32.904 0 0,0 -18.279999999999998,-32.904" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+          <g id="door-7" class="door" transform="translate(144.82165722668634, 588.9414060551912) rotate(90.0)" data-door-id="door-7" data-wall-index="10" data-width="812" data-swing="left_in">
+            <line x1="-16.240000000000002" y1="0" x2="16.240000000000002" y2="0" stroke="#ffffff" stroke-width="0.48" />
+            <line x1="-16.240000000000002" y1="0" x2="-16.240000000000002" y2="-29.232000000000003" stroke="#000000" stroke-width="2" />
+            <path d="M 12.992,0.0 A 29.232000000000003,29.232000000000003 0 0,0 -16.24,-29.232000000000003" stroke="#666666" stroke-width="0.5" fill="none" stroke-dasharray="4,2" />
+          </g>
+        </g>
+        <g class="windows">
+          <g id="window-0" class="window" transform="translate(115.85732578134909, 0.0) rotate(0.0)" data-window-id="window-0" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-1" class="window" transform="translate(231.71465156269818, 0.0) rotate(0.0)" data-window-id="window-1" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-2" class="window" transform="translate(347.5719773440473, 0.0) rotate(0.0)" data-window-id="window-2" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-3" class="window" transform="translate(463.42930312539636, 0.0) rotate(0.0)" data-window-id="window-3" data-wall-index="0" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-4" class="window" transform="translate(463.42930312539636, 675.834400391203) rotate(180.0)" data-window-id="window-4" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-5" class="window" transform="translate(347.5719773440472, 675.834400391203) rotate(180.0)" data-window-id="window-5" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-6" class="window" transform="translate(231.71465156269812, 675.834400391203) rotate(180.0)" data-window-id="window-6" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-7" class="window" transform="translate(115.85732578134906, 675.834400391203) rotate(180.0)" data-window-id="window-7" data-wall-index="2" data-width="600">
+            <line x1="-12.0" y1="0" x2="12.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-12.0" y="-0.2" width="24.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="-14.0" y1="-2.2" x2="14.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-8" class="window" transform="translate(0.0, 563.1953336593358) rotate(-90.0)" data-window-id="window-8" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-9" class="window" transform="translate(0.0, 450.5562669274687) rotate(-90.0)" data-window-id="window-9" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-10" class="window" transform="translate(0.0, 337.9172001956015) rotate(-90.0)" data-window-id="window-10" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-11" class="window" transform="translate(0.0, 225.27813346373435) rotate(-90.0)" data-window-id="window-11" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+          <g id="window-12" class="window" transform="translate(0.0, 112.6390667318672) rotate(-90.0)" data-window-id="window-12" data-wall-index="3" data-width="1200">
+            <line x1="-24.0" y1="0" x2="24.0" y2="0" stroke="#ffffff" stroke-width="4.4" />
+            <rect x="-24.0" y="-0.2" width="48.0" height="0.4" stroke="#000000" stroke-width="1" fill="#e6f3ff" />
+            <line x1="0.0" y1="-0.2" x2="0.0" y2="0.2" stroke="#000000" stroke-width="0.5" />
+            <line x1="-26.0" y1="-2.2" x2="26.0" y2="-2.2" stroke="#000000" stroke-width="0.5" />
+          </g>
+        </g>
+      </g>
+      <g id="lod-3" class="lod-layer lod-3" transform="translate(1641.3566855466274, 891.0827998043985)" data-lod="3">
+        <g class="centerline-chain-x">
+          <line x1="0.0" y1="676.6344003912029" x2="0.0" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="144.84" y1="676.6344003912029" x2="144.84" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="217.24" y1="676.6344003912029" x2="217.24" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="333.08" y1="676.6344003912029" x2="333.08" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="405.52" y1="676.6344003912029" x2="405.52" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="579.28" y1="676.6344003912029" x2="579.28" y2="684.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="0.0" y1="680.6344003912029" x2="144.84" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="72.42" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">3.62</text>
+          <line x1="144.84" y1="680.6344003912029" x2="217.24" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="181.04000000000002" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">1.81</text>
+          <line x1="217.24" y1="680.6344003912029" x2="333.08" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="275.15999999999997" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">2.90</text>
+          <line x1="333.08" y1="680.6344003912029" x2="405.52" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="369.29999999999995" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">1.81</text>
+          <line x1="405.52" y1="680.6344003912029" x2="579.28" y2="680.6344003912029" stroke="#0066cc" stroke-width="0.5" />
+          <text x="492.4" y="674.6344003912029" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="auto">4.34</text>
+        </g>
+        <g class="centerline-chain-z">
+          <line x1="-8.8" y1="0.0" x2="-0.7999999999999998" y2="0.0" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="144.84" x2="-0.7999999999999998" y2="144.84" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="241.36" x2="-0.7999999999999998" y2="241.36" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="434.48" x2="-0.7999999999999998" y2="434.48" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="502.04" x2="-0.7999999999999998" y2="502.04" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-8.8" y1="675.84" x2="-0.7999999999999998" y2="675.84" stroke="#0066cc" stroke-width="0.5" />
+          <line x1="-4.8" y1="0.0" x2="-4.8" y2="144.84" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="72.42" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 72.42)">3.62</text>
+          <line x1="-4.8" y1="144.84" x2="-4.8" y2="241.36" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="193.10000000000002" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 193.10000000000002)">2.41</text>
+          <line x1="-4.8" y1="241.36" x2="-4.8" y2="434.48" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="337.92" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 337.92)">4.83</text>
+          <line x1="-4.8" y1="434.48" x2="-4.8" y2="502.04" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="468.26" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 468.26)">1.69</text>
+          <line x1="-4.8" y1="502.04" x2="-4.8" y2="675.84" stroke="#0066cc" stroke-width="0.5" />
+          <text x="-10.8" y="588.94" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="end" dominant-baseline="middle" transform="rotate(-90, -10.8, 588.94)">4.34</text>
+        </g>
+        <g class="overall-dimensions">
+          <g id="dim-overall-x" class="dimension" data-dim-id="dim-overall-x" data-length="14482.165722668633">
+            <line x1="0.0" y1="685.034400391203" x2="0.0" y2="696.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="579.2866289067454" y1="685.034400391203" x2="579.2866289067454" y2="696.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="0.0" y1="693.034400391203" x2="579.2866289067454" y2="693.034400391203" stroke="#0066cc" stroke-width="0.5" />
+            <polygon points="0.0,693.034400391203 -0.16,692.970400391203 -0.16,693.098400391203" stroke="none" stroke-width="1" fill="#0066cc" />
+            <polygon points="579.2866289067454,693.034400391203 579.4466289067453,693.098400391203 579.4466289067453,692.970400391203" stroke="none" stroke-width="1" fill="#0066cc" />
+            <text x="289.6433144533727" y="699.034400391203" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="middle" transform="rotate(0.0, 289.6433144533727, 699.034400391203)">14.48m</text>
+          </g>
+          <g id="dim-overall-z" class="dimension" data-dim-id="dim-overall-z" data-length="16895.860009780074">
+            <line x1="-9.2" y1="0.0" x2="-20.2" y2="0.0" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="-9.2" y1="675.834400391203" x2="-20.2" y2="675.834400391203" stroke="#0066cc" stroke-width="0.5" />
+            <line x1="-17.2" y1="0.0" x2="-17.2" y2="675.834400391203" stroke="#0066cc" stroke-width="0.5" />
+            <polygon points="-17.2,0.0 -17.136,-0.16 -17.264,-0.16" stroke="none" stroke-width="1" fill="#0066cc" />
+            <polygon points="-17.2,675.834400391203 -17.264,675.9944003912029 -17.136,675.9944003912029" stroke="none" stroke-width="1" fill="#0066cc" />
+            <text x="-23.2" y="337.9172001956015" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#0066cc" text-anchor="middle" dominant-baseline="middle" transform="rotate(90.0, -23.2, 337.9172001956015)">16.90m</text>
+          </g>
+        </g>
+      </g>
+      <g id="lod-4" class="lod-layer lod-4" transform="translate(1641.3566855466274, 891.0827998043985)" data-lod="4">
+        <g class="coordinate-markers">
+          <circle cx="0.0" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="0">(0.00, 0.00)</text>
+          <circle cx="579.2866289067454" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="584.2866289067454" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="14482.165722668635" data-coord-z="0">(14.48, 0.00)</text>
+          <circle cx="579.2866289067454" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="584.2866289067454" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="14482.165722668635" data-coord-z="16895.860009780074">(14.48, 16.90)</text>
+          <circle cx="0.0" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="16895.860009780074">(0.00, 16.90)</text>
+          <circle cx="217.2324858400295" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="222.2324858400295" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5430.812146000738" data-coord-z="0">(5.43, 0.00)</text>
+          <circle cx="217.2324858400295" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="222.2324858400295" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5430.812146000738" data-coord-z="6034.235717778598">(5.43, 6.03)</text>
+          <circle cx="0.0" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="6034.235717778598">(0.00, 6.03)</text>
+          <circle cx="333.0898116213786" cy="0.0" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="338.0898116213786" y="-5.0" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="8327.245290534465" data-coord-z="0">(8.33, 0.00)</text>
+          <circle cx="333.0898116213786" cy="144.82165722668634" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="338.0898116213786" y="139.82165722668634" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="8327.245290534465" data-coord-z="3620.5414306671587">(8.33, 3.62)</text>
+          <circle cx="231.71465156269818" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="236.71465156269818" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5792.866289067454" data-coord-z="6034.235717778598">(5.79, 6.03)</text>
+          <circle cx="231.71465156269818" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="236.71465156269818" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="5792.866289067454" data-coord-z="12551.210292979484">(5.79, 12.55)</text>
+          <circle cx="0.0" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="5.0" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="0" data-coord-z="12551.210292979484">(0.00, 12.55)</text>
+          <circle cx="405.5006402347218" cy="241.3694287111439" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="410.5006402347218" y="236.3694287111439" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="10137.516005868045" data-coord-z="6034.235717778598">(10.14, 6.03)</text>
+          <circle cx="405.5006402347218" cy="434.4649716800591" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="410.5006402347218" y="429.4649716800591" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="10137.516005868045" data-coord-z="10861.624292001477">(10.14, 10.86)</text>
+          <circle cx="144.82165722668634" cy="502.04841171917934" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="149.82165722668634" y="497.04841171917934" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="3620.5414306671587" data-coord-z="12551.210292979484">(3.62, 12.55)</text>
+          <circle cx="144.82165722668634" cy="675.834400391203" r="3" stroke="none" stroke-width="1" fill="#cc0000" />
+          <text x="149.82165722668634" y="670.834400391203" font-family="Arial, sans-serif" font-size="7" font-weight="normal" fill="#cc0000" text-anchor="start" dominant-baseline="auto" data-coord-x="3620.5414306671587" data-coord-z="16895.860009780074">(3.62, 16.90)</text>
+        </g>
+      </g>
+    </g>
+    <text x="1931.0" y="1635.0" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#000000" text-anchor="middle" dominant-baseline="auto">Section A-A</text>
+    <text x="1931.0" y="1647.0" font-family="Arial, sans-serif" font-size="8" font-weight="normal" fill="#666666" text-anchor="middle" dominant-baseline="auto">Scale 1:50</text>
+  </g>
+  <script type="text/javascript">
+// &lt;![CDATA[
+function setLOD(level) {
+    var svg = document.documentElement;
+    svg.classList.remove('show-lod-1', 'show-lod-2', 'show-lod-3', 'show-lod-4');
+    if (level &gt; 0) {
+        svg.classList.add('show-lod-' + level);
+    }
+    // Button indices: 0=Overview(1), 1=Standard(2), 2=Detailed(3), 3=VR/Field(4), 4=All(0)
+    for (var i = 0; i &lt;= 4; i++) {
+        var rectId = 'lod-rect-' + i;
+        var rect = document.getElementById(rectId);
+        if (rect) {
+            var isActive = (level &gt; 0 &amp;&amp; i == level - 1) || (level == 0 &amp;&amp; i == 4);
+            rect.setAttribute('fill', isActive ? '#cce5ff' : '#f0f0f0');
+        }
+    }
+}
+// ]]&gt;
+        </script>
+  <g id="lod-controls" class="lod-controls">
+    <rect x="41" y="40" width="440" height="30" stroke="#cccccc" stroke-width="1" fill="#ffffff" rx="4" />
+    <text x="51" y="55.0" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#333333" text-anchor="start" dominant-baseline="middle">LOD:</text>
+    <g id="lod-btn-0" class="lod-btn" onclick="setLOD(1)" style="cursor: pointer;">
+      <rect id="lod-rect-0" x="86" y="44" width="70" height="22" rx="4" stroke="#666666" stroke-width="1" fill="#f0f0f0" />
+      <text x="121.0" y="55.0" font-family="Arial, sans-serif" font-size="9" font-weight="normal" fill="#333333" text-anchor="middle" dominant-baseline="middle">Overview</text>
+    </g>
+    <g id="lod-btn-1" class="lod-btn" onclick="setLOD(2)" style="cursor: pointer;">
+      <rect id="lod-rect-1" x="162" y="44" width="70" height="22" rx="4" stroke="#666666" stroke-width="1" fill="#f0f0f0" />
+      <text x="197.0" y="55.0" font-family="Arial, sans-serif" font-size="9" font-weight="normal" fill="#333333" text-anchor="middle" dominant-baseline="middle">Standard</text>
+    </g>
+    <g id="lod-btn-2" class="lod-btn" onclick="setLOD(3)" style="cursor: pointer;">
+      <rect id="lod-rect-2" x="238" y="44" width="70" height="22" rx="4" stroke="#666666" stroke-width="1" fill="#f0f0f0" />
+      <text x="273.0" y="55.0" font-family="Arial, sans-serif" font-size="9" font-weight="normal" fill="#333333" text-anchor="middle" dominant-baseline="middle">Detailed</text>
+    </g>
+    <g id="lod-btn-3" class="lod-btn" onclick="setLOD(4)" style="cursor: pointer;">
+      <rect id="lod-rect-3" x="314" y="44" width="70" height="22" rx="4" stroke="#666666" stroke-width="1" fill="#f0f0f0" />
+      <text x="349.0" y="55.0" font-family="Arial, sans-serif" font-size="9" font-weight="normal" fill="#333333" text-anchor="middle" dominant-baseline="middle">VR/Field</text>
+    </g>
+    <g id="lod-btn-4" class="lod-btn" onclick="setLOD(0)" style="cursor: pointer;">
+      <rect id="lod-rect-4" x="390" y="44" width="70" height="22" rx="4" stroke="#666666" stroke-width="1" fill="#cce5ff" />
+      <text x="425.0" y="55.0" font-family="Arial, sans-serif" font-size="9" font-weight="normal" fill="#333333" text-anchor="middle" dominant-baseline="middle">All</text>
+    </g>
+  </g>
+</svg>
