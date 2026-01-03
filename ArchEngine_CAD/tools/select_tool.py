@@ -240,9 +240,6 @@ class SelectTool(BaseTool):
                 event_bus.status_message.emit(f"Deleted {total_deleted} item(s)", 3000)
             self._emit_selection_changed()
         except Exception as e:
-            print(f"[SelectTool] Delete error: {e}")
-            import traceback
-            traceback.print_exc()
             event_bus.status_message.emit(f"Delete failed: {e}", 5000)
 
     def _emit_selection_changed(self):

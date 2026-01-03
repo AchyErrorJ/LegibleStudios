@@ -74,6 +74,7 @@ class VulkanViewportWidget(QWidget):
         self._last_mouse_pos = None
         self._dragging = False
         self._rendering = False  # Prevent concurrent renders
+        self._loading = False    # Prevent concurrent loads
         self._api_lock = threading.Lock()  # Prevent load during render
 
         # Widget setup
@@ -184,7 +185,7 @@ class VulkanViewportWidget(QWidget):
             # Start render loop
             self._render_timer = QTimer(self)
             self._render_timer.timeout.connect(self._render_frame)
-            self._render_timer.start(33)  # ~30 FPS (slower to reduce CPU load)
+            self._render_timer.start(33)  # ~30 FPS
 
             self.initialized.emit()
         except Exception as e:
@@ -291,21 +292,41 @@ class VulkanViewportWidget(QWidget):
         if not self._initialized or self._lib is None:
             return False
 
-        # Acquire lock to prevent render during load
-        with self._api_lock:
-            json_str = json.dumps(data).encode('utf-8')
-            result = self._lib.arch_load_json(json_str)
+        # Skip if already loading (prevents queue buildup)
+        if self._loading:
+            return False
 
-            if result == 0:
-                count = self._lib.arch_get_element_count()
-                print(f"[VulkanWidget] Loaded {count} elements")
-                self.load_complete.emit(count)
-                return True
-            else:
-                error = self._lib.arch_get_error().decode('utf-8')
-                print(f"[VulkanWidget] Load failed: {error}")
-                self.error_occurred.emit(error)
-                return False
+        self._loading = True
+
+        # Stop render timer and acquire lock to ensure no rendering during geometry update
+        if self._render_timer:
+            self._render_timer.stop()
+
+        try:
+            with self._api_lock:
+                json_str = json.dumps(data).encode('utf-8')
+                result = self._lib.arch_load_json(json_str)
+
+                if result == 0:
+                    count = self._lib.arch_get_element_count()
+                    print(f"[VulkanWidget] Loaded {count} elements")
+
+                    # Force a sync render to process new geometry before resuming render loop
+                    # This helps prevent crashes from stale GPU state
+                    self._lib.arch_render_frame()
+
+                    self.load_complete.emit(count)
+                    return True
+                else:
+                    error = self._lib.arch_get_error().decode('utf-8')
+                    print(f"[VulkanWidget] Load failed: {error}")
+                    self.error_occurred.emit(error)
+                    return False
+        finally:
+            self._loading = False
+            # Restart render timer after a delay to let GPU finish processing new geometry
+            if self._render_timer and self._initialized:
+                QTimer.singleShot(100, lambda: self._render_timer.start(33) if self._initialized else None)
 
     def load_file(self, file_path: str) -> bool:
         """

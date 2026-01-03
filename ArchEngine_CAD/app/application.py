@@ -85,7 +85,7 @@ class ArchEngineApplication(QMainWindow):
         # Throttle timer for 3D viewport updates (prevents lag during dragging)
         self._viewport_update_timer = QTimer(self)
         self._viewport_update_timer.setSingleShot(True)
-        self._viewport_update_timer.setInterval(50)  # 50ms debounce
+        self._viewport_update_timer.setInterval(150)  # 150ms debounce - gives GPU time to finish
         self._viewport_update_timer.timeout.connect(self._do_viewport_update)
 
         # Initialize sheet system
@@ -727,9 +727,9 @@ class ArchEngineApplication(QMainWindow):
 
     def _on_delete(self):
         """Delete selected elements."""
-        if self.tool_manager and self.tool_manager.current_tool:
-            tool = self.tool_manager.current_tool
-            if hasattr(tool, '_delete_selected'):
+        if self.tool_manager:
+            tool = self.tool_manager.active_tool
+            if tool and hasattr(tool, '_delete_selected'):
                 tool._delete_selected()
 
     # =========================================================================
@@ -877,7 +877,7 @@ class ArchEngineApplication(QMainWindow):
     def _on_document_changed_viewport(self):
         """Schedule throttled update to embedded Vulkan viewport(s)."""
         if HAS_VIEWPORT:
-            # Restart timer - only update after 50ms of no changes (prevents lag during dragging)
+            # Restart timer - only update after 150ms of no changes (prevents lag during dragging)
             self._viewport_update_timer.start()
 
     def _do_viewport_update(self):
