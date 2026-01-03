@@ -2012,17 +2012,18 @@ class PlanView(BaseView):
             self._window_items.append(item)
 
         # Add rooms (polygon rooms with RoomItem, bounds-only with RoomLabelItem)
-        for room_id, room in self.document.rooms.items():
-            if room.vertices:
-                # Polygon room - use RoomItem
-                item = RoomItem(room, document=self.document)
-                self.scene.addItem(item)
-                self._room_items.append(item)
-            else:
-                # Bounds-only room - use legacy label
-                label = RoomLabelItem(room)
-                self.scene.addItem(label)
-                self._room_labels.append(label)
+        # TEMPORARILY DISABLED to debug segfault
+        # for room_id, room in self.document.rooms.items():
+        #     if room.vertices:
+        #         # Polygon room - use RoomItem
+        #         item = RoomItem(room, document=self.document)
+        #         self.scene.addItem(item)
+        #         self._room_items.append(item)
+        #     else:
+        #         # Bounds-only room - use legacy label
+        #         label = RoomLabelItem(room)
+        #         self.scene.addItem(label)
+        #         self._room_labels.append(label)
 
         self.viewport().update()
 

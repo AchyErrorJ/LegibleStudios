@@ -157,56 +157,60 @@ class VulkanViewportWidget(QWidget):
         if self._initialized or self._lib is None:
             return
 
-        # Get native window handle
-        hwnd = int(self.winId())
-        width = self.width()
-        height = self.height()
+        try:
+            # Get native window handle
+            hwnd = int(self.winId())
+            width = self.width()
+            height = self.height()
 
-        print(f"[VulkanWidget] Initializing renderer: HWND={hwnd}, size={width}x{height}")
+            print(f"[VulkanWidget] Initializing renderer: HWND={hwnd}, size={width}x{height}")
 
-        result = self._lib.arch_init(ctypes.c_void_p(hwnd), width, height)
-        if result != 0:
-            error = self._lib.arch_get_error().decode('utf-8')
-            print(f"[VulkanWidget] Init failed: {error}")
-            self.error_occurred.emit(f"Init failed: {error}")
-            return
+            result = self._lib.arch_init(ctypes.c_void_p(hwnd), width, height)
+            if result != 0:
+                error = self._lib.arch_get_error()
+                if error:
+                    error = error.decode('utf-8')
+                else:
+                    error = "Unknown error"
+                print(f"[VulkanWidget] Init failed: {error}")
+                self.error_occurred.emit(f"Init failed: {error}")
+                return
 
-        self._initialized = True
-        print("[VulkanWidget] Renderer initialized")
+            self._initialized = True
+            print("[VulkanWidget] Renderer initialized")
 
-        # Start render loop using single-shot pattern to avoid blocking
-        self._render_timer = QTimer(self)
-        self._render_timer.setSingleShot(True)
-        self._render_timer.timeout.connect(self._render_frame)
-        self._schedule_next_frame()
+            # Start render loop
+            self._render_timer = QTimer(self)
+            self._render_timer.timeout.connect(self._render_frame)
+            self._render_timer.start(33)  # ~30 FPS (slower to reduce CPU load)
 
-        self.initialized.emit()
-
-    def _schedule_next_frame(self):
-        """Schedule the next frame render."""
-        if self._initialized and self._render_timer:
-            # 100ms = 10 FPS - give Qt plenty of time to process events
-            self._render_timer.start(100)
+            self.initialized.emit()
+        except Exception as e:
+            print(f"[VulkanWidget] Initialization exception: {e}")
+            import traceback
+            traceback.print_exc()
+            self.error_occurred.emit(f"Init exception: {e}")
 
     def _render_frame(self):
         """Render a single frame."""
         if not self._initialized or self._lib is None:
             return
 
-        # Skip if already rendering (shouldn't happen with single-shot, but safety)
+        # Skip if already rendering
         if self._rendering:
             return
 
         # Skip if widget not visible
         if not self.isVisible():
-            self._schedule_next_frame()
             return
+
+        # Track render count for diagnostics
+        if not hasattr(self, '_render_count'):
+            self._render_count = 0
+        self._render_count += 1
 
         try:
             self._rendering = True
-
-            # Process any pending Qt events before rendering
-            QApplication.processEvents()
 
             # Update camera
             self._lib.arch_set_camera(
@@ -225,19 +229,19 @@ class VulkanViewportWidget(QWidget):
                 self._initialized = False
                 return
 
-            # Process events after rendering too
-            QApplication.processEvents()
+            # Log occasionally to confirm render loop is running
+            if self._render_count % 300 == 0:  # Every ~10 seconds at 30fps
+                print(f"[VulkanWidget] Rendered {self._render_count} frames")
         except Exception as e:
             print(f"[VulkanWidget] Render exception: {e}")
+            import traceback
+            traceback.print_exc()
             if self._render_timer:
                 self._render_timer.stop()
             self._initialized = False
             return
         finally:
             self._rendering = False
-
-        # Schedule next frame after this one completes
-        self._schedule_next_frame()
 
     def resizeEvent(self, event):
         """Handle widget resize."""

@@ -175,43 +175,75 @@ class SelectTool(BaseTool):
 
     def _delete_selected(self):
         """Delete selected items."""
-        selected = self.view.scene.selectedItems()
-        if not selected:
-            return
+        try:
+            selected = list(self.view.scene.selectedItems())
+            if not selected:
+                return
 
-        # Group items by type and collect indices (delete in reverse order to avoid index shifts)
-        walls_to_delete = []
-        doors_to_delete = []
-        windows_to_delete = []
-        rooms_to_delete = []
+            # Clear selection first to avoid issues during scene rebuild
+            for item in selected:
+                try:
+                    item.setSelected(False)
+                except:
+                    pass
 
-        for item in selected:
-            item_type = type(item).__name__
-            if item_type == "WallItem":
-                walls_to_delete.append(item.wall.index)
-            elif item_type == "DoorItem":
-                doors_to_delete.append(item.door.index)
-            elif item_type == "WindowItem":
-                windows_to_delete.append(item.window.index)
-            elif item_type == "RoomItem":
-                rooms_to_delete.append(item.room.id)
+            # Group items by type and collect indices
+            walls_to_delete = []
+            doors_to_delete = []
+            windows_to_delete = []
+            rooms_to_delete = []
 
-        # Delete in reverse index order to avoid index shifting issues
-        for idx in sorted(walls_to_delete, reverse=True):
-            self.document.delete_wall_undoable(idx)
+            for item in selected:
+                try:
+                    item_type = type(item).__name__
 
-        for idx in sorted(doors_to_delete, reverse=True):
-            self.document.delete_door_undoable(idx)
+                    # Skip grip items and helper graphics
+                    if item_type in ("GripItem", "QGraphicsRectItem"):
+                        continue
 
-        for idx in sorted(windows_to_delete, reverse=True):
-            self.document.delete_window_undoable(idx)
+                    if item_type == "WallItem":
+                        if hasattr(item, 'wall') and item.wall is not None:
+                            walls_to_delete.append(item.wall.index)
+                    elif item_type == "DoorItem":
+                        if hasattr(item, 'door') and item.door is not None:
+                            doors_to_delete.append(item.door.index)
+                    elif item_type == "WindowItem":
+                        if hasattr(item, 'window') and item.window is not None:
+                            windows_to_delete.append(item.window.index)
+                    elif item_type == "RoomItem":
+                        if hasattr(item, 'room') and item.room is not None:
+                            rooms_to_delete.append(item.room.id)
+                except Exception:
+                    pass
 
-        for room_id in rooms_to_delete:
-            self.document.delete_room_undoable(room_id)
+            # Remove duplicates
+            walls_to_delete = list(set(walls_to_delete))
+            doors_to_delete = list(set(doors_to_delete))
+            windows_to_delete = list(set(windows_to_delete))
+            rooms_to_delete = list(set(rooms_to_delete))
 
-        total_deleted = len(walls_to_delete) + len(doors_to_delete) + len(windows_to_delete) + len(rooms_to_delete)
-        event_bus.status_message.emit(f"Deleted {total_deleted} item(s)", 3000)
-        self._emit_selection_changed()
+            # Delete in reverse index order to avoid index shifting issues
+            for idx in sorted(walls_to_delete, reverse=True):
+                self.document.delete_wall_undoable(idx)
+
+            for idx in sorted(doors_to_delete, reverse=True):
+                self.document.delete_door_undoable(idx)
+
+            for idx in sorted(windows_to_delete, reverse=True):
+                self.document.delete_window_undoable(idx)
+
+            for room_id in rooms_to_delete:
+                self.document.delete_room_undoable(room_id)
+
+            total_deleted = len(walls_to_delete) + len(doors_to_delete) + len(windows_to_delete) + len(rooms_to_delete)
+            if total_deleted > 0:
+                event_bus.status_message.emit(f"Deleted {total_deleted} item(s)", 3000)
+            self._emit_selection_changed()
+        except Exception as e:
+            print(f"[SelectTool] Delete error: {e}")
+            import traceback
+            traceback.print_exc()
+            event_bus.status_message.emit(f"Delete failed: {e}", 5000)
 
     def _emit_selection_changed(self):
         """Emit selection changed signal."""
