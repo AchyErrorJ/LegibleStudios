@@ -26,6 +26,15 @@ from .sheet_sizes import SHEET_SIZES, SheetSize, get_sheet_size, get_scale_facto
 from .lod_layers import LODLevel, LOD_LAYERS, get_lod_layer
 from .svg_builder import SVGBuilder
 from .viewport import Viewport, ViewportBounds, ViewportRenderer, create_standard_layout
+from .sheet_types import (
+    DrawingType,
+    SheetType,
+    ViewportContent,
+    ViewportConfig,
+    SheetPreset,
+    get_preset,
+    list_presets,
+)
 
 __all__ = [
     "InteractiveSheet",
@@ -41,4 +50,11 @@ __all__ = [
     "ViewportBounds",
     "ViewportRenderer",
     "create_standard_layout",
+    "DrawingType",
+    "SheetType",
+    "ViewportContent",
+    "ViewportConfig",
+    "SheetPreset",
+    "get_preset",
+    "list_presets",
 ]
