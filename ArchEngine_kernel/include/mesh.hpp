@@ -105,6 +105,10 @@ std::pair<std::vector<Vertex>, std::vector<u32>>
 wallWithOpening(vec3 wallStart, vec3 wallEnd, f32 wallHeight, f32 thickness,
                 vec3 openingPos, f32 openingWidth, f32 openingHeight,
                 vec3 color = {0.85f, 0.82f, 0.78f});
+// Create a wall with multiple rectangular openings
+std::pair<std::vector<Vertex>, std::vector<u32>>
+wallWithMultipleOpenings(vec3 wallStart, vec3 wallEnd, f32 wallHeight, f32 thickness,
+                         const std::vector<std::array<f32, 4>>& openings, vec3 color);
 
 } // namespace CSG
 

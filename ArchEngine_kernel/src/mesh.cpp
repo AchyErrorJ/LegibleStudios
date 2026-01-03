@@ -1,4 +1,5 @@
 #include "mesh.hpp"
+#include <algorithm>
 #include <stdexcept>
 #include <cstring>
 
@@ -866,25 +867,197 @@ meshUnion(const std::pair<std::vector<Vertex>, std::vector<u32>>& a,
 std::pair<std::vector<Vertex>, std::vector<u32>>
 wallWithOpening(vec3 wallStart, vec3 wallEnd, f32 wallHeight, f32 thickness,
                 vec3 openingPos, f32 openingWidth, f32 openingHeight, vec3 color) {
+    // Creates a wall with a rectangular opening (door/window cutout)
+    // Wall aligned to wallStart->wallEnd direction
+    // openingPos.x = offset along wall from start, openingPos.y = height from floor
     std::vector<Vertex> vertices;
     std::vector<u32> indices;
-    f32 wallLength = glm::length(wallEnd - wallStart);
-    f32 openLeft = openingPos.x;
-    f32 openRight = openLeft + openingWidth;
-    f32 openBottom = openingPos.y;
-    f32 openTop = openBottom + openingHeight;
 
-    if (openBottom > 0) {
-        auto strip = createColumn(wallStart, wallLength, thickness, openBottom, color);
-        auto result = meshUnion({vertices, indices}, strip);
-        vertices = result.first; indices = result.second;
+    vec3 wallDir = wallEnd - wallStart;
+    f32 wallLength = glm::length(vec3(wallDir.x, 0.0f, wallDir.z));
+    if (wallLength < 0.01f) return {vertices, indices};
+
+    vec3 wallDirNorm = glm::normalize(vec3(wallDir.x, 0.0f, wallDir.z));
+    vec3 wallPerp = vec3(-wallDirNorm.z, 0.0f, wallDirNorm.x);  // Perpendicular in XZ
+    f32 ht = thickness * 0.5f;
+
+    f32 openLeft = glm::clamp(openingPos.x, 0.0f, wallLength);
+    f32 openRight = glm::clamp(openingPos.x + openingWidth, 0.0f, wallLength);
+    f32 openBottom = glm::clamp(openingPos.y, 0.0f, wallHeight);
+    f32 openTop = glm::clamp(openingPos.y + openingHeight, 0.0f, wallHeight);
+
+    // Helper: add a wall-aligned box segment
+    auto addSegment = [&](f32 alongStart, f32 alongEnd, f32 yStart, f32 yEnd) {
+        if (alongEnd <= alongStart || yEnd <= yStart) return;
+
+        // 8 corners of the box
+        vec3 corners[8];
+        for (int i = 0; i < 8; i++) {
+            f32 along = (i & 1) ? alongEnd : alongStart;
+            f32 y = (i & 2) ? yEnd : yStart;
+            f32 perp = (i & 4) ? ht : -ht;
+            corners[i] = wallStart + wallDirNorm * along + vec3(0, y, 0) + wallPerp * perp;
+        }
+
+        u32 base = static_cast<u32>(vertices.size());
+
+        // Add 6 faces (each face: 4 verts, 2 triangles)
+        auto addFace = [&](int i0, int i1, int i2, int i3, vec3 normal) {
+            u32 b = static_cast<u32>(vertices.size());
+            vertices.push_back({corners[i0], normal, color});
+            vertices.push_back({corners[i1], normal, color});
+            vertices.push_back({corners[i2], normal, color});
+            vertices.push_back({corners[i3], normal, color});
+            indices.insert(indices.end(), {b, b+1, b+2, b, b+2, b+3});
+        };
+
+        // Front face (positive perp direction)
+        addFace(4, 5, 7, 6, wallPerp);
+        // Back face (negative perp direction)
+        addFace(1, 0, 2, 3, -wallPerp);
+        // Top face
+        addFace(2, 6, 7, 3, vec3(0, 1, 0));
+        // Bottom face
+        addFace(0, 1, 5, 4, vec3(0, -1, 0));
+        // Left face (toward wallStart)
+        addFace(0, 4, 6, 2, -wallDirNorm);
+        // Right face (toward wallEnd)
+        addFace(5, 1, 3, 7, wallDirNorm);
+    };
+
+    // Create 4 segments around the opening:
+    // 1. Bottom strip (full width, floor to opening bottom)
+    if (openBottom > 0.01f) {
+        addSegment(0.0f, wallLength, 0.0f, openBottom);
     }
-    if (openTop < wallHeight) {
-        vec3 topStart = wallStart + vec3(0, openTop, 0);
-        auto strip = createColumn(topStart, wallLength, thickness, wallHeight - openTop, color);
-        auto result = meshUnion({vertices, indices}, strip);
-        vertices = result.first; indices = result.second;
+    // 2. Top strip (full width, opening top to ceiling)
+    if (openTop < wallHeight - 0.01f) {
+        addSegment(0.0f, wallLength, openTop, wallHeight);
     }
+    // 3. Left strip (start to opening left, at opening height)
+    if (openLeft > 0.01f) {
+        addSegment(0.0f, openLeft, openBottom, openTop);
+    }
+    // 4. Right strip (opening right to end, at opening height)
+    if (openRight < wallLength - 0.01f) {
+        addSegment(openRight, wallLength, openBottom, openTop);
+    }
+
+    return {vertices, indices};
+}
+
+
+std::pair<std::vector<Vertex>, std::vector<u32>>
+wallWithMultipleOpenings(vec3 wallStart, vec3 wallEnd, f32 wallHeight, f32 thickness,
+                         const std::vector<std::array<f32, 4>>& openings, vec3 color) {
+    // openings: vector of {offset, width, bottom, height}
+    // Creates wall with multiple rectangular cutouts
+    std::vector<Vertex> vertices;
+    std::vector<u32> indices;
+
+    vec3 wallDir = wallEnd - wallStart;
+    f32 wallLength = glm::length(vec3(wallDir.x, 0.0f, wallDir.z));
+    if (wallLength < 0.01f) return {vertices, indices};
+
+    vec3 wallDirNorm = glm::normalize(vec3(wallDir.x, 0.0f, wallDir.z));
+    vec3 wallPerp = vec3(-wallDirNorm.z, 0.0f, wallDirNorm.x);
+    f32 ht = thickness * 0.5f;
+
+    // Helper: add a wall-aligned box segment
+    auto addSegment = [&](f32 alongStart, f32 alongEnd, f32 yStart, f32 yEnd) {
+        if (alongEnd <= alongStart + 0.01f || yEnd <= yStart + 0.01f) return;
+
+        vec3 corners[8];
+        for (int i = 0; i < 8; i++) {
+            f32 along = (i & 1) ? alongEnd : alongStart;
+            f32 y = (i & 2) ? yEnd : yStart;
+            f32 perp = (i & 4) ? ht : -ht;
+            corners[i] = wallStart + wallDirNorm * along + vec3(0, y, 0) + wallPerp * perp;
+        }
+
+        auto addFace = [&](int i0, int i1, int i2, int i3, vec3 normal) {
+            u32 b = static_cast<u32>(vertices.size());
+            vertices.push_back({corners[i0], normal, color});
+            vertices.push_back({corners[i1], normal, color});
+            vertices.push_back({corners[i2], normal, color});
+            vertices.push_back({corners[i3], normal, color});
+            indices.insert(indices.end(), {b, b+1, b+2, b, b+2, b+3});
+        };
+
+        addFace(4, 5, 7, 6, wallPerp);
+        addFace(1, 0, 2, 3, -wallPerp);
+        addFace(2, 6, 7, 3, vec3(0, 1, 0));
+        addFace(0, 1, 5, 4, vec3(0, -1, 0));
+        addFace(0, 4, 6, 2, -wallDirNorm);
+        addFace(5, 1, 3, 7, wallDirNorm);
+    };
+
+    if (openings.empty()) {
+        // No openings - solid wall
+        addSegment(0.0f, wallLength, 0.0f, wallHeight);
+        return {vertices, indices};
+    }
+
+    // Sort openings by offset
+    auto sorted = openings;
+    std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
+        return a[0] < b[0];
+    });
+
+    // Create vertical columns separated by openings
+    std::vector<f32> xBoundaries = {0.0f};
+    for (const auto& op : sorted) {
+        f32 left = glm::clamp(op[0], 0.0f, wallLength);
+        f32 right = glm::clamp(op[0] + op[1], 0.0f, wallLength);
+        xBoundaries.push_back(left);
+        xBoundaries.push_back(right);
+    }
+    xBoundaries.push_back(wallLength);
+
+    // Remove duplicates and sort
+    std::sort(xBoundaries.begin(), xBoundaries.end());
+    xBoundaries.erase(std::unique(xBoundaries.begin(), xBoundaries.end()), xBoundaries.end());
+
+    // For each column, determine what segments to create
+    for (size_t i = 0; i + 1 < xBoundaries.size(); i++) {
+        f32 colLeft = xBoundaries[i];
+        f32 colRight = xBoundaries[i + 1];
+        f32 colMid = (colLeft + colRight) * 0.5f;
+
+        // Find openings that overlap this column
+        std::vector<std::pair<f32, f32>> yGaps;  // {bottom, top} of openings in this column
+        for (const auto& op : sorted) {
+            f32 opLeft = glm::clamp(op[0], 0.0f, wallLength);
+            f32 opRight = glm::clamp(op[0] + op[1], 0.0f, wallLength);
+            if (opLeft < colRight && opRight > colLeft) {
+                // Opening overlaps this column
+                f32 opBottom = glm::clamp(op[2], 0.0f, wallHeight);
+                f32 opTop = glm::clamp(op[2] + op[3], 0.0f, wallHeight);
+                yGaps.push_back({opBottom, opTop});
+            }
+        }
+
+        if (yGaps.empty()) {
+            // No openings in this column - full height wall
+            addSegment(colLeft, colRight, 0.0f, wallHeight);
+        } else {
+            // Sort gaps by bottom
+            std::sort(yGaps.begin(), yGaps.end());
+
+            // Create segments around gaps
+            f32 currentY = 0.0f;
+            for (const auto& gap : yGaps) {
+                if (gap.first > currentY) {
+                    addSegment(colLeft, colRight, currentY, gap.first);
+                }
+                currentY = std::max(currentY, gap.second);
+            }
+            if (currentY < wallHeight) {
+                addSegment(colLeft, colRight, currentY, wallHeight);
+            }
+        }
+    }
+
     return {vertices, indices};
 }
 

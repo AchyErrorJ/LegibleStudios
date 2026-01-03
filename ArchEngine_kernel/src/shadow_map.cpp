@@ -1,6 +1,7 @@
 #include "shadow_map.hpp"
 #include <stdexcept>
 #include <array>
+#include <cmath>
 
 namespace arch {
 
@@ -298,7 +299,7 @@ void ShadowMap::createPipeline() {
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_FRONT_BIT;  // Front-face culling reduces Peter Panning
+    rasterizer.cullMode = VK_CULL_MODE_NONE;  // No culling - ensures thin walls cast shadows
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.depthBiasEnable = VK_TRUE;  // Enable depth bias to reduce shadow acne
     rasterizer.depthBiasConstantFactor = 1.25f;
@@ -369,20 +370,30 @@ void ShadowMap::endShadowPass(VkCommandBuffer cmd) {
 }
 
 void ShadowMap::updateLightMatrix(const vec3& lightDir, const vec3& sceneCenter, f32 sceneRadius) {
+    // Normalize light direction
+    vec3 lightDirNorm = glm::normalize(lightDir);
+
     // Position light far enough to encompass the scene
-    vec3 lightPos = sceneCenter - glm::normalize(lightDir) * sceneRadius * 2.0f;
+    vec3 lightPos = sceneCenter - lightDirNorm * sceneRadius * 2.0f;
 
-    // Create orthographic projection for directional light
-    m_lightView = glm::lookAt(lightPos, sceneCenter, vec3(0.0f, 1.0f, 0.0f));
+    // Create stable up vector (avoid gimbal lock when light is directly up/down)
+    vec3 up = vec3(0.0f, 1.0f, 0.0f);
+    if (std::abs(glm::dot(lightDirNorm, up)) > 0.99f) {
+        up = vec3(0.0f, 0.0f, 1.0f);
+    }
 
-    // Orthographic projection sized to encompass the scene
-    f32 orthoSize = sceneRadius * 1.5f;
+    // Create view matrix
+    m_lightView = glm::lookAt(lightPos, sceneCenter, up);
+
+    // Tighter orthographic projection for better shadow resolution
+    f32 orthoSize = sceneRadius * 1.1f;
     m_lightProj = glm::ortho(-orthoSize, orthoSize, -orthoSize, orthoSize,
                               0.1f, sceneRadius * 4.0f);
 
     // Vulkan clip space correction
     m_lightProj[1][1] *= -1.0f;
 
+    // Build the shadow matrix
     m_lightViewProj = m_lightProj * m_lightView;
 }
 
