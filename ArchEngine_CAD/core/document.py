@@ -3,9 +3,13 @@ ArchDocument - Central document model
 
 Single source of truth for building data.
 Wraps JSON building data with change tracking and signals.
+
+Now integrates with shared ArchGeometry library for geometry queries
+while maintaining mutable model for CAD editing.
 """
 import json
 import copy
+import sys
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Tuple
 from dataclasses import dataclass, field
@@ -15,6 +19,18 @@ from PyQt6.QtGui import QUndoStack
 
 from core.events import event_bus
 from core.version_control import VersionControl
+
+# Try to import shared geometry library
+_ARCHGEOMETRY_AVAILABLE = False
+try:
+    # Add shared library path
+    _lib_path = Path(__file__).parent.parent.parent / "Shared" / "ArchGeometry" / "python"
+    if _lib_path.exists() and str(_lib_path) not in sys.path:
+        sys.path.insert(0, str(_lib_path))
+    import archgeometry_py as archgeometry
+    _ARCHGEOMETRY_AVAILABLE = True
+except ImportError:
+    archgeometry = None
 
 
 @dataclass
@@ -946,3 +962,73 @@ class ArchDocument(QObject):
         if element:
             return element.is_pinned or property_name in element.locked_properties
         return False
+
+    # =========================================================================
+    # ArchGeometry Integration
+    # =========================================================================
+
+    def get_geometry_query(self) -> Optional[Any]:
+        """
+        Get ArchGeometry QueryAPI for this document.
+
+        Returns a QueryAPI instance for geometry queries, or None if
+        the archgeometry library is not available.
+
+        Usage:
+            query = doc.get_geometry_query()
+            if query:
+                wall_length = query.get_wall_length(0)
+                room_area = query.get_room_area("living_room")
+        """
+        if not _ARCHGEOMETRY_AVAILABLE or archgeometry is None:
+            return None
+
+        try:
+            # Parse current data into archgeometry schema
+            self._update_data()
+            json_str = json.dumps(self._data)
+            schema_doc = archgeometry.parse_json(json_str)
+            return archgeometry.QueryAPI(schema_doc)
+        except Exception as e:
+            print(f"Warning: Could not create geometry query: {e}")
+            return None
+
+    def validate_with_archgeometry(self) -> Tuple[bool, List[str]]:
+        """
+        Validate document using archgeometry library.
+
+        Returns:
+            Tuple of (is_valid, list of error messages)
+        """
+        if not _ARCHGEOMETRY_AVAILABLE or archgeometry is None:
+            return (True, ["archgeometry not available for validation"])
+
+        errors = []
+        try:
+            self._update_data()
+            json_str = json.dumps(self._data)
+            schema_doc = archgeometry.parse_json(json_str)
+
+            # Check wall lengths
+            for i, wall in enumerate(schema_doc.walls):
+                if wall.length() < 1.0:
+                    errors.append(f"Wall {i} has zero or negative length")
+
+            # Check door/window wall indices
+            for i, door in enumerate(schema_doc.doors):
+                if door.wall_index < 0 or door.wall_index >= len(schema_doc.walls):
+                    errors.append(f"Door {i} has invalid wall_index: {door.wall_index}")
+
+            for i, window in enumerate(schema_doc.windows):
+                if window.wall_index < 0 or window.wall_index >= len(schema_doc.walls):
+                    errors.append(f"Window {i} has invalid wall_index: {window.wall_index}")
+
+            return (len(errors) == 0, errors)
+
+        except Exception as e:
+            return (False, [f"Validation error: {str(e)}"])
+
+    @staticmethod
+    def is_archgeometry_available() -> bool:
+        """Check if archgeometry library is available."""
+        return _ARCHGEOMETRY_AVAILABLE

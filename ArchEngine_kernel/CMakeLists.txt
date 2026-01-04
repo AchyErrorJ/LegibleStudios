@@ -51,6 +51,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
+# ArchGeometry - shared geometry library (single source of truth for schema interpretation)
+# Disable tests/python for kernel build to speed up compilation
+set(ARCHGEOMETRY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ARCHGEOMETRY_BUILD_PYTHON OFF CACHE BOOL "" FORCE)
+set(ARCHGEOMETRY_BUILD_SHARED OFF CACHE BOOL "" FORCE)  # Static link for kernel
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../Shared/ArchGeometry
+                 ${CMAKE_CURRENT_BINARY_DIR}/archgeometry)
+
 # Dear ImGui - immediate mode GUI
 FetchContent_Declare(
     imgui
@@ -157,6 +165,7 @@ target_link_libraries(ArchEngineLib PRIVATE
     glfw
     glm
     nlohmann_json::nlohmann_json
+    archgeometry
 )
 
 target_compile_definitions(ArchEngineLib PRIVATE ARCHENGINE_EXPORTS)
@@ -177,6 +186,7 @@ target_link_libraries(ArchEngine PRIVATE
     glfw
     glm
     nlohmann_json::nlohmann_json
+    archgeometry
 )
 
 # Shader compilation

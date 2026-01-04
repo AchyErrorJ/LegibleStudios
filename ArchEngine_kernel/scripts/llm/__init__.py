@@ -4,24 +4,33 @@ This module provides a unified interface to multiple LLM backends (LM Studio,
 OpenAI, Claude, Gemini) for generating and modifying building schemas from
 natural language descriptions.
 
-Quick Start:
-    from llm import LLMConfig, generate_building, modify_building
+Two approaches are available:
+1. Direct schema generation (legacy) - LLM generates complete JSON schemas
+2. Fragment-based (recommended) - LLM emits fragments, QBD Algebra validates and solves
 
-    # Check available providers
-    print(LLMConfig.get_available())
+Quick Start (Fragment-based with QBD):
+    from llm import LLMConfig, FragmentEmitter
+    from qbd import QBDState, solve_state
 
-    # Use LM Studio (local)
     LLMConfig.set_active("lmstudio")
 
-    # Generate a building
-    schema = generate_building("3 bedroom 2 bath ranch house 1800 sqft")
+    # Emit fragments from natural language
+    emitter = FragmentEmitter()
+    fragments = emitter.emit_from_description("3 bedroom 2 bath house")
 
-    # Modify with constraints
-    modified = modify_building(
-        schema,
-        "Make the kitchen larger",
-        pinned_elements={"rooms": ["room_living"]}
-    )
+    # Apply to QBD state
+    state = QBDState()
+    for frag in fragments:
+        state.apply_fragment(Fragment.parse(frag))
+
+    # Solve
+    result = solve_state(state)
+
+Quick Start (Direct schema - legacy):
+    from llm import LLMConfig, generate_building, modify_building
+
+    LLMConfig.set_active("lmstudio")
+    schema = generate_building("3 bedroom 2 bath ranch house 1800 sqft")
 """
 
 from .provider import LLMProvider, Message, LLMResponse
@@ -29,6 +38,7 @@ from .config import LLMConfig
 from .schema_generator import SchemaGenerator
 from .schema_modifier import SchemaModifier
 from .action_parser import TemplateModifier, ActionParser, ActionApplier
+from .fragment_emitter import FragmentEmitter, emit_fragments, apply_fragments_to_state
 
 # Initialize defaults on import
 LLMConfig.register_defaults()
@@ -44,6 +54,10 @@ __all__ = [
     "TemplateModifier",  # Fast template-based modifier
     "ActionParser",
     "ActionApplier",
+    # Fragment-based (QBD integration)
+    "FragmentEmitter",
+    "emit_fragments",
+    "apply_fragments_to_state",
     # Helper functions
     "generate_building",
     "modify_building",

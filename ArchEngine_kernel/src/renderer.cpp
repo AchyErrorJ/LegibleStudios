@@ -690,9 +690,9 @@ void Renderer::drawSky() {
     vkCmdDraw(m_currentCommandBuffer, 3, 1, 0, 0);
 
     // Rebind the structural pipeline and descriptor sets for subsequent draws
-    if (m_vizMode == VisualizationMode::Wireframe) {
+    if (m_vizMode == VisualizationMode::Wireframe && m_wireframePipeline) {
         m_wireframePipeline->bind(m_currentCommandBuffer);
-    } else {
+    } else if (m_pipeline) {
         m_pipeline->bind(m_currentCommandBuffer);
     }
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -867,9 +867,9 @@ void Renderer::beginRenderPass(vec4 clearColor) {
     vkCmdSetScissor(m_currentCommandBuffer, 0, 1, &scissor);
 
     // Bind appropriate pipeline based on visualization mode
-    if (m_vizMode == VisualizationMode::Wireframe) {
+    if (m_vizMode == VisualizationMode::Wireframe && m_wireframePipeline) {
         m_wireframePipeline->bind(m_currentCommandBuffer);
-    } else {
+    } else if (m_pipeline) {
         m_pipeline->bind(m_currentCommandBuffer);
     }
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -915,9 +915,9 @@ void Renderer::beginHDRRenderPass(vec4 clearColor) {
     vkCmdSetScissor(m_currentCommandBuffer, 0, 1, &scissor);
 
     // Bind HDR-compatible pipeline based on visualization mode
-    if (m_vizMode == VisualizationMode::Wireframe) {
+    if (m_vizMode == VisualizationMode::Wireframe && m_hdrWireframePipeline) {
         m_hdrWireframePipeline->bind(m_currentCommandBuffer);
-    } else {
+    } else if (m_hdrPipeline) {
         m_hdrPipeline->bind(m_currentCommandBuffer);
     }
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,

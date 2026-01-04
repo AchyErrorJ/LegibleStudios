@@ -8,6 +8,10 @@
 #include <nlohmann/json.hpp>
 #include "mesh.hpp"
 
+// ArchGeometry - shared geometry library for unified schema interpretation
+// Provides QueryAPI for geometry queries, can optionally replace local parsing
+#include <archgeometry/archgeometry.hpp>
+
 using json = nlohmann::json;
 
 namespace arch {
@@ -1102,6 +1106,34 @@ void QBDInterface::setClimateZone(const std::string& zone) {
 QBDInterface& getQBDInterface() {
     static QBDInterface instance;
     return instance;
+}
+
+// ============================================================================
+// ARCHGEOMETRY INTEGRATION
+// ============================================================================
+
+bool QBDInterface::parseWithArchGeometry(const std::string& jsonString) {
+    try {
+        auto result = archgeometry::SchemaParser::parseJson(jsonString);
+        if (std::holds_alternative<archgeometry::SchemaDocument>(result)) {
+            m_archDoc = std::make_unique<archgeometry::SchemaDocument>(
+                std::get<archgeometry::SchemaDocument>(result));
+            m_archQuery = std::make_unique<archgeometry::QueryAPI>(*m_archDoc);
+            std::cout << "[QBD] ArchGeometry parsing successful - QueryAPI available\n";
+            return true;
+        } else {
+            std::cerr << "[QBD] ArchGeometry parsing failed: "
+                      << std::get<archgeometry::ParseError>(result).message << "\n";
+            return false;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[QBD] ArchGeometry exception: " << e.what() << "\n";
+        return false;
+    }
+}
+
+archgeometry::QueryAPI* QBDInterface::getArchGeometryQuery() {
+    return m_archQuery.get();
 }
 
 } // namespace qbd
