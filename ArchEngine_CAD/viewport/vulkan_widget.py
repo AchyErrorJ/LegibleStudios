@@ -19,17 +19,17 @@ from PyQt6.QtGui import QPainter, QColor
 
 # Find the DLL
 def _find_dll() -> Optional[Path]:
-    """Search for ArchEngineLib.dll - prioritize kernel worktree."""
+    """Search for ArchEngineLib.dll - prioritize local worktree."""
     search_paths = [
-        # Primary: Kernel worktree (dedicated engine development)
-        Path(r"X:\ARCH\Software\ArchEngine_Suite_Kernel\ArchEngine_kernel\build\Release"),
-        Path(r"X:\ARCH\Software\ArchEngine_Suite_Kernel\ArchEngine_kernel\build\Debug"),
-        # Relative paths from CAD app
+        # Primary: Relative paths from CAD app (same worktree)
         Path(__file__).parent.parent.parent / "ArchEngine_kernel" / "build" / "Release",
         Path(__file__).parent.parent.parent / "ArchEngine_kernel" / "build" / "Debug",
-        # UE5 worktree paths
+        # UE5 worktree paths (explicit)
         Path(r"X:\ARCH\Software\ArchEngine_suite_ue5\ArchEngine_kernel\build\Release"),
         Path(r"X:\ARCH\Software\ArchEngine_suite_ue5\ArchEngine_kernel\build\Debug"),
+        # Kernel worktree (fallback)
+        Path(r"X:\ARCH\Software\ArchEngine_Suite_Kernel\ArchEngine_kernel\build\Release"),
+        Path(r"X:\ARCH\Software\ArchEngine_Suite_Kernel\ArchEngine_kernel\build\Debug"),
     ]
 
     for path in search_paths:
@@ -71,8 +71,11 @@ class VulkanViewportWidget(QWidget):
         self._camera_yaw = 0.5
         self._camera_pitch = 0.4
         self._camera_distance = 60.0
+        self._camera_target = [20.0, 10.0, 15.0]  # x, y, z target point
         self._last_mouse_pos = None
         self._dragging = False
+        self._panning = False  # True for pan, False for orbit
+
         self._rendering = False  # Prevent concurrent renders
         self._loading = False    # Prevent concurrent loads
         self._api_lock = threading.Lock()  # Prevent load during render
@@ -141,7 +144,132 @@ class VulkanViewportWidget(QWidget):
             self._lib.arch_get_error.argtypes = []
             self._lib.arch_get_error.restype = ctypes.c_char_p
 
+            # Section clipping API
+            self._lib.arch_set_clipping_enabled.argtypes = [ctypes.c_int]
+            self._lib.arch_set_clipping_enabled.restype = None
+
+            self._lib.arch_get_clipping_enabled.argtypes = []
+            self._lib.arch_get_clipping_enabled.restype = ctypes.c_int
+
+            self._lib.arch_set_clip_axis.argtypes = [ctypes.c_int]
+            self._lib.arch_set_clip_axis.restype = None
+
+            self._lib.arch_get_clip_axis.argtypes = []
+            self._lib.arch_get_clip_axis.restype = ctypes.c_int
+
+            self._lib.arch_set_clip_height.argtypes = [ctypes.c_float]
+            self._lib.arch_set_clip_height.restype = None
+
+            self._lib.arch_get_clip_height.argtypes = []
+            self._lib.arch_get_clip_height.restype = ctypes.c_float
+
+            self._lib.arch_set_clip_flipped.argtypes = [ctypes.c_int]
+            self._lib.arch_set_clip_flipped.restype = None
+
+            self._lib.arch_get_clip_flipped.argtypes = []
+            self._lib.arch_get_clip_flipped.restype = ctypes.c_int
+
+            self._lib.arch_set_section_floor_plan.argtypes = [ctypes.c_float]
+            self._lib.arch_set_section_floor_plan.restype = None
+
+            self._lib.arch_set_section_elevation.argtypes = [ctypes.c_int, ctypes.c_float]
+            self._lib.arch_set_section_elevation.restype = None
+
+            # Material style API
+            self._lib.arch_set_material_style.argtypes = [ctypes.c_int]
+            self._lib.arch_set_material_style.restype = None
+
+            self._lib.arch_get_material_style.argtypes = []
+            self._lib.arch_get_material_style.restype = ctypes.c_int
+
             print(f"[VulkanWidget] Loaded {dll_path}")
+
+            # Try to load extended post-processing API (may not be in older DLLs)
+            try:
+                # Shadows & Lighting API
+                self._lib.arch_set_shadows_enabled.argtypes = [ctypes.c_int]
+                self._lib.arch_set_shadows_enabled.restype = None
+
+                self._lib.arch_get_shadows_enabled.argtypes = []
+                self._lib.arch_get_shadows_enabled.restype = ctypes.c_int
+
+                self._lib.arch_set_light_direction.argtypes = [ctypes.c_float, ctypes.c_float, ctypes.c_float]
+                self._lib.arch_set_light_direction.restype = None
+
+                self._lib.arch_get_light_direction.argtypes = [
+                    ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float)
+                ]
+                self._lib.arch_get_light_direction.restype = None
+
+                # SSAO API
+                self._lib.arch_set_ssao_enabled.argtypes = [ctypes.c_int]
+                self._lib.arch_set_ssao_enabled.restype = None
+
+                self._lib.arch_get_ssao_enabled.argtypes = []
+                self._lib.arch_get_ssao_enabled.restype = ctypes.c_int
+
+                self._lib.arch_set_ssao_radius.argtypes = [ctypes.c_float]
+                self._lib.arch_set_ssao_radius.restype = None
+
+                self._lib.arch_get_ssao_radius.argtypes = []
+                self._lib.arch_get_ssao_radius.restype = ctypes.c_float
+
+                self._lib.arch_set_ssao_intensity.argtypes = [ctypes.c_float]
+                self._lib.arch_set_ssao_intensity.restype = None
+
+                self._lib.arch_get_ssao_intensity.argtypes = []
+                self._lib.arch_get_ssao_intensity.restype = ctypes.c_float
+
+                # Bloom API
+                self._lib.arch_set_bloom_enabled.argtypes = [ctypes.c_int]
+                self._lib.arch_set_bloom_enabled.restype = None
+
+                self._lib.arch_get_bloom_enabled.argtypes = []
+                self._lib.arch_get_bloom_enabled.restype = ctypes.c_int
+
+                self._lib.arch_set_bloom_threshold.argtypes = [ctypes.c_float]
+                self._lib.arch_set_bloom_threshold.restype = None
+
+                self._lib.arch_get_bloom_threshold.argtypes = []
+                self._lib.arch_get_bloom_threshold.restype = ctypes.c_float
+
+                self._lib.arch_set_bloom_intensity.argtypes = [ctypes.c_float]
+                self._lib.arch_set_bloom_intensity.restype = None
+
+                self._lib.arch_get_bloom_intensity.argtypes = []
+                self._lib.arch_get_bloom_intensity.restype = ctypes.c_float
+
+                # Tonemapping & Exposure API
+                self._lib.arch_set_exposure.argtypes = [ctypes.c_float]
+                self._lib.arch_set_exposure.restype = None
+
+                self._lib.arch_get_exposure.argtypes = []
+                self._lib.arch_get_exposure.restype = ctypes.c_float
+
+                self._lib.arch_set_tonemap_mode.argtypes = [ctypes.c_int]
+                self._lib.arch_set_tonemap_mode.restype = None
+
+                self._lib.arch_get_tonemap_mode.argtypes = []
+                self._lib.arch_get_tonemap_mode.restype = ctypes.c_int
+
+                # Camera view settings API
+                self._lib.arch_set_camera_fov.argtypes = [ctypes.c_float]
+                self._lib.arch_set_camera_fov.restype = None
+
+                self._lib.arch_get_camera_fov.argtypes = []
+                self._lib.arch_get_camera_fov.restype = ctypes.c_float
+
+                self._lib.arch_set_orthographic.argtypes = [ctypes.c_int]
+                self._lib.arch_set_orthographic.restype = None
+
+                self._lib.arch_get_orthographic.argtypes = []
+                self._lib.arch_get_orthographic.restype = ctypes.c_int
+
+                print("[VulkanWidget] Extended post-processing API loaded")
+            except AttributeError as e:
+                print(f"[VulkanWidget] Extended API not available: {e}")
 
         except Exception as e:
             print(f"[VulkanWidget] Failed to load library: {e}")
@@ -271,9 +399,14 @@ class VulkanViewportWidget(QWidget):
             self._render_timer = None
 
         if self._initialized and self._lib is not None:
-            self._lib.arch_shutdown()
-            self._initialized = False
-            print("[VulkanWidget] Renderer shutdown")
+            try:
+                print("[VulkanWidget] Shutting down renderer...")
+                self._lib.arch_shutdown()
+                print("[VulkanWidget] Renderer shutdown complete")
+            except Exception as e:
+                print(f"[VulkanWidget] Shutdown error: {e}")
+            finally:
+                self._initialized = False
 
     # =========================================================================
     # Public API
@@ -390,41 +523,382 @@ class VulkanViewportWidget(QWidget):
         return self._initialized
 
     # =========================================================================
+    # Section Clipping
+    # =========================================================================
+
+    def set_clipping_enabled(self, enabled: bool):
+        """Enable or disable section clipping."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_clipping_enabled(1 if enabled else 0)
+
+    def get_clipping_enabled(self) -> bool:
+        """Check if clipping is enabled."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_clipping_enabled() != 0
+        return False
+
+    def set_clip_axis(self, axis: int):
+        """Set clipping axis (0=X, 1=Y, 2=Z)."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_clip_axis(axis)
+
+    def get_clip_axis(self) -> int:
+        """Get current clipping axis."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_clip_axis()
+        return 1
+
+    def set_clip_height(self, height: float):
+        """Set clipping plane position in feet."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_clip_height(ctypes.c_float(height))
+
+    def get_clip_height(self) -> float:
+        """Get current clipping height in feet."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_clip_height()
+        return 0.0
+
+    def set_clip_flipped(self, flipped: bool):
+        """Flip clipping direction."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_clip_flipped(1 if flipped else 0)
+
+    def get_clip_flipped(self) -> bool:
+        """Check if clipping is flipped."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_clip_flipped() != 0
+        return False
+
+    def set_section_floor_plan(self, y_height: float):
+        """Set up floor plan section at specified height."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_section_floor_plan(ctypes.c_float(y_height))
+
+    def set_section_elevation(self, axis: int, position: float):
+        """Set up elevation section (axis 0=X, 2=Z)."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_section_elevation(axis, ctypes.c_float(position))
+
+    # =========================================================================
+    # Material Style
+    # =========================================================================
+
+    def set_material_style(self, style: int):
+        """
+        Set material rendering style.
+
+        Args:
+            style: 0=Realistic, 1=Clean, 2=Schematic, 3=Blueprint
+        """
+        if self._initialized and self._lib:
+            self._lib.arch_set_material_style(style)
+
+    def get_material_style(self) -> int:
+        """Get current material style (0-3)."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_material_style()
+        return 1  # Default: Clean
+
+    # =========================================================================
+    # Shadows & Lighting
+    # =========================================================================
+
+    def set_shadows_enabled(self, enabled: bool):
+        """Enable or disable shadow mapping."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_shadows_enabled(1 if enabled else 0)
+
+    def get_shadows_enabled(self) -> bool:
+        """Check if shadows are enabled."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_shadows_enabled() != 0
+        return True
+
+    def set_light_direction(self, x: float, y: float, z: float):
+        """Set sun/light direction (normalized)."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_light_direction(
+                ctypes.c_float(x), ctypes.c_float(y), ctypes.c_float(z)
+            )
+
+    def get_light_direction(self) -> tuple:
+        """Get current light direction as (x, y, z)."""
+        if self._initialized and self._lib:
+            x = ctypes.c_float()
+            y = ctypes.c_float()
+            z = ctypes.c_float()
+            self._lib.arch_get_light_direction(
+                ctypes.byref(x), ctypes.byref(y), ctypes.byref(z)
+            )
+            return (x.value, y.value, z.value)
+        return (-0.5, -0.8, -0.3)
+
+    # =========================================================================
+    # SSAO (Screen Space Ambient Occlusion)
+    # =========================================================================
+
+    def set_ssao_enabled(self, enabled: bool):
+        """Enable or disable SSAO."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_ssao_enabled(1 if enabled else 0)
+
+    def get_ssao_enabled(self) -> bool:
+        """Check if SSAO is enabled."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_ssao_enabled() != 0
+        return True
+
+    def set_ssao_radius(self, radius: float):
+        """Set SSAO sample radius."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_ssao_radius(ctypes.c_float(radius))
+
+    def get_ssao_radius(self) -> float:
+        """Get SSAO radius."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_ssao_radius()
+        return 0.5
+
+    def set_ssao_intensity(self, intensity: float):
+        """Set SSAO intensity."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_ssao_intensity(ctypes.c_float(intensity))
+
+    def get_ssao_intensity(self) -> float:
+        """Get SSAO intensity."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_ssao_intensity()
+        return 1.0
+
+    # =========================================================================
+    # Bloom
+    # =========================================================================
+
+    def set_bloom_enabled(self, enabled: bool):
+        """Enable or disable bloom effect."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_bloom_enabled(1 if enabled else 0)
+
+    def get_bloom_enabled(self) -> bool:
+        """Check if bloom is enabled."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_bloom_enabled() != 0
+        return True
+
+    def set_bloom_threshold(self, threshold: float):
+        """Set bloom brightness threshold."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_bloom_threshold(ctypes.c_float(threshold))
+
+    def get_bloom_threshold(self) -> float:
+        """Get bloom threshold."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_bloom_threshold()
+        return 1.0
+
+    def set_bloom_intensity(self, intensity: float):
+        """Set bloom intensity."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_bloom_intensity(ctypes.c_float(intensity))
+
+    def get_bloom_intensity(self) -> float:
+        """Get bloom intensity."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_bloom_intensity()
+        return 0.5
+
+    # =========================================================================
+    # Tonemapping & Exposure
+    # =========================================================================
+
+    def set_exposure(self, exposure: float):
+        """Set camera exposure."""
+        if self._initialized and self._lib:
+            self._lib.arch_set_exposure(ctypes.c_float(exposure))
+
+    def get_exposure(self) -> float:
+        """Get current exposure."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_exposure()
+        return 1.0
+
+    def set_tonemap_mode(self, mode: int):
+        """
+        Set tonemapping operator.
+
+        Args:
+            mode: 0=Reinhard, 1=ACES, 2=Uncharted2
+        """
+        if self._initialized and self._lib:
+            self._lib.arch_set_tonemap_mode(mode)
+
+    def get_tonemap_mode(self) -> int:
+        """Get current tonemap mode (0-2)."""
+        if self._initialized and self._lib:
+            return self._lib.arch_get_tonemap_mode()
+        return 1  # Default: ACES
+
+    # =========================================================================
+    # Camera View Settings
+    # =========================================================================
+
+    def set_camera_fov(self, fov: float):
+        """Set camera field of view in degrees (10-120)."""
+        if self._initialized and self._lib:
+            try:
+                self._lib.arch_set_camera_fov(ctypes.c_float(fov))
+            except AttributeError:
+                pass
+
+    def get_camera_fov(self) -> float:
+        """Get current camera FOV in degrees."""
+        if self._initialized and self._lib:
+            try:
+                return self._lib.arch_get_camera_fov()
+            except AttributeError:
+                pass
+        return 45.0
+
+    def set_orthographic(self, enabled: bool):
+        """Enable orthographic projection mode."""
+        if self._initialized and self._lib:
+            try:
+                self._lib.arch_set_orthographic(1 if enabled else 0)
+            except AttributeError:
+                pass
+
+    def get_orthographic(self) -> bool:
+        """Check if orthographic mode is enabled."""
+        if self._initialized and self._lib:
+            try:
+                return self._lib.arch_get_orthographic() != 0
+            except AttributeError:
+                pass
+        return False
+
+    # =========================================================================
     # Mouse interaction
     # =========================================================================
 
     def mousePressEvent(self, event):
         """Handle mouse press for camera control."""
-        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
+        if event.button() == Qt.MouseButton.MiddleButton:
+            # Middle mouse = orbit
             self._dragging = True
+            self._panning = False
+            self._last_mouse_pos = event.pos()
+        elif event.button() == Qt.MouseButton.RightButton:
+            # Right mouse = pan
+            self._dragging = True
+            self._panning = True
             self._last_mouse_pos = event.pos()
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         """Handle mouse release."""
-        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
             self._dragging = False
         super().mouseReleaseEvent(event)
 
     def mouseMoveEvent(self, event):
-        """Handle mouse move for camera orbit."""
+        """Handle mouse move for camera orbit/pan."""
         if self._dragging and self._last_mouse_pos is not None:
             dx = event.pos().x() - self._last_mouse_pos.x()
             dy = event.pos().y() - self._last_mouse_pos.y()
 
-            self._camera_yaw -= dx * 0.005
-            self._camera_pitch -= dy * 0.005
-            self._camera_pitch = max(-1.4, min(1.4, self._camera_pitch))
+            if self._panning:
+                # Pan: move camera target in screen space
+                import math
+                # Calculate right and up vectors based on camera orientation
+                pan_speed = self._camera_distance * 0.002
+
+                # Right vector (perpendicular to view direction in XZ plane)
+                right_x = math.cos(self._camera_yaw)
+                right_z = math.sin(self._camera_yaw)
+
+                # Up vector (world Y for now, could be more sophisticated)
+                up_y = 1.0
+
+                # Move target
+                self._camera_target[0] -= dx * pan_speed * right_x
+                self._camera_target[2] -= dx * pan_speed * right_z
+                self._camera_target[1] += dy * pan_speed * up_y
+
+                # Update camera target in renderer
+                if self._initialized and self._lib:
+                    self._lib.arch_set_camera_target(
+                        ctypes.c_float(self._camera_target[0]),
+                        ctypes.c_float(self._camera_target[1]),
+                        ctypes.c_float(self._camera_target[2])
+                    )
+            else:
+                # Orbit: rotate camera around target
+                self._camera_yaw -= dx * 0.005
+                self._camera_pitch -= dy * 0.005
+                self._camera_pitch = max(-1.4, min(1.4, self._camera_pitch))
 
             self._last_mouse_pos = event.pos()
 
         super().mouseMoveEvent(event)
 
     def wheelEvent(self, event):
-        """Handle mouse wheel for zoom."""
+        """Handle mouse wheel for zoom centered on cursor."""
+        import math
         delta = event.angleDelta().y() / 120.0
-        self._camera_distance -= delta * self._camera_distance * 0.1
-        self._camera_distance = max(10.0, min(500.0, self._camera_distance))
+
+        if abs(delta) < 0.01:
+            super().wheelEvent(event)
+            return
+
+        # Get cursor position relative to widget center (normalized -1 to 1)
+        cursor_pos = event.position()
+        ndc_x = (cursor_pos.x() / self.width()) * 2.0 - 1.0
+        ndc_y = 1.0 - (cursor_pos.y() / self.height()) * 2.0  # Flip Y
+
+        # Calculate zoom
+        zoom_factor = 0.15
+        old_distance = self._camera_distance
+        new_distance = old_distance * (1.0 - delta * zoom_factor)
+        new_distance = max(5.0, min(500.0, new_distance))
+
+        # How much the distance changed
+        distance_delta = old_distance - new_distance
+
+        # Calculate camera vectors
+        cos_yaw = math.cos(self._camera_yaw)
+        sin_yaw = math.sin(self._camera_yaw)
+        cos_pitch = math.cos(self._camera_pitch)
+        sin_pitch = math.sin(self._camera_pitch)
+
+        # Camera right vector (in XZ plane)
+        right_x = cos_yaw
+        right_z = sin_yaw
+
+        # Camera up vector (simplified - just Y for architectural views)
+        up_y = 1.0
+
+        # Move target toward cursor position proportional to zoom amount
+        # The FOV determines how much screen space maps to world space
+        fov_factor = math.tan(math.radians(45.0 / 2.0))  # Approximate FOV
+        world_scale = distance_delta * fov_factor
+
+        # Shift target based on cursor offset from center
+        self._camera_target[0] += ndc_x * world_scale * right_x
+        self._camera_target[2] += ndc_x * world_scale * right_z
+        self._camera_target[1] += ndc_y * world_scale * cos_pitch
+
+        # Apply the zoom
+        self._camera_distance = new_distance
+
+        # Update camera target in renderer
+        if self._initialized and self._lib:
+            self._lib.arch_set_camera_target(
+                ctypes.c_float(self._camera_target[0]),
+                ctypes.c_float(self._camera_target[1]),
+                ctypes.c_float(self._camera_target[2])
+            )
+
         super().wheelEvent(event)
 
     def paintEngine(self):

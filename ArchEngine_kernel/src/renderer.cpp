@@ -39,13 +39,6 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
 Renderer::~Renderer() {
     m_context.waitIdle();
 
-    // Cleanup ray tracing resources
-    m_rtPipeline.reset();
-    m_accelStructManager.reset();
-    m_rtVertexBuffer.destroy(m_context.getDevice());
-    m_rtIndexBuffer.destroy(m_context.getDevice());
-    m_rtMaterialBuffer.destroy(m_context.getDevice());
-
     m_postProcess.reset();
     m_envMap.reset();
     m_shadowMap.reset();
@@ -688,9 +681,9 @@ void Renderer::drawSky() {
     vkCmdDraw(m_currentCommandBuffer, 3, 1, 0, 0);
 
     // Rebind the structural pipeline and descriptor sets for subsequent draws
-    if (m_vizMode == VisualizationMode::Wireframe) {
+    if (m_vizMode == VisualizationMode::Wireframe && m_wireframePipeline) {
         m_wireframePipeline->bind(m_currentCommandBuffer);
-    } else {
+    } else if (m_pipeline) {
         m_pipeline->bind(m_currentCommandBuffer);
     }
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -865,9 +858,9 @@ void Renderer::beginRenderPass(vec4 clearColor) {
     vkCmdSetScissor(m_currentCommandBuffer, 0, 1, &scissor);
 
     // Bind appropriate pipeline based on visualization mode
-    if (m_vizMode == VisualizationMode::Wireframe) {
+    if (m_vizMode == VisualizationMode::Wireframe && m_wireframePipeline) {
         m_wireframePipeline->bind(m_currentCommandBuffer);
-    } else {
+    } else if (m_pipeline) {
         m_pipeline->bind(m_currentCommandBuffer);
     }
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -913,9 +906,9 @@ void Renderer::beginHDRRenderPass(vec4 clearColor) {
     vkCmdSetScissor(m_currentCommandBuffer, 0, 1, &scissor);
 
     // Bind HDR-compatible pipeline based on visualization mode
-    if (m_vizMode == VisualizationMode::Wireframe) {
+    if (m_vizMode == VisualizationMode::Wireframe && m_hdrWireframePipeline) {
         m_hdrWireframePipeline->bind(m_currentCommandBuffer);
-    } else {
+    } else if (m_hdrPipeline) {
         m_hdrPipeline->bind(m_currentCommandBuffer);
     }
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2001,274 +1994,6 @@ void Renderer::setTonemapMode(u32 mode) {
 
 u32 Renderer::getTonemapMode() const {
     return m_postProcess ? m_postProcess->getCompositeConfig().tonemapMode : 1;
-}
-
-// Ray tracing implementation
-void Renderer::initRayTracing() {
-    if (m_rayTracingInitialized) return;
-    if (!m_context.isRayTracingSupported()) return;
-
-    m_accelStructManager = std::make_unique<AccelerationStructureManager>(m_context);
-    m_rtPipeline = std::make_unique<RayTracingPipeline>(m_context);
-
-    if (!m_rtPipeline->initialize()) {
-        m_accelStructManager.reset();
-        m_rtPipeline.reset();
-        return;
-    }
-
-    m_rayTracingInitialized = true;
-}
-
-bool Renderer::isRayTracingAvailable() const {
-    return m_context.isRayTracingSupported();
-}
-
-void Renderer::setRayTracingEnabled(bool enabled) {
-    if (enabled && !m_rayTracingInitialized) {
-        initRayTracing();
-    }
-    m_rayTracingEnabled = enabled && m_rayTracingInitialized;
-}
-
-void Renderer::resetRayTracingAccumulation() {
-    m_rtSamples = 0;
-    if (m_rtPipeline) {
-        m_rtPipeline->resetAccumulation();
-    }
-}
-
-void Renderer::createRTSceneBuffers() {
-    if (m_rtVertices.empty()) return;
-
-    VkDevice device = m_context.getDevice();
-
-    // Cleanup old buffers
-    m_rtVertexBuffer.destroy(device);
-    m_rtIndexBuffer.destroy(device);
-    m_rtMaterialBuffer.destroy(device);
-
-    // Create vertex buffer
-    VkDeviceSize vertexSize = m_rtVertices.size() * sizeof(Vertex);
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = vertexSize;
-    bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    vkCreateBuffer(device, &bufferInfo, nullptr, &m_rtVertexBuffer.buffer);
-
-    VkMemoryRequirements memReqs;
-    vkGetBufferMemoryRequirements(device, m_rtVertexBuffer.buffer, &memReqs);
-
-    VkMemoryAllocateFlagsInfo flagsInfo{};
-    flagsInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-    flagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.pNext = &flagsInfo;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = m_context.findMemoryType(
-        memReqs.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    vkAllocateMemory(device, &allocInfo, nullptr, &m_rtVertexBuffer.memory);
-    vkBindBufferMemory(device, m_rtVertexBuffer.buffer, m_rtVertexBuffer.memory, 0);
-    m_rtVertexBuffer.size = vertexSize;
-
-    // Copy vertex data
-    void* data;
-    vkMapMemory(device, m_rtVertexBuffer.memory, 0, vertexSize, 0, &data);
-    memcpy(data, m_rtVertices.data(), vertexSize);
-    vkUnmapMemory(device, m_rtVertexBuffer.memory);
-
-    // Create index buffer
-    VkDeviceSize indexSize = m_rtIndices.size() * sizeof(u32);
-    bufferInfo.size = indexSize;
-    bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-
-    vkCreateBuffer(device, &bufferInfo, nullptr, &m_rtIndexBuffer.buffer);
-    vkGetBufferMemoryRequirements(device, m_rtIndexBuffer.buffer, &memReqs);
-
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = m_context.findMemoryType(
-        memReqs.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    vkAllocateMemory(device, &allocInfo, nullptr, &m_rtIndexBuffer.memory);
-    vkBindBufferMemory(device, m_rtIndexBuffer.buffer, m_rtIndexBuffer.memory, 0);
-    m_rtIndexBuffer.size = indexSize;
-
-    // Copy index data
-    vkMapMemory(device, m_rtIndexBuffer.memory, 0, indexSize, 0, &data);
-    memcpy(data, m_rtIndices.data(), indexSize);
-    vkUnmapMemory(device, m_rtIndexBuffer.memory);
-
-    // Create material buffer
-    if (!m_rtMaterials.empty()) {
-        VkDeviceSize materialSize = m_rtMaterials.size() * sizeof(RTMaterial);
-        bufferInfo.size = materialSize;
-        bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-
-        vkCreateBuffer(device, &bufferInfo, nullptr, &m_rtMaterialBuffer.buffer);
-        vkGetBufferMemoryRequirements(device, m_rtMaterialBuffer.buffer, &memReqs);
-
-        // Material buffer doesn't need device address, just storage
-        VkMemoryAllocateInfo matAllocInfo{};
-        matAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        matAllocInfo.allocationSize = memReqs.size;
-        matAllocInfo.memoryTypeIndex = m_context.findMemoryType(
-            memReqs.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-        vkAllocateMemory(device, &matAllocInfo, nullptr, &m_rtMaterialBuffer.memory);
-        vkBindBufferMemory(device, m_rtMaterialBuffer.buffer, m_rtMaterialBuffer.memory, 0);
-        m_rtMaterialBuffer.size = materialSize;
-
-        // Copy material data
-        vkMapMemory(device, m_rtMaterialBuffer.memory, 0, materialSize, 0, &data);
-        memcpy(data, m_rtMaterials.data(), materialSize);
-        vkUnmapMemory(device, m_rtMaterialBuffer.memory);
-    }
-}
-
-void Renderer::buildAccelerationStructures(const std::vector<StructuralElement>& elements) {
-    if (!m_rayTracingInitialized) {
-        initRayTracing();
-        if (!m_rayTracingInitialized) return;
-    }
-
-    m_rtVertices.clear();
-    m_rtIndices.clear();
-    m_rtMaterials.clear();
-    std::vector<BLASInstance> instances;
-
-    // Destroy old acceleration structures
-    m_accelStructManager->cleanup();
-
-    // Create BLAS for each element using createBeam as the base geometry
-    for (const auto& elem : elements) {
-        // Get physically-based material for this element type
-        RTMaterial material = ArchMaterials::forElementType(elem.type);
-
-        // Get color from material albedo for vertex color (used as fallback)
-        vec3 color = vec3(material.albedoAndMetallic);
-
-        std::vector<Vertex> vertices;
-        std::vector<u32> indices;
-
-        // Use createBeam for most elements as a simple box representation
-        auto result = Geometry::createBeam(elem.start, elem.end, elem.width, elem.depth, color);
-        vertices = result.first;
-        indices = result.second;
-
-        if (vertices.empty()) continue;
-
-        // Store offset for global index buffer
-        u32 vertexOffset = static_cast<u32>(m_rtVertices.size());
-
-        // Add vertices to global buffer
-        m_rtVertices.insert(m_rtVertices.end(), vertices.begin(), vertices.end());
-
-        // Add indices with offset
-        for (u32 idx : indices) {
-            m_rtIndices.push_back(idx + vertexOffset);
-        }
-
-        // Store material for this instance
-        m_rtMaterials.push_back(material);
-
-        // Create BLAS for this geometry
-        u32 blasIndex = m_accelStructManager->createBLAS(vertices, indices);
-
-        // Create instance (identity transform since beam already has position)
-        BLASInstance instance;
-        instance.blasIndex = blasIndex;
-        instance.transform = mat4(1.0f);
-        instance.customIndex = static_cast<u32>(instances.size());  // Material index
-        instances.push_back(instance);
-    }
-
-    if (instances.empty()) return;
-
-    // Build TLAS from all instances
-    m_accelStructManager->buildTLAS(instances);
-
-    // Create scene buffers for shader access
-    createRTSceneBuffers();
-
-    // Update descriptors in ray tracing pipeline
-    if (m_rtPipeline && m_accelStructManager->getTLASHandle() != VK_NULL_HANDLE) {
-        m_rtPipeline->updateDescriptors(
-            m_accelStructManager->getTLASHandle(),
-            m_rtPipeline->getOutputImageView(),
-            m_rtVertexBuffer.buffer,
-            m_rtIndexBuffer.buffer,
-            m_rtMaterialBuffer.buffer
-        );
-    }
-
-    // Reset accumulation since scene changed
-    resetRayTracingAccumulation();
-}
-
-void Renderer::renderRayTraced() {
-    if (!m_rayTracingEnabled || !m_rtPipeline || !m_accelStructManager) return;
-    if (m_accelStructManager->getTLASHandle() == VK_NULL_HANDLE) return;
-
-    auto extent = m_context.getSwapchainExtent();
-    f32 aspectRatio = static_cast<f32>(extent.width) / static_cast<f32>(extent.height);
-
-    // Get camera matrices
-    mat4 view = m_camera.getViewMatrix();
-    mat4 proj = m_camera.getProjectionMatrix(aspectRatio);
-    mat4 viewProj = proj * view;
-
-    // Update denoising settings
-    m_rtPipeline->setDenoisingEnabled(m_rtDenoisingEnabled);
-    m_rtPipeline->setDenoiseStrength(m_rtDenoiseStrength);
-    m_rtPipeline->setPrevViewProj(m_prevViewProj);
-
-    // Update camera UBO
-    RTCameraUBO rtCamera;
-    rtCamera.viewInverse = glm::inverse(view);
-    rtCamera.projInverse = glm::inverse(proj);
-    rtCamera.prevViewProj = m_prevViewProj;
-    rtCamera.lightDir = vec4(m_lightDirection, 0.0f);
-    rtCamera.cameraPos = vec4(m_camera.position, 1.0f);
-    rtCamera.frameCount = m_rtSamples;
-    rtCamera.sampleCount = 1024;
-    rtCamera.time = m_time;
-    rtCamera.exposure = getExposure();
-    rtCamera.enableDenoising = m_rtDenoisingEnabled ? 1 : 0;
-    rtCamera.denoiseStrength = m_rtDenoiseStrength;
-
-    m_rtPipeline->updateCamera(rtCamera);
-
-    // Record ray tracing commands
-    m_rtPipeline->recordCommands(m_currentCommandBuffer, extent.width, extent.height);
-
-    // Store current view-projection for next frame
-    m_prevViewProj = viewProj;
-
-    m_rtSamples++;
-}
-
-void Renderer::setRTDenoisingEnabled(bool enabled) {
-    m_rtDenoisingEnabled = enabled;
-    if (m_rtPipeline) {
-        m_rtPipeline->setDenoisingEnabled(enabled);
-    }
-}
-
-void Renderer::setRTDenoiseStrength(f32 strength) {
-    m_rtDenoiseStrength = glm::clamp(strength, 0.0f, 1.0f);
-    if (m_rtPipeline) {
-        m_rtPipeline->setDenoiseStrength(m_rtDenoiseStrength);
-    }
 }
 
 } // namespace arch
