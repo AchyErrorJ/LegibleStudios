@@ -686,6 +686,12 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                     renderer.setLightDirection(newDir);
                 }
 
+                float shadowBias = renderer.getShadowBias();
+                if (ImGui::SliderFloat("Shadow Bias", &shadowBias, 0.001f, 0.1f, "%.4f")) {
+                    renderer.setShadowBias(shadowBias);
+                }
+                ImGui::SetItemTooltip("Increase to reduce shadow acne, decrease to reduce peter-panning");
+
                 // Quick presets
                 ImGui::Text("Light Presets:");
                 if (ImGui::Button("Morning")) {

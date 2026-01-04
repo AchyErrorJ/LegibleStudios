@@ -76,6 +76,8 @@ public:
     bool getShadowsEnabled() const { return m_shadowsEnabled; }
     void setLightDirection(const vec3& dir) { m_lightDirection = glm::normalize(dir); }
     const vec3& getLightDirection() const { return m_lightDirection; }
+    void setShadowBias(f32 bias) { m_shadowBias = bias; }
+    f32 getShadowBias() const { return m_shadowBias; }
 
     // Environment map settings
     bool loadHdrEnvironment(const std::string& filepath);
@@ -231,6 +233,7 @@ private:
 
     // Dynamic meshes (cached for reuse)
     std::unordered_map<std::string, std::unique_ptr<Mesh>> m_meshCache;
+    std::unordered_map<const MeshData*, std::string> m_customMeshKeyCache;  // Maps custom mesh pointers to cache keys
     std::unique_ptr<Mesh> m_gridMesh;
 
     // Frame state
@@ -253,6 +256,7 @@ private:
     std::unique_ptr<ShadowMap> m_shadowMap;
     bool m_shadowsEnabled = true;
     vec3 m_lightDirection = glm::normalize(vec3(-0.5f, -1.0f, -0.3f));
+    f32 m_shadowBias = 0.02f;  // Adjustable shadow bias
 
     // Environment mapping
     std::unique_ptr<EnvironmentMap> m_envMap;

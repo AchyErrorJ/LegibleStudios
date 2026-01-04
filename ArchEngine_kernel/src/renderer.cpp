@@ -39,12 +39,14 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
 Renderer::~Renderer() {
     m_context.waitIdle();
 
+#if 0  // Ray tracing disabled - incomplete implementation
     // Cleanup ray tracing resources
     m_rtPipeline.reset();
     m_accelStructManager.reset();
     m_rtVertexBuffer.destroy(m_context.getDevice());
     m_rtIndexBuffer.destroy(m_context.getDevice());
     m_rtMaterialBuffer.destroy(m_context.getDevice());
+#endif
 
     m_postProcess.reset();
     m_envMap.reset();
@@ -1521,7 +1523,7 @@ void Renderer::drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress) 
     if (!meshData.hasData()) return;
 
     // Check cache first to avoid recalculating hash
-    const void* meshPtr = &meshData;
+    const MeshData* meshPtr = &meshData;
     std::string key;
     auto cacheIt = m_customMeshKeyCache.find(meshPtr);
     if (cacheIt != m_customMeshKeyCache.end()) {
@@ -1577,7 +1579,7 @@ void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, 
     if (!meshData.hasData()) return;
 
     // Check cache first to avoid recalculating hash
-    const void* meshPtr = &meshData;
+    const MeshData* meshPtr = &meshData;
     std::string key;
     auto cacheIt = m_customMeshKeyCache.find(meshPtr);
     if (cacheIt != m_customMeshKeyCache.end()) {
@@ -1761,29 +1763,31 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                 if (element.mesh.hasData()) {
                     drawCustomMesh(element.mesh, color, stressForShader);
                 } else {
-                    // Fall back to generated geometry
+                    // Fall back to generated geometry using beam-based approach
                     float xExtent = element.end.x - element.start.x;
                     float zExtent = element.end.z - element.start.z;
                     float doorHeight = element.end.y - element.start.y;
-
-                    float doorWidth = std::max(std::abs(xExtent), std::abs(zExtent));
                     float doorDepth = element.depth > 0.1f ? element.depth : 100.0f;
 
-                    glm::vec3 center = (element.start + element.end) * 0.5f;
-                    center.y = element.start.y;
+                    // Door start/end are along the wall direction at floor level
+                    // Create door as a beam from start to end, with height as vertical extent
+                    vec3 doorStart = vec3(element.start.x, element.start.y + doorHeight * 0.5f, element.start.z);
+                    vec3 doorEnd = vec3(element.end.x, element.start.y + doorHeight * 0.5f, element.end.z);
 
-                    // Calculate rotation from wall direction (supports diagonal walls)
-                    float rotation = std::atan2(zExtent, xExtent);
+                    // Use diagonal length for width (supports diagonal walls)
+                    float doorWidth = glm::length(vec2(xExtent, zExtent));
+                    std::string key = "doordirect_" + std::to_string(doorWidth) + "_" +
+                                     std::to_string(doorHeight) + "_" + std::to_string(doorDepth) +
+                                     "_" + std::to_string(xExtent) + "_" + std::to_string(zExtent);
 
-                    std::string key = "door_" + std::to_string(doorWidth) + "_" + std::to_string(doorHeight) + "_" + std::to_string(doorDepth);
                     if (m_meshCache.find(key) == m_meshCache.end()) {
-                        auto [verts, indices] = Geometry::createDoor(vec3(0), doorWidth, doorHeight, doorDepth, color);
+                        // Use beam geometry: doorDepth=thickness (perpendicular), doorHeight=height (vertical)
+                        auto [verts, indices] = Geometry::createBeam(
+                            doorStart, doorEnd, doorDepth, doorHeight, color);
                         m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
                     }
 
-                    mat4 transform = glm::translate(mat4(1.0f), center);
-                    transform = glm::rotate(transform, rotation, vec3(0.0f, 1.0f, 0.0f));
-                    drawMesh(*m_meshCache[key], transform, color, stressForShader);
+                    drawMesh(*m_meshCache[key], mat4(1.0f), color, stressForShader);
                 }
                 break;
             }
@@ -1793,29 +1797,31 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                 if (element.mesh.hasData()) {
                     drawCustomMesh(element.mesh, color, stressForShader);
                 } else {
-                    // Fall back to generated geometry
+                    // Fall back to generated geometry using beam-based approach
                     float xExtent = element.end.x - element.start.x;
                     float zExtent = element.end.z - element.start.z;
                     float windowHeight = element.end.y - element.start.y;
-
-                    float windowWidth = std::max(std::abs(xExtent), std::abs(zExtent));
                     float windowDepth = element.depth > 0.1f ? element.depth : 100.0f;
 
-                    glm::vec3 center = (element.start + element.end) * 0.5f;
-                    center.y = element.start.y;
+                    // Window start/end are along the wall direction at sill height
+                    // Create window as a beam from start to end, with height as vertical extent
+                    vec3 windowStart = vec3(element.start.x, element.start.y + windowHeight * 0.5f, element.start.z);
+                    vec3 windowEnd = vec3(element.end.x, element.start.y + windowHeight * 0.5f, element.end.z);
 
-                    // Calculate rotation from wall direction (supports diagonal walls)
-                    float rotation = std::atan2(zExtent, xExtent);
+                    // Use diagonal length for width (supports diagonal walls)
+                    float windowWidth = glm::length(vec2(xExtent, zExtent));
+                    std::string key = "windowdirect_" + std::to_string(windowWidth) + "_" +
+                                     std::to_string(windowHeight) + "_" + std::to_string(windowDepth) +
+                                     "_" + std::to_string(xExtent) + "_" + std::to_string(zExtent);
 
-                    std::string key = "window_" + std::to_string(windowWidth) + "_" + std::to_string(windowHeight) + "_" + std::to_string(windowDepth);
                     if (m_meshCache.find(key) == m_meshCache.end()) {
-                        auto [verts, indices] = Geometry::createWindow(vec3(0), windowWidth, windowHeight, windowDepth, color);
+                        // Use beam geometry: windowDepth=thickness (perpendicular), windowHeight=height (vertical)
+                        auto [verts, indices] = Geometry::createBeam(
+                            windowStart, windowEnd, windowDepth, windowHeight, vec3(0.7f, 0.85f, 0.95f));
                         m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
                     }
 
-                    mat4 transform = glm::translate(mat4(1.0f), center);
-                    transform = glm::rotate(transform, rotation, vec3(0.0f, 1.0f, 0.0f));
-                    drawMesh(*m_meshCache[key], transform, color, stressForShader);
+                    drawMesh(*m_meshCache[key], mat4(1.0f), color, stressForShader);
                 }
                 break;
             }
@@ -2003,6 +2009,7 @@ u32 Renderer::getTonemapMode() const {
     return m_postProcess ? m_postProcess->getCompositeConfig().tonemapMode : 1;
 }
 
+#if 0  // Ray tracing disabled - incomplete implementation (missing header declarations)
 // Ray tracing implementation
 void Renderer::initRayTracing() {
     if (m_rayTracingInitialized) return;
@@ -2270,5 +2277,6 @@ void Renderer::setRTDenoiseStrength(f32 strength) {
         m_rtPipeline->setDenoiseStrength(m_rtDenoiseStrength);
     }
 }
+#endif  // Ray tracing disabled
 
 } // namespace arch
