@@ -37,6 +37,8 @@ namespace {
     float g_cameraPitch = 0.4f;
     float g_cameraDistance = 60.0f;
     vec3 g_cameraTarget = {20.0f, 10.0f, 15.0f};
+    float g_cameraFOV = 45.0f;
+    bool g_cameraOrthographic = false;
 
     // State
     bool g_initialized = false;
@@ -67,9 +69,11 @@ namespace {
         camera.position.z = g_cameraTarget.z + g_cameraDistance * cos(g_cameraPitch) * cos(g_cameraYaw);
         camera.target = g_cameraTarget;
         camera.up = vec3(0, 1, 0);
-        camera.fov = 45.0f;
+        camera.fov = g_cameraFOV;
         camera.nearPlane = 0.1f;
         camera.farPlane = 500.0f;
+        camera.isOrthographic = g_cameraOrthographic;
+        camera.orthoSize = g_cameraDistance * 0.5f;  // Scale ortho based on distance
 
         g_renderer->setCamera(camera);
     }
@@ -366,6 +370,22 @@ ARCH_API void arch_reset_camera(void) {
     g_cameraPitch = 0.4f;
 }
 
+ARCH_API void arch_set_camera_fov(float fov) {
+    g_cameraFOV = glm::clamp(fov, 10.0f, 120.0f);
+}
+
+ARCH_API float arch_get_camera_fov(void) {
+    return g_cameraFOV;
+}
+
+ARCH_API void arch_set_orthographic(int enabled) {
+    g_cameraOrthographic = (enabled != 0);
+}
+
+ARCH_API int arch_get_orthographic(void) {
+    return g_cameraOrthographic ? 1 : 0;
+}
+
 ARCH_API void arch_set_viz_mode(int mode) {
     if (mode >= 0 && mode <= 5) {
         g_vizMode = static_cast<VisualizationMode>(mode);
@@ -385,6 +405,235 @@ ARCH_API int arch_get_element_count(void) {
 
 ARCH_API const char* arch_get_error(void) {
     return g_lastError.c_str();
+}
+
+// =============================================================================
+// Section Clipping API
+// =============================================================================
+
+ARCH_API void arch_set_clipping_enabled(int enabled) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setClippingEnabled(enabled != 0);
+    }
+}
+
+ARCH_API int arch_get_clipping_enabled(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return (g_renderer && g_renderer->getClippingEnabled()) ? 1 : 0;
+}
+
+ARCH_API void arch_set_clip_axis(int axis) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer && axis >= 0 && axis <= 2) {
+        g_renderer->setClipAxis(axis);
+    }
+}
+
+ARCH_API int arch_get_clip_axis(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? g_renderer->getClipAxis() : 1;
+}
+
+ARCH_API void arch_set_clip_height(float height) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setClipHeight(height);
+    }
+}
+
+ARCH_API float arch_get_clip_height(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? g_renderer->getClipHeight() : 0.0f;
+}
+
+ARCH_API void arch_set_clip_flipped(int flipped) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setClipFlipped(flipped != 0);
+    }
+}
+
+ARCH_API int arch_get_clip_flipped(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return (g_renderer && g_renderer->getClipFlipped()) ? 1 : 0;
+}
+
+ARCH_API void arch_set_section_floor_plan(float y_height) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setClipAxis(1);  // Y axis
+        g_renderer->setClipHeight(y_height);
+        g_renderer->setClipFlipped(false);
+        g_renderer->setClippingEnabled(true);
+    }
+}
+
+ARCH_API void arch_set_section_elevation(int axis, float position) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer && (axis == 0 || axis == 2)) {
+        g_renderer->setClipAxis(axis);
+        g_renderer->setClipHeight(position);
+        g_renderer->setClipFlipped(false);
+        g_renderer->setClippingEnabled(true);
+    }
+}
+
+// =============================================================================
+// Material Style API
+// =============================================================================
+
+ARCH_API void arch_set_material_style(int style) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer && style >= 0 && style <= 3) {
+        g_renderer->setMaterialStyle(static_cast<MaterialStyle>(style));
+    }
+}
+
+ARCH_API int arch_get_material_style(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? static_cast<int>(g_renderer->getMaterialStyle()) : 1; // Default: Clean
+}
+
+// =============================================================================
+// Shadows & Lighting API
+// =============================================================================
+
+ARCH_API void arch_set_shadows_enabled(int enabled) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setShadowsEnabled(enabled != 0);
+    }
+}
+
+ARCH_API int arch_get_shadows_enabled(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return (g_renderer && g_renderer->getShadowsEnabled()) ? 1 : 0;
+}
+
+ARCH_API void arch_set_light_direction(float x, float y, float z) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setLightDirection(vec3(x, y, z));
+    }
+}
+
+ARCH_API void arch_get_light_direction(float* out_x, float* out_y, float* out_z) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer && out_x && out_y && out_z) {
+        const vec3& dir = g_renderer->getLightDirection();
+        *out_x = dir.x;
+        *out_y = dir.y;
+        *out_z = dir.z;
+    }
+}
+
+// =============================================================================
+// SSAO API
+// =============================================================================
+
+ARCH_API void arch_set_ssao_enabled(int enabled) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setSSAOEnabled(enabled != 0);
+    }
+}
+
+ARCH_API int arch_get_ssao_enabled(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return (g_renderer && g_renderer->getSSAOEnabled()) ? 1 : 0;
+}
+
+ARCH_API void arch_set_ssao_radius(float radius) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setSSAORadius(radius);
+    }
+}
+
+ARCH_API float arch_get_ssao_radius(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? g_renderer->getSSAORadius() : 0.5f;
+}
+
+ARCH_API void arch_set_ssao_intensity(float intensity) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setSSAOIntensity(intensity);
+    }
+}
+
+ARCH_API float arch_get_ssao_intensity(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? g_renderer->getSSAOIntensity() : 1.0f;
+}
+
+// =============================================================================
+// Bloom API
+// =============================================================================
+
+ARCH_API void arch_set_bloom_enabled(int enabled) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setBloomEnabled(enabled != 0);
+    }
+}
+
+ARCH_API int arch_get_bloom_enabled(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return (g_renderer && g_renderer->getBloomEnabled()) ? 1 : 0;
+}
+
+ARCH_API void arch_set_bloom_threshold(float threshold) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setBloomThreshold(threshold);
+    }
+}
+
+ARCH_API float arch_get_bloom_threshold(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? g_renderer->getBloomThreshold() : 1.0f;
+}
+
+ARCH_API void arch_set_bloom_intensity(float intensity) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setBloomIntensity(intensity);
+    }
+}
+
+ARCH_API float arch_get_bloom_intensity(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? g_renderer->getBloomIntensity() : 0.5f;
+}
+
+// =============================================================================
+// Tonemapping & Exposure API
+// =============================================================================
+
+ARCH_API void arch_set_exposure(float exposure) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setExposure(exposure);
+    }
+}
+
+ARCH_API float arch_get_exposure(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? g_renderer->getExposure() : 1.0f;
+}
+
+ARCH_API void arch_set_tonemap_mode(int mode) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer && mode >= 0 && mode <= 2) {
+        g_renderer->setTonemapMode(static_cast<u32>(mode));
+    }
+}
+
+ARCH_API int arch_get_tonemap_mode(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? static_cast<int>(g_renderer->getTonemapMode()) : 1; // Default: ACES
 }
 
 } // extern "C"

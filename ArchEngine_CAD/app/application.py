@@ -380,6 +380,7 @@ class ArchEngineApplication(QMainWindow):
         """Create dockable panels."""
         from panels.version_history import VersionHistoryPanel
         from panels.properties_panel import PropertiesPanel
+        from panels.viewport_panel import ViewportPanel
 
         # Project Browser dock (left side)
         self.project_dock = QDockWidget("Project Browser", self)
@@ -492,6 +493,21 @@ class ArchEngineApplication(QMainWindow):
 
             # Connect document changes to viewport
             self.document.document_changed.connect(self._on_document_changed_viewport)
+
+            # 3D Controls dock (tabbed with properties)
+            self.viewport_controls_dock = QDockWidget("3D Controls", self)
+            self.viewport_controls_dock.setObjectName("viewport_controls_dock")
+            self.viewport_controls_dock.setAllowedAreas(
+                Qt.DockWidgetArea.LeftDockWidgetArea |
+                Qt.DockWidgetArea.RightDockWidgetArea
+            )
+            self.viewport_panel = ViewportPanel()
+            self.viewport_panel.setMinimumWidth(250)
+            self.viewport_controls_dock.setWidget(self.viewport_panel)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.viewport_controls_dock)
+            # Tab it with properties dock
+            self.tabifyDockWidget(self.properties_dock, self.viewport_controls_dock)
+            self.window_menu.addAction(self.viewport_controls_dock.toggleViewAction())
 
     def _create_central_widget(self):
         """Create the central tabbed widget with plan view and sheet views."""
@@ -909,6 +925,10 @@ class ArchEngineApplication(QMainWindow):
             if self._split_viewport and self._split_viewport.is_initialized:
                 self._split_viewport.load_json(data)
 
+        # Connect viewport panel to the viewport widget
+        if hasattr(self, 'viewport_panel') and hasattr(self, 'viewport_3d'):
+            self.viewport_panel.set_viewport(self.viewport_3d)
+
     def _on_viewport_load_complete(self, element_count: int):
         """Handle viewport loaded building data."""
         self.status_bar.showMessage(f"3D View: {element_count} elements", 3000)
@@ -932,12 +952,18 @@ class ArchEngineApplication(QMainWindow):
             # Disconnect from Vulkan renderer
             if self._vulkan_sync:
                 self._vulkan_sync.disconnect()
-            # Disconnect from UE5 if connected
+            # Shutdown Vulkan viewports
             if HAS_VIEWPORT:
-                if hasattr(self, 'viewport_3d') and self.viewport_3d.is_connected:
-                    self.viewport_3d.disconnect_from_ue5()
-                if self._split_viewport and self._split_viewport.is_connected:
-                    self._split_viewport.disconnect_from_ue5()
+                if hasattr(self, 'viewport_3d'):
+                    try:
+                        self.viewport_3d._shutdown()
+                    except Exception as e:
+                        print(f"Error shutting down viewport: {e}")
+                if self._split_viewport:
+                    try:
+                        self._split_viewport._shutdown()
+                    except Exception as e:
+                        print(f"Error shutting down split viewport: {e}")
             event.accept()
         else:
             event.ignore()
