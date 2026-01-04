@@ -471,6 +471,65 @@ class _MinimalScheduleGenerator(_MinimalElevationGenerator):
         return self._generate_placeholder("Schedules", "Door/Window/Room", scale)
 
 
+
+class PresetAdapter(GeneratorAdapter):
+    """Adapter for preset-based multi-viewport sheets using InteractiveSheet."""
+
+    def __init__(self, preset_name: str):
+        """
+        Initialize preset adapter.
+
+        Args:
+            preset_name: Name of preset (floor_plan, elevations, sections, details, schedules)
+        """
+        self.preset_name = preset_name
+
+    def generate(self, data: Dict[str, Any], sheet: SheetConfig) -> GeneratorResult:
+        try:
+            from sheets.interactive_sheet import InteractiveSheet
+            from sheets.sheet_types import get_preset
+            from sheets.sheet_sizes import get_sheet_size
+
+            # Get sheet size - default to ARCH_D
+            sheet_size_name = data.get('sheet_size', 'ARCH_D')
+            sheet_size = get_sheet_size(sheet_size_name)
+
+            # Get or reconstruct preset
+            if sheet.preset_config:
+                # Reconstruct from saved config
+                preset = get_preset(self.preset_name, sheet_size.width_pt, sheet_size.height_pt)
+                # TODO: Apply saved viewport configs
+            else:
+                preset = get_preset(self.preset_name, sheet_size.width_pt, sheet_size.height_pt)
+
+            # Create InteractiveSheet with preset
+            interactive_sheet = InteractiveSheet(
+                json_data=data,
+                sheet_size=sheet_size_name,
+                scale=sheet.scale,
+                title=sheet.title,
+                project_name=data.get('project_name', 'Project'),
+                sheet_number=sheet.number,
+                preset=preset,
+            )
+
+            # Generate SVG
+            svg_content = interactive_sheet.generate()
+
+            return GeneratorResult(success=True, svg_content=svg_content)
+
+        except ImportError as e:
+            return GeneratorResult(
+                success=False,
+                error_message=f"Failed to import InteractiveSheet: {e}"
+            )
+        except Exception as e:
+            return GeneratorResult(
+                success=False,
+                error_message=f"Preset sheet generation failed: {e}"
+            )
+
+
 # =============================================================================
 # ADAPTER FACTORY
 # =============================================================================
@@ -496,6 +555,12 @@ def get_adapter_for_sheet_type(sheet_type: SheetType) -> Optional[GeneratorAdapt
         SheetType.SECTION_B: SectionAdapter("B"),
         SheetType.DETAILS: DetailAdapter(),
         SheetType.SCHEDULES: ScheduleAdapter(),
+        # Preset-based multi-viewport sheets
+        SheetType.PRESET_FLOOR_PLAN: PresetAdapter("floor_plan"),
+        SheetType.PRESET_ELEVATIONS: PresetAdapter("elevations"),
+        SheetType.PRESET_SECTIONS: PresetAdapter("sections"),
+        SheetType.PRESET_DETAILS: PresetAdapter("details"),
+        SheetType.PRESET_SCHEDULES: PresetAdapter("schedules"),
     }
 
     return adapters.get(sheet_type)
