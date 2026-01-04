@@ -20,91 +20,65 @@ class RoofGeometryGenerator {
 public:
     /**
      * @brief Generate complete roof geometry
-     * @param roof The roof schema element
-     * @return RoofGeometry containing 3D mesh and 2D roof plan
      */
     static RoofGeometry generate(const SchemaRoof& roof);
 
     /**
-     * @brief Generate from provided surface vertices
-     *
-     * Uses the 3D vertices directly from roof.surfaces[].vertices
-     * This preserves the actual ridge heights.
+     * @brief Generate mesh from provided surface vertices
      */
-    static RoofGeometry generateFromSurfaces(const SchemaRoof& roof);
+    static Mesh3D generateFromSurfaces(const SchemaRoof& roof);
 
     /**
-     * @brief Generate default gable roof (if no surfaces provided)
+     * @brief Generate default gable roof from building bounds
      */
-    static RoofGeometry generateGableDefault(
-        float building_width,
-        float building_depth,
-        float wall_height,
-        float pitch,
-        float overhang
+    static Mesh3D generateGableDefault(
+        const Vec3& min, const Vec3& max,
+        float pitch, float overhang,
+        const std::string& material
     );
 
     /**
-     * @brief Generate default hip roof (if no surfaces provided)
+     * @brief Generate default hip roof from building bounds
      */
-    static RoofGeometry generateHipDefault(
-        float building_width,
-        float building_depth,
-        float wall_height,
-        float pitch,
-        float overhang
-    );
-
-    /**
-     * @brief Generate flat roof
-     */
-    static RoofGeometry generateFlatDefault(
-        float building_width,
-        float building_depth,
-        float wall_height,
-        float overhang
-    );
-
-    /**
-     * @brief Generate shed roof (single slope)
-     */
-    static RoofGeometry generateShedDefault(
-        float building_width,
-        float building_depth,
-        float wall_height,
-        float pitch,
-        float overhang
+    static Mesh3D generateHipDefault(
+        const Vec3& min, const Vec3& max,
+        float pitch, float overhang,
+        const std::string& material
     );
 
     /**
      * @brief Convert pitch ratio (rise:12) to angle in radians
-     * @param pitch Rise per 12 units of run (e.g., 6 for 6:12)
-     * @return Angle in radians
      */
-    static float pitchToRadians(float pitch);
+    static float pitchToAngle(float pitch);
 
     /**
      * @brief Calculate ridge height from pitch and span
-     * @param pitch Rise per 12 units
-     * @param span Distance from wall to ridge (typically half building width)
-     * @return Ridge height above wall top in mm
      */
-    static float ridgeHeight(float pitch, float span);
+    static float getRidgeHeight(float pitch, float span);
 
     /**
-     * @brief Generate 2D roof plan lines (ridge, hip, eave, rake)
+     * @brief Calculate slope length from pitch and span
      */
-    static Geometry2D generateRoofPlan(const SchemaRoof& roof);
+    static float getSlopeLength(float pitch, float span);
+
+    /**
+     * @brief Get material color for rendering
+     */
+    static Vec3 getMaterialColor(const std::string& material);
 
 private:
-    /// Generate mesh from polygon vertices (fan triangulation)
-    static Mesh3D generateSurfaceMesh(
-        const std::vector<Vec3>& vertices,
-        const Vec3& color
-    );
+    /**
+     * @brief Cross product helper
+     */
+    static Vec3 cross(const Vec3& a, const Vec3& b);
 
-    /// Calculate surface normal from vertices
-    static Vec3 calculateNormal(const std::vector<Vec3>& vertices);
+    /**
+     * @brief Generate plan polygon from roof surface
+     */
+    static Polygon2D generatePlanPolygon(
+        const RoofSurface& surface,
+        const std::string& material
+    );
 };
 
 } // namespace archgeometry

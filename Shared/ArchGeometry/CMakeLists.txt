@@ -84,9 +84,8 @@ if(ARCHGEOMETRY_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-# Install rules
+# Install rules (simplified - no export for FetchContent dependencies)
 install(TARGETS archgeometry
-    EXPORT archgeometry-targets
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
@@ -94,10 +93,4 @@ install(TARGETS archgeometry
 
 install(DIRECTORY include/archgeometry
     DESTINATION include
-)
-
-install(EXPORT archgeometry-targets
-    FILE archgeometry-config.cmake
-    NAMESPACE archgeometry::
-    DESTINATION lib/cmake/archgeometry
 )

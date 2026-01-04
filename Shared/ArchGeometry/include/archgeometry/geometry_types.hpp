@@ -45,6 +45,12 @@ struct Mesh3D {
 
     bool empty() const { return vertices.empty(); }
 
+    /// Get vertex count
+    size_t vertexCount() const { return vertices.size(); }
+
+    /// Get triangle/face count
+    size_t triangleCount() const { return faces.size(); }
+
     /// Add a quad (two triangles)
     void addQuad(const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3,
                  const Vec3& normal, const Vec3& color = {0.9f, 0.9f, 0.9f}) {
@@ -117,9 +123,11 @@ struct Text2D {
     Point2D position;
     std::string text;
     float height = 100.0f;              ///< Text height in mm
+    float font_size = 100.0f;           ///< Alias for height (font size in mm)
     float rotation = 0.0f;              ///< Rotation in radians
     std::string layer = "annotation";
     std::string anchor = "middle";      ///< "left", "middle", "right"
+    std::string alignment = "center";   ///< "left", "center", "right"
 };
 
 /// Collection of 2D geometry
@@ -176,6 +184,7 @@ struct FloorGeometry {
     Geometry2D plan_view;
 
     std::string floor_id;
+    std::string room_id;            ///< Room this floor belongs to (optional)
     int floor_index = -1;
 };
 
@@ -195,30 +204,40 @@ struct RoofGeometry {
 
 /// Door geometry result
 struct DoorGeometry {
-    Mesh3D mesh_3d;
+    Mesh3D mesh_3d;             ///< Combined 3D mesh
+    Mesh3D frame_mesh;          ///< Door frame mesh
+    Mesh3D panel_mesh;          ///< Door panel mesh
     Geometry2D plan_symbol;     ///< Door symbol for floor plan (swing arc, etc.)
 
     OpeningCutout cutout;       ///< Cutout info for parent wall
     std::string door_id;
+    std::string door_type;      ///< Door type (swing, pocket, etc.)
     int door_index = -1;
 };
 
 /// Window geometry result
 struct WindowGeometry {
-    Mesh3D mesh_3d;
+    Mesh3D mesh_3d;             ///< Combined 3D mesh
+    Mesh3D frame_mesh;          ///< Window frame mesh
+    Mesh3D glass_mesh;          ///< Window glass mesh
     Geometry2D plan_symbol;     ///< Window symbol for floor plan
 
     OpeningCutout cutout;       ///< Cutout info for parent wall
     std::string window_id;
+    std::string window_type;    ///< Window type (casement, double-hung, etc.)
     int window_index = -1;
 };
 
 /// Room boundary result
 struct RoomBoundary {
     Polygon2D boundary;         ///< 2D boundary polygon
+    Polygon2D polygon;          ///< Alias for boundary (for compatibility)
     Point2D center;             ///< Centroid
+    Point2D centroid;           ///< Alias for center
     float area = 0.0f;          ///< Computed area in mm^2
     std::string label;          ///< Room name
+    std::string room_name;      ///< Alias for label
+    std::string room_type;      ///< Room type (living, bedroom, etc.)
     std::string room_id;
 };
 
@@ -228,12 +247,14 @@ struct RoomBoundary {
 
 /// Complete building geometry output
 struct BuildingGeometry {
+    std::string building_id;    ///< Building identifier
+
     std::vector<WallGeometry> walls;
     std::vector<FloorGeometry> floors;
     std::vector<RoofGeometry> roofs;
     std::vector<DoorGeometry> doors;
     std::vector<WindowGeometry> windows;
-    std::vector<RoomBoundary> room_boundaries;
+    std::vector<RoomBoundary> rooms;  ///< Room boundaries
 
     Vec3 bounds_min;
     Vec3 bounds_max;

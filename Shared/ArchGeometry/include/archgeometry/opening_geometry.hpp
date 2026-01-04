@@ -6,7 +6,6 @@
 
 #include "schema_types.hpp"
 #include "geometry_types.hpp"
-#include <tuple>
 
 namespace archgeometry {
 
@@ -23,10 +22,6 @@ public:
 
     /**
      * @brief Generate complete door geometry
-     * @param door The door schema element
-     * @param wall The wall this door is in
-     * @param wall_thickness Wall thickness for frame depth
-     * @return DoorGeometry with 3D mesh and 2D symbol
      */
     static DoorGeometry generateDoor(
         const SchemaDoor& door,
@@ -43,10 +38,31 @@ public:
     );
 
     /**
+     * @brief Generate door frame mesh
+     */
+    static Mesh3D generateDoorFrame(
+        const Vec3& position,
+        const Vec2& wallDir,
+        const Vec2& wallPerp,
+        float width,
+        float height,
+        float wall_thickness
+    );
+
+    /**
+     * @brief Generate door panel mesh
+     */
+    static Mesh3D generateDoorPanel(
+        const Vec3& position,
+        const Vec2& wallDir,
+        const Vec2& wallPerp,
+        float width,
+        float height,
+        const std::string& swing
+    );
+
+    /**
      * @brief Generate 2D door swing arc for plan view
-     * @param door The door
-     * @param wall The wall
-     * @return Geometry2D with door symbol (leaf line + swing arc)
      */
     static Geometry2D generateDoorSymbol(
         const SchemaDoor& door,
@@ -59,10 +75,6 @@ public:
 
     /**
      * @brief Generate complete window geometry
-     * @param window The window schema element
-     * @param wall The wall this window is in
-     * @param wall_thickness Wall thickness for frame depth
-     * @return WindowGeometry with 3D mesh and 2D symbol
      */
     static WindowGeometry generateWindow(
         const SchemaWindow& window,
@@ -79,13 +91,34 @@ public:
     );
 
     /**
+     * @brief Generate window frame mesh
+     */
+    static Mesh3D generateWindowFrame(
+        const Vec3& position,
+        const Vec2& wallDir,
+        const Vec2& wallPerp,
+        float width,
+        float height,
+        float wall_thickness
+    );
+
+    /**
+     * @brief Generate window glass mesh
+     */
+    static Mesh3D generateWindowGlass(
+        const Vec3& position,
+        const Vec2& wallDir,
+        const Vec2& wallPerp,
+        float width,
+        float height
+    );
+
+    /**
      * @brief Generate 2D window symbol for plan view
-     * @return Geometry2D with window lines
      */
     static Geometry2D generateWindowSymbol(
         const SchemaWindow& window,
-        const SchemaWall& wall,
-        float wall_thickness
+        const SchemaWall& wall
     );
 
     //==========================================================================
@@ -94,35 +127,36 @@ public:
 
     /**
      * @brief Calculate opening position on wall
-     *
-     * @param offset Distance along wall from start
-     * @param width Opening width
-     * @param wall The wall
-     * @return Tuple of (center_x, center_z, dir_x, dir_z, angle_degrees)
      */
-    static std::tuple<float, float, float, float, float> getOpeningPosition(
-        float offset,
-        float width,
-        const SchemaWall& wall
-    );
+    static Vec3 getOpeningPosition(float offset, const SchemaWall& wall);
 
     /**
-     * @brief Generate 3D frame mesh for door or window
+     * @brief Generate vertical frame member (jamb)
      */
-    static Mesh3D generateFrameMesh(
-        const Vec3& position,
-        float width, float height,
-        float frame_depth, float frame_width,
-        const Vec2& wall_direction,
+    static void generateFrameMember(
+        Mesh3D& mesh,
+        const Vec3& base,
+        float width,
+        float height,
+        float depth,
+        const Vec2& wallDir,
+        const Vec2& wallPerp,
         const Vec3& color
     );
 
-private:
-    /// Calculate door swing direction based on swing type
-    static float getSwingAngle(const std::string& swing_type);
-
-    /// Determine if door swings inward based on swing type
-    static bool isInwardSwing(const std::string& swing_type);
+    /**
+     * @brief Generate horizontal frame member (sill/head)
+     */
+    static void generateFrameMemberHorizontal(
+        Mesh3D& mesh,
+        const Vec3& base,
+        float width,
+        float height,
+        float depth,
+        const Vec2& wallDir,
+        const Vec2& wallPerp,
+        const Vec3& color
+    );
 };
 
 } // namespace archgeometry

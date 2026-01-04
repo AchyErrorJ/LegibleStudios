@@ -21,7 +21,7 @@ namespace archgeometry {
 FloorGeometry FloorGeometryGenerator::generate(const SchemaFloor& floor) {
     FloorGeometry result;
     result.floor_id = floor.level_name;
-    result.room_id = floor.room;
+    result.room_id = floor.room.value_or("");
 
     // Get floor dimensions - CORRECT interpretation
     float width = getWidth(floor);    // X dimension

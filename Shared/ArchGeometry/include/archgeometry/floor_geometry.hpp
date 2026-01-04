@@ -6,6 +6,7 @@
 
 #include "schema_types.hpp"
 #include "geometry_types.hpp"
+#include <utility>
 
 namespace archgeometry {
 
@@ -52,18 +53,33 @@ public:
     static float getArea(const SchemaFloor& floor);
 
     /**
-     * @brief Generate 3D slab mesh
+     * @brief Get floor bounding box
      */
-    static Mesh3D generateMesh(
-        const Vec3& position,
-        float width, float depth, float thickness,
-        const Vec3& color = {0.7f, 0.7f, 0.7f}
+    static std::pair<Vec3, Vec3> getBounds(const SchemaFloor& floor);
+
+    /**
+     * @brief Get floor center point in plan view
+     */
+    static Point2D getCenter(const SchemaFloor& floor);
+
+    /**
+     * @brief Get material color for rendering
+     */
+    static Vec3 getMaterialColor(const std::string& material);
+
+    /**
+     * @brief Generate 3D floor mesh
+     */
+    static Mesh3D generateFloorMesh(
+        float minX, float maxX, float minZ, float maxZ,
+        float bottomY, float topY,
+        const std::string& material = "concrete"
     );
 
     /**
-     * @brief Generate 2D plan outline
+     * @brief Generate 2D plan polygon
      */
-    static Polygon2D generatePlanOutline(const SchemaFloor& floor);
+    static Polygon2D generatePlanPolygon(const SchemaFloor& floor);
 };
 
 } // namespace archgeometry
