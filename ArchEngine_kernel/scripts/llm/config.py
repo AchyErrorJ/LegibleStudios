@@ -185,8 +185,12 @@ class LLMConfig:
         if not cls._initialized:
             cls.register_defaults()
 
+        # Trigger auto-selection if no active provider
+        active_provider = cls.get_active()
+        active_name = cls._active
+
         status = {
-            "active": cls._active,
+            "active": active_name,
             "providers": {}
         }
 
@@ -195,7 +199,7 @@ class LLMConfig:
             status["providers"][name] = {
                 "name": provider.name,
                 "available": available,
-                "active": name == cls._active
+                "active": name == active_name
             }
 
         return status
