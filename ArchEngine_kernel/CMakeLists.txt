@@ -147,6 +147,7 @@ set(LIB_SOURCES
     src/ipc_server.cpp
     src/post_process.cpp
     src/arch_api.cpp
+    src/texture.cpp
 )
 
 # Shared library (DLL) for embedding in Qt/Python

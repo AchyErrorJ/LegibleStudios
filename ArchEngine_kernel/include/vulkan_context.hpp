@@ -105,6 +105,7 @@ public:
                      VkDeviceMemory& bufferMemory);
 
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
+    void copyBufferToImage(VkBuffer buffer, VkImage image, u32 width, u32 height);
 
     u32 findMemoryType(u32 typeFilter, VkMemoryPropertyFlags properties);
 
