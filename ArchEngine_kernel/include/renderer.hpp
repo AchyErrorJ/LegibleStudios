@@ -257,6 +257,7 @@ private:
     bool m_shadowsEnabled = true;
     vec3 m_lightDirection = glm::normalize(vec3(-0.5f, -1.0f, -0.3f));
     f32 m_shadowBias = 0.02f;  // Adjustable shadow bias
+    bool m_outputLinearHDR = false;  // True when rendering to HDR buffer (skip in-shader tonemapping)
 
     // Environment mapping
     std::unique_ptr<EnvironmentMap> m_envMap;

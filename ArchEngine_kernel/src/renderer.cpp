@@ -813,6 +813,10 @@ void Renderer::endFrame() {
 }
 
 void Renderer::beginRenderPass(vec4 clearColor) {
+    // Direct rendering - apply tonemapping in shader
+    m_outputLinearHDR = false;
+    updateUniformBuffer(m_currentFrame);
+
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = m_renderPass;
@@ -882,6 +886,10 @@ void Renderer::endRenderPass() {
 
 void Renderer::beginHDRRenderPass(vec4 clearColor) {
     if (!m_postProcess || !m_hdrPipeline) return;
+
+    // Enable linear HDR output (composite pass will do tonemapping)
+    m_outputLinearHDR = true;
+    updateUniformBuffer(m_currentFrame);
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1168,7 +1176,7 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
     if (m_shadowMap && m_shadowsEnabled) {
         ubo.lightViewProj = m_shadowMap->getLightViewProj();
         ubo.lightDirection = vec4(m_lightDirection, 0.0f);
-        ubo.shadowBias = 0.008f;  // Increased bias to reduce shadow acne
+        ubo.shadowBias = m_shadowBias;  // Use adjustable shadow bias
         ubo.enableShadows = 1;
     } else {
         ubo.lightViewProj = mat4(1.0f);
@@ -1180,6 +1188,10 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
     // Section clipping data
     ubo.clipPlane = m_clipPlane;
     ubo.enableClipping = m_clippingEnabled ? 1 : 0;
+
+    // HDR output mode (skip tonemapping in shader when rendering to HDR buffer)
+    ubo.outputLinearHDR = m_outputLinearHDR ? 1 : 0;
+    ubo._padding = 0;
 
     std::memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
 }

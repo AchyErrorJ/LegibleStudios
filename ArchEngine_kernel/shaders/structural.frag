@@ -22,6 +22,8 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     float shadowBias;
     uint enableClipping;
     uint enableShadows;
+    uint outputLinearHDR;  // If true, output linear HDR (tonemapping done in composite pass)
+    uint _padding;
 } ubo;
 
 // Shadow map sampler with depth comparison
@@ -272,7 +274,14 @@ void main() {
     // outColor = vec4(lsPos * 0.5 + 0.5, 1.0); return;  // Light space position (RGB=XYZ)
     // outColor = vec4(vec3(lsPos.z), 1.0); return;      // Light space depth (closer=darker)
 
-    // Tone mapping (ACES-ish)
+    // When rendering to HDR buffer, output linear values (tonemapping done in composite pass)
+    if (ubo.outputLinearHDR != 0u) {
+        outColor = vec4(result, 1.0);
+        return;
+    }
+
+    // Direct rendering path: apply tonemapping and gamma correction here
+    // Tone mapping (Reinhard)
     result = result / (result + vec3(1.0));
 
     // Gamma correction

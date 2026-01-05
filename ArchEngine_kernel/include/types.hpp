@@ -194,6 +194,8 @@ struct UniformBufferObject {
     f32 shadowBias;         // Shadow mapping bias
     u32 enableClipping;     // Section clipping enabled flag
     u32 enableShadows;      // Shadow mapping enabled flag
+    u32 outputLinearHDR;    // Output linear HDR (skip tonemapping in shader)
+    u32 _padding;           // Alignment padding
 };
 
 // Visualization modes
