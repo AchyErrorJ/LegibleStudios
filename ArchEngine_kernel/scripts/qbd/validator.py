@@ -284,9 +284,13 @@ class QBDValidator:
         # Check site fit (if site dimensions specified)
         site = self.state.site
         if site.get("width") and site.get("depth"):
-            setbacks = site.get("setbacks", {})
-            buildable_width = site["width"] - (setbacks.get("left", 0) + setbacks.get("right", 0))
-            buildable_depth = site["depth"] - (setbacks.get("front", 0) + setbacks.get("rear", 0))
+            setbacks = site.get("setbacks") or {}
+            left = setbacks.get("left") or 0
+            right = setbacks.get("right") or 0
+            front = setbacks.get("front") or 0
+            rear = setbacks.get("rear") or 0
+            buildable_width = site["width"] - (left + right)
+            buildable_depth = site["depth"] - (front + rear)
             buildable_area = (buildable_width * buildable_depth) / 1_000_000  # mm² to m²
 
             if footprint_max and footprint_max > buildable_area:
