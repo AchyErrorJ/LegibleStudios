@@ -100,6 +100,7 @@ set(ENGINE_SOURCES
     src/environment_map.cpp
     src/ipc_server.cpp
     src/post_process.cpp
+    src/texture.cpp
 )
 
 # Header files
@@ -123,6 +124,7 @@ set(ENGINE_HEADERS
     include/environment_map.hpp
     include/ipc_server.hpp
     include/post_process.hpp
+    include/texture.hpp
 )
 
 # Library sources (excludes main.cpp, includes arch_api.cpp)

@@ -7,6 +7,7 @@ layout(location = 2) in vec3 fragPosition;
 layout(location = 3) in float fragStress;
 layout(location = 4) in vec4 fragLightSpacePos;
 layout(location = 5) in vec4 fragMaterial;  // x=metallic, y=roughness, z=ao, w=emission
+layout(location = 6) in vec2 fragTexCoord;
 
 // Output
 layout(location = 0) out vec4 outColor;
@@ -28,6 +29,13 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
 
 // Shadow map sampler with depth comparison
 layout(set = 0, binding = 1) uniform sampler2DShadow shadowMap;
+
+// Material textures (set 1 = per-material)
+layout(set = 1, binding = 0) uniform sampler2D albedoMap;
+layout(set = 1, binding = 1) uniform sampler2D normalMap;
+layout(set = 1, binding = 2) uniform sampler2D roughnessMap;
+layout(set = 1, binding = 3) uniform sampler2D metallicMap;
+layout(set = 1, binding = 4) uniform sampler2D aoMap;
 
 // Stress color constants (matching types.hpp)
 const vec3 STRESS_SAFE     = vec3(0.133, 0.773, 0.369);  // Green
@@ -88,6 +96,24 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
 // Fresnel-Schlick with roughness for ambient lighting
 vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Perturb normal using tangent space normal map
+vec3 perturbNormal(vec3 N, vec3 V, vec2 texCoord) {
+    // Sample normal map (stored as RGB = XYZ in [0,1] range)
+    vec3 tangentNormal = texture(normalMap, texCoord).rgb * 2.0 - 1.0;
+
+    // Compute TBN matrix using derivatives (no pre-computed tangents needed)
+    vec3 Q1 = dFdx(fragPosition);
+    vec3 Q2 = dFdy(fragPosition);
+    vec2 st1 = dFdx(texCoord);
+    vec2 st2 = dFdy(texCoord);
+
+    vec3 T = normalize(Q1 * st2.t - Q2 * st1.t);
+    vec3 B = normalize(cross(N, T));
+    mat3 TBN = mat3(T, B, N);
+
+    return normalize(TBN * tangentNormal);
 }
 
 // Calculate stress color based on utilization ratio
@@ -188,14 +214,28 @@ void main() {
     vec3 L = normalize(-ubo.lightDirection.xyz);
     vec3 H = normalize(V + L);
 
-    // Extract material properties
-    float metallic = fragMaterial.x;
-    float roughness = max(fragMaterial.y, 0.04);  // Clamp to avoid artifacts
-    float materialAO = fragMaterial.z;
+    // Sample material textures
+    vec3 texAlbedo = texture(albedoMap, fragTexCoord).rgb;
+    vec3 texNormal = texture(normalMap, fragTexCoord).rgb;
+    float texRoughness = texture(roughnessMap, fragTexCoord).r;
+    float texMetallic = texture(metallicMap, fragTexCoord).r;
+    float texAO = texture(aoMap, fragTexCoord).r;
+
+    // Perturb normal using normal map (only if not flat normal)
+    if (length(texNormal - vec3(0.5, 0.5, 1.0)) > 0.01) {
+        N = perturbNormal(N, V, fragTexCoord);
+    }
+
+    // Extract push constant material properties (used as multipliers/overrides)
+    float metallic = fragMaterial.x * texMetallic;
+    float roughness = max(fragMaterial.y * texRoughness, 0.04);  // Clamp to avoid artifacts
+    float materialAO = fragMaterial.z * texAO;
     float emission = fragMaterial.w;
 
-    // Use stress coloring if stress is significant, otherwise use vertex color
-    vec3 albedo = fragColor;
+    // Albedo: multiply texture by vertex color for tinting capability
+    vec3 albedo = texAlbedo * fragColor;
+
+    // Use stress coloring if stress is significant (override textures)
     if (fragStress > 0.01) {
         albedo = getStressColor(fragStress);
     }

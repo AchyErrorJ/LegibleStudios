@@ -29,6 +29,8 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
     createDescriptorPool();
     createUniformBuffers();
     createDescriptorSets();
+    createMaterialDescriptorSetLayout();
+    createDefaultMaterialDescriptorSet();
     createPipeline();
 
     // Create grid mesh
@@ -59,6 +61,12 @@ Renderer::~Renderer() {
     for (size_t i = 0; i < m_context.getSwapchainImageCount(); ++i) {
         vkDestroyBuffer(m_context.getDevice(), m_uniformBuffers[i], nullptr);
         vkFreeMemory(m_context.getDevice(), m_uniformBuffersMemory[i], nullptr);
+    }
+
+    // Cleanup material resources
+    m_materialLibrary.reset();
+    if (m_materialDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_context.getDevice(), m_materialDescriptorSetLayout, nullptr);
     }
 
     vkDestroyDescriptorPool(m_context.getDevice(), m_descriptorPool, nullptr);
@@ -283,17 +291,18 @@ void Renderer::createDescriptorPool() {
     uboPoolSize.descriptorCount = imageCount * 2;  // main + sky
     poolSizes.push_back(uboPoolSize);
 
-    // Sampler pool size (shadow map + environment cubemap)
+    // Sampler pool size (shadow map + environment cubemap + material textures)
+    // Material set needs 5 samplers: albedo, normal, roughness, metallic, ao
     VkDescriptorPoolSize samplerPoolSize{};
     samplerPoolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerPoolSize.descriptorCount = imageCount * 2;  // shadow + envmap
+    samplerPoolSize.descriptorCount = imageCount * 2 + 5;  // shadow + envmap per frame + 5 material textures
     poolSizes.push_back(samplerPoolSize);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<u32>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = imageCount * 2;  // main + sky descriptor sets
+    poolInfo.maxSets = imageCount * 2 + 1;  // main + sky descriptor sets + 1 material set
 
     if (vkCreateDescriptorPool(m_context.getDevice(), &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor pool");
@@ -401,9 +410,99 @@ void Renderer::createDescriptorSets() {
     }
 }
 
+void Renderer::createMaterialDescriptorSetLayout() {
+    // Material descriptor set layout (set 1) - 5 texture samplers
+    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+
+    // Binding 0: Albedo texture
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 1: Normal map
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 2: Roughness map
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 3: Metallic map
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 4: AO map
+    bindings[4].binding = 4;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[4].descriptorCount = 1;
+    bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<u32>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+
+    if (vkCreateDescriptorSetLayout(m_context.getDevice(), &layoutInfo, nullptr, &m_materialDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create material descriptor set layout");
+    }
+}
+
+void Renderer::createDefaultMaterialDescriptorSet() {
+    // Create material library and default textures
+    m_materialLibrary = std::make_unique<MaterialLibrary>(m_context);
+    m_materialLibrary->createBuiltinMaterials();
+
+    // Allocate descriptor set for default material
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_descriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_materialDescriptorSetLayout;
+
+    if (vkAllocateDescriptorSets(m_context.getDevice(), &allocInfo, &m_defaultMaterialDescriptorSet) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate default material descriptor set");
+    }
+
+    // Get default textures
+    Texture* albedo = Texture::getWhite();
+    Texture* normal = Texture::getNormalDefault();
+    Texture* roughness = Texture::getWhite();
+    Texture* metallic = Texture::getBlack();
+    Texture* ao = Texture::getWhite();
+
+    // Write descriptor set
+    std::array<VkDescriptorImageInfo, 5> imageInfos{};
+    imageInfos[0] = {albedo->getSampler(), albedo->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[1] = {normal->getSampler(), normal->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[2] = {roughness->getSampler(), roughness->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[3] = {metallic->getSampler(), metallic->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[4] = {ao->getSampler(), ao->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+    std::array<VkWriteDescriptorSet, 5> writes{};
+    for (size_t i = 0; i < 5; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = m_defaultMaterialDescriptorSet;
+        writes[i].dstBinding = static_cast<u32>(i);
+        writes[i].dstArrayElement = 0;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].descriptorCount = 1;
+        writes[i].pImageInfo = &imageInfos[i];
+    }
+
+    vkUpdateDescriptorSets(m_context.getDevice(), static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
+}
+
 void Renderer::createPipeline() {
     m_pipelineLayout = PipelineLayoutBuilder(m_context)
-        .addDescriptorSetLayout(m_descriptorSetLayout)
+        .addDescriptorSetLayout(m_descriptorSetLayout)           // Set 0: UBO + shadow map
+        .addDescriptorSetLayout(m_materialDescriptorSetLayout)   // Set 1: Material textures
         .addPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants))
         .build();
 
@@ -695,8 +794,15 @@ void Renderer::drawSky() {
     } else if (m_pipeline) {
         m_pipeline->bind(m_currentCommandBuffer);
     }
+
+    // Rebind both descriptor sets
+    std::array<VkDescriptorSet, 2> descriptorSets = {
+        m_descriptorSets[m_currentFrame],
+        m_defaultMaterialDescriptorSet
+    };
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
+                            m_pipelineLayout, 0, static_cast<u32>(descriptorSets.size()),
+                            descriptorSets.data(), 0, nullptr);
 }
 
 void Renderer::cleanupSwapchain() {
@@ -876,8 +982,15 @@ void Renderer::beginRenderPass(vec4 clearColor) {
     } else if (m_pipeline) {
         m_pipeline->bind(m_currentCommandBuffer);
     }
+
+    // Bind both descriptor sets: set 0 (UBO + shadow) and set 1 (material textures)
+    std::array<VkDescriptorSet, 2> descriptorSets = {
+        m_descriptorSets[m_currentFrame],
+        m_defaultMaterialDescriptorSet
+    };
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
+                            m_pipelineLayout, 0, static_cast<u32>(descriptorSets.size()),
+                            descriptorSets.data(), 0, nullptr);
 }
 
 void Renderer::endRenderPass() {
@@ -928,8 +1041,15 @@ void Renderer::beginHDRRenderPass(vec4 clearColor) {
     } else if (m_hdrPipeline) {
         m_hdrPipeline->bind(m_currentCommandBuffer);
     }
+
+    // Bind both descriptor sets: set 0 (UBO + shadow) and set 1 (material textures)
+    std::array<VkDescriptorSet, 2> descriptorSets = {
+        m_descriptorSets[m_currentFrame],
+        m_defaultMaterialDescriptorSet
+    };
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
+                            m_pipelineLayout, 0, static_cast<u32>(descriptorSets.size()),
+                            descriptorSets.data(), 0, nullptr);
 }
 
 void Renderer::endHDRRenderPass() {

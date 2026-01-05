@@ -36,6 +36,7 @@ layout(location = 2) out vec3 fragPosition;
 layout(location = 3) out float fragStress;
 layout(location = 4) out vec4 fragLightSpacePos;
 layout(location = 5) out vec4 fragMaterial;
+layout(location = 6) out vec2 fragTexCoord;
 
 void main() {
     mat4 modelMatrix = push.model;
@@ -66,6 +67,9 @@ void main() {
 
     // Pass material properties to fragment shader
     fragMaterial = push.material;
+
+    // Pass texture coordinates (for material textures)
+    fragTexCoord = inTexCoord;
 
     // Clip distance for section clipping
     // Always write a value to avoid undefined behavior

@@ -8,6 +8,7 @@
 #include "shadow_map.hpp"
 #include "environment_map.hpp"
 #include "post_process.hpp"
+#include "texture.hpp"
 
 namespace arch {
 
@@ -178,6 +179,8 @@ private:
     void createSyncObjects();
     void createDescriptorPool();
     void createDescriptorSets();
+    void createMaterialDescriptorSetLayout();
+    void createDefaultMaterialDescriptorSet();
     void createUniformBuffers();
     void createPipeline();
     void createSkyPipeline();
@@ -212,6 +215,11 @@ private:
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> m_descriptorSets;
+
+    // Material descriptor set (set 1)
+    VkDescriptorSetLayout m_materialDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet m_defaultMaterialDescriptorSet = VK_NULL_HANDLE;
+    std::unique_ptr<MaterialLibrary> m_materialLibrary;
 
     // Uniform buffers
     std::vector<VkBuffer> m_uniformBuffers;
