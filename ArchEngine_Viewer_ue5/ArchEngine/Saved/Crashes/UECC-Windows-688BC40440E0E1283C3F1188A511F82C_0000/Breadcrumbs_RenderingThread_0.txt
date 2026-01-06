@@ -1,0 +1,3 @@
+Breadcrumbs 'RenderingThread'
+Context 1/2
+	00 SceneCapture
