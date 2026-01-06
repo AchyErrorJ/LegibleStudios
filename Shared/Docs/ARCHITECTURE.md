@@ -1,862 +1,678 @@
-# ArchEngine Suite - System Architecture
+# Legible Studio — Architecture Guide
 
-## Overview
+## Company Vision
 
-ArchEngine is an architectural visualization and building design system consisting of three main components that work together to enable real-time building design, validation, and 3D visualization.
+**Legible Computer Assisted Decision Making**
+
+Design decisions you can read. Every line traces back to a decision, every decision traces back to a question. The audit trail isn't reconstructed—it's baked in from the start.
+
+---
+
+## Design Philosophy
+
+### Intent Driven Design
+
+Legible Studio captures design intent, not geometry. The system stores parameters, constraints, and relationships — downstream tools compute the actual shapes.
+
+Traditional CAD is geometry-first: you manipulate vertices, edges, and faces until it looks right. Intent driven design is meaning-first: you express what you want and why, and the system figures out the how.
+
+This means:
+- The schema stays lean (parameters, not meshes)
+- Changes propagate intelligently (adjust one parameter, related geometry updates)
+- The design intent is readable and queryable, not buried in coordinates
+
+### Question Based Design
+
+You design through conversation. Describe what you need, ask questions, get answers, refine.
+
+The system also asks *you* questions when it needs clarity:
+- "You said 10% max grade but the terrain is steep here. Switchbacks or tunnel?"
+- "The setback you requested conflicts with the lot line. Reduce building width or request a variance?"
+
+This is fundamentally different from direct manipulation. The dialogue *is* the design tool. Geometry is a byproduct, not the interface.
+
+### First Try Design
+
+Enforced by the software itself. You can't skip the thinking because the tools to skip don't exist until you've done the work.
+
+If you can't describe it, it's not design — it's preference. The system demands clarity upfront and generates optimal solutions from complete inputs.
+
+---
+
+## Core Principle
+
+Legible Studio uses a single source of truth — a JSON-based schema generated through conversation with an LLM. The user describes what they want, the LLM produces the canonical schema, and downstream tools consume it.
+
+---
+
+## Product Architecture
+
+### Legible Studio
+
+One application with an emerging UI. Three modes that appear as your design matures:
+
+| Phase | Mode | Function |
+|-------|------|----------|
+| 1 | **LegiQBD** | Questions, constraints, intent capture. Solver generates options. Canvas is sparse, focused on decisions. |
+| 2 | **LegiCAD** | Geometry tools emerge because now you have geometry. Walls, openings, annotations. Refining what the solver gave you. Rendering built in. |
+| 3 | **LegiDoc** | Sheet tools, titleblocks, schedules. Permit checklists tied to design. Signoff workflows. Audit trail complete. |
+
+The UI grows around the user. Tools appear when meaningful, not before. No cold start into CAD—you reach it by doing the work first.
+
+### Field Products
+
+| Product | Description |
+|---------|-------------|
+| **LegiSite** | Motorized tracking station + phone app. Hardware purchase, free app. Replaces robotic total station for layout. Works out of the box—no desktop software required. |
+| **LegiView** | Tethered XR safety glasses. Hardware for job site AR. |
+| **LegiLens** | XR software layer. Runs on LegiView, but also third-party glasses, tablets, phones. Hardware-agnostic. |
+
+### Engine
+
+**Archengine** — The underlying kernel. Vulkan renderer, QBD Algebra, shared geometry library. Powers everything, invisible to end users.
+
+---
+
+## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          ArchEngine Suite                                    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌──────────────────┐    JSON     ┌──────────────────┐    WebSocket         │
-│  │  ArchEngine      │◄──────────►│  2D Plan Editor  │◄────────────┐        │
-│  │  Kernel (C++)    │  (file)    │  (Python/Tk)     │             │        │
-│  └────────┬─────────┘            └──────────────────┘             │        │
-│           │                                                        │        │
-│           │ Vulkan                                                 │        │
-│           ▼                                                        ▼        │
-│  ┌──────────────────┐            ┌──────────────────────────────────┐       │
-│  │  Native Viewer   │            │  UE5 Viewer (ArchEngine_Viewer)  │       │
-│  │  (Vulkan/ImGui)  │            │  - AArchBuildingActor            │       │
-│  └──────────────────┘            │  - UArchBuildingLoader           │       │
-│                                  │  - UArchLiveSyncComponent        │       │
-│                                  └──────────────────────────────────┘       │
-│                                                                             │
-│  ┌──────────────────┐                                                       │
-│  │  text_to_json.py │─────► JSON ────────────────────────────────►          │
-│  │  (NLP Generator) │       (generated_building.json)                       │
-│  └──────────────────┘                                                       │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                     Legible Studio                          │
+│  ┌───────────────┬───────────────┬───────────────┐         │
+│  │    LegiQBD    │    LegiCAD    │    LegiDoc    │         │
+│  │   (intent)    │   (geometry)  │   (output)    │         │
+│  └───────┬───────┴───────┬───────┴───────┬───────┘         │
+│          │               │               │                  │
+│  ┌───────▼───────────────▼───────────────▼───────┐         │
+│  │                  Archengine                    │         │
+│  │  ┌─────────────────────────────────────────┐  │         │
+│  │  │            QBD Algebra                  │  │         │
+│  │  │  - JSON Templates    - Validation       │  │         │
+│  │  │  - Fragments         - Derivation       │  │         │
+│  │  │  - State Lifecycle   - Solver           │  │         │
+│  │  └─────────────────────────────────────────┘  │         │
+│  │  ┌─────────────────────────────────────────┐  │         │
+│  │  │       Shared Geometry Library (C++)     │  │         │
+│  │  │  Parameters → Geometry (single truth)   │  │         │
+│  │  └─────────────────────────────────────────┘  │         │
+│  │  ┌─────────────────────────────────────────┐  │         │
+│  │  │           Vulkan Kernel                 │  │         │
+│  │  │  - Rendering        - Structural sim    │  │         │
+│  │  │  - LOD system       - Thermal sim       │  │         │
+│  │  │  - Visual styles    - Acoustic sim      │  │         │
+│  │  └─────────────────────────────────────────┘  │         │
+│  └───────────────────────────────────────────────┘         │
+└─────────────────────────────────────────────────────────────┘
+                            │
+          ┌─────────────────┼─────────────────┐
+          ▼                 ▼                 ▼
+    ┌──────────┐     ┌──────────┐     ┌──────────┐
+    │ LegiSite │     │ LegiView │     │ LegiLens │
+    │  (app)   │     │ (glasses)│     │(XR layer)│
+    └──────────┘     └──────────┘     └──────────┘
+          │
+          ▼
+    ┌──────────┐
+    │ LegiSite │
+    │(station) │
+    └──────────┘
 ```
 
 ---
 
-## 1. ArchEngine Kernel (C++)
+## Data Flow
 
-**Location:** `ArchEngine_kernel/src/`
+```
+LegiQBD (intent/decisions)
+    ↓
+QBD Algebra (validates, derives, solves)
+    ↓
+JSON Schema (source of truth)
+    ↓
+LegiCAD (geometry/coordinates via Shared Library)
+    ↓
+LegiDoc (documentation/permits)
+    ↓
+LegiSite phone app (consumes points from schema)
+    ↓
+LegiSite station (field layout)
+    ↓
+LegiView + LegiLens (XR verification)
+    ↓
+LegiDoc (as-built, signoff, audit trail)
+```
 
-The kernel is a native C++ application that provides the core computational engine for building analysis, validation, and visualization.
-
-### Source Files
-
-| File | Purpose |
-|------|---------|
-| `main.cpp` | Application entry point, QBD testing, ray picking |
-| `vulkan_context.cpp` | Vulkan graphics initialization and management |
-| `renderer.cpp` | 3D rendering pipeline |
-| `window.cpp` | GLFW window management |
-| `mesh.cpp` | Mesh data structures and manipulation |
-| `csg.cpp` | Constructive Solid Geometry operations |
-| `pipeline.cpp` | Vulkan shader pipeline configuration |
-| `memory.cpp` | Vulkan memory allocation |
-| `imgui_layer.cpp` | Dear ImGui integration for UI |
-| `geometry_loader.cpp` | Load geometry from files |
-| `qbd_interface.cpp` | QBD JSON parsing and validation |
-| `obc_engine.cpp` | Ontario Building Code validation engine |
-| `slicer_2d.cpp` | 2D plan/section generation |
-| `physics_bridge.cpp` | Physics simulation bridge |
-
-### Dependencies
-
-- **Vulkan** - Graphics API
-- **GLFW** - Window/input management
-- **GLM** - Math library
-- **Dear ImGui** - Immediate mode GUI
-- **nlohmann/json** - JSON parsing
-
-### Key Features
-
-- Real-time 3D visualization with Vulkan
-- Building code validation (OBC - Ontario Building Code)
-- Structural element picking and selection
-- QBD (Quick Building Data) format support
+**Traceability is complete.** A point on the job site traces back through the station, through the app, through the schema, through QBD Algebra, to the original question that placed that wall.
 
 ---
 
-## 2. Python Scripts (Kernel Tools)
+## Mode Transitions & State Lifecycle
 
-**Location:** `ArchEngine_kernel/scripts/`
+The UI phases map directly to QBD Algebra state:
 
-### text_to_json.py - Natural Language Building Generator
+| State | Mode Available | Why |
+|-------|----------------|-----|
+| EMPTY | LegiQBD only | No data yet |
+| ACCUMULATING | LegiQBD only | Answering questions, not enough to solve |
+| COMPLETE | LegiQBD only | Can solve, but hasn't yet |
+| SOLVED | LegiQBD + LegiCAD | Geometry exists, can now refine |
+| LOCKED | LegiQBD + LegiCAD + LegiDoc | Design confirmed, ready for documentation |
 
-Converts plain text descriptions into structured building JSON.
-
-```python
-# Usage
-result = text_to_json("3 bedroom 2 bath house 1800 sqft")
-```
-
-**Features:**
-- Parses room counts, square footage, style keywords
-- Auto-generates floor plan layout with room placement
-- Creates walls, doors, windows based on room adjacency
-- Generates roof geometry (gable, hip, flat, shed)
-- Outputs wall type assemblies with layer definitions
-
-**Room Types Supported:**
-- Living, Kitchen, Dining, Bedroom, Bathroom
-- Master Bedroom/Bath, Office, Laundry
-- Garage, Mudroom, Pantry, Closet
-- Hallway, Foyer, Great Room, Family Room
-
-### plan_editor_2d.py - Interactive Floor Plan Editor
-
-A Tkinter-based 2D editor with real-time sync to UE5.
-
-**Features:**
-- Visual wall editing (move, extend, trim)
-- Joint/corner detection and snapping
-- Door and window placement
-- Room labeling and bounds editing
-- WebSocket server for live sync to UE5
-
-**Edit Modes:**
-- SELECT - Pick and inspect elements
-- MOVE_WALL - Translate entire walls
-- MOVE_ENDPOINT - Adjust wall endpoints
-- TRIM_EXTEND - Modify wall lengths
-- ADD_WALL/DOOR/WINDOW - Create new elements
-
-### Other Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `ifc_import.py` | Import IFC (Industry Foundation Classes) files |
-| `physics_bridge.py` | Python physics simulation interface |
-| `text_to_json_gui.py` | GUI wrapper for text_to_json |
+Tools don't appear until they're meaningful. You can't skip to CAD because there's nothing to draw until the solver runs.
 
 ---
 
-## 3. Drawing Generator Suite
+## Three-Layer Architecture
 
-**Location:** `ArchEngine_kernel/scripts/`
+### Layer 1: LLM (Intent & Parameters)
 
-A comprehensive suite for generating construction-quality architectural drawings from building JSON data. Produces SVG drawings and professional PDF output with precise line weights.
+The LLM handles:
+- Interpreting user intent from conversation
+- Generating and modifying schema parameters
+- Design decisions and spatial relationships
+- Calling compute services for quantitative answers
+- Responding to changes made in LegiCAD
 
-### Architecture
+The LLM does NOT:
+- Generate detailed geometry (vertices, meshes, curves)
+- Perform heavy calculations (volumes, cut/fill, slope stability)
+- Store state between conversations (the schema is the state)
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     Drawing Generator Pipeline                           │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌──────────────────┐                                                   │
-│  │ generated_       │                                                   │
-│  │ building.json    │                                                   │
-│  └────────┬─────────┘                                                   │
-│           │                                                             │
-│           ▼                                                             │
-│  ┌──────────────────┐     ┌──────────────────┐                         │
-│  │ schema_validator │────►│ Validation       │                         │
-│  │      .py         │     │ Report           │                         │
-│  └────────┬─────────┘     └──────────────────┘                         │
-│           │                                                             │
-│           ▼                                                             │
-│  ┌──────────────────┐     ┌──────────────────┐                         │
-│  │ roof_generator   │────►│ Enriched JSON    │                         │
-│  │ wall_types       │     │ (+ roofs, types) │                         │
-│  └────────┬─────────┘     └──────────────────┘                         │
-│           │                                                             │
-│           ▼                                                             │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                    generate_all.py (Master)                      │   │
-│  ├─────────────────────────────────────────────────────────────────┤   │
-│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐   │   │
-│  │  │ generate_  │ │ generate_  │ │ generate_  │ │ generate_  │   │   │
-│  │  │ plans.py   │ │ elevations │ │ sections   │ │ details    │   │   │
-│  │  └─────┬──────┘ └─────┬──────┘ └─────┬──────┘ └─────┬──────┘   │   │
-│  │        │              │              │              │          │   │
-│  │        ▼              ▼              ▼              ▼          │   │
-│  │   floor_plan.svg elevation_*.svg section_*.svg details.svg    │   │
-│  │   roof_plan.svg                                schedules.svg   │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│           │                                                             │
-│           ▼                                                             │
-│  ┌──────────────────┐     ┌──────────────────┐                         │
-│  │   pdf_export.py  │────►│ drawing_set.pdf  │  (ARCH D, vector)       │
-│  └──────────────────┘     │ + individual PDFs│                         │
-│                           └──────────────────┘                         │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+### Layer 2: Schema (Contract)
 
-### Core Modules
+The JSON schema is the single source of truth. It contains:
+- Parameters and constraints (not computed geometry)
+- Design intent that downstream tools interpret
+- Enough information for any consumer to generate what it needs
+- Complete audit trail — every value traces to a decision
 
-#### generate_all.py - Master Generator
-
-Unified pipeline that runs all generators and produces a complete drawing set.
-
-```bash
-# Basic usage
-python generate_all.py building.json -o output/
-
-# With PDF export
-python generate_all.py building.json -o output/ --pdf --sheet-size arch_d
-
-# Skip specific generators
-python generate_all.py building.json -o output/ --skip details,schedules
-```
-
-**Features:**
-- Validates input JSON against schema
-- Enriches data with roof geometry and wall types
-- Runs all drawing generators in sequence
-- Generates HTML index page for viewing
-- Optional PDF export with title blocks
-- Progress logging with timing
-
-#### Drawing Generators
-
-| Script | Output | Description |
-|--------|--------|-------------|
-| `generate_plans.py` | `floor_plan.svg`, `roof_plan.svg` | Floor plan with walls, doors, windows, room labels; Roof plan with slopes and ridges |
-| `generate_elevations.py` | `elevation_*.svg` (4 files) | South, North, East, West building elevations with roof profiles |
-| `generate_sections.py` | `section_a.svg`, `section_b.svg` | Building cross-sections showing wall layers and interior |
-| `generate_details.py` | `details.svg` | Construction details: wall section, eave, window/door jambs |
-| `generate_schedules.py` | `schedules.svg` | Door schedule, window schedule, room finish schedule |
-
-### Support Modules
-
-#### wall_types.py - Wall Assembly Definitions
-
-Defines 15+ standard wall assemblies with layer-by-layer specifications.
-
-```python
-from wall_types import get_wall_type, get_all_wall_types, WallCategory
-
-# Get a specific wall type
-ext_wall = get_wall_type('ext_2x6_r21')
-print(ext_wall.total_thickness)  # 189mm
-print(ext_wall.total_r_value)    # 21.5
-
-# Get default for category
-default = get_default_wall_type('exterior')
-```
-
-**Wall Categories:**
-| Category | Example Types |
-|----------|---------------|
-| Exterior | 2x4 R-13, 2x6 R-21, Brick Veneer, Stucco |
-| Interior | 2x4 Standard, 2x4 Soundproof |
-| Wet Wall | 2x6 Plumbing Wall |
-| Fire-Rated | 1-Hour, 2-Hour Assemblies |
-| Garage | CMU, Insulated |
-| Basement | ICF, Poured Concrete |
-
-**Layer Properties:**
-- `name` - Layer description
-- `thickness` - mm
-- `material` - wood_frame, fiberglass, gypsum, osb, etc.
-- `function` - structure, insulation, sheathing, vapor_barrier, etc.
-- `r_value` - Thermal resistance (optional)
-- `fire_rating` - Minutes (optional)
-
-#### roof_generator.py - Roof Geometry Generation
-
-Generates roof geometry from building footprint.
-
-```python
-from roof_generator import generate_gable_roof, generate_hip_roof, add_roof_to_building
-
-# Generate specific roof type
-roof = generate_gable_roof(
-    width=12000,      # mm
-    depth=9000,       # mm
-    wall_height=2700, # mm
-    pitch=4.0,        # rise/run ratio
-    overhang=600      # mm
-)
-
-# Auto-add roof based on building style
-building_data = add_roof_to_building(building_json)
-```
-
-**Supported Roof Types:**
-- Gable (2 surfaces, 1 ridge)
-- Hip (4 surfaces, 1 ridge + 4 hips)
-- Shed (1 sloped surface)
-- Flat (1 horizontal surface)
-
-**Output Format:**
+Example — a bench is stored as parameters:
 ```json
 {
-  "type": "gable",
-  "pitch": 4,
-  "overhang": 600,
-  "ridge_height": 4200,
-  "surfaces": [
-    {
-      "name": "West Slope",
-      "vertices": [[x,y,z], ...],
-      "normal": [nx, ny, nz],
-      "slope": 18.43
-    }
-  ],
-  "edges": [
-    {"type": "ridge", "start": [...], "end": [...], "length": 10200},
-    {"type": "eave", ...},
-    {"type": "rake", ...}
-  ]
+  "id": "bench-015",
+  "elevation": -15,
+  "berm_width": 8,
+  "face_angle": 70
 }
 ```
 
-#### schema_validator.py - JSON Schema Validation
+Not as geometry. LegiCAD computes the actual surface from these parameters plus terrain data.
 
-Validates building JSON against expected structure.
+### Layer 3: Compute + Geometry
 
-```python
-from schema_validator import validate_building_data, ValidationResult
+Heavy lifting lives here:
+- **LegiCAD** — generates and displays geometry from parameters, allows refinement, writes changes back to schema
+- **LegiDoc** — generates sheets, schedules, permit checklists from schema
+- **Compute Services** — calculations the LLM can call (volumes, strip ratios, grades, sight lines, costs)
+- **LegiSite** — consumes coordinates for field layout
 
-result = validate_building_data(building_json, strict=False)
-
-if result.is_valid:
-    print(f"Valid with {result.warnings_count} warnings")
-else:
-    for error in result.errors:
-        print(f"Error: {error}")
-```
-
-**Validates:**
-- Required fields (width, depth, walls_batch)
-- Wall geometry (start/end coordinates, height)
-- Door/window placement within walls
-- Room bounds and labels
-- Roof surface vertices
-
-#### pdf_export.py - Professional PDF Output
-
-Generates construction-quality PDF drawings with precise line weights.
-
-```python
-from pdf_export import batch_convert_svg_to_pdf, SheetSize, generate_single_sheet_pdf
-
-# Convert all SVGs to PDF
-batch_convert_svg_to_pdf(
-    svg_dir='output/',
-    output_dir='output/',
-    sheet_size=SheetSize.ARCH_D,
-    project_name='Sample House',
-    create_set=True  # Creates combined drawing_set.pdf
-)
-```
-
-**Sheet Sizes:**
-| Type | Sizes |
-|------|-------|
-| US Architectural | ARCH A (9"×12") through ARCH E (36"×48") |
-| ISO | A4 through A0 |
-| ANSI | Letter through E-size |
-
-**Line Weights (ISO 128):**
-| Weight | Size | Use |
-|--------|------|-----|
-| Hairline | 0.13mm | Dimensions, hatching |
-| Fine | 0.18mm | Text, annotations |
-| Light | 0.25mm | Minor details |
-| Medium | 0.35mm | Object lines |
-| Heavy | 0.50mm | Section cuts |
-| Extra Heavy | 0.70mm | Borders |
-| Border | 1.00mm | Sheet border |
-
-**Features:**
-- Vector output (no rasterization)
-- Professional title blocks
-- Drawing scales (1:1 to 1:200, imperial)
-- Multi-page drawing sets with bookmarks
-- SVG to PDF conversion via svglib
-
-#### generator_base.py - Common Utilities
-
-Base utilities shared by all generators.
-
-```python
-from generator_base import (
-    load_building_json,
-    write_svg,
-    handle_errors,
-    create_base_parser,
-    svg_header,
-    svg_footer
-)
-
-@handle_errors
-def main():
-    data = load_building_json('building.json', validate=True)
-    # ... generate drawing ...
-    write_svg(svg_content, 'output.svg')
-```
-
-**Provides:**
-- Error handling decorators
-- JSON loading with validation
-- SVG file writing
-- Command-line argument parsing
-- SVG header/footer generation
-- Building dimension extraction
-
-#### logging_config.py - Logging Infrastructure
-
-Centralized logging with colored console output.
-
-```python
-from logging_config import setup_logging, get_logger, log_section, log_step
-
-logger = setup_logging(name='generator', level=logging.INFO, colors=True)
-
-with log_section("Generating Plans"):
-    with log_step("Floor plan"):
-        # ... work ...
-        logger.success("Floor plan complete")  # Custom SUCCESS level
-```
-
-**Features:**
-- Color-coded log levels (ERROR=red, WARNING=yellow, SUCCESS=green)
-- Section/step context managers
-- File + console output
-- Progress tracking
-
-### Usage
-
-#### Full Pipeline
-
-```bash
-cd ArchEngine_kernel/scripts
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run full pipeline
-python generate_all.py ../../Shared/TestData/sample_building_complete.json \
-    -o ../../Shared/TestData/output \
-    --pdf \
-    --sheet-size arch_d \
-    -v
-```
-
-#### Individual Generators
-
-```bash
-# Floor and roof plans only
-python generate_plans.py building.json -o output/
-
-# Elevations only
-python generate_elevations.py building.json -o output/
-
-# Sections only
-python generate_sections.py building.json -o output/
-```
-
-### Dependencies
+### Round-Trip Flow
 
 ```
-# requirements.txt
-reportlab>=4.0.0    # PDF generation
-svglib>=1.5.0       # SVG to PDF conversion
-Pillow>=10.0.0      # Image handling
-lxml>=4.9.0         # XML parsing
+User: "Add a bench at -30m"
+         ↓
+LLM updates schema with bench parameters (fragment)
+         ↓
+QBD Algebra validates and re-solves
+         ↓
+LegiCAD regenerates geometry from new schema
+         ↓
+User adjusts bench edge in LegiCAD
+         ↓
+LegiCAD updates schema with new parameters (fragment)
+         ↓
+LLM sees change: "I see you widened the berm to 10m — want me to apply that to all benches?"
 ```
 
-### Output Structure
+### Compute Service Pattern
+
+For quantitative questions, the LLM calls external compute:
 
 ```
-output/
-├── floor_plan.svg
-├── roof_plan.svg
-├── elevation_south.svg
-├── elevation_north.svg
-├── elevation_east.svg
-├── elevation_west.svg
-├── section_a.svg
-├── section_b.svg
-├── details.svg
-├── schedules.svg
-├── enriched_building.json
-├── index.html              # HTML viewer
-├── floor_plan.pdf          # Individual PDFs
-├── elevation_south.pdf
-├── ...
-└── drawing_set.pdf         # Combined multi-page PDF
+User: "What's my strip ratio?"
+         ↓
+LLM calls: compute.strip_ratio(pit_geometry)
+         ↓
+Compute returns: { "strip_ratio": 3.2, "waste_m3": 4800000, "ore_m3": 1500000 }
+         ↓
+LLM responds: "Strip ratio is 3.2:1 — 4.8M m³ waste to 1.5M m³ ore"
 ```
+
+This keeps the LLM fast and accurate for numerical answers.
 
 ---
 
-## 4. UE5 Viewer (ArchEngine_Viewer)
+## Shared Geometry Library
 
-**Location:** `ArchEngine_Viewer/ArchEngine/Source/ArchEngine/`
+### The Problem
 
-An Unreal Engine 5 plugin for high-fidelity architectural visualization.
+Multiple consumers interpret the same schema. If they interpret it differently, you get drift — the CAD shows one thing, the plan generator draws another, the kernel simulates a third. Debugging these mismatches is painful and never-ending.
 
-### Core Classes
+### The Solution
 
-#### AArchBuildingActor (`Actors/ArchBuildingActor.h/.cpp`)
-
-The main actor that represents a complete building in the UE5 scene.
-
-**Properties:**
-```cpp
-FArchBuilding BuildingData;           // Complete building data
-EVisualizationMode VisualizationMode; // Structural, Thermal, etc.
-ESectionViewMode SectionViewMode;     // Solid, SectionCut, Exploded
-float ScaleFactor;                    // Coordinate scale (default 1.0)
-FString JsonFilePath;                 // Path to building JSON
-bool bWatchFileForChanges;            // Hot-reload on file change
-```
-
-**Key Methods:**
-- `LoadFromFile()` - Load building from JSON
-- `RebuildMeshes()` - Regenerate all procedural geometry
-- `SetSectionViewMode()` - Switch between view modes
-- `GenerateWallMesh()` - Create wall geometry with openings
-- `GenerateRoofMesh()` - Create roof surfaces with fascia
-- `GenerateStairMesh()` - Create stairs with treads/risers
-
-**Mesh Generation:**
-- Uses `UProceduralMeshComponent` for runtime geometry
-- Supports walls, doors, windows, roofs, stairs, elevators
-- Handles door/window cutouts in walls
-- Section view shows individual wall layers
-
-#### UArchBuildingLoader (`Loaders/ArchBuildingLoader.h/.cpp`)
-
-Static utility class for JSON parsing.
-
-**Capabilities:**
-- Parses QBD format JSON (from text_to_json.py)
-- Parses standard ArchEngine format
-- Converts mm coordinates to cm (UE units)
-- Creates wall type assemblies from layer definitions
-
-**Key Parse Functions:**
-```cpp
-ParseQBDBuilding()    // Main building parser
-ParseQBDWall()        // Wall geometry + type
-ParseQBDWallType()    // Wall assembly with layers
-ParseQBDRoof()        // Roof surfaces and ridges
-ParseQBDDoor/Window() // Openings
-ParseQBDStair()       // Stair geometry
-```
-
-#### UArchLiveSyncComponent (`Components/ArchLiveSyncComponent.h/.cpp`)
-
-WebSocket client for real-time sync with 2D editor.
-
-**Properties:**
-```cpp
-FString ServerUrl = "ws://localhost:8765";
-bool bAutoConnect = true;
-bool bAutoReconnect = true;
-float ReconnectInterval = 2.0f;
-```
-
-**Events:**
-- `OnBuildingDataReceived` - Fires when JSON received from editor
-
-### Data Types (`Types/ArchTypes.h`)
-
-Comprehensive type definitions for building elements:
+One canonical C++ library that turns parameters into geometry. Every consumer calls this library. No consumer interprets schema parameters on its own.
 
 ```
-FArchBuilding
-├── TArray<FArchElement>         // Structural elements (beams, columns, walls)
-├── TArray<FArchWallType>        // Wall assembly definitions
-│   └── TArray<FArchWallLayer>   // Individual layers with thickness/material
-├── TArray<FArchParametricWall>  // Wall instances
-├── TArray<FArchDoor>            // Door openings
-├── TArray<FArchWindow>          // Window openings
-├── TArray<FArchRoof>            // Roof structures
-│   ├── TArray<FArchRoofSurface> // Roof face polygons
-│   ├── TArray<FArchRoofRidge>   // Ridge lines
-│   ├── TArray<FArchDormer>      // Dormers
-│   └── TArray<FArchSkylight>    // Skylights
-├── TArray<FArchStair>           // Stairs with treads/risers
-├── TArray<FArchElevator>        // Elevator shafts
-├── TArray<FArchLevel>           // Floor levels
-├── TMap<FString, FArchRoom>     // Room definitions
-├── FArchMEP                     // MEP fixtures
-│   ├── Plumbing (toilets, sinks, etc.)
-│   ├── Electrical (outlets, panels)
-│   └── HVAC (registers, thermostats)
-└── TArray<FArchAnnotationSet>   // Drawing annotations
+Schema (parameters)
+       ↓
+Shared Library (C++)
+       ↓
+Geometry (vertices, faces, curves)
+       ↓
+Consumers (LegiCAD, LegiDoc, Kernel, LegiSite)
 ```
+
+### What the Library Does
+
+- Reads schema JSON
+- Computes geometry from parameters (walls, floors, roofs, terrain, benches, roads)
+- Returns geometry in a standard format all consumers can use
+- Handles all parameter interpretation (what does "wall thickness: 6 inches" actually mean spatially?)
+- Provides query functions (give me all walls on level 2, what's the area of this room)
+
+### What the Library Does NOT Do
+
+- Rendering (that's the kernel)
+- User interaction (that's LegiCAD)
+- 2D drawing production (that's LegiDoc)
+- Simulation (that's the kernel's physics layer)
+
+The library is the geometry truth. Consumers handle presentation and interaction.
+
+### Language Bindings
+
+C++ is the source of truth. Other languages bind to it:
+
+```
+┌─────────────────────────────────────┐
+│      Shared Geometry Library        │
+│              (C++)                  │
+└─────────────────────────────────────┘
+        ↑           ↑           ↑
+   Python       C#/.NET       Direct
+   bindings     bindings      linking
+      ↓            ↓            ↓
+   Scripts     LegiCAD UI    Kernel
+   Tools       (if C#)       LegiDoc
+```
+
+Bindings are thin wrappers. All real logic lives in C++.
+
+### Development Rule
+
+**New schema features don't exist until the C++ library handles them.**
+
+If you add a new parameter type to the schema, the implementation order is:
+
+1. C++ library interprets it and produces geometry
+2. Tests verify the geometry is correct
+3. Consumers can now use it (via bindings or direct linking)
+
+This prevents parallel implementations and interpretation drift.
+
+### Migration Path
+
+Current state: some interpretation logic lives in individual consumers.
+
+Target state: all interpretation in C++ library.
+
+Migration:
+1. Build library with core types (walls, floors, openings)
+2. Consumers start calling library for those types
+3. Add types incrementally, moving logic out of consumers
+4. Eventually consumers have zero interpretation logic
+
+### Testing Strategy
+
+- Unit tests: each parameter type produces expected geometry
+- Round-trip tests: schema → geometry → back to parameters (where applicable)
+- Cross-consumer tests: all consumers produce identical results from same schema
+- Golden file tests: known schemas produce known geometry (regression protection)
+
+### Performance Considerations
+
+The library may be called frequently (real-time editing in CAD). Consider:
+
+- Incremental updates (only recompute what changed)
+- Caching computed geometry
+- LOD support (quick rough geometry vs. precise final geometry)
+- Async computation for heavy operations
 
 ---
 
-## 5. Shared Data (JSON Schema)
+## Design Goals
 
-**Location:** `Shared/`
+- **Extensibility over optimization** — Design for mine-scale projects even while building residential tools
+- **Loose coupling** — Each consumer is independent; they share the schema, not each other's implementations
+- **LLM-native** — The schema should be easy for an LLM to generate and reason about
+- **Storage agnostic** — The schema and access patterns should work whether backed by a single JSON file, chunked files, SQLite, or a future API
 
-### Directory Structure
+---
 
-```
-Shared/
-├── Schemas/
-│   ├── building.schema.json      # Full building schema
-│   ├── assembly.schema.json      # Wall assembly schema
-│   ├── qbd_output.schema.json    # QBD format schema
-│   └── samples/
-│       └── exterior_wall_2x6.json
-├── TestData/
-│   ├── output/                      # Generated drawings
-│   │   ├── generated_building.json  # Current building data
-│   │   ├── enriched_building.json   # Data with roofs/wall types added
-│   │   ├── floor_plan.svg           # Floor plan drawing
-│   │   ├── roof_plan.svg            # Roof plan drawing
-│   │   ├── elevation_*.svg          # 4 elevation drawings
-│   │   ├── section_*.svg            # Section drawings
-│   │   ├── details.svg              # Construction details
-│   │   ├── schedules.svg            # Door/window/finish schedules
-│   │   ├── index.html               # HTML viewer
-│   │   ├── *.pdf                    # PDF exports (optional)
-│   │   └── drawing_set.pdf          # Combined PDF set
-│   ├── sample_building_complete.json # Complete test building
-│   └── sample_qbd_output.json
-├── Specs/
-│   └── QBD_Format_v2.1.md        # QBD format specification
-└── Docs/
-    └── ARCHITECTURE.md           # This document
-```
+## Schema Design
 
-### JSON Format (QBD Output)
+### Structure
+
+Keep the schema modular with logically separable top-level sections:
 
 ```json
 {
-  "building_id": "abc123",
-  "width": 14482.0,           // mm
-  "depth": 16895.0,           // mm
-  "sqft": 1800,
-  "unit": "mm",
-
-  "walls_batch": [
-    {
-      "start": [0, 0, 0],
-      "end": [14482, 0, 0],
-      "height": 2700,
-      "wall_type": "ext_2x6_r21",
-      "category": "exterior",
-      "rooms": ["exterior", "living"]
-    }
-  ],
-
-  "wall_types": [
-    {
-      "id": "ext_2x6_r21",
-      "name": "Exterior 2x6 R-21",
-      "layers": [
-        {"name": "Siding", "thickness": 6, "function": "exterior_finish"},
-        {"name": "OSB Sheathing", "thickness": 11, "function": "sheathing"},
-        {"name": "2x6 Stud + R-21", "thickness": 140, "function": "structure"},
-        {"name": "Drywall", "thickness": 13, "function": "interior_finish"}
-      ]
-    }
-  ],
-
-  "doors": [...],
-  "windows": [...],
-  "rooms": {...},
-  "roofs": [...],
-  "levels": [...]
+  "version": "1.0.0",
+  "metadata": { },
+  "site": { },
+  "buildings": [ ],
+  "levels": [ ],
+  "rooms": [ ],
+  "elements": [ ]
 }
 ```
 
----
+Each section should be independently loadable in future storage implementations.
 
-## 6. Coordinate Systems
+### Versioning
 
-### Kernel Coordinates (mm)
-```
-     Y (up/height)
-     │
-     │
-     └────── X (width)
-    /
-   Z (depth)
-```
+- Include `version` at the root level from day one
+- Use semantic versioning (major.minor.patch)
+- Major version changes indicate breaking schema changes
+- Document migration paths between versions
 
-### Unreal Coordinates (cm)
-```
-     Z (up/height)
-     │
-     │
-     └────── X (forward)
-    /
-   Y (right)
-```
+### Extension Pattern
 
-### Conversion
-```cpp
-FVector KernelToUnreal(const FVector& K) const {
-    return FVector(K.Z, K.X, K.Y) * ScaleFactor;
+Use namespaced extensions for tool-specific data:
+
+```json
+{
+  "id": "element-001",
+  "type": "wall",
+  "geometry": { },
+  "extensions": {
+    "revit": { },
+    "ue5": { },
+    "generator": { }
+  }
 }
 ```
 
-- Kernel X (width) → Unreal Y
-- Kernel Y (height) → Unreal Z
-- Kernel Z (depth) → Unreal X
-- mm → cm: multiply by 0.1 (done in loader)
-- ScaleFactor: typically 1.0 (data already in cm after loader conversion)
+Tools ignore namespaces they don't recognize.
 
 ---
 
-## 7. Data Flow
+## Access Layer
 
-### 1. Text Input to 3D Model
+### Interface-First Design
 
-```
-User Input: "3 bedroom 2 bath house 1800 sqft"
-        │
-        ▼
-┌─────────────────────┐
-│  text_to_json.py    │  Parse NLP, generate layout
-└─────────┬───────────┘
-          │
-          ▼
-┌─────────────────────┐
-│ generated_building  │  JSON file with all building data
-│      .json          │
-└─────────┬───────────┘
-          │
-          ▼
-┌─────────────────────┐
-│ UArchBuildingLoader │  Parse JSON, convert units
-└─────────┬───────────┘
-          │
-          ▼
-┌─────────────────────┐
-│ AArchBuildingActor  │  Generate procedural meshes
-└─────────┬───────────┘
-          │
-          ▼
-    3D Visualization
-```
-
-### 2. Live Editing Flow
+Translators and consumers should not directly read/write files. Define an interface:
 
 ```
-┌─────────────────────┐
-│  plan_editor_2d.py  │  User edits floor plan
-└─────────┬───────────┘
-          │ WebSocket (port 8765)
-          ▼
-┌─────────────────────┐
-│ UArchLiveSyncComponent │  Receives JSON updates
-└─────────┬───────────┘
-          │
-          ▼
-┌─────────────────────┐
-│ AArchBuildingActor  │  RebuildMeshes()
-└─────────────────────┘
+getProjectMetadata()
+getElementsByType(type)
+getElementById(id)
+getElementsInBounds(bbox)
+saveElement(element)
+saveProject()
 ```
 
-### 3. File Watch Flow
+Today these functions read a JSON file. Tomorrow they could query SQLite or hit an API. Consumers don't care about storage implementation.
 
-```
-┌─────────────────────┐
-│ External Editor     │  Modify JSON file
-└─────────┬───────────┘
-          │
-          ▼
-┌─────────────────────┐
-│ AArchBuildingActor  │  Tick() detects file change
-│  (bWatchFileForChanges)
-└─────────┬───────────┘
-          │
-          ▼
-     ReloadFromFile()
-```
+### Reference Implementation
+
+Build one canonical reader/writer library that all translators use or wrap. When storage changes, update one place.
+
+Recommended: TypeScript or Python for cross-platform compatibility.
 
 ---
 
-## 8. Section View System
+## Consumer Consistency
 
-The section view allows visualization of wall construction layers.
+Since the LLM generates the schema directly, there's no translator drift problem at the input layer. The focus shifts to ensuring consumers interpret the schema consistently.
 
-### View Modes
+### Validation Layer
 
-1. **Solid** - Normal 3D view, single-color walls
-2. **SectionCut** - Show layers at a cutting plane
-3. **Exploded** - Separate layers with gaps between them
+All consumers must validate against the schema:
 
-### Layer Functions
+- Schema validation (structure correctness)
+- Semantic validation (business rules)
+- Report errors clearly so the LLM can correct the output
 
-| Function | Description | Default Color |
-|----------|-------------|---------------|
-| ExteriorFinish | Siding, stucco, brick | Light gray |
-| Sheathing | OSB, plywood | Tan/brown |
-| Insulation | Fiberglass, foam | Yellow/pink |
-| Structure | Studs, framing | Wood color |
-| AirGap | Ventilation space | Transparent |
-| Membrane | Vapor barrier, house wrap | White |
-| InteriorFinish | Drywall, plaster | Off-white |
+### Consumer Testing Strategy
+
+- Unit tests for each consumer's schema parsing
+- Golden file tests for known good outputs
+- Round-trip testing: LegiCAD saves should produce identical schema
 
 ---
 
-## 9. Roof System
+## Future Storage Paths
 
-### Roof Types
-- **Gable** - Two sloped surfaces meeting at ridge
-- **Hip** - Four sloped surfaces, no vertical gable ends
-- **Flat** - Single horizontal surface
-- **Shed** - Single sloped surface
-- **Mansard** - Four-sided with double slopes
-- **Gambrel** - Barn-style with two slopes per side
+When single-file JSON is outgrown:
 
-### Roof Components
-- **Surfaces** - Polygon faces defined by vertices
-- **Ridges** - Peak lines with height data
-- **Fascia** - Trim board at eave edges
-- **Soffit** - Underside of overhang
-- **Dormers** - Roof protrusions with windows
-- **Skylights** - Roof window openings
+### Chunked Files
+- Manifest file points to sub-files
+- Spatial or logical chunking (by building, by level, by zone)
+- Maintains git-friendliness
 
-### Geometry Generation
-1. Parse surface vertices from JSON
-2. Apply RoofLift to align soffit with wall tops
-3. Generate top surface (fan triangulation)
-4. Generate bottom surface (vertical offset for thickness)
-5. Generate eave edge faces (horizontal edges only)
-6. Add fascia boards at eave edges
+### SQLite + JSON
+- Tables for indexing and queries
+- JSON blobs for complex nested data
+- Single file, no server, queryable
+
+### API Layer
+- Local REST/GraphQL service wrapping storage
+- Required for real-time collaboration
+- Multi-user concurrent access
+
+The access layer abstraction makes this migration transparent to consumers.
 
 ---
 
-## 10. Build & Run
+## Implementation Checklist
 
-### Kernel (CMake)
-```bash
-cd ArchEngine_kernel
-mkdir build && cd build
-cmake ..
-cmake --build .
-./ArchEngine
+When building new consumers or updating existing ones:
+
+- [ ] Does it use the access layer interface (not direct file I/O)?
+- [ ] Does it handle schema versioning?
+- [ ] Does tool-specific data go in the `extensions` namespace?
+- [ ] Does it validate the schema before processing?
+- [ ] Does it gracefully ignore unknown schema sections?
+- [ ] Does it report errors in a way the LLM can understand and correct?
+
+---
+
+## Current State
+
+- Storage: Single JSON file
+- Reference implementation: TBD
+- Schema version: 1.0.0
+- Input: LLM conversation via LegiQBD
+- Active consumers: LegiCAD, LegiDoc, Vulkan Kernel
+- Field products: In development
+
+---
+
+## Version Roadmap
+
+### Version 1 — Core Product (Legible Studio)
+
+Focus: Get the intent driven design loop working end-to-end.
+
+**Includes:**
+- LegiQBD → Schema → LegiCAD (full loop)
+- QBD Algebra (validation, derivation, solver)
+- Vulkan kernel as primary renderer
+- Integrated sims (structural, thermal, sound)
+- LegiCAD for viewing/refining schema
+- LegiDoc for 2D output and documentation
+- Shared C++ geometry library
+
+**Does NOT include:**
+- VR support
+- 4K / photorealistic rendering
+- LegiSite hardware
+- LegiView/LegiLens
+
+**Why:** Ship a tight, focused product. No external dependencies blocking release. Visual fidelity matters less than responsiveness for design exploration.
+
+### Version 2 — Pro Features & Field Products
+
+Focus: Polish, immersive visualization, and field deployment.
+
+**Adds:**
+- 4K quality rendering in Vulkan kernel
+- VR support (native Vulkan)
+- Enhanced materials and lighting
+- Client presentation mode
+- LegiSite phone app (consumes schema coordinates)
+- LegiSite hardware (ships when app is proven)
+
+### Version 3 — Extended Reality
+
+**Adds:**
+- LegiView hardware
+- LegiLens XR software layer
+- As-built verification workflows
+- Full field-to-office audit trail
+
+---
+
+## Level of Detail System
+
+### Philosophy
+
+Everything exists in the schema. LOD isn't about hiding information — it's about presenting what's meaningful at your current level of focus.
+
+This is not CAD (consciously setting scale, making drawings). This is not BIM (same detail level everywhere, always too much or too little). This is the design breathing as you explore it.
+
+---
+
+## LegiCAD: Review, Refine & Constrain
+
+### Philosophy
+
+LegiCAD emerges when you have geometry to work with. It's not a blank canvas — it's a refinement tool for what QBD Algebra solved.
+
+The conversation remains the primary design tool. LegiCAD is for:
+- Reviewing what the solver produced
+- Refining details the solver couldn't know
+- Constraining elements you want to preserve
+- Querying the design
+
+### Core Actions
+
+**Navigate**
+- Move through the model
+- Change views (plan, elevation, section, 3D)
+- Zoom triggers LOD transitions
+
+**Select**
+- Click to identify elements
+- Selection provides context for conversation ("make *this* room bigger")
+- Multi-select for group operations
+
+**Refine**
+- Adjust geometry the solver produced
+- Move walls, resize openings, adjust positions
+- Every edit becomes a fragment in QBD Algebra
+- Constraints are respected — pinned elements stay fixed
+
+**Pin / Lock**
+- Mark elements or relationships as solved
+- Pinned elements are constraints the solver must respect on regeneration
+- "I like this, don't change it"
+
+**Annotate**
+- Mark up the model with feedback
+- Notes provide context for the LLM ("this doesn't work because...")
+- Could be voice, text, or sketch
+
+**Query**
+- "How far is this from that?"
+- "What's the area of this room?"
+- LLM or compute layer answers
+
+### UI Principles
+
+- Tools appear as they become relevant
+- No tool palettes on first launch — you're in LegiQBD
+- Geometry tools emerge when SOLVED state is reached
+- Chat always visible or accessible
+- Voice input available
+
+### Constraint Schema
+
+Pins and locks write back to the schema:
+
+```json
+{
+  "id": "room-living",
+  "type": "room",
+  "constraints": {
+    "pinned": true,
+    "locked_properties": ["position", "dimensions"],
+    "notes": "Client approved this layout"
+  }
+}
 ```
 
-### UE5 Viewer
-1. Open `ArchEngine_Viewer/ArchEngine/ArchEngine.uproject`
-2. Build for Development Editor
-3. Place `AArchBuildingActor` in level
-4. Set `JsonFilePath` to building JSON
-5. Play in editor
-
-### Python Tools
-```bash
-cd ArchEngine_kernel/scripts
-
-# Generate building from text
-python text_to_json.py "3 bed 2 bath 1800 sqft"
-
-# Launch 2D editor with live sync
-python plan_editor_2d.py
-```
+The solver reads these constraints and respects them during regeneration.
 
 ---
 
-## 11. Future Considerations
+### Continuous, Not Discrete
 
-- **IFC Export** - Export to Industry Foundation Classes format
-- **Structural Analysis** - Integrate with FEA solvers
-- **Energy Modeling** - Thermal performance simulation
-- **Cost Estimation** - Material takeoffs and pricing
-- **VR Support** - Immersive walkthrough mode
-- **Multi-story** - Enhanced vertical circulation
-- **Terrain Integration** - Site grading and foundation
+LOD transitions are smooth. Elements fade in and resolve as you zoom, like focus pulling on a camera. No jarring switches, no mode changes.
+
+The experience should feel magical — you move through the design and it reveals itself.
+
+### Resolution Order
+
+What appears first at each LOD communicates hierarchy:
+
+1. **Structure** — the bones snap in first
+2. **Enclosure** — walls, floors, roofs resolve
+3. **Systems** — MEP, fixtures fade in
+4. **Annotations** — dimensions, notes, symbols last
+
+The order tells a story: function before finish, relationships before details.
+
+### LOD Levels
+
+Tied to scale ranges, but transitions are smooth between them:
+
+| Scale Range | LOD | What's Visible |
+|-------------|-----|----------------|
+| 1:500+ | 1 | Massing, room names, major dimensions |
+| 1:200 - 1:100 | 2 | Wall thickness, doors/windows, key dimensions |
+| 1:100 - 1:50 | 3 | Fixtures, openings detailed, full annotations |
+| 1:50 - 1:20 | 4 | Construction detail, materials, specs |
+| 1:20 and closer | 5 | Assembly details, fasteners, tolerances |
+
+### Implementation
+
+**LegiDoc (Plan Generation):**
+- Determines what elements to include based on current scale
+- Controls annotation density and symbol complexity
+- Manages which dimensions appear
+
+**Kernel (Rendering):**
+- Handles fade/resolve transitions
+- Controls timing and easing of element appearance
+- Easter egg: Star Wars hologram flicker on resolve (optional/subtle)
+
+**Schema:**
+- Contains all information at all times
+- LOD is purely a presentation concern
+- Elements may have LOD hints (e.g., "don't show until LOD 3")
+
+### Mixed LOD in Single View
+
+A view can have different LOD in different regions:
+
+- Overall plan at LOD 2
+- Detail bubble drops an area to LOD 4
+- Everything outside the bubble stays at LOD 2 but dims slightly
+
+Focus follows attention.
+
+### The Goal
+
+The user never thinks about LOD. They explore, and the design responds. Zoom out to understand relationships. Zoom in to understand construction. The representation serves the question you're asking right now.

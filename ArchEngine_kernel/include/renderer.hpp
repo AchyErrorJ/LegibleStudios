@@ -295,6 +295,9 @@ private:
 
     // Stats
     RenderStats m_stats;
+
+    // Custom mesh key cache - maps MeshData pointers to their cache keys
+    std::unordered_map<const void*, std::string> m_customMeshKeyCache;
 };
 
 } // namespace arch
