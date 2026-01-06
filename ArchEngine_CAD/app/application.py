@@ -15,10 +15,22 @@ from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from app.config import Config
 from core.document import ArchDocument
 from core.events import event_bus
+from core.config import is_api_enabled, get_config
+
+# API backend support
+try:
+    from client import APIDocumentAdapter
+    HAS_API_BACKEND = True
+except ImportError:
+    HAS_API_BACKEND = False
+
+# API server process (for auto-start)
+_api_server_process = None
 
 # Sheet system imports
 from sheets.sheet_registry import SheetRegistry
 from panels.sheet_manager import SheetManagerPanel
+from panels.properties_panel import PropertiesPanel
 from panels.chat_panel import ChatPanel
 from generators.generator_service import GeneratorService
 
@@ -58,7 +70,24 @@ class ArchEngineApplication(QMainWindow):
     def __init__(self, config: Config, parent=None):
         super().__init__(parent)
         self.config = config
-        self.document = ArchDocument(self)
+
+        # Create document - use API backend if enabled
+        if HAS_API_BACKEND and is_api_enabled():
+            # Auto-start API server if not running
+            self._ensure_api_server()
+
+            self.document = APIDocumentAdapter(
+                parent=self,
+                use_api=True,
+                workspace_id="default"
+            )
+            self._using_api = True
+            print("[App] Using API backend for document storage")
+        else:
+            self.document = ArchDocument(self)
+            self._using_api = False
+            if is_api_enabled() and not HAS_API_BACKEND:
+                print("[App] API backend requested but client module not available")
 
         # Initialize LiveSync server for UE5 connection
         self._livesync_server = None
@@ -379,6 +408,19 @@ class ArchEngineApplication(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready")
 
+        # API status indicator
+        if self._using_api:
+            self._api_status_label = QLabel()
+            self._api_status_label.setStyleSheet("padding: 0 8px;")
+            self.status_bar.addPermanentWidget(self._api_status_label)
+            self._update_api_status()
+
+            # Connect to connection changes
+            if hasattr(self.document, 'connection_changed'):
+                self.document.connection_changed.connect(self._update_api_status)
+            if hasattr(self.document, 'sync_completed'):
+                self.document.sync_completed.connect(self._on_sync_completed)
+
         # Connect status message event
         event_bus.status_message.connect(self._show_status_message)
 
@@ -387,6 +429,51 @@ class ArchEngineApplication(QMainWindow):
         from panels.viewport_panel import ViewportPanel
         from panels.smart_panel_container import SmartPanelContainer
         from panels.panel_registry import NavigationPanel, DesignChatPanel
+
+        # Project Browser dock (left side)
+        self.project_dock = QDockWidget("Project Browser", self)
+        self.project_dock.setObjectName("project_dock")
+        self.project_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea |
+            Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        # Placeholder widget for now
+        project_widget = QWidget()
+        project_widget.setMinimumWidth(200)
+        self.project_dock.setWidget(project_widget)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.project_dock)
+        self.window_menu.addAction(self.project_dock.toggleViewAction())
+
+        # Properties dock (right side)
+        self.properties_dock = QDockWidget("Properties", self)
+        self.properties_dock.setObjectName("properties_dock")
+        self.properties_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea |
+            Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.properties_panel = PropertiesPanel(self.document)
+        self.properties_panel.setMinimumWidth(250)
+        self.properties_dock.setWidget(self.properties_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.properties_dock)
+        self.window_menu.addAction(self.properties_dock.toggleViewAction())
+
+        # Sheet Manager dock (left side, tabbed with project browser)
+        self.sheets_dock = QDockWidget("Sheets", self)
+        self.sheets_dock.setObjectName("sheets_dock")
+        self.sheets_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea |
+            Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.sheet_manager = SheetManagerPanel(self._sheet_registry, self)
+        self.sheet_manager.setMinimumWidth(200)
+        self.sheet_manager.regenerate_requested.connect(self._on_regenerate_sheet)
+        self.sheet_manager.sheet_double_clicked.connect(self._on_open_sheet)
+        self.sheet_manager.preset_sheet_created.connect(self._on_preset_sheet_created)
+        self.sheets_dock.setWidget(self.sheet_manager)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.sheets_dock)
+        self.tabifyDockWidget(self.project_dock, self.sheets_dock)
+        self.sheets_dock.raise_()  # Show sheets dock by default
+        self.window_menu.addAction(self.sheets_dock.toggleViewAction())
 
         # Connect generator service signals (for sheet generation feedback)
         self._generator_service.generation_started.connect(
@@ -1040,6 +1127,122 @@ class ArchEngineApplication(QMainWindow):
                 return True  # Event handled, don't propagate
 
         return super().eventFilter(obj, event)
+    def _update_api_status(self, connected: bool = None):
+        """Update API connection status indicator."""
+        if not hasattr(self, '_api_status_label'):
+            return
+
+        if connected is None and hasattr(self.document, 'is_connected'):
+            connected = self.document.is_connected
+
+        if connected:
+            self._api_status_label.setText("API: Connected")
+            self._api_status_label.setStyleSheet(
+                "padding: 0 8px; color: #2e7d32; font-weight: bold;"
+            )
+        else:
+            pending = 0
+            if hasattr(self.document, 'get_pending_changes_count'):
+                pending = self.document.get_pending_changes_count()
+
+            if pending > 0:
+                self._api_status_label.setText(f"API: Offline ({pending} pending)")
+                self._api_status_label.setStyleSheet(
+                    "padding: 0 8px; color: #f57c00; font-weight: bold;"
+                )
+            else:
+                self._api_status_label.setText("API: Offline")
+                self._api_status_label.setStyleSheet(
+                    "padding: 0 8px; color: #757575;"
+                )
+
+    def _on_sync_completed(self, result: dict):
+        """Handle sync completion."""
+        synced = result.get('synced', 0)
+        failed = result.get('failed', 0)
+
+        if failed > 0:
+            self.status_bar.showMessage(f"Sync: {synced} saved, {failed} failed", 5000)
+        elif synced > 0:
+            self.status_bar.showMessage(f"Synced {synced} changes", 3000)
+
+        self._update_api_status()
+
+    def _ensure_api_server(self):
+        """Start API server if not already running."""
+        import subprocess
+        import socket
+        import time
+
+        global _api_server_process
+
+        # Check if server is already running
+        api_config = get_config().api
+        host = "127.0.0.1"
+        port = 8000
+
+        # Parse port from URL if present
+        if api_config.base_url:
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(api_config.base_url)
+                if parsed.port:
+                    port = parsed.port
+            except Exception:
+                pass
+
+        # Try to connect
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex((host, port))
+            sock.close()
+
+            if result == 0:
+                print(f"[App] API server already running on port {port}")
+                return
+        except Exception:
+            pass
+
+        # Start the server
+        print(f"[App] Starting API server on port {port}...")
+        try:
+            # Get the CAD directory
+            import sys
+            cad_dir = Path(__file__).parent.parent
+
+            # Start uvicorn as subprocess
+            _api_server_process = subprocess.Popen(
+                [
+                    sys.executable, "-m", "uvicorn",
+                    "api.server:app",
+                    "--host", host,
+                    "--port", str(port),
+                ],
+                cwd=str(cad_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+            )
+
+            # Wait briefly for server to start
+            for _ in range(10):
+                time.sleep(0.3)
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(1)
+                    if sock.connect_ex((host, port)) == 0:
+                        sock.close()
+                        print(f"[App] API server started successfully")
+                        return
+                    sock.close()
+                except Exception:
+                    pass
+
+            print("[App] API server may still be starting...")
+
+        except Exception as e:
+            print(f"[App] Failed to start API server: {e}")
 
     def closeEvent(self, event):
         """Handle window close."""
@@ -1064,6 +1267,15 @@ class ArchEngineApplication(QMainWindow):
                         self._split_viewport._shutdown()
                     except Exception as e:
                         print(f"Error shutting down split viewport: {e}")
+            # Clean up API document adapter
+            if self._using_api and hasattr(self.document, 'close'):
+                self.document.close()
+            # Stop API server if we started it
+            global _api_server_process
+            if _api_server_process:
+                print("[App] Stopping API server...")
+                _api_server_process.terminate()
+                _api_server_process = None
             event.accept()
         else:
             event.ignore()
@@ -1155,6 +1367,52 @@ class ArchEngineApplication(QMainWindow):
 
         # Switch to the new tab
         self.central_tabs.setCurrentIndex(tab_index)
+
+    def _on_preset_sheet_created(self, preset_data: dict):
+        """Handle preset sheet creation from the sheet manager dialog."""
+        from sheets.models import SheetType, SheetConfig
+        import uuid
+
+        preset = preset_data.get('preset')
+        info = preset_data.get('info', {})
+
+        if not preset:
+            return
+
+        # Map preset name to sheet type
+        preset_type_map = {
+            'Floor Plan Sheet': SheetType.PRESET_FLOOR_PLAN,
+            'Elevations Sheet': SheetType.PRESET_ELEVATIONS,
+            'Sections Sheet': SheetType.PRESET_SECTIONS,
+            'Details Sheet': SheetType.PRESET_DETAILS,
+            'Schedules Sheet': SheetType.PRESET_SCHEDULES,
+        }
+
+        sheet_type = preset_type_map.get(preset.name, SheetType.PRESET_FLOOR_PLAN)
+
+        # Create unique ID
+        sheet_id = f"{sheet_type.value}_{uuid.uuid4().hex[:8]}"
+
+        # Create sheet config
+        sheet = SheetConfig(
+            id=sheet_id,
+            sheet_type=sheet_type,
+            title=info.get('title', preset.name),
+            number=info.get('number', 'A-001'),
+            scale=info.get('scale', '1:100'),
+            preset_name=preset.name.lower().replace(' sheet', '').replace(' ', '_'),
+        )
+
+        # Add to registry
+        self._sheet_registry.add_sheet_config(sheet)
+
+        # Generate the sheet
+        self._generator_service.generate_sheet(sheet_id)
+
+        # Open in tab
+        self._on_open_sheet(sheet_id)
+
+        self.status_bar.showMessage(f"Created preset sheet: {sheet.title}", 3000)
 
     def _on_tab_close_requested(self, index: int):
         """Handle tab close request."""

@@ -155,6 +155,23 @@ class SheetRegistry(QObject):
         self.sheet_added.emit(sheet_id)
         return sheet
 
+    def add_sheet_config(self, sheet: SheetConfig) -> SheetConfig:
+        """
+        Add a pre-configured sheet.
+        Used for preset-based sheets with custom configurations.
+        """
+        # Ensure unique ID
+        sheet_id = sheet.id
+        counter = 1
+        while sheet_id in self._drawing_set.sheets:
+            counter += 1
+            sheet_id = f"{sheet.sheet_type.value}_{counter}"
+
+        sheet.id = sheet_id
+        self._drawing_set.sheets[sheet_id] = sheet
+        self.sheet_added.emit(sheet_id)
+        return sheet
+
     def remove_sheet(self, sheet_id: str) -> bool:
         """
         Remove a sheet by ID.

@@ -19,6 +19,12 @@ class SheetType(Enum):
     SECTION_B = "section_b"
     DETAILS = "details"
     SCHEDULES = "schedules"
+    # Multi-viewport preset sheets (use InteractiveSheet for generation)
+    PRESET_FLOOR_PLAN = "preset_floor_plan"
+    PRESET_ELEVATIONS = "preset_elevations"
+    PRESET_SECTIONS = "preset_sections"
+    PRESET_DETAILS = "preset_details"
+    PRESET_SCHEDULES = "preset_schedules"
 
 
 # Default sheet configurations
@@ -33,6 +39,12 @@ SHEET_DEFAULTS = {
     SheetType.SECTION_B: {"title": "Building Section B", "category": "Sections", "number_suffix": "02"},
     SheetType.DETAILS: {"title": "Construction Details", "category": "Details", "number_suffix": "01"},
     SheetType.SCHEDULES: {"title": "Schedules", "category": "Schedules", "number_suffix": "01"},
+    # Preset sheets
+    SheetType.PRESET_FLOOR_PLAN: {"title": "Floor Plan Sheet", "category": "Plans", "number_suffix": "10"},
+    SheetType.PRESET_ELEVATIONS: {"title": "Elevations Sheet", "category": "Elevations", "number_suffix": "10"},
+    SheetType.PRESET_SECTIONS: {"title": "Sections Sheet", "category": "Sections", "number_suffix": "10"},
+    SheetType.PRESET_DETAILS: {"title": "Details Sheet", "category": "Details", "number_suffix": "10"},
+    SheetType.PRESET_SCHEDULES: {"title": "Schedules Sheet", "category": "Schedules", "number_suffix": "10"},
 }
 
 # Category prefixes for numbering
@@ -92,6 +104,9 @@ class SheetConfig:
     references_out: List[DrawingReference] = field(default_factory=list)  # Markers on this sheet
     references_in: List[DrawingReference] = field(default_factory=list)   # Sheets referencing this
     dimension_overrides: Dict[str, str] = field(default_factory=dict)     # Editable dimension overrides
+    # Preset configuration (for PRESET_* sheet types)
+    preset_name: Optional[str] = None    # Name of preset used
+    preset_config: Optional[Dict[str, Any]] = None  # Serialized preset config
 
     @property
     def category(self) -> str:
@@ -127,6 +142,8 @@ class SheetConfig:
             'references_out': [ref.to_dict() for ref in self.references_out],
             'references_in': [ref.to_dict() for ref in self.references_in],
             'dimension_overrides': self.dimension_overrides,
+            'preset_name': self.preset_name,
+            'preset_config': self.preset_config,
             # Note: svg_content not saved - regenerated on load
         }
 
@@ -144,6 +161,8 @@ class SheetConfig:
             references_out=[DrawingReference.from_dict(r) for r in data.get('references_out', [])],
             references_in=[DrawingReference.from_dict(r) for r in data.get('references_in', [])],
             dimension_overrides=data.get('dimension_overrides', {}),
+            preset_name=data.get('preset_name'),
+            preset_config=data.get('preset_config'),
         )
 
 
@@ -227,8 +246,11 @@ class DrawingSet:
         """Create a default drawing set with standard sheets."""
         drawing_set = cls(prefix=prefix)
 
-        # Create default sheets
+        # Create default sheets (only non-preset types)
         for sheet_type in SheetType:
+            # Skip preset types for default set
+            if sheet_type.value.startswith('preset_'):
+                continue
             defaults = SHEET_DEFAULTS.get(sheet_type, {})
             sheet_id = sheet_type.value
             sheet = SheetConfig(

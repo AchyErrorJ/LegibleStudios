@@ -1,6 +1,0 @@
-Breadcrumbs 'RenderingThread'
-Context 1/2
-	00 Scene
-	01 BeginOcclusionTests
-	02 ViewOcclusionTests
-	03 IndividualQueries
