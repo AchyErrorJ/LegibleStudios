@@ -6,8 +6,8 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow, QDockWidget, QToolBar, QStatusBar,
-    QFileDialog, QMessageBox, QWidget, QVBoxLayout,
-    QSplitter, QLabel, QTabWidget
+    QFileDialog, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout,
+    QSplitter, QLabel, QTabWidget, QApplication, QStackedWidget
 )
 from PyQt6.QtCore import Qt, QSettings, QTimer
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
@@ -96,6 +96,9 @@ class ArchEngineApplication(QMainWindow):
             self
         )
 
+        # Global LOD state (Shift+scroll works everywhere)
+        self._global_lod_level = 2
+
         self._setup_window()
         self._create_actions()
         self._create_menus()
@@ -105,6 +108,9 @@ class ArchEngineApplication(QMainWindow):
         self._create_central_widget()
         self._connect_signals()
         self._restore_state()
+
+        # Install global event filter for Shift+scroll LOD control
+        QApplication.instance().installEventFilter(self)
 
     def _setup_window(self):
         """Configure main window properties."""
@@ -280,14 +286,14 @@ class ArchEngineApplication(QMainWindow):
         edit_menu.addAction(self.action_delete)
 
         # View menu
-        view_menu = menubar.addMenu("&View")
-        view_menu.addAction(self.action_zoom_in)
-        view_menu.addAction(self.action_zoom_out)
-        view_menu.addAction(self.action_zoom_fit)
-        view_menu.addSeparator()
-        view_menu.addAction(self.action_grid)
-        view_menu.addSeparator()
-        view_menu.addAction(self.action_regenerate_sheets)
+        self.view_menu = menubar.addMenu("&View")
+        self.view_menu.addAction(self.action_zoom_in)
+        self.view_menu.addAction(self.action_zoom_out)
+        self.view_menu.addAction(self.action_zoom_fit)
+        self.view_menu.addSeparator()
+        self.view_menu.addAction(self.action_grid)
+        self.view_menu.addSeparator()
+        self.view_menu.addAction(self.action_regenerate_sheets)
 
         # Draw menu
         draw_menu = menubar.addMenu("&Draw")
@@ -377,56 +383,12 @@ class ArchEngineApplication(QMainWindow):
         event_bus.status_message.connect(self._show_status_message)
 
     def _create_dock_widgets(self):
-        """Create dockable panels."""
-        from panels.version_history import VersionHistoryPanel
-        from panels.properties_panel import PropertiesPanel
+        """Create dock widgets - Navigation, Chat, and Smart Panels."""
         from panels.viewport_panel import ViewportPanel
+        from panels.smart_panel_container import SmartPanelContainer
+        from panels.panel_registry import NavigationPanel, DesignChatPanel
 
-        # Project Browser dock (left side)
-        self.project_dock = QDockWidget("Project Browser", self)
-        self.project_dock.setObjectName("project_dock")
-        self.project_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea |
-            Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        # Placeholder widget for now
-        project_widget = QWidget()
-        project_widget.setMinimumWidth(200)
-        self.project_dock.setWidget(project_widget)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.project_dock)
-        self.window_menu.addAction(self.project_dock.toggleViewAction())
-
-        # Properties dock (right side)
-        self.properties_dock = QDockWidget("Properties", self)
-        self.properties_dock.setObjectName("properties_dock")
-        self.properties_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea |
-            Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        self.properties_panel = PropertiesPanel(self.document)
-        self.properties_panel.setMinimumWidth(250)
-        self.properties_dock.setWidget(self.properties_panel)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.properties_dock)
-        self.window_menu.addAction(self.properties_dock.toggleViewAction())
-
-        # Sheet Manager dock (left side, tabbed with project browser)
-        self.sheets_dock = QDockWidget("Sheets", self)
-        self.sheets_dock.setObjectName("sheets_dock")
-        self.sheets_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea |
-            Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        self.sheet_manager = SheetManagerPanel(self._sheet_registry, self)
-        self.sheet_manager.setMinimumWidth(200)
-        self.sheet_manager.regenerate_requested.connect(self._on_regenerate_sheet)
-        self.sheet_manager.sheet_double_clicked.connect(self._on_open_sheet)
-        self.sheets_dock.setWidget(self.sheet_manager)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.sheets_dock)
-        self.tabifyDockWidget(self.project_dock, self.sheets_dock)
-        self.sheets_dock.raise_()  # Show sheets dock by default
-        self.window_menu.addAction(self.sheets_dock.toggleViewAction())
-
-        # Connect generator service signals
+        # Connect generator service signals (for sheet generation feedback)
         self._generator_service.generation_started.connect(
             lambda sid: self.status_bar.showMessage(f"Generating {sid}...")
         )
@@ -436,81 +398,77 @@ class ArchEngineApplication(QMainWindow):
         self._generator_service.generation_failed.connect(
             lambda sid, err: self.status_bar.showMessage(f"Generation failed: {err}", 5000)
         )
-        self._generator_service.progress_updated.connect(self.sheet_manager.show_progress)
-        self._generator_service.all_generation_completed.connect(self.sheet_manager.hide_progress)
 
-        # Version History dock (right side, tabbed with properties)
-        self.history_dock = QDockWidget("Version History", self)
-        self.history_dock.setObjectName("history_dock")
-        self.history_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea |
-            Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        self.history_panel = VersionHistoryPanel(self.document)
-        self.history_panel.setMinimumWidth(250)
-        self.history_dock.setWidget(self.history_panel)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.history_dock)
-        # Tab it with properties dock
-        self.tabifyDockWidget(self.properties_dock, self.history_dock)
-        self.window_menu.addAction(self.history_dock.toggleViewAction())
-
-        # Chat panel dock (right side, tabbed with properties)
-        self.chat_dock = QDockWidget("Design Chat", self)
-        self.chat_dock.setObjectName("chat_dock")
-        self.chat_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea |
-            Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        self.chat_panel = ChatPanel(self.document)
-        self.chat_panel.setMinimumWidth(280)
-        self.chat_panel.message_sent.connect(self._on_chat_message)
-        self.chat_panel.schema_updated.connect(self._on_schema_updated)
-        self.chat_dock.setWidget(self.chat_panel)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
-        # Tab it with properties dock
-        self.tabifyDockWidget(self.properties_dock, self.chat_dock)
-        self.window_menu.addAction(self.chat_dock.toggleViewAction())
-
-        # 3D Viewport dock (Vulkan renderer)
+        # 3D Viewport setup (actual widget created in _create_central_widget)
         if HAS_VIEWPORT:
-            self.viewport_dock = QDockWidget("3D Viewport", self)
-            self.viewport_dock.setObjectName("viewport_dock")
-            self.viewport_dock.setAllowedAreas(
-                Qt.DockWidgetArea.LeftDockWidgetArea |
-                Qt.DockWidgetArea.RightDockWidgetArea |
-                Qt.DockWidgetArea.BottomDockWidgetArea
-            )
-            # Create the Vulkan viewport widget
-            self.viewport_3d = VulkanViewportWidget()
-            self.viewport_3d.setMinimumSize(400, 300)
-            self.viewport_3d.initialized.connect(self._on_viewport_initialized)
-            self.viewport_3d.load_complete.connect(self._on_viewport_load_complete)
-            self.viewport_3d.error_occurred.connect(self._on_viewport_error)
-            self.viewport_dock.setWidget(self.viewport_3d)
-            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.viewport_dock)
-            self.viewport_dock.show()  # Show 3D viewport by default
-            self.window_menu.addAction(self.viewport_dock.toggleViewAction())
-
             # Connect document changes to viewport
             self.document.document_changed.connect(self._on_document_changed_viewport)
 
-            # 3D Controls dock (tabbed with properties)
-            self.viewport_controls_dock = QDockWidget("3D Controls", self)
-            self.viewport_controls_dock.setObjectName("viewport_controls_dock")
-            self.viewport_controls_dock.setAllowedAreas(
-                Qt.DockWidgetArea.LeftDockWidgetArea |
-                Qt.DockWidgetArea.RightDockWidgetArea
-            )
+            # Create viewport panel (for gravity/LOD controls)
             self.viewport_panel = ViewportPanel()
-            self.viewport_panel.setMinimumWidth(250)
-            self.viewport_controls_dock.setWidget(self.viewport_panel)
-            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.viewport_controls_dock)
-            # Tab it with properties dock
-            self.tabifyDockWidget(self.properties_dock, self.viewport_controls_dock)
-            self.window_menu.addAction(self.viewport_controls_dock.toggleViewAction())
+
+        # =================================================================
+        # Navigation Dock - Gravity Triangle + LOD (always visible, compact)
+        # =================================================================
+        self.nav_dock = QDockWidget("Navigation", self)
+        self.nav_dock.setObjectName("nav_dock")
+        self.nav_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.nav_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable |
+            QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.nav_panel = NavigationPanel()
+        self.nav_dock.setWidget(self.nav_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.nav_dock)
+        self.window_menu.addAction(self.nav_dock.toggleViewAction())
+
+        # Connect navigation signals to smart panel system (will connect after smart panels created)
+
+        # =================================================================
+        # Chat Dock - Design conversation (always visible)
+        # =================================================================
+        self.chat_dock = QDockWidget("Chat", self)
+        self.chat_dock.setObjectName("chat_dock")
+        self.chat_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.chat_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable |
+            QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.chat_panel = DesignChatPanel()
+        self.chat_dock.setWidget(self.chat_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
+        self.tabifyDockWidget(self.nav_dock, self.chat_dock)
+        self.nav_dock.raise_()  # Show navigation by default
+        self.window_menu.addAction(self.chat_dock.toggleViewAction())
+
+        # =================================================================
+        # Smart Panels Dock - Context-aware tool panels
+        # =================================================================
+        self.smart_panels_dock = QDockWidget("Tools", self)
+        self.smart_panels_dock.setObjectName("smart_panels_dock")
+        self.smart_panels_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.smart_panels_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable |
+            QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.smart_panel_container = SmartPanelContainer()
+        self.smart_panel_container.setMinimumWidth(250)
+        self.smart_panels_dock.setWidget(self.smart_panel_container)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.smart_panels_dock)
+        self.window_menu.addAction(self.smart_panels_dock.toggleViewAction())
+
+        # Connect navigation panel signals to smart panel container
+        if hasattr(self.nav_panel, 'gravity_triangle'):
+            self.nav_panel.gravity_triangle.gravity_changed.connect(
+                self.smart_panel_container.update_gravity
+            )
+        if hasattr(self.nav_panel, 'lod_indicator'):
+            self.nav_panel.lod_indicator.lod_changed.connect(
+                self.smart_panel_container.update_lod
+            )
 
     def _create_central_widget(self):
-        """Create the central tabbed widget with plan view and sheet views."""
+        """Create dockable 2D and 3D views that can be tabbed together."""
         from views.plan_view import PlanView
         from tools.tool_manager import ToolManager
         from tools.base_tool import ToolType
@@ -519,26 +477,47 @@ class ArchEngineApplication(QMainWindow):
         from tools.window_tool import WindowTool
         from tools.room_tool import RoomTool
 
-        # Create central tab widget
-        self.central_tabs = QTabWidget(self)
-        self.central_tabs.setTabsClosable(True)
-        self.central_tabs.setMovable(True)
-        self.central_tabs.tabCloseRequested.connect(self._on_tab_close_requested)
-
-        # Create the main plan view
-        self.plan_view = PlanView(self.document, self.config, self)
-
-        # Create split view container (for 2D | 3D side-by-side mode)
+        # Legacy flags
         self._split_mode = False
-        self._split_viewport: Optional[VulkanViewportWidget] = None
+        self._split_viewport = None
 
-        # Disable split viewport for now to simplify (use dock viewport only)
-        self.central_tabs.addTab(self.plan_view, "Editor")
+        # Create central widget with tabbed viewports
+        # This is the main content area - viewports live here
+        self._viewport_tabs = QTabWidget(self)
+        self._viewport_tabs.setTabsClosable(False)
+        self._viewport_tabs.setMovable(True)
+        self._viewport_tabs.setDocumentMode(True)  # Cleaner look
+        self.setCentralWidget(self._viewport_tabs)
 
-        # Don't allow closing the Editor tab
-        self.central_tabs.tabBar().setTabButton(0, self.central_tabs.tabBar().ButtonPosition.RightSide, None)
+        # Create 2D Editor (in central tabs)
+        self.plan_view = PlanView(self.document, self.config, self)
+        self._viewport_tabs.addTab(self.plan_view, "2D Editor")
 
-        self.setCentralWidget(self.central_tabs)
+        # Create 3D Viewport (in central tabs)
+        if HAS_VIEWPORT:
+            self.viewport_3d = VulkanViewportWidget(self)
+            self.viewport_3d.setMinimumSize(400, 300)
+            self.viewport_3d.initialized.connect(self._on_viewport_initialized)
+            self.viewport_3d.load_complete.connect(self._on_viewport_load_complete)
+            self.viewport_3d.error_occurred.connect(self._on_viewport_error)
+            self._viewport_tabs.addTab(self.viewport_3d, "3D Viewport")
+
+        # Add view menu actions for viewports
+        self.action_show_2d = QAction("Show &2D Editor", self)
+        self.action_show_2d.setShortcut(QKeySequence("F2"))
+        self.action_show_2d.triggered.connect(lambda: self._viewport_tabs.setCurrentIndex(0))
+        self.view_menu.addAction(self.action_show_2d)
+
+        self.action_show_3d = QAction("Show &3D Viewport", self)
+        self.action_show_3d.setShortcut(QKeySequence("F3"))
+        self.action_show_3d.triggered.connect(lambda: self._viewport_tabs.setCurrentIndex(1) if HAS_VIEWPORT else None)
+        self.view_menu.addAction(self.action_show_3d)
+
+        self.action_split_view = QAction("&Split View", self)
+        self.action_split_view.setShortcut(QKeySequence("F4"))
+        self.action_split_view.setCheckable(True)
+        self.action_split_view.triggered.connect(self._toggle_split_view)
+        self.view_menu.addAction(self.action_split_view)
 
         # Track open sheet tabs
         self._sheet_tabs: dict = {}  # sheet_id -> tab index
@@ -587,6 +566,49 @@ class ArchEngineApplication(QMainWindow):
         self.action_door.setChecked(tool_name == "DoorTool")
         self.action_window.setChecked(tool_name == "WindowTool")
         self.action_room.setChecked(tool_name == "RoomTool")
+
+    def _toggle_split_view(self, checked: bool):
+        """Toggle between tabbed and split view for viewports."""
+        if not HAS_VIEWPORT:
+            return
+
+        if checked:
+            # Switch to split view
+            self._split_mode = True
+
+            # Create splitter
+            splitter = QSplitter(Qt.Orientation.Horizontal, self)
+
+            # Remove widgets from tabs
+            self._viewport_tabs.removeTab(1)  # Remove 3D
+            self._viewport_tabs.removeTab(0)  # Remove 2D
+
+            # Add to splitter
+            splitter.addWidget(self.plan_view)
+            splitter.addWidget(self.viewport_3d)
+            splitter.setSizes([500, 500])
+
+            # Replace central widget
+            self.setCentralWidget(splitter)
+            self._viewport_splitter = splitter
+        else:
+            # Switch back to tabbed view
+            self._split_mode = False
+
+            # Remove from splitter
+            self.plan_view.setParent(None)
+            self.viewport_3d.setParent(None)
+
+            # Recreate tabs
+            self._viewport_tabs = QTabWidget(self)
+            self._viewport_tabs.setTabsClosable(False)
+            self._viewport_tabs.setMovable(True)
+            self._viewport_tabs.setDocumentMode(True)
+            self._viewport_tabs.addTab(self.plan_view, "2D Editor")
+            self._viewport_tabs.addTab(self.viewport_3d, "3D Viewport")
+
+            # Replace central widget
+            self.setCentralWidget(self._viewport_tabs)
 
     def _connect_signals(self):
         """Connect document and event signals."""
@@ -928,6 +950,54 @@ class ArchEngineApplication(QMainWindow):
         # Connect viewport panel to the viewport widget
         if hasattr(self, 'viewport_panel') and hasattr(self, 'viewport_3d'):
             self.viewport_panel.set_viewport(self.viewport_3d)
+            # Connect manual LOD changes (shift+scroll) from 3D viewport
+            self.viewport_3d.lod_level_changed.connect(
+                self.viewport_panel.set_lod_level
+            )
+
+            # Connect LOD changes from 2D plan view as well
+            if hasattr(self, 'plan_view'):
+                self.plan_view.lod_level_changed.connect(
+                    self.viewport_panel.set_lod_level
+                )
+
+            # Connect to smart panel container if available
+            if hasattr(self, 'smart_panel_container'):
+                # Connect gravity changes
+                self.viewport_panel.gravity_changed.connect(
+                    self.smart_panel_container.update_gravity
+                )
+                # Connect LOD changes
+                self.viewport_panel.lod_changed.connect(
+                    lambda level, trans: self.smart_panel_container.update_lod(level, trans)
+                )
+                # Connect hover-to-center: when user hovers a dimmed panel,
+                # auto-center gravity so all panels become accessible
+                self.smart_panel_container.request_gravity_center.connect(
+                    self._on_request_gravity_center
+                )
+
+                # Connect hover-to-LOD: switch to the LOD the panel needs
+                self.smart_panel_container.request_lod_change.connect(
+                    self._on_request_lod_change
+                )
+
+    def _on_request_gravity_center(self):
+        """Handle request to center gravity (from hovering a panel)."""
+        if hasattr(self, 'viewport_panel'):
+            self.viewport_panel.center_gravity()
+
+    def _on_request_lod_change(self, lod_level: int):
+        """Handle request to change LOD (from hovering a panel)."""
+        self._global_lod_level = lod_level
+        if hasattr(self, 'viewport_panel'):
+            self.viewport_panel.set_lod_level(lod_level)
+        # Show feedback
+        lod_names = {1: "Topology", 2: "Walls", 3: "Fixtures", 4: "Viewports", 5: "Documentation"}
+        self.status_bar.showMessage(
+            f"LOD {lod_level}: {lod_names.get(lod_level, '')} (panel hover)",
+            1500
+        )
 
     def _on_viewport_load_complete(self, element_count: int):
         """Handle viewport loaded building data."""
@@ -940,6 +1010,36 @@ class ArchEngineApplication(QMainWindow):
     def _show_status_message(self, message: str, timeout: int):
         """Show message in status bar."""
         self.status_bar.showMessage(message, timeout)
+
+    def eventFilter(self, obj, event):
+        """Global event filter - captures Shift+scroll for LOD control everywhere."""
+        from PyQt6.QtCore import QEvent
+        from PyQt6.QtGui import QWheelEvent
+
+        if event.type() == QEvent.Type.Wheel:
+            wheel_event = event
+            if wheel_event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                # Shift+scroll = LOD change (works everywhere)
+                delta = wheel_event.angleDelta().y()
+                if delta > 0:
+                    self._global_lod_level = max(1, self._global_lod_level - 1)
+                else:
+                    self._global_lod_level = min(5, self._global_lod_level + 1)
+
+                # Update viewport panel if available
+                if hasattr(self, 'viewport_panel'):
+                    self.viewport_panel.set_lod_level(self._global_lod_level)
+
+                # Show feedback in status bar
+                lod_names = {1: "Topology", 2: "Walls", 3: "Fixtures", 4: "Viewports", 5: "Documentation"}
+                self.status_bar.showMessage(
+                    f"LOD {self._global_lod_level}: {lod_names.get(self._global_lod_level, '')}",
+                    1500
+                )
+
+                return True  # Event handled, don't propagate
+
+        return super().eventFilter(obj, event)
 
     def closeEvent(self, event):
         """Handle window close."""
@@ -983,55 +1083,31 @@ class ArchEngineApplication(QMainWindow):
             self.status_bar.showMessage("Camera reset to fit building", 2000)
 
     def _toggle_3d_view(self, checked: bool):
-        """Toggle 3D viewport dock visibility."""
+        """Toggle 3D viewport visibility (switch to 3D tab)."""
         if not HAS_VIEWPORT:
             return
 
-        if hasattr(self, 'viewport_dock'):
-            self.viewport_dock.setVisible(checked)
+        if hasattr(self, '_viewport_tabs') and hasattr(self, 'viewport_3d'):
             if checked:
+                self._viewport_tabs.setCurrentWidget(self.viewport_3d)
                 self.status_bar.showMessage("3D Viewport visible", 2000)
                 # Load document data if viewport just became visible
                 if self.viewport_3d.is_initialized and self.document._data:
                     self.viewport_3d.load_json(self.document._data)
-
-    def _toggle_split_view(self, checked: bool):
-        """Toggle split view mode (2D | 3D side-by-side)."""
-        if not HAS_VIEWPORT or not self._split_viewport:
-            return
-
-        self._split_mode = checked
-        if checked:
-            self._split_viewport.show()
-            # Set equal split
-            total_width = self.central_splitter.width()
-            self.central_splitter.setSizes([total_width // 2, total_width // 2])
-            self.status_bar.showMessage("Split view enabled (2D | 3D)", 3000)
-            # Load current document into split viewport
-            if self._split_viewport.is_initialized and self.document._data:
-                self._split_viewport.load_json(self.document._data)
-        else:
-            self._split_viewport.hide()
-            self.central_splitter.setSizes([1, 0])
-            self.status_bar.showMessage("Split view disabled", 3000)
 
     def _get_active_viewport(self) -> Optional['VulkanViewportWidget']:
         """Get the currently active/visible viewport."""
         if not HAS_VIEWPORT:
             return None
 
-        # Prefer split viewport if in split mode
-        if self._split_mode and self._split_viewport and self._split_viewport.isVisible():
-            return self._split_viewport
+        # In split mode, the viewport is always visible
+        if self._split_mode and hasattr(self, 'viewport_3d'):
+            return self.viewport_3d
 
-        # Otherwise use dock viewport if visible
-        if hasattr(self, 'viewport_3d') and hasattr(self, 'viewport_dock'):
-            if self.viewport_dock.isVisible():
+        # In tab mode, check if 3D tab is active
+        if hasattr(self, '_viewport_tabs') and hasattr(self, 'viewport_3d'):
+            if self._viewport_tabs.currentWidget() == self.viewport_3d:
                 return self.viewport_3d
-
-        # Fallback to split viewport even if not visible
-        if self._split_viewport:
-            return self._split_viewport
 
         return getattr(self, 'viewport_3d', None)
 

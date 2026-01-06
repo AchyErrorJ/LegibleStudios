@@ -26,7 +26,9 @@
       "rooms": [
         "exterior",
         "living"
-      ]
+      ],
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "start": [
@@ -46,7 +48,9 @@
       "rooms": [
         "exterior",
         null
-      ]
+      ],
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "start": [
@@ -66,7 +70,9 @@
       "rooms": [
         "exterior",
         "master_bath"
-      ]
+      ],
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "start": [
@@ -86,7 +92,9 @@
       "rooms": [
         "exterior",
         "living"
-      ]
+      ],
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "start": [
@@ -106,7 +114,9 @@
       "rooms": [
         "living",
         "bathroom_1"
-      ]
+      ],
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "start": [
@@ -126,7 +136,9 @@
       "rooms": [
         "living",
         "master_bedroom"
-      ]
+      ],
+      "is_pinned": true,
+      "locked_properties": []
     },
     {
       "start": [
@@ -146,7 +158,9 @@
       "rooms": [
         "bathroom_1",
         "kitchen"
-      ]
+      ],
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "start": [
@@ -166,7 +180,9 @@
       "rooms": [
         "master_bedroom",
         "bedroom_4"
-      ]
+      ],
+      "is_pinned": true,
+      "locked_properties": []
     },
     {
       "start": [
@@ -186,7 +202,9 @@
       "rooms": [
         "master_bedroom",
         "master_bath"
-      ]
+      ],
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "start": [
@@ -197,7 +215,7 @@
       "end": [
         10137.516005868045,
         0,
-        10861.624292001477
+        12532.67961200514
       ],
       "height": 2700,
       "wall_type": "int_2x4",
@@ -206,7 +224,9 @@
       "rooms": [
         "bedroom_4",
         "bedroom_5"
-      ]
+      ],
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "start": [
@@ -226,7 +246,26 @@
       "rooms": [
         "master_bath",
         "hallway_7"
-      ]
+      ],
+      "is_pinned": false,
+      "locked_properties": []
+    },
+    {
+      "start": [
+        10043.0,
+        0,
+        12551.2
+      ],
+      "end": [
+        5792.9,
+        0,
+        12551.2
+      ],
+      "height": 2700,
+      "category": "interior",
+      "wall_type": "",
+      "is_pinned": false,
+      "locked_properties": []
     }
   ],
   "doors": [
@@ -238,7 +277,9 @@
       "type": "entry",
       "swing": "left_in",
       "room1": "exterior",
-      "room2": "living"
+      "room2": "living",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 4,
@@ -248,7 +289,9 @@
       "type": "pocket",
       "swing": "left_in",
       "room1": "living",
-      "room2": "bathroom_1"
+      "room2": "bathroom_1",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 5,
@@ -258,7 +301,9 @@
       "type": "swing",
       "swing": "left_in",
       "room1": "living",
-      "room2": "master_bedroom"
+      "room2": "master_bedroom",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 6,
@@ -268,7 +313,9 @@
       "type": "pocket",
       "swing": "left_in",
       "room1": "bathroom_1",
-      "room2": "kitchen"
+      "room2": "kitchen",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 7,
@@ -278,7 +325,9 @@
       "type": "swing",
       "swing": "left_in",
       "room1": "master_bedroom",
-      "room2": "bedroom_4"
+      "room2": "bedroom_4",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 8,
@@ -288,7 +337,9 @@
       "type": "pocket",
       "swing": "left_in",
       "room1": "master_bedroom",
-      "room2": "master_bath"
+      "room2": "master_bath",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 9,
@@ -298,7 +349,9 @@
       "type": "swing",
       "swing": "left_in",
       "room1": "bedroom_4",
-      "room2": "bedroom_5"
+      "room2": "bedroom_5",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 10,
@@ -308,7 +361,9 @@
       "type": "pocket",
       "swing": "left_in",
       "room1": "master_bath",
-      "room2": "hallway_7"
+      "room2": "hallway_7",
+      "is_pinned": false,
+      "locked_properties": []
     }
   ],
   "windows": [
@@ -319,7 +374,9 @@
       "height": 1200,
       "sill_height": 900,
       "type": "double_hung",
-      "room": "living"
+      "room": "living",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 0,
@@ -328,7 +385,9 @@
       "height": 1200,
       "sill_height": 900,
       "type": "double_hung",
-      "room": "living"
+      "room": "living",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 0,
@@ -337,7 +396,9 @@
       "height": 1200,
       "sill_height": 900,
       "type": "double_hung",
-      "room": "living"
+      "room": "living",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 0,
@@ -346,7 +407,9 @@
       "height": 1200,
       "sill_height": 900,
       "type": "double_hung",
-      "room": "living"
+      "room": "living",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 2,
@@ -355,7 +418,9 @@
       "height": 600,
       "sill_height": 1500,
       "type": "casement",
-      "room": "master_bath"
+      "room": "master_bath",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 2,
@@ -364,7 +429,9 @@
       "height": 600,
       "sill_height": 1500,
       "type": "casement",
-      "room": "master_bath"
+      "room": "master_bath",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 2,
@@ -373,7 +440,9 @@
       "height": 600,
       "sill_height": 1500,
       "type": "casement",
-      "room": "master_bath"
+      "room": "master_bath",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 2,
@@ -382,7 +451,9 @@
       "height": 600,
       "sill_height": 1500,
       "type": "casement",
-      "room": "master_bath"
+      "room": "master_bath",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 3,
@@ -391,7 +462,9 @@
       "height": 1200,
       "sill_height": 900,
       "type": "double_hung",
-      "room": "living"
+      "room": "living",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 3,
@@ -400,7 +473,9 @@
       "height": 1200,
       "sill_height": 900,
       "type": "double_hung",
-      "room": "living"
+      "room": "living",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 3,
@@ -409,7 +484,9 @@
       "height": 1200,
       "sill_height": 900,
       "type": "double_hung",
-      "room": "living"
+      "room": "living",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 3,
@@ -418,7 +495,9 @@
       "height": 1200,
       "sill_height": 900,
       "type": "double_hung",
-      "room": "living"
+      "room": "living",
+      "is_pinned": false,
+      "locked_properties": []
     },
     {
       "wall_index": 3,
@@ -427,7 +506,9 @@
       "height": 1200,
       "sill_height": 900,
       "type": "double_hung",
-      "room": "living"
+      "room": "living",
+      "is_pinned": false,
+      "locked_properties": []
     }
   ],
   "rooms": {
@@ -445,8 +526,8 @@
         "x": 2715.406073000369,
         "y": 3017.117858889299
       },
-      "zone": "public",
-      "level": "Level 1"
+      "is_pinned": false,
+      "locked_properties": []
     },
     "bathroom_1": {
       "name": "Bathroom",
@@ -462,8 +543,8 @@
         "x": 6879.028718267601,
         "y": 1810.2707153335793
       },
-      "zone": "service",
-      "level": "Level 1"
+      "is_pinned": false,
+      "locked_properties": []
     },
     "kitchen": {
       "name": "Kitchen",
@@ -479,8 +560,8 @@
         "x": 10499.57014893476,
         "y": 2534.379001467011
       },
-      "zone": "service",
-      "level": "Level 1"
+      "is_pinned": false,
+      "locked_properties": []
     },
     "master_bedroom": {
       "name": "Primary Bedroom",
@@ -496,8 +577,8 @@
         "x": 2896.433144533727,
         "y": 9292.72300537904
       },
-      "zone": "private",
-      "level": "Level 1"
+      "is_pinned": false,
+      "locked_properties": []
     },
     "bedroom_4": {
       "name": "Bedroom 2",
@@ -513,8 +594,8 @@
         "x": 7965.191147467749,
         "y": 8447.930004890037
       },
-      "zone": "private",
-      "level": "Level 1"
+      "is_pinned": false,
+      "locked_properties": []
     },
     "bedroom_5": {
       "name": "Bedroom 3",
@@ -530,8 +611,8 @@
         "x": 12309.840864268339,
         "y": 8447.930004890037
       },
-      "zone": "private",
-      "level": "Level 1"
+      "is_pinned": false,
+      "locked_properties": []
     },
     "master_bath": {
       "name": "Primary Bath",
@@ -547,8 +628,8 @@
         "x": 1810.2707153335793,
         "y": 14723.53515137978
       },
-      "zone": "private",
-      "level": "Level 1"
+      "is_pinned": false,
+      "locked_properties": []
     },
     "hallway_7": {
       "name": "Hallway",
@@ -564,8 +645,8 @@
         "x": 4344.649716800591,
         "y": 14723.53515137978
       },
-      "zone": "circulation",
-      "level": "Level 1"
+      "is_pinned": false,
+      "locked_properties": []
     }
   },
   "roofs": [

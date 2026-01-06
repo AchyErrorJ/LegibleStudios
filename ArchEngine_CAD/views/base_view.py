@@ -4,7 +4,7 @@ Base view class for all 2D views
 from abc import abstractmethod
 
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen
 
 from core.document import ArchDocument
@@ -16,6 +16,9 @@ class BaseView(QGraphicsView):
     Base class for all 2D views (plan, elevation, section).
     Provides common functionality like zoom, pan, grid.
     """
+
+    # Signal emitted when LOD changes via Shift+scroll
+    lod_level_changed = pyqtSignal(int)  # 1-5
 
     def __init__(self, document: ArchDocument, config: Config, parent=None):
         super().__init__(parent)
@@ -45,6 +48,7 @@ class BaseView(QGraphicsView):
         self._panning = False
         self._last_pan_point = None
         self._grid_visible = config.grid_visible
+        self._lod_level = 2  # Default LOD level (1-5)
 
         # Colors
         self._bg_color = QColor(self.config.background_color)
@@ -156,9 +160,25 @@ class BaseView(QGraphicsView):
     # =========================================================================
 
     def wheelEvent(self, event):
-        """Handle mouse wheel for zooming - centers on cursor position."""
+        """Handle mouse wheel for zooming - centers on cursor position.
+
+        Shift+scroll changes LOD level instead of zooming.
+        """
+        delta = event.angleDelta().y()
+
+        # Shift+scroll = LOD change
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            if delta > 0:
+                self._lod_level = max(1, self._lod_level - 1)
+            else:
+                self._lod_level = min(5, self._lod_level + 1)
+            self.lod_level_changed.emit(self._lod_level)
+            event.accept()
+            return
+
+        # Regular scroll = zoom
         mouse_pos = event.position().toPoint()
-        if event.angleDelta().y() > 0:
+        if delta > 0:
             self._zoom_by(1.15, center_on_mouse=True, mouse_pos=mouse_pos)
         else:
             self._zoom_by(0.87, center_on_mouse=True, mouse_pos=mouse_pos)

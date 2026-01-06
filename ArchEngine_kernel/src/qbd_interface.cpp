@@ -1123,7 +1123,7 @@ bool QBDInterface::parseWithArchGeometry(const std::string& jsonString) {
             return true;
         } else {
             std::cerr << "[QBD] ArchGeometry parsing failed: "
-                      << std::get<std::string>(result) << "\n";
+                      << std::get<archgeometry::ParseError>(result).message << "\n";
             return false;
         }
     } catch (const std::exception& e) {

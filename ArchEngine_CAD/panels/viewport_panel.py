@@ -12,6 +12,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
+from panels.gravity_triangle import GravityTriangleWidget
+from panels.lod_indicator import LODControlWidget, LODLevel, LOD_INFO
+
 
 # Material style constants
 MATERIAL_STYLES = ["Realistic", "Clean", "Schematic", "Blueprint"]
@@ -37,6 +40,8 @@ class ViewportPanel(QWidget):
     # Signals for when settings change
     material_style_changed = pyqtSignal(int)  # 0-3
     clipping_changed = pyqtSignal()
+    gravity_changed = pyqtSignal(float, float, float)  # design, client, build
+    lod_changed = pyqtSignal(int, float)  # level (1-5), transition (0-1)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -66,6 +71,18 @@ class ViewportPanel(QWidget):
         header.setStyleSheet("font-weight: bold; font-size: 12px;")
         content_layout.addWidget(header)
 
+        # Escher Controls: Gravity + LOD side by side
+        escher_layout = QHBoxLayout()
+        escher_layout.setSpacing(10)
+
+        # Gravity Triangle (Perspective Blend)
+        self._create_gravity_group(escher_layout)
+
+        # LOD Indicator
+        self._create_lod_group(escher_layout)
+
+        content_layout.addLayout(escher_layout)
+
         # Camera Settings Section
         self._create_camera_group(content_layout)
 
@@ -87,6 +104,56 @@ class ViewportPanel(QWidget):
         content_layout.addStretch()
         scroll.setWidget(scroll_content)
         main_layout.addWidget(scroll)
+
+    def _create_gravity_group(self, parent_layout):
+        """Create the gravity triangle perspective control."""
+        group = QGroupBox("Perspective")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(5)
+
+        # Gravity triangle widget
+        self.gravity_triangle = GravityTriangleWidget()
+        self.gravity_triangle.gravity_changed.connect(self._on_gravity_changed)
+        layout.addWidget(self.gravity_triangle, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Quick preset buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(3)
+
+        btn_design = QPushButton("D")
+        btn_design.setToolTip("Design: relationships, topology")
+        btn_design.setMaximumWidth(30)
+        btn_design.clicked.connect(self.gravity_triangle.set_design)
+        btn_layout.addWidget(btn_design)
+
+        btn_client = QPushButton("C")
+        btn_client.setToolTip("Client: realistic, materials")
+        btn_client.setMaximumWidth(30)
+        btn_client.clicked.connect(self.gravity_triangle.set_client)
+        btn_layout.addWidget(btn_client)
+
+        btn_build = QPushButton("B")
+        btn_build.setToolTip("Build: coordinates, specs")
+        btn_build.setMaximumWidth(30)
+        btn_build.clicked.connect(self.gravity_triangle.set_build)
+        btn_layout.addWidget(btn_build)
+
+        layout.addLayout(btn_layout)
+
+        parent_layout.addWidget(group)
+
+    def _create_lod_group(self, parent_layout):
+        """Create the LOD indicator control."""
+        group = QGroupBox("LOD")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(5)
+
+        # LOD indicator widget
+        self.lod_indicator = LODControlWidget()
+        self.lod_indicator.lod_changed.connect(self._on_lod_changed)
+        layout.addWidget(self.lod_indicator)
+
+        parent_layout.addWidget(group)
 
     def _create_camera_group(self, parent_layout):
         """Create camera view settings controls."""
@@ -505,6 +572,156 @@ class ViewportPanel(QWidget):
         """Set material style programmatically."""
         if 0 <= style < len(MATERIAL_STYLES):
             self.style_combo.setCurrentIndex(style)
+
+    # =========================================================================
+    # Gravity handlers
+    # =========================================================================
+
+    def _on_gravity_changed(self, design: float, client: float, build: float):
+        """Handle gravity triangle changes - map to rendering settings."""
+        if self._updating:
+            return
+
+        # Emit the raw gravity signal
+        self.gravity_changed.emit(design, client, build)
+
+        # Map gravity to rendering settings
+        self._apply_gravity_blend(design, client, build)
+
+    def _apply_gravity_blend(self, design: float, client: float, build: float):
+        """Apply gravity blend to viewport rendering settings."""
+        if not self._viewport:
+            return
+
+        self._updating = True
+
+        # Determine dominant gravity
+        max_weight = max(design, client, build)
+
+        # Material style mapping:
+        # Design -> Schematic (flat, analytical)
+        # Client -> Realistic (full PBR)
+        # Build -> Blueprint (technical)
+        if design == max_weight and design > 0.5:
+            self.style_combo.setCurrentIndex(2)  # Schematic
+            self._viewport.set_material_style(2)
+        elif client == max_weight and client > 0.5:
+            self.style_combo.setCurrentIndex(0)  # Realistic
+            self._viewport.set_material_style(0)
+        elif build == max_weight and build > 0.5:
+            self.style_combo.setCurrentIndex(3)  # Blueprint
+            self._viewport.set_material_style(3)
+        else:
+            # Blended - use Clean as middle ground
+            self.style_combo.setCurrentIndex(1)  # Clean
+            self._viewport.set_material_style(1)
+
+        # Visualization mode mapping:
+        # Design -> Structural (analytical)
+        # Client -> Material (realistic look)
+        # Build -> Structural or Wireframe
+        if design == max_weight and design > 0.6:
+            self.viz_combo.setCurrentIndex(0)  # Structural
+            self._viewport.set_visualization_mode(0)
+        elif client == max_weight and client > 0.6:
+            self.viz_combo.setCurrentIndex(4)  # Material
+            self._viewport.set_visualization_mode(4)
+        elif build == max_weight and build > 0.6:
+            self.viz_combo.setCurrentIndex(5)  # Wireframe
+            self._viewport.set_visualization_mode(5)
+
+        # Post-processing adjustments:
+        # Design -> Less bloom, more SSAO (analytical)
+        # Client -> Full bloom, exposure (pretty)
+        # Build -> Minimal effects (clear)
+        if hasattr(self._viewport, 'set_bloom_enabled'):
+            # Client gets bloom, others don't
+            bloom_enabled = client > 0.4
+            self.bloom_check.setChecked(bloom_enabled)
+            self._viewport.set_bloom_enabled(bloom_enabled)
+
+            if bloom_enabled:
+                bloom_intensity = client * 0.8
+                self.bloom_slider.setValue(int(bloom_intensity * 10))
+                self._viewport.set_bloom_intensity(bloom_intensity)
+
+        if hasattr(self._viewport, 'set_ssao_enabled'):
+            # Design and Client get SSAO, Build minimal
+            ssao_enabled = build < 0.6
+            self.ssao_check.setChecked(ssao_enabled)
+            self._viewport.set_ssao_enabled(ssao_enabled)
+
+            if ssao_enabled:
+                ssao_intensity = 0.5 + design * 0.5 + client * 0.3
+                self.ssao_slider.setValue(int(ssao_intensity * 10))
+                self._viewport.set_ssao_intensity(ssao_intensity)
+
+        # Exposure adjustments
+        if hasattr(self._viewport, 'set_exposure'):
+            # Client gets warmer exposure, Build gets neutral
+            exposure = 1.0 + client * 0.3 - build * 0.2
+            exposure = max(0.5, min(2.0, exposure))
+            self.exposure_slider.setValue(int(exposure * 10))
+            self._viewport.set_exposure(exposure)
+
+        self._updating = False
+
+    # =========================================================================
+    # LOD handlers
+    # =========================================================================
+
+    def _on_lod_changed(self, level: int, transition: float):
+        """Handle LOD level change - map to rendering settings."""
+        if self._updating:
+            return
+
+        # Emit the signal
+        self.lod_changed.emit(level, transition)
+
+        # Apply LOD-based rendering adjustments
+        self._apply_lod_settings(level, transition)
+
+    def _apply_lod_settings(self, level: int, transition: float):
+        """Apply rendering settings based on LOD level."""
+        if not self._viewport:
+            return
+
+        self._updating = True
+
+        # LOD affects visualization mode and detail level
+        # Higher LOD (closer) = more detail
+        # Lower LOD (farther) = more abstract
+
+        lod = LODLevel(level)
+
+        # Adjust SSAO based on LOD - more occlusion detail at closer LODs
+        if hasattr(self._viewport, 'set_ssao_intensity'):
+            if lod >= LODLevel.FIXTURES:
+                # Close up - full SSAO
+                self._viewport.set_ssao_intensity(1.2)
+            elif lod == LODLevel.WALLS:
+                # Mid range - moderate SSAO
+                self._viewport.set_ssao_intensity(0.8)
+            else:
+                # Far away - minimal SSAO
+                self._viewport.set_ssao_intensity(0.4)
+
+        self._updating = False
+
+    def update_from_camera_distance(self, distance: float):
+        """Update LOD indicator based on camera distance (auto mode)."""
+        if hasattr(self, 'lod_indicator'):
+            self.lod_indicator.set_camera_distance(distance)
+
+    def set_lod_level(self, level: int):
+        """Set LOD level directly (manual mode via shift+scroll)."""
+        if hasattr(self, 'lod_indicator'):
+            self.lod_indicator.set_lod_level(level)
+
+    def center_gravity(self):
+        """Center gravity (called when user hovers a dimmed panel)."""
+        if hasattr(self, 'gravity_triangle'):
+            self.gravity_triangle.set_center()
 
     # =========================================================================
     # Camera handlers

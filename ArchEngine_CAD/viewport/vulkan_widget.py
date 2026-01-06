@@ -59,6 +59,8 @@ class VulkanViewportWidget(QWidget):
     initialized = pyqtSignal()
     load_complete = pyqtSignal(int)  # element count
     error_occurred = pyqtSignal(str)
+    camera_distance_changed = pyqtSignal(float)  # distance from target
+    lod_level_changed = pyqtSignal(int)  # LOD level 1-5 (shift+scroll)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -75,6 +77,9 @@ class VulkanViewportWidget(QWidget):
         self._last_mouse_pos = None
         self._dragging = False
         self._panning = False  # True for pan, False for orbit
+
+        # LOD state (independent of camera distance)
+        self._lod_level = 2  # Default: Walls (1-5 range)
 
         self._rendering = False  # Prevent concurrent renders
         self._loading = False    # Prevent concurrent loads
@@ -808,22 +813,32 @@ class VulkanViewportWidget(QWidget):
             dy = event.pos().y() - self._last_mouse_pos.y()
 
             if self._panning:
-                # Pan: move camera target in screen space
+                # Pan: move camera target so cursor tracks 1:1 with world
                 import math
-                # Calculate right and up vectors based on camera orientation
-                pan_speed = self._camera_distance * 0.002
+
+                # Calculate world units per pixel based on camera distance and FOV
+                # This gives us 1:1 cursor tracking
+                fov_rad = math.radians(45.0)  # Approximate FOV
+                viewport_height = self.height()
+
+                # World height visible at the target distance
+                world_height = 2.0 * self._camera_distance * math.tan(fov_rad / 2.0)
+                world_per_pixel = world_height / viewport_height
 
                 # Right vector (perpendicular to view direction in XZ plane)
                 right_x = math.cos(self._camera_yaw)
                 right_z = math.sin(self._camera_yaw)
 
-                # Up vector (world Y for now, could be more sophisticated)
-                up_y = 1.0
+                # Calculate pan in world units (negative dx moves target right, so view pans left)
+                pan_x = -dx * world_per_pixel
+                pan_y = dy * world_per_pixel  # Positive dy moves target up
 
-                # Move target
-                self._camera_target[0] -= dx * pan_speed * right_x
-                self._camera_target[2] -= dx * pan_speed * right_z
-                self._camera_target[1] += dy * pan_speed * up_y
+                # Move target along right vector (horizontal pan)
+                self._camera_target[0] += pan_x * right_x
+                self._camera_target[2] += pan_x * right_z
+
+                # Move target along up vector (vertical pan)
+                self._camera_target[1] += pan_y
 
                 # Update camera target in renderer
                 if self._initialized and self._lib:
@@ -843,7 +858,7 @@ class VulkanViewportWidget(QWidget):
         super().mouseMoveEvent(event)
 
     def wheelEvent(self, event):
-        """Handle mouse wheel for zoom centered on cursor."""
+        """Handle mouse wheel for zoom (normal) or LOD change (shift+scroll)."""
         import math
         delta = event.angleDelta().y() / 120.0
 
@@ -851,6 +866,21 @@ class VulkanViewportWidget(QWidget):
             super().wheelEvent(event)
             return
 
+        # Check for shift modifier - LOD change
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            # Shift+scroll = change LOD level
+            if delta > 0:
+                # Scroll up = decrease LOD (more abstract, farther view)
+                self._lod_level = max(1, self._lod_level - 1)
+            else:
+                # Scroll down = increase LOD (more detail, closer view)
+                self._lod_level = min(5, self._lod_level + 1)
+
+            self.lod_level_changed.emit(self._lod_level)
+            super().wheelEvent(event)
+            return
+
+        # Normal scroll = zoom
         # Get cursor position relative to widget center (normalized -1 to 1)
         cursor_pos = event.position()
         ndc_x = (cursor_pos.x() / self.width()) * 2.0 - 1.0
@@ -874,9 +904,6 @@ class VulkanViewportWidget(QWidget):
         # Camera right vector (in XZ plane)
         right_x = cos_yaw
         right_z = sin_yaw
-
-        # Camera up vector (simplified - just Y for architectural views)
-        up_y = 1.0
 
         # Move target toward cursor position proportional to zoom amount
         # The FOV determines how much screen space maps to world space
