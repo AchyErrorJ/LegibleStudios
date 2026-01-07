@@ -9,6 +9,7 @@
 #include "environment_map.hpp"
 #include "post_process.hpp"
 #include "texture.hpp"
+#include <unordered_map>
 
 namespace arch {
 
@@ -157,10 +158,19 @@ public:
     f32 getRoofAO() const { return m_roofAO; }
     void setRoofEmission(f32 emission) { m_roofEmission = emission; }
     f32 getRoofEmission() const { return m_roofEmission; }
+    void setMaterialUVScale(f32 scale) { m_materialUVScale = scale; }
+    f32 getMaterialUVScale() const { return m_materialUVScale; }
+    void setNormalStrength(f32 strength) { m_normalStrength = strength; }
+    f32 getNormalStrength() const { return m_normalStrength; }
 
     // Material style
     void setMaterialStyle(MaterialStyle style) { m_materialStyle = style; applyMaterialStyle(); }
     MaterialStyle getMaterialStyle() const { return m_materialStyle; }
+
+    // Material library
+    const std::string& getMaterialRoot() const { return m_materialRoot; }
+    bool reloadMaterialLibrary(const std::string& root);
+    std::vector<std::string> getMaterialNames() const;
 
     // Get material preset for element type (based on current style)
     MaterialPreset getMaterialForElement(ElementType type) const;
@@ -173,6 +183,8 @@ public:
     void onResize();
 
 private:
+    static constexpr u32 kMaxMaterialSets = 64;
+
     void createRenderPass();
     void createFramebuffers();
     void createCommandBuffers();
@@ -189,6 +201,11 @@ private:
     void recreateSwapchain();
 
     void updateUniformBuffer(u32 frameIndex);
+
+    VkDescriptorSet createMaterialDescriptorSetForMaterial(const Material& material);
+    void buildMaterialDescriptorSets();
+    void bindMaterialDescriptorSet(const std::string& materialName);
+    std::string resolveMaterialName(const StructuralElement& element) const;
 
     // Get element color based on visualization mode
     vec3 getElementColor(const StructuralElement& element, const Building& building, size_t index) const;
@@ -219,7 +236,9 @@ private:
     // Material descriptor set (set 1)
     VkDescriptorSetLayout m_materialDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet m_defaultMaterialDescriptorSet = VK_NULL_HANDLE;
+    std::unordered_map<std::string, VkDescriptorSet> m_materialDescriptorSets;
     std::unique_ptr<MaterialLibrary> m_materialLibrary;
+    std::string m_materialRoot = "materials";
 
     // Uniform buffers
     std::vector<VkBuffer> m_uniformBuffers;
@@ -230,6 +249,7 @@ private:
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     std::unique_ptr<Pipeline> m_pipeline;
     std::unique_ptr<Pipeline> m_wireframePipeline;
+    std::unique_ptr<Pipeline> m_transparentPipeline;  // For glass/transparent materials
 
     // HDR pipelines (for post-processing path - no MSAA, HDR render pass)
     std::unique_ptr<Pipeline> m_hdrPipeline;
@@ -255,10 +275,10 @@ private:
     f32 m_time = 0.0f;
 
     // Visualization mode
-    VisualizationMode m_vizMode = VisualizationMode::Structural;
+    VisualizationMode m_vizMode = VisualizationMode::Material;
 
     // Material style
-    MaterialStyle m_materialStyle = MaterialStyle::Clean;
+    MaterialStyle m_materialStyle = MaterialStyle::Realistic;
 
     // Shadow mapping
     std::unique_ptr<ShadowMap> m_shadowMap;
@@ -305,6 +325,8 @@ private:
     f32 m_roofRoughness = 0.7f;
     f32 m_roofAO = 1.0f;
     f32 m_roofEmission = 0.0f;
+    f32 m_materialUVScale = 1.0f;
+    f32 m_normalStrength = 1.0f;
 
     // Stats
     RenderStats m_stats;

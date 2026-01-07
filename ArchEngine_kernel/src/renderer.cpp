@@ -2,6 +2,9 @@
 #include <stdexcept>
 #include <cstring>
 #include <array>
+#include <iostream>
+#include <algorithm>
+#include <cctype>
 
 namespace arch {
 
@@ -25,6 +28,7 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
     m_postProcess = std::make_unique<PostProcess>(m_context);
     auto extent = m_context.getSwapchainExtent();
     m_postProcess->initialize(extent.width, extent.height);
+    m_postProcess->createCompositePipeline(m_renderPass, m_context.getMsaaSamples());
 
     createDescriptorPool();
     createUniformBuffers();
@@ -292,17 +296,17 @@ void Renderer::createDescriptorPool() {
     poolSizes.push_back(uboPoolSize);
 
     // Sampler pool size (shadow map + environment cubemap + material textures)
-    // Material set needs 5 samplers: albedo, normal, roughness, metallic, ao
+    // Material set needs 7 samplers: albedo, normal, roughness, metallic, ao, emissive, opacity
     VkDescriptorPoolSize samplerPoolSize{};
     samplerPoolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerPoolSize.descriptorCount = imageCount * 2 + 5;  // shadow + envmap per frame + 5 material textures
+    samplerPoolSize.descriptorCount = imageCount * 2 + (7 * kMaxMaterialSets);
     poolSizes.push_back(samplerPoolSize);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<u32>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = imageCount * 2 + 1;  // main + sky descriptor sets + 1 material set
+    poolInfo.maxSets = imageCount * 2 + 1 + kMaxMaterialSets;  // main + sky + material sets
 
     if (vkCreateDescriptorPool(m_context.getDevice(), &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor pool");
@@ -411,8 +415,8 @@ void Renderer::createDescriptorSets() {
 }
 
 void Renderer::createMaterialDescriptorSetLayout() {
-    // Material descriptor set layout (set 1) - 5 texture samplers
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    // Material descriptor set layout (set 1) - 7 texture samplers
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
 
     // Binding 0: Albedo texture
     bindings[0].binding = 0;
@@ -444,6 +448,18 @@ void Renderer::createMaterialDescriptorSetLayout() {
     bindings[4].descriptorCount = 1;
     bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // Binding 5: Emissive map
+    bindings[5].binding = 5;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[5].descriptorCount = 1;
+    bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 6: Opacity map
+    bindings[6].binding = 6;
+    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[6].descriptorCount = 1;
+    bindings[6].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<u32>(bindings.size());
@@ -458,6 +474,7 @@ void Renderer::createDefaultMaterialDescriptorSet() {
     // Create material library and default textures
     m_materialLibrary = std::make_unique<MaterialLibrary>(m_context);
     m_materialLibrary->createBuiltinMaterials();
+    m_materialLibrary->loadMaterialsFromDirectory(m_materialRoot);
 
     // Allocate descriptor set for default material
     VkDescriptorSetAllocateInfo allocInfo{};
@@ -476,17 +493,21 @@ void Renderer::createDefaultMaterialDescriptorSet() {
     Texture* roughness = Texture::getWhite();
     Texture* metallic = Texture::getBlack();
     Texture* ao = Texture::getWhite();
+    Texture* emissive = Texture::getBlack();
+    Texture* opacity = Texture::getWhite();
 
     // Write descriptor set
-    std::array<VkDescriptorImageInfo, 5> imageInfos{};
+    std::array<VkDescriptorImageInfo, 7> imageInfos{};
     imageInfos[0] = {albedo->getSampler(), albedo->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[1] = {normal->getSampler(), normal->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[2] = {roughness->getSampler(), roughness->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[3] = {metallic->getSampler(), metallic->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[4] = {ao->getSampler(), ao->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[5] = {emissive->getSampler(), emissive->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[6] = {opacity->getSampler(), opacity->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
-    std::array<VkWriteDescriptorSet, 5> writes{};
-    for (size_t i = 0; i < 5; ++i) {
+    std::array<VkWriteDescriptorSet, 7> writes{};
+    for (size_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = m_defaultMaterialDescriptorSet;
         writes[i].dstBinding = static_cast<u32>(i);
@@ -497,6 +518,35 @@ void Renderer::createDefaultMaterialDescriptorSet() {
     }
 
     vkUpdateDescriptorSets(m_context.getDevice(), static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
+
+    // Build descriptor sets for all loaded materials
+    buildMaterialDescriptorSets();
+}
+
+bool Renderer::reloadMaterialLibrary(const std::string& root) {
+    if (!m_materialLibrary) {
+        return false;
+    }
+
+    m_materialRoot = root.empty() ? "materials" : root;
+    m_materialLibrary->loadMaterialsFromDirectory(m_materialRoot);
+    buildMaterialDescriptorSets();
+    return true;
+}
+
+std::vector<std::string> Renderer::getMaterialNames() const {
+    std::vector<std::string> names;
+    if (!m_materialLibrary) {
+        return names;
+    }
+
+    names.reserve(m_materialLibrary->getMaterials().size());
+    for (const auto& [name, mat] : m_materialLibrary->getMaterials()) {
+        if (!mat) continue;
+        names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    return names;
 }
 
 void Renderer::createPipeline() {
@@ -536,6 +586,19 @@ void Renderer::createPipeline() {
 
     m_wireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                                       "shaders/structural.frag.spv", wireframeConfig);
+
+    // Transparent pipeline for glass/windows (alpha blending enabled)
+    PipelineConfig transparentConfig = PipelineConfig::transparentConfig();
+    transparentConfig.renderPass = m_renderPass;
+    transparentConfig.pipelineLayout = m_pipelineLayout;
+    transparentConfig.multisample.rasterizationSamples = msaaSamples;
+    if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+        transparentConfig.multisample.sampleShadingEnable = VK_TRUE;
+        transparentConfig.multisample.minSampleShading = 0.2f;
+    }
+
+    m_transparentPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                        "shaders/structural.frag.spv", transparentConfig);
 
     // Create HDR pipelines (no MSAA, uses HDR render pass from PostProcess)
     if (m_postProcess) {
@@ -755,6 +818,9 @@ void Renderer::createSkyPipeline() {
 }
 
 void Renderer::drawSky() {
+    // Sky pipeline is built for the swapchain render pass only.
+    // Skip it when rendering to HDR to avoid render pass mismatch.
+    if (m_outputLinearHDR) return;
     if (m_skyPipeline == VK_NULL_HANDLE) return;
     if (m_skyDescriptorSets.empty()) return;
 
@@ -817,6 +883,11 @@ void Renderer::recreateSwapchain() {
     cleanupSwapchain();
     m_context.recreateSwapchain();
     createFramebuffers();
+    if (m_postProcess) {
+        auto extent = m_context.getSwapchainExtent();
+        m_postProcess->resize(extent.width, extent.height);
+        m_postProcess->createCompositePipeline(m_renderPass, m_context.getMsaaSamples());
+    }
     // Reset frame counter and per-image fence tracking
     m_currentFrame = 0;
     m_imagesInFlight.assign(m_context.getSwapchainImageCount(), VK_NULL_HANDLE);
@@ -1074,13 +1145,14 @@ void Renderer::runPostProcessing() {
             m_postProcess->getHDRDepthView(),
             nullptr,  // No separate normal buffer yet
             proj,
-            view
+            view,
+            m_currentFrame
         );
     }
 
     // Generate bloom from HDR color buffer
     if (m_bloomEnabled) {
-        m_postProcess->generateBloom(m_currentCommandBuffer);
+        m_postProcess->generateBloom(m_currentCommandBuffer, m_currentFrame);
     }
 }
 
@@ -1095,6 +1167,7 @@ void Renderer::beginCompositePass() {
         m_renderPass,
         m_framebuffers[m_imageIndex],
         extent,
+        m_currentFrame,
         true,   // Begin render pass
         false   // Don't end render pass (ImGui will render, then endRenderPass)
     );
@@ -1311,7 +1384,10 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
 
     // HDR output mode (skip tonemapping in shader when rendering to HDR buffer)
     ubo.outputLinearHDR = m_outputLinearHDR ? 1 : 0;
-    ubo._padding = 0;
+    ubo._padding0 = 0;
+    ubo._padding1 = 0;
+    ubo._padding2 = 0;
+    ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, 0.0f, 0.0f);
 
     std::memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
 }
@@ -1676,6 +1752,20 @@ void Renderer::drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress) 
         // Convert MeshData to vertices with normals
         std::vector<Vertex> vertices;
         std::vector<u32> indices;
+        auto calcWorldUV = [](vec3 pos, vec3 normal, f32 uvScale = 0.001f) -> vec2 {
+            vec3 uAxis, vAxis;
+            if (std::abs(normal.y) > 0.9f) {
+                uAxis = vec3(1, 0, 0);
+                vAxis = vec3(0, 0, 1);
+            } else if (std::abs(normal.x) > std::abs(normal.z)) {
+                uAxis = vec3(0, 0, 1);
+                vAxis = vec3(0, 1, 0);
+            } else {
+                uAxis = vec3(1, 0, 0);
+                vAxis = vec3(0, 1, 0);
+            }
+            return vec2(glm::dot(pos, uAxis) * uvScale, glm::dot(pos, vAxis) * uvScale);
+        };
 
         // Build vertices and compute normals per-face
         for (const auto& face : meshData.faces) {
@@ -1691,9 +1781,9 @@ void Renderer::drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress) 
 
             // Add vertices with face normal (flat shading)
             u32 baseIndex = static_cast<u32>(vertices.size());
-            vertices.push_back({v0, normal, color});
-            vertices.push_back({v1, normal, color});
-            vertices.push_back({v2, normal, color});
+            vertices.push_back({v0, normal, color, calcWorldUV(v0, normal)});
+            vertices.push_back({v1, normal, color, calcWorldUV(v1, normal)});
+            vertices.push_back({v2, normal, color, calcWorldUV(v2, normal)});
 
             indices.push_back(baseIndex + 0);
             indices.push_back(baseIndex + 1);
@@ -1731,6 +1821,20 @@ void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, 
     if (m_meshCache.find(key) == m_meshCache.end()) {
         std::vector<Vertex> vertices;
         std::vector<u32> indices;
+        auto calcWorldUV = [](vec3 pos, vec3 normal, f32 uvScale = 0.001f) -> vec2 {
+            vec3 uAxis, vAxis;
+            if (std::abs(normal.y) > 0.9f) {
+                uAxis = vec3(1, 0, 0);
+                vAxis = vec3(0, 0, 1);
+            } else if (std::abs(normal.x) > std::abs(normal.z)) {
+                uAxis = vec3(0, 0, 1);
+                vAxis = vec3(0, 1, 0);
+            } else {
+                uAxis = vec3(1, 0, 0);
+                vAxis = vec3(0, 1, 0);
+            }
+            return vec2(glm::dot(pos, uAxis) * uvScale, glm::dot(pos, vAxis) * uvScale);
+        };
 
         for (const auto& face : meshData.faces) {
             const vec3& v0 = meshData.vertices[face[0]];
@@ -1742,9 +1846,9 @@ void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, 
             vec3 normal = glm::normalize(glm::cross(edge1, edge2));
 
             u32 baseIndex = static_cast<u32>(vertices.size());
-            vertices.push_back({v0, normal, color});
-            vertices.push_back({v1, normal, color});
-            vertices.push_back({v2, normal, color});
+            vertices.push_back({v0, normal, color, calcWorldUV(v0, normal)});
+            vertices.push_back({v1, normal, color, calcWorldUV(v1, normal)});
+            vertices.push_back({v2, normal, color, calcWorldUV(v2, normal)});
 
             indices.push_back(baseIndex + 0);
             indices.push_back(baseIndex + 1);
@@ -1756,6 +1860,208 @@ void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, 
 
     mat4 transform = mat4(1.0f);
     drawMeshWithMaterial(*m_meshCache[key], transform, color, stress, material);
+}
+
+VkDescriptorSet Renderer::createMaterialDescriptorSetForMaterial(const Material& material) {
+    VkDescriptorSet descSet = VK_NULL_HANDLE;
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_descriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_materialDescriptorSetLayout;
+
+    if (vkAllocateDescriptorSets(m_context.getDevice(), &allocInfo, &descSet) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate material descriptor set");
+    }
+
+    Texture* albedo = material.albedoMap ? material.albedoMap : Texture::getWhite();
+    Texture* normal = material.normalMap ? material.normalMap : Texture::getNormalDefault();
+    Texture* roughness = material.roughnessMap ? material.roughnessMap : Texture::getWhite();
+    Texture* metallic = material.metallicMap ? material.metallicMap : Texture::getBlack();
+    Texture* ao = material.aoMap ? material.aoMap : Texture::getWhite();
+    Texture* emissive = material.emissiveMap ? material.emissiveMap : Texture::getBlack();
+    Texture* opacity = material.opacityMap ? material.opacityMap : Texture::getWhite();
+
+    std::array<VkDescriptorImageInfo, 7> imageInfos{};
+    imageInfos[0] = {albedo->getSampler(), albedo->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[1] = {normal->getSampler(), normal->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[2] = {roughness->getSampler(), roughness->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[3] = {metallic->getSampler(), metallic->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[4] = {ao->getSampler(), ao->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[5] = {emissive->getSampler(), emissive->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[6] = {opacity->getSampler(), opacity->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+    std::array<VkWriteDescriptorSet, 7> writes{};
+    for (size_t i = 0; i < writes.size(); ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = descSet;
+        writes[i].dstBinding = static_cast<u32>(i);
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].descriptorCount = 1;
+        writes[i].pImageInfo = &imageInfos[i];
+    }
+
+    vkUpdateDescriptorSets(m_context.getDevice(), static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
+    return descSet;
+}
+
+void Renderer::buildMaterialDescriptorSets() {
+    m_materialDescriptorSets.clear();
+    m_materialDescriptorSets["default"] = m_defaultMaterialDescriptorSet;
+
+    if (!m_materialLibrary) {
+        return;
+    }
+
+    for (const auto& [name, mat] : m_materialLibrary->getMaterials()) {
+        if (!mat) continue;
+        if (m_materialDescriptorSets.find(name) != m_materialDescriptorSets.end()) continue;
+        m_materialDescriptorSets[name] = createMaterialDescriptorSetForMaterial(*mat);
+    }
+}
+
+void Renderer::bindMaterialDescriptorSet(const std::string& materialName) {
+    VkDescriptorSet set = m_defaultMaterialDescriptorSet;
+    auto it = m_materialDescriptorSets.find(materialName);
+    if (it != m_materialDescriptorSets.end()) {
+        set = it->second;
+    } else if (!materialName.empty()) {
+        std::string lowered = materialName;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+
+        if (lowered.find("wall") != std::string::npos) {
+            set = m_materialDescriptorSets["drywall"];
+        } else if (lowered.find("roof") != std::string::npos) {
+            set = m_materialDescriptorSets["shingle"];
+        } else if (lowered.find("window") != std::string::npos || lowered.find("glass") != std::string::npos) {
+            set = m_materialDescriptorSets["glass"];
+        } else if (lowered.find("door") != std::string::npos || lowered.find("wood") != std::string::npos) {
+            set = m_materialDescriptorSets["wood"];
+        } else if (lowered.find("metal") != std::string::npos || lowered.find("steel") != std::string::npos) {
+            set = m_materialDescriptorSets["metal"];
+        } else if (lowered.find("concrete") != std::string::npos) {
+            set = m_materialDescriptorSets["concrete"];
+        } else if (lowered.find("brick") != std::string::npos) {
+            set = m_materialDescriptorSets["brick"];
+        }
+    }
+
+    vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_pipelineLayout, 1, 1, &set, 0, nullptr);
+}
+
+static std::string normalizeMaterialKey(const std::string& name) {
+    std::string out;
+    out.reserve(name.size());
+    bool lastUnderscore = false;
+
+    for (unsigned char c : name) {
+        if (std::isalnum(c)) {
+            out.push_back(static_cast<char>(std::tolower(c)));
+            lastUnderscore = false;
+        } else if (c == '_' || c == '-' || c == ' ' || c == '\t' || c == '/') {
+            if (!lastUnderscore && !out.empty()) {
+                out.push_back('_');
+                lastUnderscore = true;
+            }
+        }
+    }
+
+    if (!out.empty() && out.back() == '_') {
+        out.pop_back();
+    }
+
+    return out;
+}
+
+std::string Renderer::resolveMaterialName(const StructuralElement& element) const {
+    auto hasMaterial = [&](const std::string& name) -> bool {
+        return m_materialLibrary && m_materialLibrary->hasMaterial(name);
+    };
+
+    auto defaultForType = [&]() -> std::string {
+        switch (element.type) {
+            case ElementType::Wall:
+                if (m_materialStyle == MaterialStyle::Realistic && hasMaterial("brick_red_01")) {
+                    return "brick_red_01";
+                }
+                return "drywall";
+            case ElementType::Door: return "wood";
+            case ElementType::Window: return "glass";
+            case ElementType::Floor: return "tile";
+            case ElementType::Roof: return "shingle";
+            case ElementType::Beam:
+            case ElementType::Column:
+                return "metal";
+            default:
+                return "default";
+        }
+    };
+
+    auto mapKeyword = [&](const std::string& key) -> std::string {
+        if (key.find("brick") != std::string::npos) {
+            if (m_materialStyle == MaterialStyle::Realistic && hasMaterial("brick_red_01")) {
+                return "brick_red_01";
+            }
+            return "brick";
+        }
+        if (key.find("concrete") != std::string::npos || key.find("cement") != std::string::npos ||
+            key.find("stone") != std::string::npos) {
+            return "concrete";
+        }
+        if (key.find("drywall") != std::string::npos || key.find("plaster") != std::string::npos ||
+            key.find("gypsum") != std::string::npos || key.find("paint") != std::string::npos ||
+            key.find("stucco") != std::string::npos || key.find("poly") != std::string::npos ||
+            key.find("tyvek") != std::string::npos || key.find("membrane") != std::string::npos) {
+            return "drywall";
+        }
+        if (key.find("wood") != std::string::npos || key.find("timber") != std::string::npos ||
+            key.find("osb") != std::string::npos || key.find("plywood") != std::string::npos) {
+            return "wood";
+        }
+        if (key.find("vinyl") != std::string::npos || key.find("siding") != std::string::npos) {
+            if (m_materialStyle == MaterialStyle::Realistic && hasMaterial("brick_red_01")) {
+                return "brick_red_01";
+            }
+            return "brick";
+        }
+        if (key.find("glass") != std::string::npos || key.find("glazing") != std::string::npos) {
+            return "glass";
+        }
+        if (key.find("metal") != std::string::npos || key.find("steel") != std::string::npos ||
+            key.find("aluminum") != std::string::npos) {
+            return "metal";
+        }
+        if (key.find("tile") != std::string::npos || key.find("ceramic") != std::string::npos) {
+            return "tile";
+        }
+        if (key.find("shingle") != std::string::npos || key.find("asphalt") != std::string::npos ||
+            key.find("roof") != std::string::npos) {
+            return "shingle";
+        }
+
+        return defaultForType();
+    };
+
+    if (!element.material.empty()) {
+        if (hasMaterial(element.material)) {
+            return element.material;
+        }
+
+        std::string normalized = normalizeMaterialKey(element.material);
+        if (!normalized.empty() && hasMaterial(normalized)) {
+            return normalized;
+        }
+
+        if (!normalized.empty()) {
+            return mapKeyword(normalized);
+        }
+    }
+
+    return defaultForType();
 }
 
 void Renderer::drawGrid(f32 size, f32 spacing) {
@@ -1791,6 +2097,19 @@ void Renderer::drawLoadArrow(vec3 start, vec3 end, f32 magnitude) {
 void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices) {
     m_context.beginDebugLabel(m_currentCommandBuffer, "Structural Frame", {0.2f, 0.6f, 0.9f, 1.0f});
 
+    // Debug: count element types on first call per building change
+    static std::string lastBuilding;
+    if (building.name != lastBuilding) {
+        lastBuilding = building.name;
+        int doors = 0, windows = 0, walls = 0;
+        for (const auto& e : elements) {
+            if (e.type == ElementType::Door) doors++;
+            else if (e.type == ElementType::Window) windows++;
+            else if (e.type == ElementType::Wall) walls++;
+        }
+        std::cout << "[Renderer] Building: " << building.name << " - " << walls << " walls, " << doors << " doors, " << windows << " windows\n";
+    }
+
     size_t index = 0;
     for (const auto& element : elements) {
         vec3 color = getElementColor(element, building, index);
@@ -1800,6 +2119,9 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
         if (isSelected) {
             color = vec3(1.0f, 0.8f, 0.2f);  // Yellow-orange highlight
         }
+        // Bind material textures for this element (set 1)
+        bindMaterialDescriptorSet(resolveMaterialName(element));
+
         // Only pass stress to shader for Structural mode; otherwise pass 0 so shader uses RGB color
         f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? element.stress : 0.0f;
         
@@ -1891,72 +2213,59 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             }
 
             case ElementType::Door: {
-                // Use actual IFC mesh if available
-                if (element.mesh.hasData()) {
-                    drawCustomMesh(element.mesh, color, stressForShader);
-                } else {
-                    // Fall back to generated geometry using beam-based approach
-                    float xExtent = element.end.x - element.start.x;
-                    float zExtent = element.end.z - element.start.z;
-                    float doorHeight = element.end.y - element.start.y;
-                    float doorDepth = element.depth > 0.1f ? element.depth : 100.0f;
+                // Generate door geometry
+                float xExtent = element.end.x - element.start.x;
+                float zExtent = element.end.z - element.start.z;
+                float doorHeight = element.end.y - element.start.y;
+                float doorDepth = element.depth > 0.1f ? element.depth : 50.0f;
 
-                    // Door start/end are along the wall direction at floor level
-                    // Create door as a beam from start to end, with height as vertical extent
-                    vec3 doorStart = vec3(element.start.x, element.start.y + doorHeight * 0.5f, element.start.z);
-                    vec3 doorEnd = vec3(element.end.x, element.start.y + doorHeight * 0.5f, element.end.z);
-
-                    // Use diagonal length for width (supports diagonal walls)
-                    float doorWidth = glm::length(vec2(xExtent, zExtent));
-                    std::string key = "doordirect_" + std::to_string(doorWidth) + "_" +
-                                     std::to_string(doorHeight) + "_" + std::to_string(doorDepth) +
-                                     "_" + std::to_string(xExtent) + "_" + std::to_string(zExtent);
-
-                    if (m_meshCache.find(key) == m_meshCache.end()) {
-                        // Use beam geometry: doorDepth=thickness (perpendicular), doorHeight=height (vertical)
-                        auto [verts, indices] = Geometry::createBeam(
-                            doorStart, doorEnd, doorDepth, doorHeight, color);
-                        m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
-                    }
-
-                    drawMesh(*m_meshCache[key], mat4(1.0f), color, stressForShader);
+                // Debug: print door info on first few frames
+                static int doorDebugCount = 0;
+                if (doorDebugCount < 5) {
+                    std::cout << "[Door] height=" << doorHeight << " width=" << glm::length(vec2(xExtent, zExtent))
+                              << " start=(" << element.start.x << "," << element.start.y << "," << element.start.z << ")"
+                              << " end=(" << element.end.x << "," << element.end.y << "," << element.end.z << ")" << std::endl;
+                    doorDebugCount++;
                 }
+
+                if (doorHeight <= 0.01f) break;
+
+                float doorWidth = glm::length(vec2(xExtent, zExtent));
+                if (doorWidth <= 0.01f) break;
+
+                // Calculate door center and rotation
+                vec3 doorCenter = (element.start + element.end) * 0.5f;
+                doorCenter.y = element.start.y + doorHeight * 0.5f;
+
+                // Calculate rotation angle from wall direction
+                float angle = std::atan2(zExtent, xExtent);
+
+                // Create transform: translate to position, rotate to align with wall
+                mat4 transform = glm::translate(mat4(1.0f), doorCenter);
+                transform = glm::rotate(transform, angle, vec3(0, 1, 0));
+
+                // Wood door material
+                vec4 doorMat = vec4(0.0f, 0.75f, 1.0f, 0.0f);
+
+                // Create door mesh centered at origin
+                std::string key = "door_" + std::to_string(static_cast<int>(doorWidth)) + "_" +
+                                 std::to_string(static_cast<int>(doorHeight)) + "_" +
+                                 std::to_string(static_cast<int>(doorDepth));
+
+                if (m_meshCache.find(key) == m_meshCache.end()) {
+                    // createColumn extends from y=0 to y=height, so offset by -height/2 to center
+                    auto [verts, indices] = Geometry::createColumn(
+                        vec3(0, -doorHeight * 0.5f, 0), doorWidth, doorDepth, doorHeight, vec3(0.55f, 0.35f, 0.2f));
+                    m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                }
+
+                drawMeshWithMaterial(*m_meshCache[key], transform, color, stressForShader, doorMat);
                 break;
             }
 
-            case ElementType::Window: {
-                // Use actual IFC mesh if available
-                if (element.mesh.hasData()) {
-                    drawCustomMesh(element.mesh, color, stressForShader);
-                } else {
-                    // Fall back to generated geometry using beam-based approach
-                    float xExtent = element.end.x - element.start.x;
-                    float zExtent = element.end.z - element.start.z;
-                    float windowHeight = element.end.y - element.start.y;
-                    float windowDepth = element.depth > 0.1f ? element.depth : 100.0f;
-
-                    // Window start/end are along the wall direction at sill height
-                    // Create window as a beam from start to end, with height as vertical extent
-                    vec3 windowStart = vec3(element.start.x, element.start.y + windowHeight * 0.5f, element.start.z);
-                    vec3 windowEnd = vec3(element.end.x, element.start.y + windowHeight * 0.5f, element.end.z);
-
-                    // Use diagonal length for width (supports diagonal walls)
-                    float windowWidth = glm::length(vec2(xExtent, zExtent));
-                    std::string key = "windowdirect_" + std::to_string(windowWidth) + "_" +
-                                     std::to_string(windowHeight) + "_" + std::to_string(windowDepth) +
-                                     "_" + std::to_string(xExtent) + "_" + std::to_string(zExtent);
-
-                    if (m_meshCache.find(key) == m_meshCache.end()) {
-                        // Use beam geometry: windowDepth=thickness (perpendicular), windowHeight=height (vertical)
-                        auto [verts, indices] = Geometry::createBeam(
-                            windowStart, windowEnd, windowDepth, windowHeight, vec3(0.7f, 0.85f, 0.95f));
-                        m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
-                    }
-
-                    drawMesh(*m_meshCache[key], mat4(1.0f), color, stressForShader);
-                }
+            case ElementType::Window:
+                // Windows are rendered in a separate transparent pass below
                 break;
-            }
 
             case ElementType::Roof: {
                 // Roof material
@@ -1991,6 +2300,81 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                 break;
         }
         index++;
+    }
+
+    // Second pass: Render transparent windows with alpha blending
+    // Skip in HDR path (transparent HDR pipeline not implemented yet).
+    if (m_transparentPipeline && !m_outputLinearHDR) {
+        m_context.beginDebugLabel(m_currentCommandBuffer, "Transparent Windows", {0.4f, 0.7f, 0.9f, 1.0f});
+        m_transparentPipeline->bind(m_currentCommandBuffer);
+
+        index = 0;
+        for (const auto& element : elements) {
+            if (element.type != ElementType::Window) {
+                index++;
+                continue;
+            }
+
+            bindMaterialDescriptorSet(resolveMaterialName(element));
+
+            vec3 color = getElementColor(element, building, index);
+            bool isSelected = selectedIndices.count(static_cast<int>(index)) > 0;
+            if (isSelected) {
+                color = vec3(1.0f, 0.8f, 0.2f);
+            }
+            f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? element.stress : 0.0f;
+
+            // Generate window geometry
+            float xExtent = element.end.x - element.start.x;
+            float zExtent = element.end.z - element.start.z;
+            float windowHeight = element.end.y - element.start.y;
+            float windowDepth = element.depth > 0.01f ? element.depth : 0.2f;  // Thin glass pane
+
+            if (windowHeight <= 0.01f) {
+                index++;
+                continue;
+            }
+
+            float windowWidth = glm::length(vec2(xExtent, zExtent));
+            if (windowWidth <= 0.01f) {
+                index++;
+                continue;
+            }
+
+            // Calculate window center and rotation
+            vec3 windowCenter = (element.start + element.end) * 0.5f;
+            windowCenter.y = element.start.y + windowHeight * 0.5f;
+
+            float angle = std::atan2(zExtent, xExtent);
+
+            mat4 transform = glm::translate(mat4(1.0f), windowCenter);
+            transform = glm::rotate(transform, angle, vec3(0, 1, 0));
+
+            // Glass material: very low roughness for transparency
+            vec4 glassMat = vec4(0.0f, 0.1f, 1.0f, 0.0f);
+
+            std::string key = "window_" + std::to_string(static_cast<int>(windowWidth)) + "_" +
+                             std::to_string(static_cast<int>(windowHeight));
+
+            if (m_meshCache.find(key) == m_meshCache.end()) {
+                // createColumn extends from y=0 to y=height, so offset by -height/2 to center
+                auto [verts, indices] = Geometry::createColumn(
+                    vec3(0, -windowHeight * 0.5f, 0), windowWidth, windowDepth, windowHeight, vec3(0.8f, 0.9f, 0.95f));
+                m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+            }
+
+            drawMeshWithMaterial(*m_meshCache[key], transform, color, stressForShader, glassMat);
+            index++;
+        }
+
+        // Rebind opaque pipeline for subsequent draws
+        if (m_vizMode == VisualizationMode::Wireframe && m_wireframePipeline) {
+            m_wireframePipeline->bind(m_currentCommandBuffer);
+        } else if (m_pipeline) {
+            m_pipeline->bind(m_currentCommandBuffer);
+        }
+
+        m_context.endDebugLabel(m_currentCommandBuffer);
     }
 
     m_context.endDebugLabel(m_currentCommandBuffer);

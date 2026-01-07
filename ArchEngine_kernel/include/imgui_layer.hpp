@@ -28,6 +28,20 @@ enum class DrawMode {
 
 class ImGuiLayer {
 public:
+    struct MaterialGenerateRequest {
+        std::string name;
+        std::string prompt;
+        std::string negativePrompt;
+        std::string serverUrl;
+        std::string pythonExe;
+        std::string scriptPath;
+        std::string outputRoot;
+        int size = 1024;
+        int steps = 30;
+        float guidance = 7.5f;
+        bool tileable = true;
+    };
+
     ImGuiLayer(VulkanContext& context, GLFWwindow* window, VkRenderPass renderPass);
     ~ImGuiLayer();
 
@@ -125,6 +139,21 @@ public:
     void clearCameraViewRequest() { m_cameraViewRequested = false; }
     CameraView getRequestedCameraView() const { return m_requestedCameraView; }
 
+    // Material UI actions
+    bool wasApplyMaterialRequested() const { return m_applyMaterialRequested; }
+    const std::string& getApplyMaterialName() const { return m_applyMaterialName; }
+    void clearApplyMaterialRequest() { m_applyMaterialRequested = false; }
+    bool takeMaterialDrop(std::string& outName);
+
+    bool wasMaterialGenerateRequested() const { return m_materialGenerateRequested; }
+    MaterialGenerateRequest takeMaterialGenerateRequest();
+    void setMaterialGenerationState(bool inFlight, const std::string& status);
+    bool wasStartRenderServerRequested() const { return m_startRenderServerRequested; }
+    void clearStartRenderServerRequest() { m_startRenderServerRequested = false; }
+    bool wasStopRenderServerRequested() const { return m_stopRenderServerRequested; }
+    void clearStopRenderServerRequest() { m_stopRenderServerRequested = false; }
+    int getRenderServerPort() const { return m_renderServerPort; }
+
 private:
     void createDescriptorPool();
     void uploadFonts();
@@ -155,6 +184,36 @@ private:
     DrawMode m_drawMode = DrawMode::None;
     std::vector<vec3> m_drawPoints;
     bool m_parametricWallRequested = false;
+
+    // Material UI state
+    bool m_materialUiInitialized = false;
+    int m_materialListIndex = -1;
+    char m_materialFilter[96] = "";
+    char m_materialRoot[260] = "materials";
+    char m_materialOutputRoot[260] = "materials";
+    char m_materialName[128] = "";
+    char m_materialPrompt[512] = "";
+    char m_materialNegative[256] = "blurry, low quality, distorted, watermark";
+    char m_materialServerUrl[256] = "http://localhost:5000";
+    char m_materialPythonExe[260] = ".venv-sd/Scripts/python.exe";
+    char m_materialScriptPath[260] = "scripts/material_generate.py";
+    int m_materialSize = 1024;
+    int m_materialSteps = 30;
+    float m_materialGuidance = 7.5f;
+    bool m_materialTileable = true;
+    int m_renderServerPort = 5000;
+    bool m_applyMaterialRequested = false;
+    std::string m_applyMaterialName;
+    bool m_materialDropRequested = false;
+    std::string m_materialDropName;
+    bool m_materialDragActive = false;
+    std::string m_materialDragName;
+    bool m_materialGenerateRequested = false;
+    MaterialGenerateRequest m_materialGenerateRequest;
+    bool m_materialGenerateInFlight = false;
+    std::string m_materialGenerateStatus;
+    bool m_startRenderServerRequested = false;
+    bool m_stopRenderServerRequested = false;
 };
 
 } // namespace arch

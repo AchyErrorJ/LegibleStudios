@@ -650,6 +650,15 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
     ImGui::SetNextWindowPos(ImVec2(10, 660), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320, 300), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Render Settings", &show)) {
+        // Post-processing (HDR) master toggle
+        bool postProcessingEnabled = renderer.isPostProcessingEnabled();
+        if (ImGui::Checkbox("Enable Post Processing (HDR)", &postProcessingEnabled)) {
+            renderer.setPostProcessingEnabled(postProcessingEnabled);
+        }
+        ImGui::SetItemTooltip("Enables HDR path for SSAO, bloom, and tonemapping.");
+
+        ImGui::Separator();
+
         // Shadow Settings
         if (ImGui::CollapsingHeader("Shadow Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
             bool shadowsEnabled = renderer.getShadowsEnabled();
@@ -862,8 +871,156 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
 
         ImGui::Separator();
 
+        // Material Library
+        if (ImGui::CollapsingHeader("Material Library", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (!m_materialUiInitialized) {
+                const std::string& root = renderer.getMaterialRoot();
+                if (!root.empty()) {
+                    std::snprintf(m_materialRoot, sizeof(m_materialRoot), "%s", root.c_str());
+                    std::snprintf(m_materialOutputRoot, sizeof(m_materialOutputRoot), "%s", root.c_str());
+                }
+                m_materialUiInitialized = true;
+            }
+
+            ImGui::InputText("Filter", m_materialFilter, sizeof(m_materialFilter));
+
+            auto materials = renderer.getMaterialNames();
+            std::vector<std::string> filtered;
+            filtered.reserve(materials.size());
+
+            std::string filter = m_materialFilter;
+            for (const auto& name : materials) {
+                if (filter.empty() || name.find(filter) != std::string::npos) {
+                    filtered.push_back(name);
+                }
+            }
+
+            if (ImGui::BeginListBox("Materials", ImVec2(-1.0f, 180.0f))) {
+                for (int i = 0; i < static_cast<int>(filtered.size()); ++i) {
+                    const std::string& name = filtered[i];
+                    bool isSelected = (m_materialListIndex == i);
+                    if (ImGui::Selectable(name.c_str(), isSelected)) {
+                        m_materialListIndex = i;
+                        m_applyMaterialName = name;
+                    }
+                    if (ImGui::BeginDragDropSource()) {
+                        ImGui::SetDragDropPayload("ARCH_MATERIAL", name.c_str(), name.size() + 1);
+                        ImGui::Text("Apply %s", name.c_str());
+                        m_materialDragActive = true;
+                        m_materialDragName = name;
+                        ImGui::EndDragDropSource();
+                    }
+                }
+                ImGui::EndListBox();
+            }
+
+            if (!m_applyMaterialName.empty()) {
+                ImGui::Text("Selected: %s", m_applyMaterialName.c_str());
+            } else {
+                ImGui::Text("Selected: -");
+            }
+
+            if (ImGui::Button("Apply to Selection")) {
+                if (!m_applyMaterialName.empty()) {
+                    m_applyMaterialRequested = true;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reload Library")) {
+                renderer.reloadMaterialLibrary(m_materialRoot);
+            }
+
+            ImGui::InputText("Material Root", m_materialRoot, sizeof(m_materialRoot));
+            if (ImGui::Button("Set Material Root")) {
+                renderer.reloadMaterialLibrary(m_materialRoot);
+            }
+
+            // Quick preview controls
+            float uvScale = renderer.getMaterialUVScale();
+            if (ImGui::SliderFloat("UV Scale", &uvScale, 0.05f, 100.0f, "%.2f")) {
+                renderer.setMaterialUVScale(uvScale);
+            }
+
+            float normalStrength = renderer.getNormalStrength();
+            if (ImGui::SliderFloat("Normal Strength", &normalStrength, 0.0f, 2.0f, "%.2f")) {
+                renderer.setNormalStrength(normalStrength);
+            }
+
+            ImGui::TextWrapped("Drag a material onto the viewport to apply it to the surface under the cursor.");
+
+            // Render-server generation
+            if (ImGui::TreeNode("Generate Material (Render Server)")) {
+                if (ImGui::Button("Start Render Server")) {
+                    m_startRenderServerRequested = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Stop Render Server")) {
+                    m_stopRenderServerRequested = true;
+                }
+                ImGui::Text("Script: render_server/start_render_server.ps1");
+                ImGui::DragInt("Port", &m_renderServerPort, 1.0f, 1, 65535);
+
+                ImGui::InputText("Name", m_materialName, sizeof(m_materialName));
+                ImGui::InputText("Prompt", m_materialPrompt, sizeof(m_materialPrompt));
+                ImGui::InputText("Negative", m_materialNegative, sizeof(m_materialNegative));
+                ImGui::InputText("Server URL", m_materialServerUrl, sizeof(m_materialServerUrl));
+                ImGui::InputText("Python EXE", m_materialPythonExe, sizeof(m_materialPythonExe));
+                ImGui::InputText("Generator Script", m_materialScriptPath, sizeof(m_materialScriptPath));
+                ImGui::InputText("Output Root", m_materialOutputRoot, sizeof(m_materialOutputRoot));
+
+                ImGui::DragInt("Size", &m_materialSize, 32, 256, 4096);
+                ImGui::DragInt("Steps", &m_materialSteps, 1, 5, 100);
+                ImGui::DragFloat("Guidance", &m_materialGuidance, 0.1f, 1.0f, 20.0f, "%.1f");
+                ImGui::Checkbox("Tileable", &m_materialTileable);
+
+                if (ImGui::Button("Generate Material")) {
+                    m_materialGenerateRequest.name = m_materialName;
+                    m_materialGenerateRequest.prompt = m_materialPrompt;
+                    m_materialGenerateRequest.negativePrompt = m_materialNegative;
+                    m_materialGenerateRequest.serverUrl = m_materialServerUrl;
+                    m_materialGenerateRequest.pythonExe = m_materialPythonExe;
+                    m_materialGenerateRequest.scriptPath = m_materialScriptPath;
+                    m_materialGenerateRequest.outputRoot = m_materialOutputRoot;
+                    m_materialGenerateRequest.size = m_materialSize;
+                    m_materialGenerateRequest.steps = m_materialSteps;
+                    m_materialGenerateRequest.guidance = m_materialGuidance;
+                    m_materialGenerateRequest.tileable = m_materialTileable;
+                    m_materialGenerateRequested = true;
+                }
+
+                if (!m_materialGenerateStatus.empty()) {
+                    ImGui::Text("Status: %s", m_materialGenerateStatus.c_str());
+                }
+
+                ImGui::TreePop();
+            }
+
+            if (m_materialDragActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
+                    m_materialDropRequested = true;
+                    m_materialDropName = m_materialDragName;
+                }
+                m_materialDragActive = false;
+            }
+        }
+
+        ImGui::Separator();
+
         // PBR Material Settings
         if (ImGui::CollapsingHeader("Material Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::TreeNode("Texture Settings")) {
+                float uvScale = renderer.getMaterialUVScale();
+                if (ImGui::SliderFloat("UV Scale", &uvScale, 0.05f, 100.0f, "%.2f")) {
+                    renderer.setMaterialUVScale(uvScale);
+                }
+
+                float normalStrength = renderer.getNormalStrength();
+                if (ImGui::SliderFloat("Normal Strength", &normalStrength, 0.0f, 2.0f, "%.2f")) {
+                    renderer.setNormalStrength(normalStrength);
+                }
+                ImGui::TreePop();
+            }
+
             // Wall Materials
             if (ImGui::TreeNode("Wall Material")) {
                 float wallMetallic = renderer.getWallMetallic();
@@ -1042,6 +1199,27 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
         }
     }
     ImGui::End();
+}
+
+bool ImGuiLayer::takeMaterialDrop(std::string& outName) {
+    if (!m_materialDropRequested) {
+        return false;
+    }
+
+    outName = m_materialDropName;
+    m_materialDropRequested = false;
+    m_materialDropName.clear();
+    return true;
+}
+
+ImGuiLayer::MaterialGenerateRequest ImGuiLayer::takeMaterialGenerateRequest() {
+    m_materialGenerateRequested = false;
+    return m_materialGenerateRequest;
+}
+
+void ImGuiLayer::setMaterialGenerationState(bool inFlight, const std::string& status) {
+    m_materialGenerateInFlight = inFlight;
+    m_materialGenerateStatus = status;
 }
 
 } // namespace arch

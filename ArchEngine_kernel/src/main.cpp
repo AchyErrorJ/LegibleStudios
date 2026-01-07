@@ -13,8 +13,83 @@
 #include <chrono>
 #include <fstream>
 #include <filesystem>
+#include <sstream>
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <limits>
+#include <cstdlib>
 
 using namespace arch;
+
+static std::string quoteShellArg(const std::string& arg) {
+    std::string out;
+    out.reserve(arg.size());
+    for (char c : arg) {
+        out.push_back(c == '"' ? '\'' : c);
+    }
+    return "\"" + out + "\"";
+}
+
+static std::string buildMaterialGenerateCommand(const ImGuiLayer::MaterialGenerateRequest& req) {
+    std::ostringstream cmd;
+    cmd << quoteShellArg(req.pythonExe)
+        << " " << quoteShellArg(req.scriptPath)
+        << " --name " << quoteShellArg(req.name)
+        << " --prompt " << quoteShellArg(req.prompt)
+        << " --server " << quoteShellArg(req.serverUrl)
+        << " --size " << req.size
+        << " --steps " << req.steps
+        << " --guidance " << req.guidance;
+
+    if (req.tileable) {
+        cmd << " --tileable";
+    } else {
+        cmd << " --no-tileable";
+    }
+
+    if (!req.outputRoot.empty()) {
+        cmd << " --output-root " << quoteShellArg(req.outputRoot);
+    }
+
+    if (!req.negativePrompt.empty()) {
+        cmd << " --negative " << quoteShellArg(req.negativePrompt);
+    }
+
+    return cmd.str();
+}
+
+static std::string buildStartRenderServerCommand(int port) {
+    std::ostringstream cmd;
+    cmd << "powershell -ExecutionPolicy Bypass -File "
+        << quoteShellArg("render_server/start_render_server.ps1")
+        << " -Port " << port;
+    return cmd.str();
+}
+
+static std::string buildStopRenderServerCommand() {
+    std::ostringstream cmd;
+    cmd << "powershell -ExecutionPolicy Bypass -File "
+        << quoteShellArg("render_server/stop_render_server.ps1");
+    return cmd.str();
+}
+
+static std::string detectMaterialRoot() {
+    namespace fs = std::filesystem;
+    const std::vector<std::string> candidates = {
+        "materials",
+        "../materials",
+        "../../materials"
+    };
+
+    for (const auto& path : candidates) {
+        if (fs::exists(path) && fs::is_directory(path)) {
+            return path;
+        }
+    }
+
+    return "materials";
+}
 
 // Ray-box intersection for element picking
 bool rayBoxIntersect(vec3 rayOrigin, vec3 rayDir, vec3 boxMin, vec3 boxMax, float& tMin) {
@@ -247,6 +322,7 @@ int main(int argc, char* argv[]) {
 
         // Create renderer
         Renderer renderer(context);
+        renderer.reloadMaterialLibrary(detectMaterialRoot());
 
         // Initialize physics bridge
         PhysicsBridge physics;
@@ -281,6 +357,9 @@ int main(int argc, char* argv[]) {
 
         // Create ImGui layer
         ImGuiLayer imgui(context, window.getHandle(), renderer.getRenderPass());
+        std::atomic<bool> materialGenInFlight(false);
+        std::mutex materialGenMutex;
+        std::string materialGenStatus = "Idle";
 
         // Load sample buildings
         std::vector<Building> buildings = {
@@ -341,7 +420,7 @@ int main(int argc, char* argv[]) {
         }
 
         size_t currentBuilding = 0;
-        VisualizationMode vizMode = VisualizationMode::Structural;
+        VisualizationMode vizMode = VisualizationMode::Material;
         FrameAnalysis lastAnalysis{};
         bool showDemo = false;
         bool showMetrics = false;
@@ -879,6 +958,10 @@ int main(int argc, char* argv[]) {
 
                 // Render settings panel (shadows, clipping)
                 static bool showRenderSettings = true;
+                {
+                    std::lock_guard<std::mutex> lock(materialGenMutex);
+                    imgui.setMaterialGenerationState(materialGenInFlight.load(), materialGenStatus);
+                }
                 imgui.drawRenderSettingsPanel(renderer, showRenderSettings);
 
                 // Parametric Wall Test Panel
@@ -1002,6 +1085,137 @@ int main(int argc, char* argv[]) {
                 imgui.drawWallEditor(buildings[currentBuilding], showGeometryEditor);
                 imgui.drawHelpPanel(showHelp);
                 imgui.drawPerformancePanel(currentFps, renderer.getStats().drawCalls, renderer.getStats().triangles);
+
+                // Apply material to selection (button)
+                if (imgui.wasApplyMaterialRequested()) {
+                    imgui.clearApplyMaterialRequest();
+                    const std::string& name = imgui.getApplyMaterialName();
+                    auto& elements = buildings[currentBuilding].elements;
+                    const auto& selected = imgui.getSelectedElements();
+                    if (!name.empty() && !selected.empty()) {
+                        for (int idx : selected) {
+                            if (idx >= 0 && idx < static_cast<int>(elements.size())) {
+                                elements[idx].material = name;
+                            }
+                        }
+                        std::cout << "Applied material to selection: " << name << std::endl;
+                    } else if (!name.empty()) {
+                        std::cout << "No selection to apply material: " << name << std::endl;
+                    }
+                }
+
+                // Apply material by dragging onto the viewport
+                std::string droppedMaterial;
+                if (imgui.takeMaterialDrop(droppedMaterial) && !droppedMaterial.empty()) {
+                    f64 mouseX, mouseY;
+                    window.getCursorPos(mouseX, mouseY);
+                    auto [winWidth, winHeight] = window.getWindowSize();
+
+                    float ndcX = (2.0f * static_cast<float>(mouseX) / static_cast<float>(winWidth)) - 1.0f;
+                    float ndcY = 1.0f - (2.0f * static_cast<float>(mouseY) / static_cast<float>(winHeight));
+
+                    float aspect = static_cast<float>(winWidth) / static_cast<float>(winHeight);
+                    mat4 proj = camera.getProjectionMatrix(aspect);
+                    mat4 view = camera.getViewMatrix();
+                    mat4 invVP = glm::inverse(proj * view);
+
+                    vec4 nearPoint = invVP * vec4(ndcX, ndcY, -1.0f, 1.0f);
+                    vec4 farPoint = invVP * vec4(ndcX, ndcY, 1.0f, 1.0f);
+                    nearPoint /= nearPoint.w;
+                    farPoint /= farPoint.w;
+
+                    vec3 rayOrigin = vec3(nearPoint);
+                    vec3 rayDir = glm::normalize(vec3(farPoint) - vec3(nearPoint));
+
+                    auto& elements = buildings[currentBuilding].elements;
+                    int hitIndex = -1;
+                    float bestT = std::numeric_limits<float>::max();
+                    for (size_t i = 0; i < elements.size(); i++) {
+                        vec3 minB, maxB;
+                        getElementBounds(elements[i], minB, maxB);
+                        float t;
+                        if (rayBoxIntersect(rayOrigin, rayDir, minB, maxB, t)) {
+                            if (t < bestT) {
+                                bestT = t;
+                                hitIndex = static_cast<int>(i);
+                            }
+                        }
+                    }
+
+                    if (hitIndex >= 0) {
+                        elements[hitIndex].material = droppedMaterial;
+                        std::cout << "Applied material to element #" << hitIndex << ": " << droppedMaterial << std::endl;
+                    } else {
+                        const auto& selected = imgui.getSelectedElements();
+                        if (!selected.empty()) {
+                            for (int idx : selected) {
+                                if (idx >= 0 && idx < static_cast<int>(elements.size())) {
+                                    elements[idx].material = droppedMaterial;
+                                }
+                            }
+                            std::cout << "Applied material to selection: " << droppedMaterial << std::endl;
+                        } else {
+                            std::cout << "No surface under cursor for material drop: " << droppedMaterial << std::endl;
+                        }
+                    }
+                }
+
+                // Render-server material generation
+                if (imgui.wasMaterialGenerateRequested()) {
+                    auto request = imgui.takeMaterialGenerateRequest();
+                    if (request.name.empty() || request.prompt.empty()) {
+                        std::lock_guard<std::mutex> lock(materialGenMutex);
+                        materialGenStatus = "Name and prompt required.";
+                    } else if (!materialGenInFlight.exchange(true)) {
+                        {
+                            std::lock_guard<std::mutex> lock(materialGenMutex);
+                            materialGenStatus = "Running...";
+                        }
+
+                        std::string cmd = buildMaterialGenerateCommand(request);
+                        std::thread([cmd, &materialGenInFlight, &materialGenMutex, &materialGenStatus]() {
+                            int rc = std::system(cmd.c_str());
+                            {
+                                std::lock_guard<std::mutex> lock(materialGenMutex);
+                                materialGenStatus = (rc == 0) ? "Complete" : "Failed (check console)";
+                            }
+                            materialGenInFlight = false;
+                        }).detach();
+                    }
+                }
+
+                if (imgui.wasStartRenderServerRequested()) {
+                    imgui.clearStartRenderServerRequest();
+                    int port = imgui.getRenderServerPort();
+                    std::string cmd = buildStartRenderServerCommand(port);
+                    std::thread([cmd, &materialGenMutex, &materialGenStatus]() {
+                        {
+                            std::lock_guard<std::mutex> lock(materialGenMutex);
+                            materialGenStatus = "Starting render server...";
+                        }
+                        int rc = std::system(cmd.c_str());
+                        {
+                            std::lock_guard<std::mutex> lock(materialGenMutex);
+                            materialGenStatus = (rc == 0) ? "Render server started" : "Render server start failed";
+                        }
+                    }).detach();
+                }
+
+                if (imgui.wasStopRenderServerRequested()) {
+                    imgui.clearStopRenderServerRequest();
+                    std::string cmd = buildStopRenderServerCommand();
+                    std::thread([cmd, &materialGenMutex, &materialGenStatus]() {
+                        {
+                            std::lock_guard<std::mutex> lock(materialGenMutex);
+                            materialGenStatus = "Stopping render server...";
+                        }
+                        int rc = std::system(cmd.c_str());
+                        {
+                            std::lock_guard<std::mutex> lock(materialGenMutex);
+                            materialGenStatus = (rc == 0) ? "Render server stopped" : "Render server stop failed";
+                        }
+                    }).detach();
+                }
                 if (showDemo) ImGui::ShowDemoWindow(&showDemo);
                 if (showMetrics) ImGui::ShowMetricsWindow(&showMetrics);
 

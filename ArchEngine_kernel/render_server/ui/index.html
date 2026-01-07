@@ -1,0 +1,1211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Revit AI</title>
+    <!-- Import Marked.js for Markdown Rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        /* --- LIGHT MODE (Default) --- */
+        :root {
+            --bg-color: #f3f3f3;
+            --container-bg: #fff;
+            --border-color: #e5e5e5;
+            --text-color: #333;
+            --user-bubble: #0078D4;
+            --ai-bubble: white;
+            --code-bg: #f5f5f5;
+        }
+
+        /* --- DARK MODE OVERRIDES --- */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #1f1f1f;
+                --container-bg: #2d2d2d;
+                --border-color: #444;
+                --text-color: #ccc;
+                --user-bubble: #3f90e9;
+                --ai-bubble: #3a3a3a;
+                --code-bg: #4c4c4c;
+            }
+            body { color: var(--text-color); }
+            #chat-container { background-color: var(--bg-color); }
+            .ai { border: 1px solid #555; }
+            .ai pre { background: var(--code-bg); border-color: #555; }
+            .ai th { background-color: #333; }
+            .ai code { background: #555; color: #eee; }
+            #input-area { background: #333; border-top-color: #444; }
+            #user-input { background: #444; border-color: #555; color: white; }
+        }
+
+        /* --- BASE STYLES --- */
+        body { 
+            font-family: 'Segoe UI', sans-serif; 
+            background-color: var(--bg-color); 
+            margin: 0; 
+            display: flex; 
+            flex-direction: column; 
+            height: 100vh; 
+            color: var(--text-color); 
+        }
+        
+        #chat-container { 
+            flex: 1; 
+            padding: 20px; 
+            overflow-y: auto; 
+            display: flex; 
+            flex-direction: column; 
+            gap: 16px; 
+            scroll-behavior: smooth; 
+        }
+        
+        /* Message Bubbles */
+        .message { 
+            max-width: 85%; 
+            padding: 12px 18px; 
+            border-radius: 12px; 
+            font-size: 14px; 
+            line-height: 1.5; 
+            word-wrap: break-word; 
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1); 
+        }
+        .user { 
+            align-self: flex-end; 
+            background-color: var(--user-bubble); 
+            color: white; 
+            border-bottom-right-radius: 2px; 
+        }
+        .ai { 
+            align-self: flex-start; 
+            background-color: var(--ai-bubble); 
+            border: 1px solid var(--border-color); 
+            border-bottom-left-radius: 2px; 
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05); 
+        }
+        
+        /* Input Area */
+        #input-area { 
+            padding: 15px; 
+            background: var(--container-bg); 
+            border-top: 1px solid var(--border-color); 
+            display: flex; 
+            gap: 10px; 
+            align-items: center; 
+        }
+        #user-input { 
+            flex: 1; 
+            padding: 12px; 
+            border: 1px solid var(--border-color); 
+            border-radius: 6px; 
+            outline: none; 
+            font-size: 14px; 
+            transition: border-color 0.2s; 
+            background: var(--ai-bubble); 
+            color: var(--text-color); 
+        }
+        #user-input:focus { border-color: var(--user-bubble); }
+        
+        /* Send Button */
+        #send-btn { 
+            padding: 0 20px; 
+            height: 42px; 
+            background-color: var(--user-bubble); 
+            color: white; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-weight: 600; 
+            transition: background 0.2s; 
+        }
+        #send-btn:hover { background-color: #005a9e; }
+        #send-btn:disabled { background-color: #ccc; cursor: not-allowed; }
+
+        /* Status Bar with Metrics */
+        #status-bar { 
+            font-size: 11px; 
+            color: var(--text-color); 
+            padding: 6px 10px; 
+            background: var(--container-bg); 
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #metrics {
+            display: flex;
+            gap: 12px;
+            font-size: 10px;
+            color: #666;
+        }
+        .metric {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .metric-value {
+            font-weight: 600;
+            color: #9C27B0;
+        }
+        .metric-separator {
+            color: #999;
+            margin: 0 5px;
+        }
+        #reset-metrics-btn {
+            background: transparent;
+            border: 1px solid #999;
+            color: #666;
+            padding: 2px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        #reset-metrics-btn:hover {
+            background: #f0f0f0;
+            border-color: #666;
+            color: #333;
+        }
+        @media (prefers-color-scheme: dark) {
+            #reset-metrics-btn {
+                border-color: #666;
+                color: #999;
+            }
+            #reset-metrics-btn:hover {
+                background: #3a3a3a;
+                border-color: #999;
+                color: #ccc;
+            }
+        }
+
+        /* --- LOG AREA --- */
+        #log-header {
+            cursor: pointer;
+            padding: 8px 10px;
+            background: #2a2a2a;
+            border-top: 1px solid #3a3a3a;
+            font-size: 11px;
+            font-weight: 600;
+            color: #ffeb3b;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #log-header:hover {
+            background: #333;
+        }
+        #log-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        #clear-log-btn {
+            background: #444;
+            color: #ffeb3b;
+            border: none;
+            padding: 3px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 10px;
+        }
+        #clear-log-btn:hover {
+            background: #555;
+        }
+        #auto-expand-toggle {
+            font-size: 10px;
+            cursor: pointer;
+            padding: 3px 8px;
+            background: #444;
+            color: #ffeb3b;
+            border-radius: 3px;
+        }
+        #auto-expand-toggle.disabled {
+            background: #333;
+            color: #888;
+        }
+        
+        #log-container {
+            height: 0;
+            max-height: 200px;
+            padding: 0 10px;
+            font-size: 11px;
+            background: #3a3a3a;
+            overflow-y: auto;
+            border-top: 1px solid #4a4a4a;
+            font-family: 'Consolas', 'Monaco', monospace;
+            transition: height 0.3s ease-in-out, padding 0.3s ease-in-out;
+            border-bottom: 1px solid #4a4a4a;
+        }
+        #log-container.expanded {
+            height: 150px;
+            padding: 10px;
+        }
+        
+        /* Log Entry Styles - All Yellow */
+        .log-entry {
+            margin: 3px 0;
+            padding: 4px 6px;
+            border-left: 3px solid #ffeb3b;
+            border-radius: 2px;
+            line-height: 1.4;
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            color: #ffeb3b;
+        }
+        .log-timestamp {
+            color: #888;
+            font-size: 9px;
+            min-width: 70px;
+            flex-shrink: 0;
+        }
+        .log-message {
+            flex: 1;
+            color: #ffeb3b;
+        }
+
+        /* --- SKETCH OVERLAY --- */
+        #sketch-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px; /* Adds safe space around edges */
+            box-sizing: border-box; /* Ensures padding doesn't increase size */
+        }
+
+        #sketch-container {
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            /* 🛑 PREVENT OVERFLOW */
+            max-height: 90vh; /* Never taller than 90% of screen */
+            max-width: 95vw; /* Never wider than 95% of screen */
+            overflow: auto; /* Scrollbars appear if too small */
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        canvas {
+            background: white;
+            cursor: crosshair;
+            display: block;
+            /* Make canvas responsive-ish */
+            max-width: 100%;
+            height: auto;
+        }
+
+        .toolbar {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            /* 🛑 KEEP BUTTONS VISIBLE */
+            position: sticky;
+            bottom: 0;
+            background: white;
+            padding-top: 10px;
+            padding-bottom: 5px;
+            border-top: 1px solid #eee;
+        }
+
+        .tool-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .btn-primary {
+            background: #0078D4;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #e57373;
+            color: white;
+        }
+
+        /* Input Area Buttons */
+        .icon-btn {
+            background: transparent;
+            border: none;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 0 10px;
+            color: var(--text-color);
+            transition: transform 0.2s;
+        }
+
+            .icon-btn:hover {
+                transform: scale(1.1);
+                color: var(--user-bubble);
+            }
+
+        /* Quick Actions Bar */
+        #quick-actions {
+            display: flex;
+            gap: 8px;
+            padding: 10px 15px;
+            background: var(--container-bg);
+            border-bottom: 1px solid var(--border-color);
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .quick-action-label {
+            font-size: 11px;
+            color: #888;
+            margin-right: 5px;
+        }
+        .quick-btn {
+            padding: 6px 12px;
+            font-size: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 15px;
+            background: var(--ai-bubble);
+            color: var(--text-color);
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .quick-btn:hover {
+            background: var(--user-bubble);
+            color: white;
+            border-color: var(--user-bubble);
+        }
+        .quick-btn.primary {
+            background: #4CAF50;
+            color: white;
+            border-color: #4CAF50;
+        }
+        .quick-btn.primary:hover {
+            background: #45a049;
+        }
+
+        /* Room Layout Modal */
+        #room-layout-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        #room-layout-container {
+            background: var(--container-bg);
+            padding: 20px;
+            border-radius: 12px;
+            max-width: 500px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        #room-layout-container h3 {
+            margin: 0 0 15px 0;
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .layout-section {
+            margin-bottom: 15px;
+        }
+        .layout-section label {
+            display: block;
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 5px;
+        }
+        .layout-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .layout-input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--ai-bubble);
+            color: var(--text-color);
+            font-size: 14px;
+        }
+        .layout-input:focus {
+            outline: none;
+            border-color: var(--user-bubble);
+        }
+        .preset-btns {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
+        }
+        .preset-btn {
+            padding: 8px 14px;
+            font-size: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--ai-bubble);
+            color: var(--text-color);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .preset-btn:hover, .preset-btn.active {
+            background: var(--user-bubble);
+            color: white;
+            border-color: var(--user-bubble);
+        }
+        .room-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+        .room-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .room-item:last-child {
+            border-bottom: none;
+        }
+        .room-item span {
+            font-size: 13px;
+        }
+        .room-remove {
+            background: #e57373;
+            color: white;
+            border: none;
+            padding: 2px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 15px;
+        }
+
+        /* Attachment Preview */
+        #attachment-preview {
+            position: absolute;
+            bottom: 70px;
+            left: 20px;
+            background: var(--container-bg);
+            border: 1px solid var(--border-color);
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            display: none;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+
+
+    </style>
+</head>
+<body>
+    <div id="status-bar">
+        <span id="status-text">Agent Ready</span>
+        <div id="metrics">
+            <div class="metric">
+                <span>⏱️</span>
+                <span class="metric-value" id="last-response-time">--</span>
+            </div>
+            <div class="metric">
+                <span>📊</span>
+                <span class="metric-value" id="avg-response-time">--</span>
+            </div>
+            <span class="metric-separator">|</span>
+            <div class="metric">
+                <span>🔧</span>
+                <span class="metric-value" id="tool-calls">0</span>
+            </div>
+            <span class="metric-separator">|</span>
+            <div class="metric">
+                <span>📥</span>
+                <span class="metric-value" id="input-tokens">0</span>
+            </div>
+            <div class="metric">
+                <span>📤</span>
+                <span class="metric-value" id="output-tokens">0</span>
+            </div>
+            <div class="metric">
+                <span>💰</span>
+                <span class="metric-value" id="total-tokens">0</span>
+            </div>
+            <span class="metric-separator">|</span>
+            <div class="metric">
+                <span>💬</span>
+                <span class="metric-value" id="message-count">0</span>
+            </div>
+            <span class="metric-separator">|</span>
+            <button id="reset-metrics-btn" onclick="resetMetrics()" title="Reset all metrics">🔄</button>
+        </div>
+    </div>
+
+    <!-- Quick Actions Bar -->
+    <div id="quick-actions">
+        <span class="quick-action-label">Quick:</span>
+        <button class="quick-btn" onclick="quickCommand('status')">📊 Status</button>
+        <button class="quick-btn" onclick="quickCommand('list levels')">📏 Levels</button>
+        <button class="quick-btn" onclick="quickCommand('list wall types')">🧱 Wall Types</button>
+        <button class="quick-btn primary" onclick="openRoomLayout()">🏠 Room Layout</button>
+        <button class="quick-btn" onclick="quickCommand('create a 30x40 house')">🏗️ Simple House</button>
+    </div>
+
+    <div id="chat-container">
+        <div class="message ai">Hello! I am connected to your Revit model. What shall we build? Try the <strong>🏠 Room Layout</strong> button to generate interior partition walls!</div>
+    </div>
+
+    <!-- Room Layout Modal -->
+    <div id="room-layout-modal">
+        <div id="room-layout-container">
+            <h3>🏠 Room Layout Generator</h3>
+
+            <div class="layout-section">
+                <label>Presets</label>
+                <div class="preset-btns">
+                    <button class="preset-btn" onclick="applyPreset('studio')">Studio</button>
+                    <button class="preset-btn" onclick="applyPreset('1bed')">1 Bed</button>
+                    <button class="preset-btn" onclick="applyPreset('2bed')">2 Bed</button>
+                    <button class="preset-btn" onclick="applyPreset('3bed')">3 Bed</button>
+                    <button class="preset-btn" onclick="applyPreset('4bed')">4 Bed</button>
+                </div>
+            </div>
+
+            <div class="layout-section">
+                <label>Footprint Dimensions (feet)</label>
+                <div class="layout-row">
+                    <input type="number" id="layout-width" class="layout-input" placeholder="Width" value="40">
+                    <span style="color: var(--text-color); align-self: center;">×</span>
+                    <input type="number" id="layout-depth" class="layout-input" placeholder="Depth" value="30">
+                </div>
+            </div>
+
+            <div class="layout-section">
+                <label>Add Room</label>
+                <div class="layout-row">
+                    <select id="room-type" class="layout-input">
+                        <option value="entry">Entry</option>
+                        <option value="living">Living Room</option>
+                        <option value="dining">Dining Room</option>
+                        <option value="kitchen">Kitchen</option>
+                        <option value="primary_bedroom">Primary Bedroom</option>
+                        <option value="bedroom">Bedroom</option>
+                        <option value="bathroom">Bathroom</option>
+                        <option value="primary_bath">Primary Bath</option>
+                        <option value="hallway">Hallway</option>
+                        <option value="closet">Closet</option>
+                        <option value="laundry">Laundry</option>
+                        <option value="office">Office</option>
+                        <option value="mechanical">Mechanical</option>
+                        <option value="garage">Garage</option>
+                    </select>
+                    <input type="number" id="room-area" class="layout-input" placeholder="Min Area (sqft)" value="100" style="width: 120px;">
+                    <button class="quick-btn" onclick="addRoom()">+ Add</button>
+                </div>
+            </div>
+
+            <div class="layout-section">
+                <label>Rooms to Generate</label>
+                <div class="room-list" id="room-list">
+                    <div class="room-item" style="color: #888; font-style: italic;">No rooms added yet</div>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button class="tool-btn btn-danger" onclick="closeRoomLayout()">Cancel</button>
+                <button class="tool-btn" onclick="clearRoomList()">Clear All</button>
+                <button class="tool-btn btn-primary" onclick="generateRoomLayout()">🚀 Generate Layout</button>
+            </div>
+        </div>
+    </div>
+    <input type="file" id="file-input" accept="image/*" style="display: none;" onchange="handleFileSelect(this)">
+
+    <div id="sketch-overlay">
+        <div id="sketch-container">
+            <h3 style="color: black; margin: 0 0 10px 0;">Draw Floor Plan</h3>
+            <canvas id="drawing-canvas" width="500" height="500"></canvas>
+            <div class="toolbar">
+                <button class="tool-btn" onclick="clearCanvas()">Clear</button>
+                <button class="tool-btn btn-danger" onclick="toggleSketch()">Cancel</button>
+                <button class="tool-btn btn-primary" onclick="useSketch()">✅ Use Sketch</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="attachment-preview">
+        📎 Image Attached <span style="cursor:pointer; color:red; margin-left:5px" onclick="clearAttachment()">✖</span>
+    </div>
+
+
+
+    <!-- Enhanced Log Header -->
+    <div id="log-header" onclick="toggleLog()">
+        <span>🛠 Live Process Log</span>
+        <div id="log-controls" onclick="event.stopPropagation()">
+            <span id="auto-expand-toggle" onclick="toggleAutoExpand()">Auto ✓</span>
+            <button id="clear-log-btn" onclick="clearLog()">Clear</button>
+            <span id="log-toggle-icon">▶</span>
+        </div>
+    </div>
+
+    <!-- Log Content Area -->
+    <div id="log-container">
+        <div class="log-entry">
+            <span class="log-timestamp">[00:00:00]</span>
+            <span class="log-message">System initialized successfully</span>
+        </div>
+    </div>
+
+    <div id="input-area">
+        <button class="icon-btn" onclick="document.getElementById('file-input').click()" title="Attach Image">📎</button>
+        <button class="icon-btn" onclick="toggleSketch()" title="Draw Sketch">✏️</button>
+        <input type="text" id="user-input" placeholder="Type a command..." onkeypress="handleEnter(event)">
+        <button id="send-btn" onclick="sendMessage()">Send</button>
+    </div>
+
+    <script>
+        const API_URL = "http://localhost:8001/chat";
+        const LOG_STREAM_URL = "http://localhost:8001/log-stream";
+
+        let currentImageBase64 = null;
+        let isDrawing = false;
+
+        let chatHistory = [];
+        let logExpanded = false;
+        let autoExpandLog = true;
+        let responseTimes = [];
+        let messageCount = 0;
+        let logEventSource = null;
+
+        // Token and tool tracking
+        let totalInputTokens = 0;
+        let totalOutputTokens = 0;
+        let totalToolCalls = 0;
+
+        // Initialize log streaming on page load
+        window.addEventListener('load', () => {
+            initLogStream();
+        });
+
+        // --- VISION FUNCTIONS ---
+        function handleFileSelect(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                currentImageBase64 = e.target.result;
+                showAttachment("Image Attached");
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function showAttachment(text) {
+            const preview = document.getElementById('attachment-preview');
+            preview.style.display = 'block';
+            preview.firstChild.textContent = "📎 " + text + " ";
+        }
+
+        function clearAttachment() {
+            currentImageBase64 = null;
+            document.getElementById('file-input').value = "";
+            document.getElementById('attachment-preview').style.display = 'none';
+        }
+
+        // Sketch Pad Logic
+        const canvas = document.getElementById('drawing-canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = "white"; ctx.fillRect(0, 0, 500, 500);
+        ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.strokeStyle = 'black';
+
+        function toggleSketch() {
+            const overlay = document.getElementById('sketch-overlay');
+            overlay.style.display = overlay.style.display === 'flex' ? 'none' : 'flex';
+        }
+
+        function clearCanvas() {
+            ctx.fillStyle = "white"; ctx.fillRect(0, 0, 500, 500);
+        }
+
+        function useSketch() {
+            currentImageBase64 = canvas.toDataURL('image/png');
+            showAttachment("Sketch Attached");
+            toggleSketch();
+        }
+
+        // Drawing Events
+        canvas.addEventListener('mousedown', (e) => { isDrawing = true; ctx.beginPath(); ctx.moveTo(e.offsetX, e.offsetY); });
+        canvas.addEventListener('mousemove', (e) => { if (isDrawing) { ctx.lineTo(e.offsetX, e.offsetY); ctx.stroke(); } });
+        canvas.addEventListener('mouseup', () => isDrawing = false);
+
+        function initLogStream() {
+            // Close existing connection if any
+            if (logEventSource) {
+                logEventSource.close();
+            }
+
+            // Create new EventSource connection for real-time logs
+            logEventSource = new EventSource(LOG_STREAM_URL);
+
+            logEventSource.onmessage = function (event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    appendToLog(data.message, data.level || 'info', data.timestamp);
+                } catch (e) {
+                    console.error('Error parsing log stream:', e);
+                }
+            };
+
+            logEventSource.onerror = function (error) {
+                console.error('Log stream error:', error);
+                appendToLog('Log stream disconnected. Attempting to reconnect...', 'warning');
+
+                // Attempt to reconnect after 5 seconds
+                setTimeout(() => {
+                    if (logEventSource.readyState === EventSource.CLOSED) {
+                        initLogStream();
+                    }
+                }, 5000);
+            };
+
+            logEventSource.onopen = function () {
+                appendToLog('Real-time log stream connected', 'success');
+            };
+        }
+
+        function toggleLog() {
+            const container = document.getElementById('log-container');
+            const icon = document.getElementById('log-toggle-icon');
+
+            if (logExpanded) {
+                container.classList.remove('expanded');
+                icon.innerText = '▶';
+            } else {
+                container.classList.add('expanded');
+                icon.innerText = '▼';
+            }
+            logExpanded = !logExpanded;
+        }
+
+        function toggleAutoExpand() {
+            autoExpandLog = !autoExpandLog;
+            const toggle = document.getElementById('auto-expand-toggle');
+            toggle.innerText = autoExpandLog ? 'Auto ✓' : 'Auto ✗';
+            toggle.className = autoExpandLog ? '' : 'disabled';
+        }
+
+        function clearLog() {
+            const log = document.getElementById('log-container');
+            log.innerHTML = '<div class="log-entry"><span class="log-timestamp">[' +
+                new Date().toLocaleTimeString() + ']</span><span class="log-message">Log cleared</span></div>';
+        }
+
+        function appendToLog(text, level = 'info', timestamp = null) {
+            const log = document.getElementById('log-container');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+
+            const time = timestamp || new Date().toLocaleTimeString();
+
+            entry.innerHTML = `
+                    <span class="log-timestamp">[${time}]</span>
+                    <span class="log-message">${text}</span>
+                `;
+
+            log.appendChild(entry);
+
+            // Auto-expand on error or if enabled
+            if ((level === 'error' || autoExpandLog) && !logExpanded) {
+                toggleLog();
+            }
+
+            // Auto-scroll to bottom
+            log.scrollTop = log.scrollHeight;
+
+            // Limit log entries to prevent memory issues (keep last 100)
+            const entries = log.querySelectorAll('.log-entry');
+            if (entries.length > 100) {
+                entries[0].remove();
+            }
+        }
+
+        function updateMetrics(responseTime, usage = null) {
+            // Update last response time
+            document.getElementById('last-response-time').innerText = `${responseTime}ms`;
+
+            // Update average response time
+            responseTimes.push(responseTime);
+            if (responseTimes.length > 10) responseTimes.shift(); // Keep last 10
+            const avg = Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length);
+            document.getElementById('avg-response-time').innerText = `${avg}ms avg`;
+
+            // Update message count
+            messageCount++;
+            document.getElementById('message-count').innerText = messageCount;
+
+            // Update token usage if provided
+            if (usage) {
+                if (usage.input_tokens) {
+                    totalInputTokens += usage.input_tokens;
+                    document.getElementById('input-tokens').innerText = formatNumber(totalInputTokens);
+                }
+                if (usage.output_tokens) {
+                    totalOutputTokens += usage.output_tokens;
+                    document.getElementById('output-tokens').innerText = formatNumber(totalOutputTokens);
+                }
+                if (usage.total_tokens || (usage.input_tokens && usage.output_tokens)) {
+                    const total = usage.total_tokens || (usage.input_tokens + usage.output_tokens);
+                    document.getElementById('total-tokens').innerText = formatNumber(totalInputTokens + totalOutputTokens);
+                }
+                if (usage.tool_calls !== undefined) {
+                    totalToolCalls += usage.tool_calls;
+                    document.getElementById('tool-calls').innerText = totalToolCalls;
+                }
+            }
+
+            // Log the metric
+            let metricLog = `Response: ${responseTime}ms (avg: ${avg}ms)`;
+            if (usage && usage.tool_calls !== undefined) {
+                metricLog += `, ${usage.tool_calls} tool calls`;
+            }
+            if (usage && usage.total_tokens) {
+                metricLog += `, ${formatNumber(usage.total_tokens)} tokens`;
+            }
+            appendToLog(metricLog, 'metric');
+        }
+
+        function formatNumber(num) {
+            if (num >= 1000000) {
+                return (num / 1000000).toFixed(1) + 'M';
+            } else if (num >= 1000) {
+                return (num / 1000).toFixed(1) + 'K';
+            }
+            return num.toString();
+        }
+
+        function resetMetrics() {
+            if (confirm('Reset all metrics to zero?')) {
+                // Reset all tracking variables
+                totalInputTokens = 0;
+                totalOutputTokens = 0;
+                totalToolCalls = 0;
+                responseTimes = [];
+                messageCount = 0;
+
+                // Reset all display elements
+                document.getElementById('last-response-time').innerText = '--';
+                document.getElementById('avg-response-time').innerText = '--';
+                document.getElementById('tool-calls').innerText = '0';
+                document.getElementById('input-tokens').innerText = '0';
+                document.getElementById('output-tokens').innerText = '0';
+                document.getElementById('total-tokens').innerText = '0';
+                document.getElementById('message-count').innerText = '0';
+
+                // Log the reset
+                appendToLog('Metrics reset to zero', 'info');
+            }
+        }
+
+        function handleEnter(e) {
+            if (e.key === 'Enter') sendMessage();
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('user-input');
+            const btn = document.getElementById('send-btn');
+            const status = document.getElementById('status-text');
+            const text = input.value.trim();
+
+            if (!text) return;
+
+            console.log("Sending message:", text);
+
+            // UI Updates
+            addMessage(text, 'user');
+            input.value = '';
+            input.disabled = true;
+            btn.disabled = true;
+            status.innerText = "Thinking...";
+
+            const startTime = performance.now();
+
+            try {
+                appendToLog(`Sending request: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`, 'info');
+
+                console.log("Fetching from:", API_URL);
+
+                const response = await fetch(API_URL, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ message: text, history: chatHistory, image: currentImageBase64  })
+                });
+
+                console.log("Response status:", response.status);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                console.log("Response data:", data);
+
+                const responseTime = Math.round(performance.now() - startTime);
+
+                if (data.reply) {
+                    clearAttachment();
+                    appendToLog("Response received successfully", 'success');
+                    addMessage(data.reply, 'ai', true);
+
+                    // Update history
+                    chatHistory.push({ role: "user", content: text });
+                    chatHistory.push({ role: "assistant", content: data.reply });
+
+                    // Update metrics with usage data
+                    updateMetrics(responseTime, data.usage);
+                } else {
+                    appendToLog("Error: No reply structure found", 'error');
+                    addMessage("Error: No reply structure found.", 'ai');
+                    console.error("Response missing 'reply' field:", data);
+                }
+
+            } catch (err) {
+                const responseTime = Math.round(performance.now() - startTime);
+                appendToLog(`ERROR: ${err.message}`, 'error');
+                addMessage(`Connection Error: ${err.message}. Is the Python server running on port 8001?`, 'ai');
+                console.error("Full error:", err);
+            } finally {
+                input.disabled = false;
+                btn.disabled = false;
+                status.innerText = "Ready";
+                input.focus();
+            }
+        }
+
+        function addMessage(text, sender, isMarkdown = false) {
+            const container = document.getElementById('chat-container');
+            const msg = document.createElement('div');
+            msg.className = `message ${sender}`;
+
+            if (isMarkdown && typeof marked !== 'undefined') {
+                msg.innerHTML = marked.parse(text);
+            } else {
+                msg.innerText = text;
+            }
+
+            container.appendChild(msg);
+            container.scrollTop = container.scrollHeight;
+        }
+
+
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (logEventSource) {
+                logEventSource.close();
+            }
+        });
+
+        // --- ROOM LAYOUT FUNCTIONS ---
+        let roomList = [];
+
+        const presets = {
+            'studio': {
+                width: 25, depth: 20,
+                rooms: [
+                    { type: 'entry', min_area: 30 },
+                    { type: 'living', min_area: 150 },
+                    { type: 'kitchen', min_area: 60 },
+                    { type: 'bathroom', min_area: 40 },
+                    { type: 'closet', min_area: 20 }
+                ]
+            },
+            '1bed': {
+                width: 35, depth: 25,
+                rooms: [
+                    { type: 'entry', min_area: 40 },
+                    { type: 'living', min_area: 180 },
+                    { type: 'kitchen', min_area: 80 },
+                    { type: 'dining', min_area: 60 },
+                    { type: 'primary_bedroom', min_area: 140 },
+                    { type: 'bathroom', min_area: 45 },
+                    { type: 'closet', min_area: 25 }
+                ]
+            },
+            '2bed': {
+                width: 40, depth: 30,
+                rooms: [
+                    { type: 'entry', min_area: 50 },
+                    { type: 'living', min_area: 200 },
+                    { type: 'kitchen', min_area: 100 },
+                    { type: 'dining', min_area: 80 },
+                    { type: 'primary_bedroom', min_area: 160 },
+                    { type: 'bedroom', min_area: 120, name: 'Bedroom 2' },
+                    { type: 'primary_bath', min_area: 50 },
+                    { type: 'bathroom', min_area: 40 },
+                    { type: 'laundry', min_area: 30 },
+                    { type: 'hallway', min_area: 40 }
+                ]
+            },
+            '3bed': {
+                width: 50, depth: 35,
+                rooms: [
+                    { type: 'entry', min_area: 60 },
+                    { type: 'living', min_area: 250 },
+                    { type: 'kitchen', min_area: 120 },
+                    { type: 'dining', min_area: 100 },
+                    { type: 'primary_bedroom', min_area: 180 },
+                    { type: 'bedroom', min_area: 130, name: 'Bedroom 2' },
+                    { type: 'bedroom', min_area: 120, name: 'Bedroom 3' },
+                    { type: 'primary_bath', min_area: 60 },
+                    { type: 'bathroom', min_area: 45 },
+                    { type: 'laundry', min_area: 35 },
+                    { type: 'hallway', min_area: 50 },
+                    { type: 'mechanical', min_area: 25 }
+                ]
+            },
+            '4bed': {
+                width: 60, depth: 40,
+                rooms: [
+                    { type: 'entry', min_area: 70 },
+                    { type: 'living', min_area: 300 },
+                    { type: 'kitchen', min_area: 150 },
+                    { type: 'dining', min_area: 120 },
+                    { type: 'primary_bedroom', min_area: 200 },
+                    { type: 'bedroom', min_area: 140, name: 'Bedroom 2' },
+                    { type: 'bedroom', min_area: 130, name: 'Bedroom 3' },
+                    { type: 'bedroom', min_area: 120, name: 'Bedroom 4' },
+                    { type: 'primary_bath', min_area: 70 },
+                    { type: 'bathroom', min_area: 50 },
+                    { type: 'bathroom', min_area: 45, name: 'Bathroom 2' },
+                    { type: 'laundry', min_area: 40 },
+                    { type: 'office', min_area: 100 },
+                    { type: 'hallway', min_area: 60 },
+                    { type: 'mechanical', min_area: 30 }
+                ]
+            }
+        };
+
+        function quickCommand(cmd) {
+            document.getElementById('user-input').value = cmd;
+            sendMessage();
+        }
+
+        function openRoomLayout() {
+            document.getElementById('room-layout-modal').style.display = 'flex';
+        }
+
+        function closeRoomLayout() {
+            document.getElementById('room-layout-modal').style.display = 'none';
+        }
+
+        function applyPreset(presetName) {
+            const preset = presets[presetName];
+            if (!preset) return;
+
+            document.getElementById('layout-width').value = preset.width;
+            document.getElementById('layout-depth').value = preset.depth;
+            roomList = JSON.parse(JSON.stringify(preset.rooms)); // Deep copy
+            updateRoomListUI();
+
+            // Highlight active preset
+            document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+        }
+
+        function addRoom() {
+            const type = document.getElementById('room-type').value;
+            const area = parseInt(document.getElementById('room-area').value) || 100;
+
+            const roomNames = {
+                'entry': 'Entry', 'living': 'Living Room', 'dining': 'Dining Room',
+                'kitchen': 'Kitchen', 'primary_bedroom': 'Primary Bedroom', 'bedroom': 'Bedroom',
+                'bathroom': 'Bathroom', 'primary_bath': 'Primary Bath', 'hallway': 'Hallway',
+                'closet': 'Closet', 'laundry': 'Laundry', 'office': 'Office',
+                'mechanical': 'Mechanical', 'garage': 'Garage'
+            };
+
+            // Count existing rooms of same type for naming
+            const sameTypeCount = roomList.filter(r => r.type === type).length;
+            const name = sameTypeCount > 0 ? `${roomNames[type]} ${sameTypeCount + 1}` : roomNames[type];
+
+            roomList.push({ type, min_area: area, name });
+            updateRoomListUI();
+        }
+
+        function removeRoom(index) {
+            roomList.splice(index, 1);
+            updateRoomListUI();
+        }
+
+        function clearRoomList() {
+            roomList = [];
+            updateRoomListUI();
+        }
+
+        function updateRoomListUI() {
+            const container = document.getElementById('room-list');
+
+            if (roomList.length === 0) {
+                container.innerHTML = '<div class="room-item" style="color: #888; font-style: italic;">No rooms added yet</div>';
+                return;
+            }
+
+            container.innerHTML = roomList.map((room, index) => `
+                <div class="room-item">
+                    <span>${room.name || room.type} (${room.min_area} sqft)</span>
+                    <button class="room-remove" onclick="removeRoom(${index})">✕</button>
+                </div>
+            `).join('');
+        }
+
+        function generateRoomLayout() {
+            if (roomList.length === 0) {
+                alert('Please add at least one room or select a preset.');
+                return;
+            }
+
+            const width = parseInt(document.getElementById('layout-width').value) || 40;
+            const depth = parseInt(document.getElementById('layout-depth').value) || 30;
+
+            // Build the command string
+            const roomDescriptions = roomList.map(r => {
+                if (r.name && r.name !== r.type) {
+                    return `${r.name} (${r.min_area} sqft)`;
+                }
+                return `${r.type} (${r.min_area} sqft)`;
+            }).join(', ');
+
+            const command = `generate a ${width}x${depth} floor plan with room layout: ${roomDescriptions}`;
+
+            closeRoomLayout();
+            document.getElementById('user-input').value = command;
+            sendMessage();
+        }
+    </script>
+</body>
+</html>
