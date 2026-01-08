@@ -714,6 +714,168 @@ class APIDocumentAdapter(QObject):
             return False
 
     # =========================================================================
+    # LLM Integration
+    # =========================================================================
+
+    def apply_llm_changes(self, new_json: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply changes from LLM-generated JSON.
+
+        Compares the new JSON with current state and applies only the
+        differences, providing efficient updates while allowing the LLM
+        to work with familiar full JSON structures.
+
+        Args:
+            new_json: The modified JSON from the LLM
+
+        Returns:
+            Dict with keys:
+                - diff: The DiffResult object
+                - applied: Number of changes applied
+                - failed: Number of changes that failed
+                - errors: List of error details
+                - summary: Human-readable summary
+
+        Example:
+            # LLM modifies the building JSON
+            new_json = llm_modify_building(current_json, user_prompt)
+
+            # Apply only the changes
+            result = document.apply_llm_changes(new_json)
+            print(result["summary"])  # "5 changes: walls: +2 ~1 -0, doors: +1 ~0 -1"
+        """
+        from client.json_diff import JSONDiffer, ChangeApplicator
+        import asyncio
+
+        # Get current state
+        old_json = self.get_data()
+
+        # Find differences
+        differ = JSONDiffer()
+        diff = differ.diff(old_json, new_json)
+
+        if not diff.has_changes:
+            return {
+                "diff": diff,
+                "applied": 0,
+                "failed": 0,
+                "errors": [],
+                "summary": "No changes detected",
+            }
+
+        # Apply changes via API or locally
+        if self._use_api and self._project_id and self._is_connected:
+            # Apply via API for proper transactions
+            applicator = ChangeApplicator(self._api_client, self._project_id)
+
+            loop = asyncio.new_event_loop()
+            try:
+                apply_result = loop.run_until_complete(applicator.apply(diff))
+            finally:
+                loop.close()
+
+            # Refresh local document from API
+            if apply_result["applied"] > 0:
+                self._load_from_api()
+        else:
+            # Apply locally to the document
+            apply_result = self._apply_changes_locally(diff, new_json)
+
+        return {
+            "diff": diff,
+            "applied": apply_result["applied"],
+            "failed": apply_result["failed"],
+            "errors": apply_result.get("errors", []),
+            "summary": diff.summary(),
+        }
+
+    def _apply_changes_locally(self, diff, new_json: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply changes directly to the local document."""
+        from client.json_diff import ChangeType
+
+        applied = 0
+        failed = 0
+        errors = []
+
+        for change in diff.changes:
+            try:
+                if change.element_type == "project":
+                    # Update project-level properties
+                    for key, value in change.data.items():
+                        if hasattr(self._document, key):
+                            setattr(self._document, key, value)
+                        elif hasattr(self._document, '_data'):
+                            self._document._data[key] = value
+                    applied += 1
+
+                elif change.element_type == "wall":
+                    if change.change_type == ChangeType.ADD:
+                        self._document.add_wall(change.data)
+                    elif change.change_type == ChangeType.UPDATE:
+                        self._document.modify_wall(change.index, **change.data)
+                    elif change.change_type == ChangeType.DELETE:
+                        self._document.delete_wall(change.index)
+                    applied += 1
+
+                elif change.element_type == "door":
+                    if change.change_type == ChangeType.ADD:
+                        self._document.add_door(change.data)
+                    elif change.change_type == ChangeType.DELETE:
+                        # Find and delete door by wall_index + offset
+                        doors = self._document.get_doors()
+                        for i, d in enumerate(doors):
+                            if (d.get("wall_index") == change.data.get("wall_index") and
+                                d.get("offset") == change.data.get("offset")):
+                                self._document.delete_door(i)
+                                break
+                    applied += 1
+
+                elif change.element_type == "window":
+                    if change.change_type == ChangeType.ADD:
+                        self._document.add_window(change.data)
+                    elif change.change_type == ChangeType.DELETE:
+                        windows = self._document.get_windows()
+                        for i, w in enumerate(windows):
+                            if (w.get("wall_index") == change.data.get("wall_index") and
+                                w.get("offset") == change.data.get("offset")):
+                                self._document.delete_window(i)
+                                break
+                    applied += 1
+
+                elif change.element_type == "room":
+                    if change.change_type == ChangeType.ADD:
+                        room_data = change.data.copy()
+                        room_data["key"] = change.element_id
+                        self._document.add_room(room_data)
+                    elif change.change_type == ChangeType.DELETE:
+                        self._document.delete_room(change.element_id)
+                    applied += 1
+
+            except Exception as e:
+                failed += 1
+                errors.append({
+                    "change": f"{change.change_type.value} {change.element_type}",
+                    "error": str(e)
+                })
+
+        self._document.set_modified(True)
+        self.document_changed.emit()
+
+        return {"applied": applied, "failed": failed, "errors": errors}
+
+    def get_json_for_llm(self) -> Dict[str, Any]:
+        """
+        Get current building JSON formatted for LLM editing.
+
+        Returns the same format used by text_to_json and schema_modifier,
+        suitable for sending to an LLM for modification.
+
+        Returns:
+            Dict containing the full building structure
+        """
+        return self.get_data()
+
+    # =========================================================================
     # Cleanup
     # =========================================================================
 
