@@ -19,7 +19,10 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     uint enableClipping;
     uint enableShadows;
     uint outputLinearHDR;
-    uint _padding;
+    uint _padding0;
+    uint _padding1;
+    uint _padding2;
+    vec4 materialParams;
 } ubo;
 
 // Push constants

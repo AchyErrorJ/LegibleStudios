@@ -195,7 +195,10 @@ struct UniformBufferObject {
     u32 enableClipping;     // Section clipping enabled flag
     u32 enableShadows;      // Shadow mapping enabled flag
     u32 outputLinearHDR;    // Output linear HDR (skip tonemapping in shader)
-    u32 _padding;           // Alignment padding
+    u32 _padding0;          // Alignment padding
+    u32 _padding1;
+    u32 _padding2;
+    vec4 materialParams;    // x = UV scale, y = normal strength
 };
 
 // Visualization modes

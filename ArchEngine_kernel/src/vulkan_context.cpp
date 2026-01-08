@@ -184,6 +184,7 @@ void VulkanContext::pickPhysicalDevice() {
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
     std::cout << "Selected GPU: " << props.deviceName << "\n";
+    m_maxSamplerAnisotropy = props.limits.maxSamplerAnisotropy;
 }
 
 void VulkanContext::createLogicalDevice() {
@@ -205,11 +206,15 @@ void VulkanContext::createLogicalDevice() {
         queueCreateInfos.push_back(queueCreateInfo);
     }
 
+    VkPhysicalDeviceFeatures supportedFeatures{};
+    vkGetPhysicalDeviceFeatures(m_physicalDevice, &supportedFeatures);
+
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.fillModeNonSolid = VK_TRUE;   // For wireframe
     deviceFeatures.wideLines = VK_TRUE;          // For thick lines
     deviceFeatures.sampleRateShading = VK_TRUE;  // For MSAA sample shading
     deviceFeatures.shaderClipDistance = VK_TRUE; // For section clipping
+    deviceFeatures.samplerAnisotropy = supportedFeatures.samplerAnisotropy;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -223,6 +228,7 @@ void VulkanContext::createLogicalDevice() {
         throw std::runtime_error("Failed to create logical device");
     }
 
+    m_deviceFeatures = deviceFeatures;
     vkGetDeviceQueue(m_device, m_queueFamilies.graphicsFamily.value(), 0, &m_graphicsQueue);
     vkGetDeviceQueue(m_device, m_queueFamilies.presentFamily.value(), 0, &m_presentQueue);
 }
@@ -670,6 +676,12 @@ void VulkanContext::transitionImageLayout(VkImage image, VkFormat format,
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED &&
+               newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     } else {
         throw std::invalid_argument("Unsupported layout transition");

@@ -28,7 +28,7 @@ Vulkan-based architectural visualization and structural analysis tool.
 
 ```bash
 # Clone the repository
-git clone https://aesir.tailb0b4db.ts.net/git/ArchEngine.git
+git clone https://aesir.tailb0b4db.ts.net/git/ArchEngine.git repo might be different 
 cd ArchEngine
 
 # Create build directory

@@ -41,6 +41,25 @@ PipelineConfig PipelineConfig::defaultConfig() {
     return config;
 }
 
+// PipelineConfig for transparent/glass materials with alpha blending
+PipelineConfig PipelineConfig::transparentConfig() {
+    PipelineConfig config = defaultConfig();
+
+    // Enable alpha blending: finalColor = srcAlpha * srcColor + (1 - srcAlpha) * dstColor
+    config.colorBlendAttachment.blendEnable = VK_TRUE;
+    config.colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    config.colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    config.colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    config.colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    config.colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    config.colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    // Disable depth writing for transparent objects (but still test depth)
+    config.depthStencil.depthWriteEnable = VK_FALSE;
+
+    return config;
+}
+
 // Pipeline implementation
 Pipeline::Pipeline(VulkanContext& context, const std::string& vertPath,
                    const std::string& fragPath, const PipelineConfig& config)

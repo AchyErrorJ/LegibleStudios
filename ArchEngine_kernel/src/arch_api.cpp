@@ -45,7 +45,7 @@ namespace {
     int g_width = 800;
     int g_height = 600;
     int g_selectedElement = -1;
-    VisualizationMode g_vizMode = VisualizationMode::Structural;
+    VisualizationMode g_vizMode = VisualizationMode::Material;
 
     // Error handling
     std::string g_lastError;

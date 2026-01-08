@@ -68,12 +68,15 @@ struct Material {
     Texture* roughnessMap = nullptr;   // Roughness (linear, grayscale)
     Texture* metallicMap = nullptr;    // Metallic (linear, grayscale)
     Texture* aoMap = nullptr;          // Ambient occlusion (linear, grayscale)
+    Texture* emissiveMap = nullptr;    // Emissive (sRGB)
+    Texture* opacityMap = nullptr;     // Opacity (linear, grayscale)
 
     // Fallback values when no texture
     vec3 albedoColor = vec3(0.8f);
     f32 roughness = 0.5f;
     f32 metallic = 0.0f;
     f32 ao = 1.0f;
+    f32 opacity = 1.0f;
 
     // Texture tiling
     vec2 uvScale = vec2(1.0f);
@@ -87,6 +90,17 @@ public:
 
     // Load material from directory (expects albedo.png, normal.png, roughness.png, etc.)
     Material* loadMaterial(const std::string& name, const std::string& directory);
+
+    // Load materials from subdirectories under a root directory.
+    // Each subdirectory name becomes a material name.
+    u32 loadMaterialsFromDirectory(const std::string& rootDirectory);
+
+    const std::unordered_map<std::string, std::unique_ptr<Material>>& getMaterials() const {
+        return m_materials;
+    }
+    bool hasMaterial(const std::string& name) const {
+        return m_materials.find(name) != m_materials.end();
+    }
 
     // Create material with solid colors
     Material* createSolidMaterial(const std::string& name, vec3 albedo, f32 roughness, f32 metallic);

@@ -24,7 +24,10 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     uint enableClipping;
     uint enableShadows;
     uint outputLinearHDR;  // If true, output linear HDR (tonemapping done in composite pass)
-    uint _padding;
+    uint _padding0;
+    uint _padding1;
+    uint _padding2;
+    vec4 materialParams;
 } ubo;
 
 // Shadow map sampler with depth comparison
@@ -36,6 +39,8 @@ layout(set = 1, binding = 1) uniform sampler2D normalMap;
 layout(set = 1, binding = 2) uniform sampler2D roughnessMap;
 layout(set = 1, binding = 3) uniform sampler2D metallicMap;
 layout(set = 1, binding = 4) uniform sampler2D aoMap;
+layout(set = 1, binding = 5) uniform sampler2D emissiveMap;
+layout(set = 1, binding = 6) uniform sampler2D opacityMap;
 
 // Stress color constants (matching types.hpp)
 const vec3 STRESS_SAFE     = vec3(0.133, 0.773, 0.369);  // Green
@@ -99,9 +104,10 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
 }
 
 // Perturb normal using tangent space normal map
-vec3 perturbNormal(vec3 N, vec3 V, vec2 texCoord) {
+vec3 perturbNormal(vec3 N, vec3 V, vec2 texCoord, float normalStrength) {
     // Sample normal map (stored as RGB = XYZ in [0,1] range)
     vec3 tangentNormal = texture(normalMap, texCoord).rgb * 2.0 - 1.0;
+    tangentNormal = normalize(vec3(tangentNormal.xy * normalStrength, tangentNormal.z));
 
     // Compute TBN matrix using derivatives (no pre-computed tangents needed)
     vec3 Q1 = dFdx(fragPosition);
@@ -215,15 +221,18 @@ void main() {
     vec3 H = normalize(V + L);
 
     // Sample material textures
-    vec3 texAlbedo = texture(albedoMap, fragTexCoord).rgb;
-    vec3 texNormal = texture(normalMap, fragTexCoord).rgb;
-    float texRoughness = texture(roughnessMap, fragTexCoord).r;
-    float texMetallic = texture(metallicMap, fragTexCoord).r;
-    float texAO = texture(aoMap, fragTexCoord).r;
+    vec2 uv = fragTexCoord * ubo.materialParams.x;
+    vec3 texAlbedo = texture(albedoMap, uv).rgb;
+    vec3 texNormal = texture(normalMap, uv).rgb;
+    float texRoughness = texture(roughnessMap, uv).r;
+    float texMetallic = texture(metallicMap, uv).r;
+    float texAO = texture(aoMap, uv).r;
+    vec3 texEmissive = texture(emissiveMap, uv).rgb;
+    float texOpacity = texture(opacityMap, uv).r;
 
     // Perturb normal using normal map (only if not flat normal)
     if (length(texNormal - vec3(0.5, 0.5, 1.0)) > 0.01) {
-        N = perturbNormal(N, V, fragTexCoord);
+        N = perturbNormal(N, V, uv, ubo.materialParams.y);
     }
 
     // Extract push constant material properties (used as multipliers/overrides)
@@ -296,8 +305,9 @@ void main() {
     // Combine direct and ambient lighting
     vec3 result = ambient + Lo;
 
-    // Add emission
-    result += albedo * emission;
+    // Add emission (use emissive texture when present, fall back to albedo)
+    vec3 emissiveColor = (length(texEmissive) > 0.001) ? texEmissive : albedo;
+    result += emissiveColor * emission;
 
     // DEBUG: Uncomment one to visualize components
     // outColor = vec4(N * 0.5 + 0.5, 1.0); return;  // Normals
@@ -314,9 +324,20 @@ void main() {
     // outColor = vec4(lsPos * 0.5 + 0.5, 1.0); return;  // Light space position (RGB=XYZ)
     // outColor = vec4(vec3(lsPos.z), 1.0); return;      // Light space depth (closer=darker)
 
+    // Calculate alpha for transparency (glass has low roughness)
+    // Glass materials: roughness < 0.35 = transparent
+    float alpha = 1.0;
+    if (roughness < 0.35 && metallic < 0.1) {
+        // Glass: semi-transparent with fresnel effect (more opaque at grazing angles)
+        float fresnel = pow(1.0 - NdotV, 3.0);
+        alpha = mix(0.3, 0.7, fresnel);  // 30% to 70% opacity based on view angle
+    }
+    // Clamp opacity so glass doesn't vanish when opacity maps are too dark
+    alpha *= clamp(texOpacity, 0.05, 1.0);
+
     // When rendering to HDR buffer, output linear values (tonemapping done in composite pass)
     if (ubo.outputLinearHDR != 0u) {
-        outColor = vec4(result, 1.0);
+        outColor = vec4(result, alpha);
         return;
     }
 
@@ -327,5 +348,5 @@ void main() {
     // Gamma correction
     result = pow(result, vec3(1.0 / 2.2));
 
-    outColor = vec4(result, 1.0);
+    outColor = vec4(result, alpha);
 }

@@ -18,6 +18,7 @@ struct PipelineConfig {
     u32 subpass = 0;
 
     static PipelineConfig defaultConfig();
+    static PipelineConfig transparentConfig();  // Alpha blending enabled
 };
 
 class Pipeline {

@@ -124,8 +124,13 @@ void Texture::createSampler() {
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.anisotropyEnable = VK_TRUE;
-    samplerInfo.maxAnisotropy = 16.0f;
+    if (m_context.supportsSamplerAnisotropy()) {
+        samplerInfo.anisotropyEnable = VK_TRUE;
+        samplerInfo.maxAnisotropy = m_context.getMaxSamplerAnisotropy();
+    } else {
+        samplerInfo.anisotropyEnable = VK_FALSE;
+        samplerInfo.maxAnisotropy = 1.0f;
+    }
     samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
     samplerInfo.unnormalizedCoordinates = VK_FALSE;
     samplerInfo.compareEnable = VK_FALSE;
@@ -177,6 +182,8 @@ MaterialLibrary::MaterialLibrary(VulkanContext& context)
     m_defaultMaterial.roughnessMap = Texture::getWhite();  // White = rough
     m_defaultMaterial.metallicMap = Texture::getBlack();   // Black = non-metallic
     m_defaultMaterial.aoMap = Texture::getWhite();         // White = no occlusion
+    m_defaultMaterial.emissiveMap = Texture::getBlack();
+    m_defaultMaterial.opacityMap = Texture::getWhite();
     m_defaultMaterial.albedoColor = vec3(0.8f);
     m_defaultMaterial.roughness = 0.5f;
     m_defaultMaterial.metallic = 0.0f;
@@ -228,11 +235,49 @@ Material* MaterialLibrary::loadMaterial(const std::string& name, const std::stri
     if (!mat->aoMap) mat->aoMap = tryLoad("ambient_occlusion", false);
     if (!mat->aoMap) mat->aoMap = Texture::getWhite();
 
+    mat->emissiveMap = tryLoad("emissive", true);
+    if (!mat->emissiveMap) mat->emissiveMap = tryLoad("emission", true);
+    if (!mat->emissiveMap) mat->emissiveMap = tryLoad("emit", true);
+    if (!mat->emissiveMap) mat->emissiveMap = Texture::getBlack();
+
+    mat->opacityMap = tryLoad("opacity", false);
+    if (!mat->opacityMap) mat->opacityMap = tryLoad("alpha", false);
+    if (!mat->opacityMap) mat->opacityMap = Texture::getWhite();
+
     auto* ptr = mat.get();
     m_materials[name] = std::move(mat);
 
     std::cout << "[MaterialLibrary] Loaded material: " << name << std::endl;
     return ptr;
+}
+
+u32 MaterialLibrary::loadMaterialsFromDirectory(const std::string& rootDirectory) {
+    namespace fs = std::filesystem;
+
+    if (!fs::exists(rootDirectory) || !fs::is_directory(rootDirectory)) {
+        std::cout << "[MaterialLibrary] Materials directory not found: " << rootDirectory << std::endl;
+        return 0;
+    }
+
+    u32 loaded = 0;
+    for (const auto& entry : fs::directory_iterator(rootDirectory)) {
+        if (!entry.is_directory()) continue;
+
+        std::string name = entry.path().filename().string();
+        if (m_materials.find(name) != m_materials.end()) {
+            continue;
+        }
+
+        if (loadMaterial(name, entry.path().string())) {
+            loaded++;
+        }
+    }
+
+    if (loaded > 0) {
+        std::cout << "[MaterialLibrary] Loaded " << loaded << " materials from " << rootDirectory << std::endl;
+    }
+
+    return loaded;
 }
 
 Material* MaterialLibrary::createSolidMaterial(const std::string& name, vec3 albedo, f32 roughness, f32 metallic) {
@@ -252,6 +297,8 @@ Material* MaterialLibrary::createSolidMaterial(const std::string& name, vec3 alb
     mat->roughnessMap = Texture::getWhite();
     mat->metallicMap = Texture::getBlack();
     mat->aoMap = Texture::getWhite();
+    mat->emissiveMap = Texture::getBlack();
+    mat->opacityMap = Texture::getWhite();
 
     auto* ptr = mat.get();
     m_materials[name] = std::move(mat);

@@ -7,3 +7,12 @@ cmake-build-*/
 *.lib
 *.ilk
 imgui.ini
+
+# Cache and generated files
+pipeline_cache.bin
+nul
+__pycache__/
+.claude/
+
+# Temporary scripts
+*.ps1

@@ -76,6 +76,8 @@ public:
     VkSampleCountFlagBits getMsaaSamples() const { return m_msaaSamples; }
     VkSampleCountFlagBits getMaxUsableSampleCount() const;
     VkImageView getMsaaColorImageView() const { return m_msaaColorImageView; }
+    bool supportsSamplerAnisotropy() const { return m_deviceFeatures.samplerAnisotropy == VK_TRUE; }
+    float getMaxSamplerAnisotropy() const { return m_maxSamplerAnisotropy; }
 
     // Config access
     const VulkanConfig& getConfig() const { return m_config; }
@@ -170,6 +172,8 @@ private:
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
+    VkPhysicalDeviceFeatures m_deviceFeatures{};
+    float m_maxSamplerAnisotropy = 1.0f;
 
     // Pipeline cache (Phase 0)
     VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
