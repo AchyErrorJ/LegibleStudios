@@ -884,6 +884,9 @@ class LayoutGenerator:
         # Generate roof
         roofs_array = self._generate_roof()
 
+        # Generate floor slabs
+        floors_array = self._generate_floors()
+
         return {
             "success": True,
             "building_id": str(uuid.uuid4())[:8],
@@ -894,6 +897,7 @@ class LayoutGenerator:
             "unit": "mm",
             "output_format": "archengine",
             "walls_batch": walls_array,
+            "floors_batch": floors_array,
             "doors": doors_array,
             "windows": windows_array,
             "rooms": rooms_dict,
@@ -916,12 +920,30 @@ class LayoutGenerator:
                 "exterior_walls": len([w for w in walls_array if w["category"] == "exterior"]),
                 "interior_walls": len([w for w in walls_array if w["category"] == "interior"]),
                 "wet_walls": len([w for w in walls_array if w["category"] == "wet_wall"]),
+                "floors": len(floors_array),
                 "doors": len(doors_array),
                 "windows": len(windows_array),
                 "rooms_placed": len(rooms_dict),
                 "roofs": len(roofs_array)
             }
         }
+
+    def _generate_floors(self) -> List[Dict]:
+        """Generate floor slabs from building bounds and room layout"""
+        floors = []
+
+        # Main floor slab covering entire building footprint
+        # Format matches kernel's floors_batch parsing: start, end, thickness, level_name, room
+        floors.append({
+            "start": [0, 0, 0],
+            "end": [self.building_width, 0, self.building_depth],
+            "thickness": 150,  # 150mm (6") concrete slab on grade
+            "level_name": "Level 1",
+            "room": None,  # Full building slab, not room-specific
+            "material": "concrete"
+        })
+
+        return floors
 
     def _get_wall_types(self) -> List[Dict]:
         """Return wall assembly definitions with layers for section views"""
@@ -1275,6 +1297,7 @@ def main():
     print(f"  Area: {result['sqm']} sqm ({result['sqft']} sqft)")
     print(f"  Rooms: {result['summary']['rooms_placed']}")
     print(f"  Walls: {result['summary']['total_walls']} ({result['summary']['exterior_walls']} exterior)")
+    print(f"  Floors: {result['summary']['floors']}")
     print(f"  Doors: {result['summary']['doors']}")
     print(f"  Windows: {result['summary']['windows']}")
     print(f"\nOutput written to: {output_path}")
