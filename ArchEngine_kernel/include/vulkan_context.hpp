@@ -1,3 +1,19 @@
+/**
+ * @file vulkan_context.hpp
+ * @brief Vulkan device and resource management
+ *
+ * This file contains the VulkanContext class which handles all low-level Vulkan
+ * initialization and resource management. It provides:
+ * - Instance, device, and queue creation
+ * - Swapchain management
+ * - Buffer and image creation helpers
+ * - Command buffer utilities
+ * - Debug marker support for profiling tools
+ *
+ * @see Renderer for high-level rendering operations
+ * @see Pipeline for graphics pipeline creation
+ */
+
 #pragma once
 
 #include "types.hpp"
@@ -8,124 +24,380 @@
 
 namespace arch {
 
-// Queue family indices
+/**
+ * @brief Queue family indices for graphics and present operations
+ *
+ * Stores the queue family indices discovered during device selection.
+ * Both graphics and present families must be available for rendering.
+ */
 struct QueueFamilyIndices {
-    std::optional<u32> graphicsFamily;
-    std::optional<u32> presentFamily;
+    std::optional<u32> graphicsFamily;  ///< Graphics queue family index
+    std::optional<u32> presentFamily;   ///< Presentation queue family index
 
+    /**
+     * @brief Check if all required queue families are found
+     * @return true if both graphics and present families are available
+     */
     bool isComplete() const {
         return graphicsFamily.has_value() && presentFamily.has_value();
     }
 };
 
-// Swapchain support details
+/**
+ * @brief Swapchain capabilities and supported modes
+ *
+ * Contains the surface capabilities, supported formats, and present modes
+ * used to configure the swapchain.
+ */
 struct SwapchainSupportDetails {
-    VkSurfaceCapabilitiesKHR capabilities;
-    std::vector<VkSurfaceFormatKHR> formats;
-    std::vector<VkPresentModeKHR> presentModes;
+    VkSurfaceCapabilitiesKHR capabilities;         ///< Surface capabilities (min/max images, extents)
+    std::vector<VkSurfaceFormatKHR> formats;       ///< Supported surface formats
+    std::vector<VkPresentModeKHR> presentModes;    ///< Supported presentation modes
 };
 
-// Vulkan context configuration
+/**
+ * @brief Configuration options for VulkanContext
+ *
+ * Allows customization of Vulkan initialization including validation,
+ * MSAA, shadows, and pipeline caching.
+ */
 struct VulkanConfig {
-    bool enableValidation = true;
-    bool enableDebugMarkers = true;
-    u32 maxFramesInFlight = 2;
+    bool enableValidation = true;       ///< Enable Vulkan validation layers
+    bool enableDebugMarkers = true;     ///< Enable debug markers for RenderDoc/NSight
+    u32 maxFramesInFlight = 2;          ///< Number of frames that can be in-flight
 
-    // MSAA settings (Phase 2)
-    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_4_BIT;
-    bool enableMsaa = true;
+    /// @name MSAA Settings
+    /// @{
+    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_4_BIT;  ///< MSAA sample count
+    bool enableMsaa = true;             ///< Enable multi-sample anti-aliasing
+    /// @}
 
-    // Shadow settings (Phase 4)
-    u32 shadowMapResolution = 2048;
-    bool enableShadows = true;
+    /// @name Shadow Settings
+    /// @{
+    u32 shadowMapResolution = 2048;     ///< Shadow map resolution (pixels)
+    bool enableShadows = true;          ///< Enable shadow mapping
+    /// @}
 
-    // Pipeline cache path
-    std::string pipelineCachePath = "pipeline_cache.bin";
+    std::string pipelineCachePath = "pipeline_cache.bin";  ///< Path for pipeline cache file
 };
 
+/**
+ * @brief Vulkan device and resource management
+ *
+ * VulkanContext handles all low-level Vulkan operations including:
+ * - Instance and device creation with validation layers
+ * - Physical device selection
+ * - Swapchain creation and management
+ * - Buffer and image allocation
+ * - Command buffer management
+ * - Pipeline caching
+ *
+ * Two construction modes are supported:
+ * 1. Standard mode: Creates its own VkInstance and VkSurfaceKHR from a Window
+ * 2. Embedded mode: Uses externally provided instance and surface (for CAD integration)
+ *
+ * @note This class is non-copyable. Only one VulkanContext should exist per application.
+ *
+ * Example usage:
+ * @code
+ * Window window(1280, 720, "ArchEngine");
+ * VulkanConfig config;
+ * config.msaaSamples = VK_SAMPLE_COUNT_4_BIT;
+ * config.enableValidation = true;
+ *
+ * VulkanContext context(window, config);
+ *
+ * // Create a buffer
+ * VkBuffer vertexBuffer;
+ * VkDeviceMemory vertexMemory;
+ * context.createBuffer(size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+ *                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+ *                      vertexBuffer, vertexMemory);
+ * @endcode
+ */
 class VulkanContext {
 public:
-    // Standard constructor with GLFW window
+    /**
+     * @brief Construct VulkanContext with a GLFW window
+     * @param window Reference to the Window object
+     * @param config Configuration options
+     *
+     * Creates VkInstance, VkSurfaceKHR, and all other Vulkan resources.
+     */
     VulkanContext(Window& window, const VulkanConfig& config = {});
 
-    // Embedded mode constructor - accepts external instance and surface
+    /**
+     * @brief Construct VulkanContext with external instance and surface
+     * @param instance Pre-created VkInstance (ownership not transferred)
+     * @param surface Pre-created VkSurfaceKHR (ownership not transferred)
+     * @param width Initial swapchain width
+     * @param height Initial swapchain height
+     * @param config Configuration options
+     *
+     * Use this constructor when embedding ArchEngine in another application
+     * that already has a Vulkan instance and surface.
+     */
     VulkanContext(VkInstance instance, VkSurfaceKHR surface, u32 width, u32 height, const VulkanConfig& config = {});
 
+    /**
+     * @brief Destructor - cleans up all Vulkan resources
+     */
     ~VulkanContext();
 
-    // Non-copyable
+    /// @name Non-copyable
+    /// @{
     VulkanContext(const VulkanContext&) = delete;
     VulkanContext& operator=(const VulkanContext&) = delete;
+    /// @}
 
-    // Accessors
+    /// @name Core Vulkan Accessors
+    /// @{
+
+    /** @brief Get the Vulkan instance handle */
     VkInstance getInstance() const { return m_instance; }
+
+    /** @brief Get the logical device handle */
     VkDevice getDevice() const { return m_device; }
+
+    /** @brief Get the physical device handle */
     VkPhysicalDevice getPhysicalDevice() const { return m_physicalDevice; }
+
+    /** @brief Get the graphics queue */
     VkQueue getGraphicsQueue() const { return m_graphicsQueue; }
+
+    /** @brief Get the presentation queue */
     VkQueue getPresentQueue() const { return m_presentQueue; }
+
+    /** @brief Get the command pool for allocating command buffers */
     VkCommandPool getCommandPool() const { return m_commandPool; }
+
+    /** @brief Get the window surface */
     VkSurfaceKHR getSurface() const { return m_surface; }
+
+    /** @brief Get queue family indices */
     const QueueFamilyIndices& getQueueFamilies() const { return m_queueFamilies; }
+
+    /** @brief Get graphics queue family index */
     u32 getGraphicsQueueFamily() const { return m_queueFamilies.graphicsFamily.value(); }
+
+    /** @brief Get maximum frames that can be in-flight */
     u32 getMaxFramesInFlight() const { return m_config.maxFramesInFlight; }
+    /// @}
 
-    // Pipeline cache (Phase 0)
+    /// @name Pipeline Cache
+    /// @{
+
+    /** @brief Get the pipeline cache for faster pipeline creation */
     VkPipelineCache getPipelineCache() const { return m_pipelineCache; }
+    /// @}
 
-    // MSAA support (Phase 2)
+    /// @name MSAA Support
+    /// @{
+
+    /** @brief Get the configured MSAA sample count */
     VkSampleCountFlagBits getMsaaSamples() const { return m_msaaSamples; }
+
+    /**
+     * @brief Get the maximum supported MSAA sample count
+     * @return Highest sample count supported by the device
+     */
     VkSampleCountFlagBits getMaxUsableSampleCount() const;
+
+    /** @brief Get the MSAA color image view for rendering */
     VkImageView getMsaaColorImageView() const { return m_msaaColorImageView; }
+
+    /** @brief Check if anisotropic filtering is supported */
     bool supportsSamplerAnisotropy() const { return m_deviceFeatures.samplerAnisotropy == VK_TRUE; }
+
+    /** @brief Get maximum anisotropy level supported */
     float getMaxSamplerAnisotropy() const { return m_maxSamplerAnisotropy; }
+    /// @}
 
-    // Config access
+    /// @name Configuration
+    /// @{
+
+    /** @brief Get the current configuration */
     const VulkanConfig& getConfig() const { return m_config; }
+    /// @}
 
-    // Swapchain
+    /// @name Swapchain Access
+    /// @{
+
+    /** @brief Get the swapchain handle */
     VkSwapchainKHR getSwapchain() const { return m_swapchain; }
+
+    /** @brief Get the swapchain image format */
     VkFormat getSwapchainFormat() const { return m_swapchainFormat; }
+
+    /** @brief Get the swapchain extent (width/height) */
     VkExtent2D getSwapchainExtent() const { return m_swapchainExtent; }
+
+    /** @brief Get all swapchain image views */
     const std::vector<VkImageView>& getSwapchainImageViews() const { return m_swapchainImageViews; }
+
+    /** @brief Get the number of swapchain images */
     u32 getSwapchainImageCount() const { return static_cast<u32>(m_swapchainImages.size()); }
+    /// @}
 
-    // Depth buffer
+    /// @name Depth Buffer
+    /// @{
+
+    /** @brief Get the depth buffer image view */
     VkImageView getDepthImageView() const { return m_depthImageView; }
+
+    /** @brief Get the depth buffer format (D32_SFLOAT) */
     VkFormat getDepthFormat() const { return VK_FORMAT_D32_SFLOAT; }
+    /// @}
 
-    // Swapchain management
+    /// @name Swapchain Management
+    /// @{
+
+    /**
+     * @brief Recreate the swapchain after window resize
+     *
+     * Call when the window size changes. Destroys and recreates all
+     * swapchain-dependent resources.
+     */
     void recreateSwapchain();
+
+    /**
+     * @brief Wait for all device operations to complete
+     *
+     * Blocks until the GPU is idle. Use before cleanup or resize operations.
+     */
     void waitIdle() { vkDeviceWaitIdle(m_device); }
+    /// @}
 
-    // Command buffer helpers
+    /// @name Command Buffer Helpers
+    /// @{
+
+    /**
+     * @brief Begin a single-use command buffer
+     * @return Command buffer ready for recording
+     *
+     * Use for one-time operations like buffer copies or image transitions.
+     * Must be paired with endSingleTimeCommands().
+     */
     VkCommandBuffer beginSingleTimeCommands();
-    void endSingleTimeCommands(VkCommandBuffer commandBuffer);
 
-    // Buffer creation helpers
+    /**
+     * @brief End and submit a single-use command buffer
+     * @param commandBuffer The command buffer from beginSingleTimeCommands()
+     *
+     * Submits the command buffer and waits for completion.
+     */
+    void endSingleTimeCommands(VkCommandBuffer commandBuffer);
+    /// @}
+
+    /// @name Buffer Creation
+    /// @{
+
+    /**
+     * @brief Create a Vulkan buffer with memory
+     * @param size Buffer size in bytes
+     * @param usage Buffer usage flags (e.g., VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)
+     * @param properties Memory property flags (e.g., VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+     * @param buffer Output buffer handle
+     * @param bufferMemory Output memory handle
+     */
     void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                      VkMemoryPropertyFlags properties, VkBuffer& buffer,
                      VkDeviceMemory& bufferMemory);
 
+    /**
+     * @brief Copy data between buffers
+     * @param srcBuffer Source buffer
+     * @param dstBuffer Destination buffer
+     * @param size Number of bytes to copy
+     */
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
+
+    /**
+     * @brief Copy buffer data to an image
+     * @param buffer Source buffer containing pixel data
+     * @param image Destination image
+     * @param width Image width
+     * @param height Image height
+     */
     void copyBufferToImage(VkBuffer buffer, VkImage image, u32 width, u32 height);
 
+    /**
+     * @brief Find a suitable memory type for allocation
+     * @param typeFilter Bitmask of acceptable memory types
+     * @param properties Required memory properties
+     * @return Memory type index
+     * @throws std::runtime_error if no suitable memory type found
+     */
     u32 findMemoryType(u32 typeFilter, VkMemoryPropertyFlags properties);
+    /// @}
 
-    // Image creation helpers
+    /// @name Image Creation
+    /// @{
+
+    /**
+     * @brief Create a Vulkan image with memory
+     * @param width Image width
+     * @param height Image height
+     * @param format Image format (e.g., VK_FORMAT_R8G8B8A8_SRGB)
+     * @param tiling Image tiling mode
+     * @param usage Image usage flags
+     * @param properties Memory property flags
+     * @param image Output image handle
+     * @param imageMemory Output memory handle
+     * @param samples MSAA sample count (default: 1)
+     */
     void createImage(u32 width, u32 height, VkFormat format, VkImageTiling tiling,
                     VkImageUsageFlags usage, VkMemoryPropertyFlags properties,
                     VkImage& image, VkDeviceMemory& imageMemory,
                     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
 
+    /**
+     * @brief Create an image view for an image
+     * @param image The image to create a view for
+     * @param format View format
+     * @param aspectFlags Aspect flags (e.g., VK_IMAGE_ASPECT_COLOR_BIT)
+     * @return Created image view handle
+     */
     VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
 
+    /**
+     * @brief Transition an image between layouts
+     * @param image The image to transition
+     * @param format Image format
+     * @param oldLayout Current layout
+     * @param newLayout Target layout
+     *
+     * Inserts appropriate pipeline barriers for the layout transition.
+     */
     void transitionImageLayout(VkImage image, VkFormat format,
                               VkImageLayout oldLayout, VkImageLayout newLayout);
+    /// @}
 
-    // Debug markers (for RenderDoc/NSight)
+    /// @name Debug Markers
+    /// @{
+
+    /**
+     * @brief Begin a labeled debug region (for RenderDoc/NSight)
+     * @param cmd Command buffer to label
+     * @param name Region name
+     * @param color Debug color (RGBA)
+     */
     void beginDebugLabel(VkCommandBuffer cmd, const char* name, vec4 color = {1,1,1,1});
+
+    /**
+     * @brief End a labeled debug region
+     * @param cmd Command buffer
+     */
     void endDebugLabel(VkCommandBuffer cmd);
+
+    /**
+     * @brief Insert a debug marker at current position
+     * @param cmd Command buffer
+     * @param name Marker name
+     * @param color Debug color (RGBA)
+     */
     void insertDebugLabel(VkCommandBuffer cmd, const char* name, vec4 color = {1,1,1,1});
+    /// @}
 
 private:
     void createInstance();
