@@ -7,3 +7,12 @@ cmake-build-*/
 *.lib
 *.ilk
 imgui.ini
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
