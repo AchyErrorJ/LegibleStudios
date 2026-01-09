@@ -11,8 +11,16 @@ imgui.ini
 # Cache and generated files
 pipeline_cache.bin
 nul
-__pycache__/
 .claude/
 
 # Temporary scripts
 *.ps1
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
