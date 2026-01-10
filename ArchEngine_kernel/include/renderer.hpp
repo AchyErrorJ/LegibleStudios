@@ -732,7 +732,7 @@ public:
     /// @}
 
 private:
-    static constexpr u32 kMaxMaterialSets = 64;
+    static constexpr u32 kMaxMaterialSets = 128;
 
     void createRenderPass();
     void createFramebuffers();

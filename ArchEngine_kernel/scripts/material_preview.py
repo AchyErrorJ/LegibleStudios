@@ -411,6 +411,8 @@ def main():
     parser.add_argument("--preview", action="store_true", help="Generate preview grid")
     parser.add_argument("--sphere", type=str, help="Generate sphere preview for material")
     parser.add_argument("--upscale", type=str, help="Upscale material textures")
+    parser.add_argument("--scale", type=int, default=4, choices=[2, 4], help="Upscale factor (2 or 4)")
+    parser.add_argument("--method", type=str, default="realesrgan", choices=["realesrgan", "simple"], help="Upscale method")
     parser.add_argument("--generate", type=str, help="Generate material from prompt")
     parser.add_argument("--name", type=str, help="Name for generated material")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive mode")
@@ -462,7 +464,7 @@ def main():
         mat = library.get_material(args.upscale)
         if mat and server:
             output_dir = materials_root / f"{args.upscale.replace('/', '_')}_upscaled"
-            upscale_material(mat, output_dir, server)
+            upscale_material(mat, output_dir, server, scale=args.scale, method=args.method)
         elif not mat:
             print(f"Material not found: {args.upscale}")
         else:

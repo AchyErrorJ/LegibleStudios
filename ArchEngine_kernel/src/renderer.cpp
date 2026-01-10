@@ -1286,16 +1286,23 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
                     f32 xExtent = elem.end.x - elem.start.x;
                     f32 zExtent = elem.end.z - elem.start.z;
                     f32 doorHeight = elem.end.y - elem.start.y;
-                    f32 doorWidth = std::max(std::abs(xExtent), std::abs(zExtent));
-                    f32 doorDepth = std::min(std::abs(xExtent), std::abs(zExtent));
-                    if (doorDepth < 0.1f) doorDepth = elem.depth;
-                    key = "door_" + std::to_string(doorWidth) + "_" + std::to_string(doorHeight) + "_" + std::to_string(doorDepth);
+                    f32 doorDepth = elem.depth > 0.1f ? elem.depth : 0.5f;
+
+                    // Calculate actual door width from wall direction vector
+                    f32 doorWidth = glm::length(vec2(xExtent, zExtent));
+                    if (doorWidth < 0.01f || doorHeight < 0.01f) continue;
+
+                    // Use consistent key with main rendering pass
+                    key = "door_proper_" + std::to_string(static_cast<int>(doorWidth * 100)) + "_" +
+                          std::to_string(static_cast<int>(doorHeight * 100)) + "_" +
+                          std::to_string(static_cast<int>(doorDepth * 100));
+
                     vec3 center = (elem.start + elem.end) * 0.5f;
                     center.y = elem.start.y;
-                    f32 rotation = 0.0f;
-                    if (std::abs(zExtent) > std::abs(xExtent)) {
-                        rotation = glm::radians(90.0f);
-                    }
+
+                    // Calculate rotation from extents (negate for proper alignment)
+                    f32 rotation = -std::atan2(zExtent, xExtent);
+
                     transform = glm::translate(mat4(1.0f), center);
                     transform = glm::rotate(transform, rotation, vec3(0.0f, 1.0f, 0.0f));
                 }
@@ -2213,49 +2220,55 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             }
 
             case ElementType::Door: {
+                // If door has custom mesh, render it directly
+                if (element.mesh.hasData()) {
+                    vec4 doorMat = vec4(0.0f, 0.75f, 1.0f, 0.0f);
+                    drawCustomMeshWithMaterial(element.mesh, color, stressForShader, doorMat);
+                    break;
+                }
+
                 // Generate door geometry
                 float xExtent = element.end.x - element.start.x;
                 float zExtent = element.end.z - element.start.z;
                 float doorHeight = element.end.y - element.start.y;
-                float doorDepth = element.depth > 0.1f ? element.depth : 50.0f;
-
-                // Debug: print door info on first few frames
-                static int doorDebugCount = 0;
-                if (doorDebugCount < 5) {
-                    std::cout << "[Door] height=" << doorHeight << " width=" << glm::length(vec2(xExtent, zExtent))
-                              << " start=(" << element.start.x << "," << element.start.y << "," << element.start.z << ")"
-                              << " end=(" << element.end.x << "," << element.end.y << "," << element.end.z << ")" << std::endl;
-                    doorDebugCount++;
-                }
+                float doorDepth = element.depth > 0.1f ? element.depth : 0.5f;
 
                 if (doorHeight <= 0.01f) break;
 
                 float doorWidth = glm::length(vec2(xExtent, zExtent));
-                if (doorWidth <= 0.01f) break;
+                if (doorWidth <= 0.01f) {
+                    // Fallback: use element.width if extents are zero
+                    doorWidth = element.width > 0.01f ? element.width : 3.0f;
+                }
 
-                // Calculate door center and rotation
-                vec3 doorCenter = (element.start + element.end) * 0.5f;
-                doorCenter.y = element.start.y + doorHeight * 0.5f;
+                // Calculate door position at bottom center of wall segment
+                vec3 doorPos = vec3(
+                    (element.start.x + element.end.x) * 0.5f,
+                    element.start.y,  // Bottom of door
+                    (element.start.z + element.end.z) * 0.5f
+                );
 
-                // Calculate rotation angle from wall direction
-                float angle = std::atan2(zExtent, xExtent);
+                // Calculate rotation from extents (which are set from host wall direction)
+                // The door mesh has width along X and depth (walkthrough) along Z
+                // For the door width to align with wall direction, we use negative angle
+                float angle = -std::atan2(zExtent, xExtent);
 
                 // Create transform: translate to position, rotate to align with wall
-                mat4 transform = glm::translate(mat4(1.0f), doorCenter);
+                mat4 transform = glm::translate(mat4(1.0f), doorPos);
                 transform = glm::rotate(transform, angle, vec3(0, 1, 0));
 
                 // Wood door material
                 vec4 doorMat = vec4(0.0f, 0.75f, 1.0f, 0.0f);
 
-                // Create door mesh centered at origin
-                std::string key = "door_" + std::to_string(static_cast<int>(doorWidth)) + "_" +
-                                 std::to_string(static_cast<int>(doorHeight)) + "_" +
-                                 std::to_string(static_cast<int>(doorDepth));
+                // Create proper door mesh with frame, panel, and handle
+                std::string key = "door_proper_" + std::to_string(static_cast<int>(doorWidth * 100)) + "_" +
+                                 std::to_string(static_cast<int>(doorHeight * 100)) + "_" +
+                                 std::to_string(static_cast<int>(doorDepth * 100));
 
                 if (m_meshCache.find(key) == m_meshCache.end()) {
-                    // createColumn extends from y=0 to y=height, so offset by -height/2 to center
-                    auto [verts, indices] = Geometry::createColumn(
-                        vec3(0, -doorHeight * 0.5f, 0), doorWidth, doorDepth, doorHeight, vec3(0.55f, 0.35f, 0.2f));
+                    // createDoor expects position at bottom center, creates door from y=0 to y=height
+                    auto [verts, indices] = Geometry::createDoor(
+                        vec3(0), doorWidth, doorHeight, doorDepth, vec3(0.55f, 0.35f, 0.2f));
                     m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
                 }
 
@@ -2328,7 +2341,7 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             float xExtent = element.end.x - element.start.x;
             float zExtent = element.end.z - element.start.z;
             float windowHeight = element.end.y - element.start.y;
-            float windowDepth = element.depth > 0.01f ? element.depth : 0.2f;  // Thin glass pane
+            float windowDepth = element.depth > 0.01f ? element.depth : 0.3f;
 
             if (windowHeight <= 0.01f) {
                 index++;
@@ -2341,25 +2354,31 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                 continue;
             }
 
-            // Calculate window center and rotation
-            vec3 windowCenter = (element.start + element.end) * 0.5f;
-            windowCenter.y = element.start.y + windowHeight * 0.5f;
+            // Calculate window position at bottom center of wall segment
+            vec3 windowPos = vec3(
+                (element.start.x + element.end.x) * 0.5f,
+                element.start.y,  // Bottom of window
+                (element.start.z + element.end.z) * 0.5f
+            );
 
-            float angle = std::atan2(zExtent, xExtent);
+            // Calculate rotation from extents (negate for proper alignment)
+            float angle = -std::atan2(zExtent, xExtent);
 
-            mat4 transform = glm::translate(mat4(1.0f), windowCenter);
+            mat4 transform = glm::translate(mat4(1.0f), windowPos);
             transform = glm::rotate(transform, angle, vec3(0, 1, 0));
 
             // Glass material: very low roughness for transparency
             vec4 glassMat = vec4(0.0f, 0.1f, 1.0f, 0.0f);
 
-            std::string key = "window_" + std::to_string(static_cast<int>(windowWidth)) + "_" +
-                             std::to_string(static_cast<int>(windowHeight));
+            // Create proper window mesh with frame, glass, and mullions
+            std::string key = "window_proper_" + std::to_string(static_cast<int>(windowWidth * 100)) + "_" +
+                             std::to_string(static_cast<int>(windowHeight * 100)) + "_" +
+                             std::to_string(static_cast<int>(windowDepth * 100));
 
             if (m_meshCache.find(key) == m_meshCache.end()) {
-                // createColumn extends from y=0 to y=height, so offset by -height/2 to center
-                auto [verts, indices] = Geometry::createColumn(
-                    vec3(0, -windowHeight * 0.5f, 0), windowWidth, windowDepth, windowHeight, vec3(0.8f, 0.9f, 0.95f));
+                // createWindow expects position at bottom center, creates window from y=0 to y=height
+                auto [verts, indices] = Geometry::createWindow(
+                    vec3(0), windowWidth, windowHeight, windowDepth, vec3(0.8f, 0.9f, 0.95f));
                 m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
             }
 

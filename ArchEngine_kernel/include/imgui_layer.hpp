@@ -42,6 +42,16 @@ public:
         bool tileable = true;
     };
 
+    struct MaterialUpscaleRequest {
+        std::string materialName;
+        std::string serverUrl;
+        std::string pythonExe;
+        std::string scriptPath;
+        std::string materialRoot;
+        int scale = 4;      // 2 or 4
+        int method = 0;     // 0=realesrgan, 1=lanczos
+    };
+
     ImGuiLayer(VulkanContext& context, GLFWwindow* window, VkRenderPass renderPass);
     ~ImGuiLayer();
 
@@ -154,6 +164,11 @@ public:
     void clearStopRenderServerRequest() { m_stopRenderServerRequested = false; }
     int getRenderServerPort() const { return m_renderServerPort; }
 
+    // Material upscaling
+    bool wasMaterialUpscaleRequested() const { return m_materialUpscaleRequested; }
+    MaterialUpscaleRequest takeMaterialUpscaleRequest();
+    void setMaterialUpscaleState(bool inFlight, const std::string& status);
+
 private:
     void createDescriptorPool();
     void uploadFonts();
@@ -195,7 +210,7 @@ private:
     char m_materialPrompt[512] = "";
     char m_materialNegative[256] = "blurry, low quality, distorted, watermark";
     char m_materialServerUrl[256] = "http://localhost:5000";
-    char m_materialPythonExe[260] = ".venv-sd/Scripts/python.exe";
+    char m_materialPythonExe[260] = "C:\\RevitMCP\\.venv-sd\\Scripts\\python.exe";
     char m_materialScriptPath[260] = "scripts/material_generate.py";
     int m_materialSize = 1024;
     int m_materialSteps = 30;
@@ -214,6 +229,14 @@ private:
     std::string m_materialGenerateStatus;
     bool m_startRenderServerRequested = false;
     bool m_stopRenderServerRequested = false;
+
+    // Material upscale state
+    bool m_materialUpscaleRequested = false;
+    MaterialUpscaleRequest m_materialUpscaleRequest;
+    bool m_materialUpscaleInFlight = false;
+    std::string m_materialUpscaleStatus;
+    int m_upscaleScale = 4;
+    int m_upscaleMethod = 0;
 };
 
 } // namespace arch

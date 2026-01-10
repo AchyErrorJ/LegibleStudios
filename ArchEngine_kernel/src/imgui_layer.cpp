@@ -995,6 +995,55 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                 ImGui::TreePop();
             }
 
+            // Material upscaling
+            if (ImGui::TreeNode("Upscale Material")) {
+                if (!m_applyMaterialName.empty()) {
+                    ImGui::Text("Material: %s", m_applyMaterialName.c_str());
+
+                    // Scale selector
+                    const char* scaleItems[] = { "2x", "4x" };
+                    int scaleIndex = (m_upscaleScale == 2) ? 0 : 1;
+                    if (ImGui::Combo("Scale Factor", &scaleIndex, scaleItems, 2)) {
+                        m_upscaleScale = (scaleIndex == 0) ? 2 : 4;
+                    }
+
+                    // Method selector
+                    const char* methodItems[] = { "Real-ESRGAN (AI)", "Lanczos (Fast)" };
+                    ImGui::Combo("Method", &m_upscaleMethod, methodItems, 2);
+
+                    ImGui::TextDisabled("Upscales all textures in material folder");
+
+                    // Upscale button
+                    bool canUpscale = !m_materialUpscaleInFlight;
+                    if (!canUpscale) {
+                        ImGui::BeginDisabled();
+                    }
+
+                    if (ImGui::Button("Upscale Material", ImVec2(-1, 25))) {
+                        m_materialUpscaleRequest.materialName = m_applyMaterialName;
+                        m_materialUpscaleRequest.serverUrl = m_materialServerUrl;
+                        m_materialUpscaleRequest.pythonExe = m_materialPythonExe;
+                        m_materialUpscaleRequest.scriptPath = "scripts/material_preview.py";
+                        m_materialUpscaleRequest.materialRoot = m_materialRoot;
+                        m_materialUpscaleRequest.scale = m_upscaleScale;
+                        m_materialUpscaleRequest.method = m_upscaleMethod;
+                        m_materialUpscaleRequested = true;
+                    }
+
+                    if (!canUpscale) {
+                        ImGui::EndDisabled();
+                    }
+
+                    if (!m_materialUpscaleStatus.empty()) {
+                        ImGui::Text("Status: %s", m_materialUpscaleStatus.c_str());
+                    }
+                } else {
+                    ImGui::TextDisabled("Select a material from the list above");
+                }
+
+                ImGui::TreePop();
+            }
+
             if (m_materialDragActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
                     m_materialDropRequested = true;
@@ -1220,6 +1269,16 @@ ImGuiLayer::MaterialGenerateRequest ImGuiLayer::takeMaterialGenerateRequest() {
 void ImGuiLayer::setMaterialGenerationState(bool inFlight, const std::string& status) {
     m_materialGenerateInFlight = inFlight;
     m_materialGenerateStatus = status;
+}
+
+ImGuiLayer::MaterialUpscaleRequest ImGuiLayer::takeMaterialUpscaleRequest() {
+    m_materialUpscaleRequested = false;
+    return m_materialUpscaleRequest;
+}
+
+void ImGuiLayer::setMaterialUpscaleState(bool inFlight, const std::string& status) {
+    m_materialUpscaleInFlight = inFlight;
+    m_materialUpscaleStatus = status;
 }
 
 } // namespace arch

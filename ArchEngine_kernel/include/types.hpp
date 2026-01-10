@@ -136,6 +136,7 @@ struct StructuralElement {
     std::string material;  // Material name (e.g., "steel", "concrete")
     bool failed;
     MeshData mesh;       // Optional actual mesh geometry from IFC
+    f32 rotation = -1000.0f; // Rotation angle in radians (-1000 = not set, use from host wall)
 };
 
 // Camera view modes
