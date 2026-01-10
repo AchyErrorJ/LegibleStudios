@@ -5,7 +5,9 @@ Provides parametric furniture generation with multi-LOD support:
 - LOD0: 2D plan symbols
 - LOD1: Bounding boxes (distant 3D)
 - LOD2: Composed primitives (mid-range 3D)
-- LOD3+: AI-generated detailed meshes (future)
+- LOD3: AI-generated base mesh (no materials)
+- LOD4: AI-generated mesh with materials
+- LOD5: Reserved for documentation
 """
 from furniture.models import (
     FurnitureCategory,
@@ -36,6 +38,29 @@ from furniture.primitives import (
     transform_mesh,
 )
 
+# AI generation (optional)
+try:
+    from furniture.ai_generator import (
+        AIFurnitureGenerator,
+        AIBackend,
+        GenerationRequest,
+        GenerationResult,
+        GenerationQuality,
+        get_ai_generator,
+    )
+    from furniture.backends import LMStudioBackend
+    _AI_EXPORTS = [
+        "AIFurnitureGenerator",
+        "AIBackend",
+        "GenerationRequest",
+        "GenerationResult",
+        "GenerationQuality",
+        "get_ai_generator",
+        "LMStudioBackend",
+    ]
+except ImportError:
+    _AI_EXPORTS = []
+
 __all__ = [
     # Models
     "FurnitureCategory",
@@ -64,4 +89,4 @@ __all__ = [
     "create_rounded_box",
     "merge_meshes",
     "transform_mesh",
-]
+] + _AI_EXPORTS
