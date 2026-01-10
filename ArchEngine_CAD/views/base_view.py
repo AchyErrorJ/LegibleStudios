@@ -2,6 +2,7 @@
 Base view class for all 2D views
 """
 from abc import abstractmethod
+from enum import Enum
 
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene
 from PyQt6.QtCore import Qt, QRectF, pyqtSignal
@@ -9,6 +10,15 @@ from PyQt6.QtGui import QPainter, QColor, QPen
 
 from core.document import ArchDocument
 from app.config import Config
+
+
+class ViewMode(Enum):
+    """2D view modes mirroring the tetrahedron faces."""
+    VISION = "vision"      # Design + Client focus - aesthetic, spatial
+    BUDGET = "budget"      # Client + Build focus - cost, feasibility
+    CRAFT = "craft"        # Build + Design focus - construction, detail
+    REALITY = "reality"    # All constraints - balanced view
+    WIREFRAME = "wireframe"  # Pure geometry, no fills
 
 
 class BaseView(QGraphicsView):
@@ -19,6 +29,7 @@ class BaseView(QGraphicsView):
 
     # Signal emitted when LOD changes via Shift+scroll
     lod_level_changed = pyqtSignal(int)  # 1-5
+    view_mode_changed = pyqtSignal(str)  # ViewMode value
 
     def __init__(self, document: ArchDocument, config: Config, parent=None):
         super().__init__(parent)
@@ -49,6 +60,7 @@ class BaseView(QGraphicsView):
         self._last_pan_point = None
         self._grid_visible = config.grid_visible
         self._lod_level = 2  # Default LOD level (1-5)
+        self._view_mode = ViewMode.REALITY  # Default view mode
 
         # Colors
         self._bg_color = QColor(self.config.background_color)
@@ -60,6 +72,38 @@ class BaseView(QGraphicsView):
     def zoom_level(self) -> float:
         """Get current zoom level."""
         return self._zoom
+
+    @property
+    def view_mode(self) -> ViewMode:
+        """Get current view mode."""
+        return self._view_mode
+
+    def set_view_mode(self, mode: ViewMode):
+        """Set view mode and refresh."""
+        if isinstance(mode, str):
+            try:
+                mode = ViewMode(mode)
+            except ValueError:
+                return  # Invalid mode string
+        if mode != self._view_mode:
+            self._view_mode = mode
+            self.view_mode_changed.emit(mode.value)
+            self.scene.update()  # Update entire scene to repaint all items
+            self.viewport().update()
+
+    @property
+    def lod_level(self) -> int:
+        """Get current LOD level (1-5)."""
+        return self._lod_level
+
+    def set_lod_level(self, level: int):
+        """Set LOD level and refresh."""
+        level = max(1, min(5, level))
+        if level != self._lod_level:
+            self._lod_level = level
+            self.lod_level_changed.emit(level)
+            self.scene.update()  # Update entire scene to repaint all items
+            self.viewport().update()
 
     def set_grid_visible(self, visible: bool):
         """Set grid visibility."""

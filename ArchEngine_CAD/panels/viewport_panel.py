@@ -666,6 +666,12 @@ class ViewportPanel(QWidget):
 
         self._updating = False
 
+    def set_gravity_weights(self, design: float, client: float, build: float):
+        """Update gravity weights from external controls (overlay)."""
+        if hasattr(self, 'gravity_triangle'):
+            self.gravity_triangle.set_weights(design, client, build)
+        self._on_gravity_changed(design, client, build)
+
     # =========================================================================
     # LOD handlers
     # =========================================================================

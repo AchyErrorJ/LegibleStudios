@@ -42,6 +42,10 @@ class Wall:
     height: float = 2700
     category: str = "interior"  # exterior, interior, wet_wall
     wall_type: str = ""
+    # Structural binding - walls bound to room boundaries at LOD 1-2
+    is_structural: bool = True  # Structural walls define room boundaries
+    bound_room_id: str = ""  # Room this wall belongs to (empty = unbound partition)
+    edge_index: int = -1  # Which edge of the room polygon (-1 = not bound)
     # Constraint fields
     is_pinned: bool = False
     locked_properties: List[str] = field(default_factory=list)
@@ -132,6 +136,24 @@ class Room:
     locked_properties: List[str] = field(default_factory=list)
 
 
+@dataclass
+class RoomConnection:
+    """Connection between two adjacent rooms."""
+    room_a_id: str
+    room_b_id: str
+    connection_type: str  # 'structural', 'open', 'mechanical', 'insulated', 'undefined'
+    shared_edge: Optional[List[List[float]]] = None  # [[x1,y1], [x2,y2]] where rooms meet
+    wall_id: Optional[str] = None  # Generated wall if applicable
+
+    def other_room(self, room_id: str) -> Optional[str]:
+        """Get the other room in this connection."""
+        if room_id == self.room_a_id:
+            return self.room_b_id
+        elif room_id == self.room_b_id:
+            return self.room_a_id
+        return None
+
+
 class ArchDocument(QObject):
     """
     Central document model - single source of truth.
@@ -166,6 +188,7 @@ class ArchDocument(QObject):
         self._windows: List[Window] = []
         self._rooms: Dict[str, Room] = {}
         self._wall_types: Dict[str, WallType] = {}
+        self._room_connections: List[RoomConnection] = []  # Room adjacencies
 
         # Version control (git-based)
         self._version_control: Optional[VersionControl] = None
@@ -209,6 +232,160 @@ class ArchDocument(QObject):
     def rooms(self) -> Dict[str, Room]:
         """Get parsed rooms."""
         return self._rooms
+
+    @property
+    def room_connections(self) -> List[RoomConnection]:
+        """Get room adjacency connections."""
+        return self._room_connections
+
+    def get_room_neighbors(self, room_id: str) -> List[str]:
+        """Get list of room IDs adjacent to the given room."""
+        neighbors = []
+        for conn in self._room_connections:
+            other = conn.other_room(room_id)
+            if other:
+                neighbors.append(other)
+        return neighbors
+
+    def get_connection(self, room_a_id: str, room_b_id: str) -> Optional[RoomConnection]:
+        """Get connection between two specific rooms."""
+        for conn in self._room_connections:
+            if (conn.room_a_id == room_a_id and conn.room_b_id == room_b_id) or \
+               (conn.room_a_id == room_b_id and conn.room_b_id == room_a_id):
+                return conn
+        return None
+
+    def detect_room_adjacencies(self, threshold: float = 500.0):
+        """
+        Detect which rooms are adjacent by checking for overlapping/touching edges.
+
+        Args:
+            threshold: Maximum distance (mm) between edges to consider adjacent
+        """
+        self._room_connections.clear()
+        room_ids = list(self._rooms.keys())
+        print(f"[Adjacency] Checking {len(room_ids)} rooms for adjacencies (threshold={threshold}mm)")
+
+        for i, room_a_id in enumerate(room_ids):
+            room_a = self._rooms[room_a_id]
+            if not room_a.vertices or len(room_a.vertices) < 3:
+                print(f"[Adjacency] Skipping {room_a.name} - no vertices")
+                continue
+
+            for room_b_id in room_ids[i+1:]:
+                room_b = self._rooms[room_b_id]
+                if not room_b.vertices or len(room_b.vertices) < 3:
+                    continue
+
+                # Check for shared/overlapping edges
+                shared_edge = self._find_shared_edge(room_a, room_b, threshold)
+                if shared_edge:
+                    conn = RoomConnection(
+                        room_a_id=room_a_id,
+                        room_b_id=room_b_id,
+                        connection_type='undefined',  # Default, can be set later
+                        shared_edge=shared_edge
+                    )
+                    self._room_connections.append(conn)
+                    print(f"[Adjacency] {room_a.name} <-> {room_b.name}")
+
+    def _find_shared_edge(self, room_a: Room, room_b: Room, threshold: float) -> Optional[List[List[float]]]:
+        """
+        Find shared edge between two room polygons.
+
+        Returns the overlapping segment if edges are collinear and overlap,
+        or None if rooms don't share an edge.
+        """
+        # Check each edge of room_a against each edge of room_b
+        for i in range(len(room_a.vertices)):
+            a1 = room_a.vertices[i]
+            a2 = room_a.vertices[(i + 1) % len(room_a.vertices)]
+
+            for j in range(len(room_b.vertices)):
+                b1 = room_b.vertices[j]
+                b2 = room_b.vertices[(j + 1) % len(room_b.vertices)]
+
+                # Check if edges are parallel and close enough
+                overlap = self._edges_overlap(a1, a2, b1, b2, threshold)
+                if overlap:
+                    return overlap
+
+        return None
+
+    def _edges_overlap(self, a1: List[float], a2: List[float],
+                       b1: List[float], b2: List[float],
+                       threshold: float) -> Optional[List[List[float]]]:
+        """
+        Check if two edges overlap (are collinear and share a segment).
+
+        Returns overlapping segment [[x1,y1], [x2,y2]] or None.
+        """
+        import math
+
+        # Edge vectors
+        ax, ay = a2[0] - a1[0], a2[1] - a1[1]
+        bx, by = b2[0] - b1[0], b2[1] - b1[1]
+
+        # Edge lengths
+        len_a = math.sqrt(ax*ax + ay*ay)
+        len_b = math.sqrt(bx*bx + by*by)
+
+        if len_a < 1 or len_b < 1:
+            return None
+
+        # Normalize
+        ax, ay = ax/len_a, ay/len_a
+        bx, by = bx/len_b, by/len_b
+
+        # Check if parallel (dot product of normals close to 1 or -1)
+        dot = abs(ax*bx + ay*by)
+        if dot < 0.99:  # Not parallel
+            return None
+
+        # Project b1 onto line defined by a1-a2 and check distance
+        # Vector from a1 to b1
+        vx, vy = b1[0] - a1[0], b1[1] - a1[1]
+
+        # Distance from b1 to line a1-a2
+        # Cross product gives signed area, divide by length for distance
+        cross = ax * vy - ay * vx
+        dist = abs(cross)  # Already normalized
+
+        if dist > threshold:
+            return None
+
+        # Edges are parallel and close - find overlap
+        # Project all points onto the line direction
+        def project(p):
+            return (p[0] - a1[0]) * ax + (p[1] - a1[1]) * ay
+
+        t_a1, t_a2 = 0, len_a
+        t_b1, t_b2 = project(b1), project(b2)
+
+        # Ensure t_b1 < t_b2
+        if t_b1 > t_b2:
+            t_b1, t_b2 = t_b2, t_b1
+
+        # Find overlap
+        t_start = max(t_a1, t_b1)
+        t_end = min(t_a2, t_b2)
+
+        if t_end - t_start < 10:  # Minimum overlap of 10mm
+            return None
+
+        # Convert back to coordinates
+        p1 = [a1[0] + ax * t_start, a1[1] + ay * t_start]
+        p2 = [a1[0] + ax * t_end, a1[1] + ay * t_end]
+
+        return [p1, p2]
+
+    def set_connection_type(self, room_a_id: str, room_b_id: str, connection_type: str):
+        """Set the connection type between two rooms."""
+        conn = self.get_connection(room_a_id, room_b_id)
+        if conn:
+            conn.connection_type = connection_type
+            self._modified = True
+            print(f"[Adjacency] Set {room_a_id} <-> {room_b_id} = {connection_type}")
 
     @property
     def wall_types(self) -> Dict[str, WallType]:
@@ -368,6 +545,7 @@ class ArchDocument(QObject):
         self._windows.clear()
         self._rooms.clear()
         self._wall_types.clear()
+        self._room_connections.clear()
 
         # Parse wall types first (needed for wall thickness)
         for wt in self._data.get('wall_types', []):
@@ -399,6 +577,9 @@ class ArchDocument(QObject):
                 height=w.get('height', 2700),
                 category=w.get('category', 'interior'),
                 wall_type=w.get('wall_type', ''),
+                is_structural=w.get('is_structural', True),
+                bound_room_id=w.get('bound_room_id', ''),
+                edge_index=w.get('edge_index', -1),
                 is_pinned=w.get('is_pinned', False),
                 locked_properties=w.get('locked_properties', [])
             )
@@ -435,17 +616,483 @@ class ArchDocument(QObject):
 
         # Parse rooms
         for room_id, r in self._data.get('rooms', {}).items():
+            bounds = r.get('bounds', {'x': 0, 'y': 0, 'width': 0, 'height': 0})
+            vertices = r.get('vertices')
+
+            # Generate vertices from bounds if not provided
+            if not vertices and bounds.get('width', 0) > 0 and bounds.get('height', 0) > 0:
+                x, y = bounds.get('x', 0), bounds.get('y', 0)
+                w, h = bounds.get('width', 0), bounds.get('height', 0)
+                # Create rectangular polygon from bounds (clockwise)
+                vertices = [
+                    [x, y],           # Top-left
+                    [x + w, y],       # Top-right
+                    [x + w, y + h],   # Bottom-right
+                    [x, y + h]        # Bottom-left
+                ]
+
+            # Calculate center if not provided
+            center = r.get('center')
+            if not center and vertices:
+                xs = [v[0] for v in vertices]
+                zs = [v[1] for v in vertices]
+                center = {'x': sum(xs) / len(xs), 'z': sum(zs) / len(zs)}
+
             room = Room(
                 id=room_id,
                 name=r.get('name', room_id),
                 room_type=r.get('room_type', 'room'),
-                bounds=r.get('bounds', {'x': 0, 'y': 0, 'width': 0, 'height': 0}),
+                bounds=bounds,
                 area=r.get('area', 0),
-                center=r.get('center'),
+                center=center,
+                vertices=vertices,
                 is_pinned=r.get('is_pinned', False),
                 locked_properties=r.get('locked_properties', [])
             )
             self._rooms[room_id] = room
+
+        # Load room connections
+        for conn_data in self._data.get('room_connections', []):
+            conn = RoomConnection(
+                room_a_id=conn_data['room_a_id'],
+                room_b_id=conn_data['room_b_id'],
+                connection_type=conn_data.get('connection_type', 'undefined'),
+                shared_edge=conn_data.get('shared_edge'),
+                wall_id=conn_data.get('wall_id')
+            )
+            self._room_connections.append(conn)
+
+        # Auto-bind walls to rooms if not already bound
+        self._auto_bind_walls_to_rooms()
+
+        # Detect room adjacencies if not loaded from data
+        print(f"[Document] Rooms loaded: {len(self._rooms)}, connections: {len(self._room_connections)}")
+        if not self._room_connections and len(self._rooms) > 1:
+            self.detect_room_adjacencies()
+
+    def _auto_bind_walls_to_rooms(self):
+        """
+        Automatically bind walls to room edges based on geometric overlap.
+        Only binds walls that don't already have a bound_room_id.
+        """
+        TOLERANCE = 100  # mm tolerance for matching
+
+        for wall in self._walls:
+            if wall.bound_room_id:
+                continue  # Already bound
+
+            wall_start = (wall.start[0], wall.start[2])
+            wall_end = (wall.end[0], wall.end[2])
+
+            # Check each room's edges
+            for room_id, room in self._rooms.items():
+                if not room.vertices or len(room.vertices) < 3:
+                    continue
+
+                num_verts = len(room.vertices)
+                for edge_idx in range(num_verts):
+                    # Room edge from vertex[i] to vertex[(i+1) % n]
+                    v1 = room.vertices[edge_idx]
+                    v2 = room.vertices[(edge_idx + 1) % num_verts]
+
+                    # Check if wall matches this edge (in either direction)
+                    dist_fwd = (self._point_dist(wall_start, v1) +
+                               self._point_dist(wall_end, v2))
+                    dist_rev = (self._point_dist(wall_start, v2) +
+                               self._point_dist(wall_end, v1))
+
+                    if dist_fwd < TOLERANCE * 2 or dist_rev < TOLERANCE * 2:
+                        # Wall matches this room edge
+                        wall.bound_room_id = room_id
+                        wall.edge_index = edge_idx
+                        wall.is_structural = True
+                        break
+
+                if wall.bound_room_id:
+                    break  # Found a match, stop searching
+
+    def _point_dist(self, p1, p2) -> float:
+        """Calculate distance between two 2D points."""
+        if isinstance(p1, (list, tuple)) and isinstance(p2, (list, tuple)):
+            dx = p1[0] - p2[0]
+            dy = p1[1] - p2[1]
+            return (dx*dx + dy*dy) ** 0.5
+        return float('inf')
+
+    def snap_walls_to_connections(self, snap_threshold: float = 500.0) -> int:
+        """
+        Snap existing walls to room connection edges.
+
+        For each connection with a shared_edge:
+        1. Find walls that are close to this edge
+        2. Snap their endpoints to align with the shared edge
+        3. Update wall category based on connection_type
+        4. Link the wall to the connection
+
+        Returns number of walls snapped.
+        """
+        CONNECTION_TO_CATEGORY = {
+            'wall': 'interior',
+            'open': 'opening',  # No physical wall, just opening
+            'wet_wall': 'wet_wall',
+            'structural': 'structural',
+            'mechanical': 'mechanical',
+            'insulated': 'insulated',
+            'undefined': 'interior',
+        }
+
+        snapped_count = 0
+
+        for conn in self._room_connections:
+            if not conn.shared_edge:
+                continue
+
+            edge_p1 = conn.shared_edge[0]  # [x, z]
+            edge_p2 = conn.shared_edge[1]
+
+            # Find the best matching wall for this connection edge
+            best_wall = None
+            best_distance = float('inf')
+
+            for wall in self._walls:
+                wall_start = (wall.start[0], wall.start[2])
+                wall_end = (wall.end[0], wall.end[2])
+
+                # Check distance from wall to connection edge
+                # Using perpendicular distance from wall midpoint to edge
+                wall_mid = ((wall_start[0] + wall_end[0]) / 2,
+                           (wall_start[1] + wall_end[1]) / 2)
+
+                dist = self._point_to_line_distance(wall_mid, edge_p1, edge_p2)
+
+                # Also check if the wall overlaps with the edge
+                if dist < snap_threshold:
+                    # Check overlap along the edge direction
+                    overlap = self._segments_overlap(wall_start, wall_end, edge_p1, edge_p2)
+                    if overlap > 0.3:  # At least 30% overlap
+                        if dist < best_distance:
+                            best_distance = dist
+                            best_wall = wall
+
+            if best_wall:
+                # Snap this wall to the connection edge
+                self._snap_wall_to_edge(best_wall, edge_p1, edge_p2)
+
+                # Update wall category based on connection type
+                new_category = CONNECTION_TO_CATEGORY.get(conn.connection_type, 'interior')
+                if new_category != 'opening':  # Don't set category for openings
+                    best_wall.category = new_category
+
+                # Link connection to wall
+                conn.wall_id = str(best_wall.index)
+
+                snapped_count += 1
+                print(f"[WallSnap] Snapped wall {best_wall.index} to connection "
+                      f"{conn.room_a_id} <-> {conn.room_b_id} ({conn.connection_type})")
+
+        if snapped_count > 0:
+            self._modified = True
+
+        return snapped_count
+
+    def _point_to_line_distance(self, point, line_p1, line_p2) -> float:
+        """Calculate perpendicular distance from point to line segment."""
+        px, py = point[0], point[1]
+        x1, y1 = line_p1[0], line_p1[1]
+        x2, y2 = line_p2[0], line_p2[1]
+
+        # Line segment vector
+        dx = x2 - x1
+        dy = y2 - y1
+
+        # Handle zero-length segment
+        length_sq = dx * dx + dy * dy
+        if length_sq < 1e-10:
+            return self._point_dist(point, line_p1)
+
+        # Project point onto line
+        t = max(0, min(1, ((px - x1) * dx + (py - y1) * dy) / length_sq))
+
+        # Closest point on segment
+        closest_x = x1 + t * dx
+        closest_y = y1 + t * dy
+
+        return self._point_dist(point, (closest_x, closest_y))
+
+    def _segments_overlap(self, seg1_p1, seg1_p2, seg2_p1, seg2_p2) -> float:
+        """
+        Calculate how much two line segments overlap (0-1).
+        Projects both segments onto their average direction.
+        """
+        # Get direction vectors
+        d1 = (seg1_p2[0] - seg1_p1[0], seg1_p2[1] - seg1_p1[1])
+        d2 = (seg2_p2[0] - seg2_p1[0], seg2_p2[1] - seg2_p1[1])
+
+        # Use the longer segment's direction
+        len1_sq = d1[0]**2 + d1[1]**2
+        len2_sq = d2[0]**2 + d2[1]**2
+
+        if max(len1_sq, len2_sq) < 1e-10:
+            return 0.0
+
+        if len1_sq >= len2_sq:
+            dir_vec = d1
+            dir_len = len1_sq ** 0.5
+        else:
+            dir_vec = d2
+            dir_len = len2_sq ** 0.5
+
+        # Normalize
+        dir_vec = (dir_vec[0] / dir_len, dir_vec[1] / dir_len)
+
+        # Project all points onto this direction
+        proj1_a = seg1_p1[0] * dir_vec[0] + seg1_p1[1] * dir_vec[1]
+        proj1_b = seg1_p2[0] * dir_vec[0] + seg1_p2[1] * dir_vec[1]
+        proj2_a = seg2_p1[0] * dir_vec[0] + seg2_p1[1] * dir_vec[1]
+        proj2_b = seg2_p2[0] * dir_vec[0] + seg2_p2[1] * dir_vec[1]
+
+        # Get ranges
+        min1, max1 = min(proj1_a, proj1_b), max(proj1_a, proj1_b)
+        min2, max2 = min(proj2_a, proj2_b), max(proj2_a, proj2_b)
+
+        # Calculate overlap
+        overlap_start = max(min1, min2)
+        overlap_end = min(max1, max2)
+
+        if overlap_end <= overlap_start:
+            return 0.0
+
+        overlap_length = overlap_end - overlap_start
+        seg1_length = max1 - min1
+        seg2_length = max2 - min2
+
+        # Return overlap as fraction of shorter segment
+        shorter_length = min(seg1_length, seg2_length)
+        if shorter_length < 1e-10:
+            return 0.0
+
+        return min(1.0, overlap_length / shorter_length)
+
+    def _snap_wall_to_edge(self, wall: Wall, edge_p1, edge_p2):
+        """Snap a wall's endpoints to align with a connection edge."""
+        wall_start = (wall.start[0], wall.start[2])
+        wall_end = (wall.end[0], wall.end[2])
+
+        # Determine which direction the wall should go
+        # Check both orientations
+        dist_fwd = (self._point_dist(wall_start, edge_p1) +
+                   self._point_dist(wall_end, edge_p2))
+        dist_rev = (self._point_dist(wall_start, edge_p2) +
+                   self._point_dist(wall_end, edge_p1))
+
+        if dist_fwd <= dist_rev:
+            # Keep same direction
+            new_start = edge_p1
+            new_end = edge_p2
+        else:
+            # Reverse direction
+            new_start = edge_p2
+            new_end = edge_p1
+
+        # Update wall coordinates (keeping Y/height the same)
+        wall.start = (new_start[0], wall.start[1], new_start[1])
+        wall.end = (new_end[0], wall.end[1], new_end[1])
+
+    def generate_wall_from_connection(self, conn: 'RoomConnection', height: float = 2700) -> Optional[Wall]:
+        """
+        Generate a new wall from a connection if no matching wall exists.
+
+        Returns the newly created wall, or None if connection has no shared_edge.
+        """
+        if not conn.shared_edge:
+            return None
+
+        if conn.connection_type == 'open':
+            # Open connections don't need walls
+            return None
+
+        CONNECTION_TO_CATEGORY = {
+            'wall': 'interior',
+            'wet_wall': 'wet_wall',
+            'structural': 'structural',
+            'mechanical': 'mechanical',
+            'insulated': 'insulated',
+            'undefined': 'interior',
+        }
+
+        edge_p1 = conn.shared_edge[0]
+        edge_p2 = conn.shared_edge[1]
+
+        # Create new wall
+        new_index = len(self._walls)
+        new_wall = Wall(
+            index=new_index,
+            start=(edge_p1[0], 0, edge_p1[1]),  # x, y=0, z
+            end=(edge_p2[0], 0, edge_p2[1]),
+            height=height,
+            category=CONNECTION_TO_CATEGORY.get(conn.connection_type, 'interior'),
+            is_structural=True,
+        )
+
+        self._walls.append(new_wall)
+        conn.wall_id = str(new_index)
+        self._modified = True
+
+        print(f"[WallGen] Created wall {new_index} for connection "
+              f"{conn.room_a_id} <-> {conn.room_b_id} ({conn.connection_type})")
+
+        return new_wall
+
+    def sync_connections_to_walls(self, snap_threshold: float = 500.0):
+        """
+        Legacy method - redirects to new generate_walls_from_rooms.
+        """
+        return self.generate_walls_from_rooms()
+
+    def _edge_key(self, p1, p2) -> tuple:
+        """
+        Create a canonical key for an edge (order-independent).
+        Rounds coordinates to avoid floating point issues.
+        """
+        # Round to nearest mm
+        p1_rounded = (round(p1[0]), round(p1[1]))
+        p2_rounded = (round(p2[0]), round(p2[1]))
+        # Return in consistent order
+        if p1_rounded < p2_rounded:
+            return (p1_rounded, p2_rounded)
+        return (p2_rounded, p1_rounded)
+
+    def _find_connection_for_edge(self, edge_p1, edge_p2, tolerance: float = 100.0):
+        """
+        Find a RoomConnection that matches this edge.
+        Returns (connection, is_reversed) or (None, False).
+        """
+        for conn in self._room_connections:
+            if not conn.shared_edge:
+                continue
+
+            conn_p1 = conn.shared_edge[0]
+            conn_p2 = conn.shared_edge[1]
+
+            # Check forward match
+            dist_fwd = (self._point_dist(edge_p1, conn_p1) +
+                       self._point_dist(edge_p2, conn_p2))
+            if dist_fwd < tolerance * 2:
+                return conn, False
+
+            # Check reverse match
+            dist_rev = (self._point_dist(edge_p1, conn_p2) +
+                       self._point_dist(edge_p2, conn_p1))
+            if dist_rev < tolerance * 2:
+                return conn, True
+
+        return None, False
+
+    def generate_walls_from_rooms(self, wall_height: float = 2700.0):
+        """
+        Generate walls from room edges.
+
+        Rules:
+        - Each room edge becomes a wall
+        - If edge has a connection to another room:
+          - Use connection_type to determine wall category
+          - 'open' connections = no wall
+        - If edge has no connection = exterior wall
+        - Shared edges only create one wall (avoid duplicates)
+        - Preserves existing partition walls (is_structural=False)
+
+        Returns (exterior_count, interior_count, open_count).
+        """
+        CONNECTION_TO_CATEGORY = {
+            'wall': 'interior',
+            'open': None,  # No wall for open connections
+            'wet_wall': 'wet_wall',
+            'structural': 'structural',
+            'mechanical': 'mechanical',
+            'insulated': 'insulated',
+            'undefined': 'interior',
+        }
+
+        print(f"[WallGen] Generating walls from {len(self._rooms)} rooms...")
+
+        # Preserve partition walls (non-structural walls added at LOD 2)
+        partition_walls = [w for w in self._walls if not w.is_structural]
+        print(f"[WallGen] Preserving {len(partition_walls)} partition walls")
+
+        # Track processed edges to avoid duplicates
+        processed_edges = set()
+
+        # New walls list starts with partition walls
+        new_walls = list(partition_walls)
+        wall_index = len(new_walls)
+
+        exterior_count = 0
+        interior_count = 0
+        open_count = 0
+
+        for room_id, room in self._rooms.items():
+            if not room.vertices or len(room.vertices) < 3:
+                continue
+
+            num_verts = len(room.vertices)
+            for edge_idx in range(num_verts):
+                v1 = room.vertices[edge_idx]
+                v2 = room.vertices[(edge_idx + 1) % num_verts]
+
+                # Create edge key to check for duplicates
+                edge_key = self._edge_key(v1, v2)
+                if edge_key in processed_edges:
+                    continue  # Already created wall for this edge
+
+                processed_edges.add(edge_key)
+
+                # Check if this edge has a connection
+                conn, is_reversed = self._find_connection_for_edge(v1, v2)
+
+                if conn:
+                    # Edge has a connection - use connection_type
+                    category = CONNECTION_TO_CATEGORY.get(conn.connection_type, 'interior')
+
+                    if category is None:
+                        # 'open' connection - no wall
+                        open_count += 1
+                        continue
+
+                    interior_count += 1
+                else:
+                    # No connection = exterior wall
+                    category = 'exterior'
+                    exterior_count += 1
+
+                # Create the wall
+                wall = Wall(
+                    index=wall_index,
+                    start=(v1[0], 0, v1[1]),  # x, y=0, z
+                    end=(v2[0], 0, v2[1]),
+                    height=wall_height,
+                    category=category,
+                    is_structural=True,
+                    bound_room_id=room_id,
+                    edge_index=edge_idx,
+                )
+
+                # Link connection to wall if applicable
+                if conn:
+                    conn.wall_id = str(wall_index)
+
+                new_walls.append(wall)
+                wall_index += 1
+
+        # Replace walls list
+        self._walls = new_walls
+        self._modified = True
+
+        print(f"[WallGen] Generated: {exterior_count} exterior, "
+              f"{interior_count} interior, {open_count} open (no wall)")
+        print(f"[WallGen] Total walls: {len(self._walls)}")
+
+        self.document_changed.emit()
+        return exterior_count, interior_count, open_count
 
     def _update_data(self):
         """Update JSON data from parsed objects, preserving original fields."""
@@ -464,6 +1111,10 @@ class ArchDocument(QObject):
             wall_data['height'] = wall.height
             wall_data['category'] = wall.category
             wall_data['wall_type'] = wall.wall_type
+            # Structural binding fields
+            wall_data['is_structural'] = wall.is_structural
+            wall_data['bound_room_id'] = wall.bound_room_id
+            wall_data['edge_index'] = wall.edge_index
             # Constraint fields
             wall_data['is_pinned'] = wall.is_pinned
             wall_data['locked_properties'] = wall.locked_properties
@@ -518,11 +1169,24 @@ class ArchDocument(QObject):
                 'bounds': room.bounds,
                 'area': room.area,
                 'center': room.center,
+                'vertices': room.vertices,  # Include polygon vertices
                 # Constraint fields
                 'is_pinned': room.is_pinned,
                 'locked_properties': room.locked_properties
             }
         self._data['rooms'] = rooms
+
+        # Update room connections
+        connections = []
+        for conn in self._room_connections:
+            connections.append({
+                'room_a_id': conn.room_a_id,
+                'room_b_id': conn.room_b_id,
+                'connection_type': conn.connection_type,
+                'shared_edge': conn.shared_edge,
+                'wall_id': conn.wall_id
+            })
+        self._data['room_connections'] = connections
 
     def get_data(self) -> dict:
         """Get current document data as JSON-serializable dict.
@@ -543,6 +1207,89 @@ class ArchDocument(QObject):
         if modified:
             event_bus.document_modified.emit()
 
+    def _sync_room_from_wall(self, wall: Wall):
+        """
+        Update room vertices when a structural wall bound to it moves.
+
+        If wall is structural and bound to a room, update that room's
+        polygon edge to match the wall's new position.
+        """
+        if not wall.is_structural or not wall.bound_room_id:
+            return
+
+        room = self._rooms.get(wall.bound_room_id)
+        if not room or not room.vertices or wall.edge_index < 0:
+            return
+
+        # Update the room polygon edge
+        num_verts = len(room.vertices)
+        if wall.edge_index >= num_verts:
+            return
+
+        # Edge goes from vertex[edge_index] to vertex[(edge_index+1) % n]
+        start_idx = wall.edge_index
+        end_idx = (wall.edge_index + 1) % num_verts
+
+        # Update vertices - wall endpoints become room edge endpoints
+        room.vertices[start_idx] = [wall.start[0], wall.start[2]]
+        room.vertices[end_idx] = [wall.end[0], wall.end[2]]
+
+        # Update room center
+        xs = [v[0] for v in room.vertices]
+        zs = [v[1] for v in room.vertices]
+        room.center = {'x': sum(xs) / len(xs), 'z': sum(zs) / len(zs)}
+
+        # Update room area (shoelace formula)
+        area = 0
+        for i in range(num_verts):
+            j = (i + 1) % num_verts
+            area += room.vertices[i][0] * room.vertices[j][1]
+            area -= room.vertices[j][0] * room.vertices[i][1]
+        room.area = abs(area) / 2
+
+    def move_room_walls(self, room_id: str, dx: float, dy: float,
+                        from_drag_start: bool = False,
+                        drag_start_vertices: list = None):
+        """
+        Move all walls bound to a room by the given delta.
+
+        Args:
+            room_id: The room being moved
+            dx, dy: Movement delta
+            from_drag_start: If True, calculate wall positions from drag_start_vertices
+            drag_start_vertices: Original room vertices at drag start
+        """
+        room = self._rooms.get(room_id)
+        if not room or not room.vertices:
+            return
+
+        # Find all walls bound to this room
+        for wall in self._walls:
+            if wall.bound_room_id != room_id or wall.edge_index < 0:
+                continue
+
+            num_verts = len(room.vertices)
+            if wall.edge_index >= num_verts:
+                continue
+
+            # Get the room edge vertices (already updated by the caller)
+            v1_idx = wall.edge_index
+            v2_idx = (wall.edge_index + 1) % num_verts
+
+            # Update wall endpoints from room vertices
+            new_start = room.vertices[v1_idx]
+            new_end = room.vertices[v2_idx]
+
+            # Keep Y (height) the same
+            wall.start = (new_start[0], wall.start[1], new_start[1])
+            wall.end = (new_end[0], wall.end[1], new_end[1])
+
+            # Emit element modified for wall items to update
+            event_bus.element_modified.emit('wall', str(wall.index), {
+                'start': wall.start,
+                'end': wall.end
+            })
+
     def modify_wall(self, index: int, **changes):
         """
         Modify a wall's properties (direct, no undo).
@@ -557,6 +1304,10 @@ class ArchDocument(QObject):
             for key, value in changes.items():
                 if hasattr(wall, key):
                     setattr(wall, key, value)
+
+            # If structural wall moved, update bound room
+            if ('start' in changes or 'end' in changes) and wall.is_structural:
+                self._sync_room_from_wall(wall)
 
             self.set_modified(True)
             self.element_modified.emit('wall', str(index))

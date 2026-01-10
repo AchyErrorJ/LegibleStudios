@@ -220,6 +220,11 @@ class ArchEngineApplication(QMainWindow):
         self.action_regenerate_sheets.setShortcut(QKeySequence("F4"))
         self.action_regenerate_sheets.triggered.connect(lambda: self._on_regenerate_sheet(""))
 
+        # Wall sync action
+        self.action_sync_walls = QAction("Sync Walls to &Connections", self)
+        self.action_sync_walls.setShortcut(QKeySequence("Ctrl+Shift+W"))
+        self.action_sync_walls.triggered.connect(self._on_sync_walls_to_connections)
+
         # Toggle actions
         self.action_ortho = QAction("&Ortho", self)
         self.action_ortho.setCheckable(True)
@@ -334,6 +339,8 @@ class ArchEngineApplication(QMainWindow):
         # Tools menu
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction(self.action_select)
+        tools_menu.addSeparator()
+        tools_menu.addAction(self.action_sync_walls)
 
         # Snap menu
         snap_menu = menubar.addMenu("&Snap")
@@ -428,7 +435,7 @@ class ArchEngineApplication(QMainWindow):
         """Create dock widgets - Navigation, Chat, and Smart Panels."""
         from panels.viewport_panel import ViewportPanel
         from panels.smart_panel_container import SmartPanelContainer
-        from panels.panel_registry import NavigationPanel, DesignChatPanel
+        from panels.panel_registry import DesignChatPanel
 
         # Project Browser dock (left side)
         self.project_dock = QDockWidget("Project Browser", self)
@@ -495,23 +502,6 @@ class ArchEngineApplication(QMainWindow):
             self.viewport_panel = ViewportPanel()
 
         # =================================================================
-        # Navigation Dock - Gravity Triangle + LOD (always visible, compact)
-        # =================================================================
-        self.nav_dock = QDockWidget("Navigation", self)
-        self.nav_dock.setObjectName("nav_dock")
-        self.nav_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.nav_dock.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetMovable |
-            QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        )
-        self.nav_panel = NavigationPanel()
-        self.nav_dock.setWidget(self.nav_panel)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.nav_dock)
-        self.window_menu.addAction(self.nav_dock.toggleViewAction())
-
-        # Connect navigation signals to smart panel system (will connect after smart panels created)
-
-        # =================================================================
         # Chat Dock - Design conversation (always visible)
         # =================================================================
         self.chat_dock = QDockWidget("Chat", self)
@@ -524,8 +514,7 @@ class ArchEngineApplication(QMainWindow):
         self.chat_panel = DesignChatPanel()
         self.chat_dock.setWidget(self.chat_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
-        self.tabifyDockWidget(self.nav_dock, self.chat_dock)
-        self.nav_dock.raise_()  # Show navigation by default
+        self.tabifyDockWidget(self.properties_dock, self.chat_dock)
         self.window_menu.addAction(self.chat_dock.toggleViewAction())
 
         # =================================================================
@@ -544,15 +533,7 @@ class ArchEngineApplication(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.smart_panels_dock)
         self.window_menu.addAction(self.smart_panels_dock.toggleViewAction())
 
-        # Connect navigation panel signals to smart panel container
-        if hasattr(self.nav_panel, 'gravity_triangle'):
-            self.nav_panel.gravity_triangle.gravity_changed.connect(
-                self.smart_panel_container.update_gravity
-            )
-        if hasattr(self.nav_panel, 'lod_indicator'):
-            self.nav_panel.lod_indicator.lod_changed.connect(
-                self.smart_panel_container.update_lod
-            )
+        # Navigation control is now a floating overlay in the 3D viewport.
 
     def _create_central_widget(self):
         """Create dockable 2D and 3D views that can be tabbed together."""
@@ -586,8 +567,11 @@ class ArchEngineApplication(QMainWindow):
             self.viewport_3d.setMinimumSize(400, 300)
             self.viewport_3d.initialized.connect(self._on_viewport_initialized)
             self.viewport_3d.load_complete.connect(self._on_viewport_load_complete)
+            self.viewport_3d.rooms_loaded.connect(self._on_rooms_loaded)
             self.viewport_3d.error_occurred.connect(self._on_viewport_error)
             self._viewport_tabs.addTab(self.viewport_3d, "3D Viewport")
+            # Default to 3D viewport
+            self._viewport_tabs.setCurrentIndex(1)
 
         # Add view menu actions for viewports
         self.action_show_2d = QAction("Show &2D Editor", self)
@@ -703,6 +687,7 @@ class ArchEngineApplication(QMainWindow):
         event_bus.document_loaded.connect(self._on_document_loaded)
         event_bus.document_modified.connect(self._on_document_modified)
         event_bus.selection_changed.connect(self._on_selection_changed)
+        event_bus.tool_changed.connect(self._on_tool_changed)
 
         # Connect generator service to document changes (disabled by default to avoid blocking)
         # Users can enable auto-regenerate in the sheets panel
@@ -710,7 +695,28 @@ class ArchEngineApplication(QMainWindow):
         self._generator_service.connect_to_document(self.document)
 
     def _on_selection_changed(self, selected_items):
-        """Handle selection change - update pin button state."""
+        """Handle selection change - update pin button state and smart panels."""
+        # Update smart panel container with selection info
+        if hasattr(self, 'smart_panel_container'):
+            element_ids = []
+            element_types = []
+            for item in selected_items:
+                item_type = type(item).__name__
+                # Extract element ID and type from graphics items
+                if item_type == "WallItem" and hasattr(item, 'wall'):
+                    element_ids.append(str(id(item.wall)))
+                    element_types.append("wall")
+                elif item_type == "DoorItem" and hasattr(item, 'door'):
+                    element_ids.append(str(id(item.door)))
+                    element_types.append("door")
+                elif item_type == "WindowItem" and hasattr(item, 'window'):
+                    element_ids.append(str(id(item.window)))
+                    element_types.append("window")
+                elif item_type == "RoomItem" and hasattr(item, 'room'):
+                    element_ids.append(str(id(item.room)))
+                    element_types.append("room")
+            self.smart_panel_container.update_selection(element_ids, element_types)
+
         if not selected_items:
             self.action_pin.setChecked(False)
             self.action_pin.setEnabled(False)
@@ -739,6 +745,22 @@ class ArchEngineApplication(QMainWindow):
         self.action_pin.blockSignals(True)
         self.action_pin.setChecked(any_pinned)
         self.action_pin.blockSignals(False)
+
+    def _on_tool_changed(self, tool_name: str):
+        """Handle tool change - update smart panels task state."""
+        if hasattr(self, 'smart_panel_container'):
+            # Map tool names to task types
+            # Tools like 'wall', 'door', 'window' indicate active drawing/placement
+            # The 'select' tool means idle state
+            task_map = {
+                'select': 'idle',
+                'wall': 'dragging_wall',
+                'door': 'dragging_opening',
+                'window': 'dragging_opening',
+                'room': 'dragging_blob',
+            }
+            task = task_map.get(tool_name.lower(), 'idle')
+            self.smart_panel_container.update_task(task)
 
     def _restore_state(self):
         """Restore window geometry and state."""
@@ -1069,6 +1091,43 @@ class ArchEngineApplication(QMainWindow):
                     self._on_request_lod_change
                 )
 
+            # Connect floating navigation overlay (tetrahedron) to viewport + panels
+            if hasattr(self.viewport_3d, 'gravity_changed'):
+                self.viewport_3d.gravity_changed.connect(
+                    self.viewport_panel.set_gravity_weights
+                )
+                if hasattr(self, 'smart_panel_container'):
+                    self.viewport_3d.gravity_changed.connect(
+                        self.smart_panel_container.update_gravity
+                    )
+            # Connect tetrahedron mode changes to 2D plan view
+            if hasattr(self.viewport_3d, 'mode_changed'):
+                self.viewport_3d.mode_changed.connect(
+                    lambda mode: self.plan_view.set_view_mode(mode) if hasattr(self, 'plan_view') else None
+                )
+            if hasattr(self.viewport_3d, 'lod_changed'):
+                self.viewport_3d.lod_changed.connect(
+                    self.viewport_panel.set_lod_level
+                )
+                # Also update 2D plan view LOD
+                self.viewport_3d.lod_changed.connect(
+                    lambda level, trans: self.plan_view.set_lod_level(level) if hasattr(self, 'plan_view') else None
+                )
+                if hasattr(self, 'smart_panel_container'):
+                    self.viewport_3d.lod_changed.connect(
+                        lambda level, trans: self.smart_panel_container.update_lod(level, trans)
+                    )
+
+            # Keep overlay in sync if controls change elsewhere
+            if hasattr(self.viewport_3d, 'set_nav_gravity'):
+                self.viewport_panel.gravity_changed.connect(
+                    self.viewport_3d.set_nav_gravity
+                )
+            if hasattr(self.viewport_3d, 'set_nav_lod'):
+                self.viewport_panel.lod_changed.connect(
+                    lambda level, trans: self.viewport_3d.set_nav_lod(level)
+                )
+
     def _on_request_gravity_center(self):
         """Handle request to center gravity (from hovering a panel)."""
         if hasattr(self, 'viewport_panel'):
@@ -1090,9 +1149,93 @@ class ArchEngineApplication(QMainWindow):
         """Handle viewport loaded building data."""
         self.status_bar.showMessage(f"3D View: {element_count} elements", 3000)
 
+    def _on_rooms_loaded(self, rooms: list):
+        """Handle rooms loaded from 3D renderer - sync to document."""
+        if not rooms:
+            return
+
+        print(f"[App] Syncing {len(rooms)} rooms from renderer to document")
+
+        # Update document with rooms from renderer
+        for room_data in rooms:
+            room_id = room_data['id']
+            bounds = room_data['bounds']
+
+            # Generate vertices from bounds
+            x, y = bounds['x'], bounds['y']
+            w, h = bounds['width'], bounds['height']
+            vertices = [
+                [x, y],
+                [x + w, y],
+                [x + w, y + h],
+                [x, y + h]
+            ]
+
+            # Check if room exists in document
+            if room_id in self.document._rooms:
+                # Update existing room
+                room = self.document._rooms[room_id]
+                room.bounds = bounds
+                room.vertices = vertices
+                room.center = room_data['center']
+                room.name = room_data['name']
+                room.room_type = room_data['room_type']
+                room.area = room_data['area']
+            else:
+                # Add new room
+                from core.document import Room
+                room = Room(
+                    id=room_id,
+                    name=room_data['name'],
+                    room_type=room_data['room_type'],
+                    bounds=bounds,
+                    area=room_data['area'],
+                    center=room_data['center'],
+                    vertices=vertices
+                )
+                self.document._rooms[room_id] = room
+
+        # Auto-bind walls to rooms
+        self.document._auto_bind_walls_to_rooms()
+
+        # Detect room adjacencies
+        self.document.detect_room_adjacencies()
+
+        # Refresh plan view
+        if hasattr(self, 'plan_view'):
+            self.plan_view.refresh()
+
+        self.status_bar.showMessage(f"Synced {len(rooms)} rooms from 3D renderer", 3000)
+
     def _on_viewport_error(self, error: str):
         """Handle viewport error."""
         self.status_bar.showMessage(f"3D Viewport Error: {error}", 5000)
+
+    def _on_sync_walls_to_connections(self):
+        """Generate walls from room edges based on connections."""
+        if not self.document:
+            self.status_bar.showMessage("No document loaded", 3000)
+            return
+
+        try:
+            print("[App] Starting wall generation...", flush=True)
+            exterior, interior, openings = self.document.generate_walls_from_rooms()
+            print(f"[App] Wall generation complete: {exterior} ext, {interior} int, {openings} open", flush=True)
+
+            # Refresh plan view
+            if hasattr(self, 'plan_view'):
+                self.plan_view.refresh()
+
+            # 3D view auto-reloads via document_changed signal
+
+            self.status_bar.showMessage(
+                f"Walls generated: {exterior} exterior, {interior} interior, {openings} open", 5000
+            )
+        except Exception as e:
+            print(f"[App] Error in wall sync: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            self.status_bar.showMessage(f"Wall sync error: {e}", 5000)
 
     def _show_status_message(self, message: str, timeout: int):
         """Show message in status bar."""
@@ -1116,6 +1259,12 @@ class ArchEngineApplication(QMainWindow):
                 # Update viewport panel if available
                 if hasattr(self, 'viewport_panel'):
                     self.viewport_panel.set_lod_level(self._global_lod_level)
+                    if hasattr(self, 'viewport_3d') and hasattr(self.viewport_3d, 'set_nav_lod'):
+                        self.viewport_3d.set_nav_lod(self._global_lod_level)
+
+                # Update plan view LOD (controls wall/room visibility)
+                if hasattr(self, 'plan_view'):
+                    self.plan_view.set_lod_level(self._global_lod_level)
 
                 # Show feedback in status bar
                 lod_names = {1: "Topology", 2: "Walls", 3: "Fixtures", 4: "Viewports", 5: "Documentation"}

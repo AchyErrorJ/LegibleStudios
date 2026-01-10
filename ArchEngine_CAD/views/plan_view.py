@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QRectF, QPointF, QLineF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPainterPath, QFont, QPolygonF
 
-from views.base_view import BaseView
+from views.base_view import BaseView, ViewMode
 from core.document import ArchDocument, Wall, Door, Window, Room
 from core.events import event_bus
 from app.config import Config
@@ -1850,16 +1850,470 @@ class WindowItem(QGraphicsItem):
             painter.restore()
 
 
+class ConnectionItem(QGraphicsItem):
+    """Graphics item representing a connection between two adjacent rooms."""
+
+    # Connection type colors and styles - order matters for cycling
+    CONNECTION_TYPES = ['wall', 'open', 'wet_wall', 'structural', 'mechanical', 'insulated']
+
+    CONNECTION_STYLES = {
+        'undefined': ("#888888", Qt.PenStyle.DashLine, "?", "Undefined - Click to set"),
+        'wall': ("#666666", Qt.PenStyle.SolidLine, "W", "Standard Wall"),
+        'open': ("#44DD44", Qt.PenStyle.DotLine, "O", "Open (No Wall)"),
+        'wet_wall': ("#4488FF", Qt.PenStyle.SolidLine, "P", "Wet Wall (Plumbing)"),
+        'structural': ("#FF4444", Qt.PenStyle.SolidLine, "S", "Structural Wall"),
+        'mechanical': ("#FF8800", Qt.PenStyle.DashDotLine, "M", "Mechanical Wall"),
+        'insulated': ("#AA44AA", Qt.PenStyle.SolidLine, "I", "Insulated Wall"),
+    }
+
+    def __init__(self, connection, document=None, view=None, parent=None):
+        super().__init__(parent)
+        self.connection = connection
+        self.document = document
+        self._view = view
+        self.setZValue(50)  # Between rooms and UI elements
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def boundingRect(self) -> QRectF:
+        """Return bounding rectangle of the connection line."""
+        if not self.connection.shared_edge:
+            return QRectF()
+
+        p1, p2 = self.connection.shared_edge
+        margin = 50
+        x = min(p1[0], p2[0]) - margin
+        y = min(p1[1], p2[1]) - margin
+        w = abs(p2[0] - p1[0]) + margin * 2
+        h = abs(p2[1] - p1[1]) + margin * 2
+        return QRectF(x, y, max(w, 100), max(h, 100))
+
+    def paint(self, painter: QPainter, option, widget):
+        """Paint the connection line."""
+        if not self.connection.shared_edge:
+            return
+
+        # Only show at LOD 1 (blob view)
+        if self._view and self._view.lod_level != 1:
+            return
+
+        p1, p2 = self.connection.shared_edge
+
+        # Get style for connection type (color, pen_style, letter, tooltip)
+        style = self.CONNECTION_STYLES.get(
+            self.connection.connection_type,
+            self.CONNECTION_STYLES['undefined']
+        )
+        color_hex, pen_style, letter, tooltip = style
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Draw the shared edge line
+        color = QColor(color_hex)
+        pen = QPen(color, 80)  # Thick line (80mm)
+        pen.setStyle(pen_style)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawLine(QPointF(p1[0], p1[1]), QPointF(p2[0], p2[1]))
+
+        # Draw connection type indicator at midpoint
+        mid_x = (p1[0] + p2[0]) / 2
+        mid_y = (p1[1] + p2[1]) / 2
+
+        # Draw a small circle at midpoint
+        painter.setBrush(QBrush(color))
+        painter.setPen(QPen(Qt.GlobalColor.white, 20))
+        painter.drawEllipse(QPointF(mid_x, mid_y), 100, 100)
+
+        # Draw connection type icon/letter
+        painter.setPen(QPen(Qt.GlobalColor.white))
+        font = painter.font()
+        font.setPixelSize(120)
+        font.setBold(True)
+        painter.setFont(font)
+
+        # Draw the letter from style
+        painter.drawText(
+            QRectF(mid_x - 60, mid_y - 60, 120, 120),
+            Qt.AlignmentFlag.AlignCenter,
+            letter
+        )
+
+    def mousePressEvent(self, event):
+        """Handle mouse clicks to change connection type."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Left click cycles through types
+            self._cycle_connection_type()
+            event.accept()
+        elif event.button() == Qt.MouseButton.RightButton:
+            # Right click shows context menu
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        """Show context menu for connection type selection."""
+        from PyQt6.QtWidgets import QMenu
+        from PyQt6.QtCore import QPoint
+
+        try:
+            menu = QMenu()
+            current_type = self.connection.connection_type or 'undefined'
+
+            # Add connection type options
+            for conn_type in self.CONNECTION_TYPES:
+                style = self.CONNECTION_STYLES.get(conn_type, self.CONNECTION_STYLES['wall'])
+                color_hex, pen_style, letter, tooltip = style
+
+                action = menu.addAction(f"[{letter}] {tooltip}")
+                action.setCheckable(True)
+                action.setChecked(conn_type == current_type)
+                action.setData(conn_type)
+
+            # Add undefined option
+            menu.addSeparator()
+            undef_style = self.CONNECTION_STYLES['undefined']
+            undef_action = menu.addAction(f"[{undef_style[2]}] {undef_style[3]}")
+            undef_action.setCheckable(True)
+            undef_action.setChecked(current_type == 'undefined')
+            undef_action.setData('undefined')
+
+            # Show menu and handle selection
+            screen_pos = event.screenPos()
+            if hasattr(screen_pos, 'toPoint'):
+                screen_pos = screen_pos.toPoint()
+
+            action = menu.exec(screen_pos)
+            if action:
+                new_type = action.data()
+                self._set_connection_type(new_type)
+        except Exception as e:
+            print(f"[ConnectionItem] Context menu error: {e}", flush=True)
+
+    def _cycle_connection_type(self):
+        """Cycle to the next connection type."""
+        current = self.connection.connection_type or 'undefined'
+
+        # Build full cycle list: undefined -> types -> undefined
+        all_types = ['undefined'] + self.CONNECTION_TYPES
+
+        try:
+            current_idx = all_types.index(current)
+            next_idx = (current_idx + 1) % len(all_types)
+            new_type = all_types[next_idx]
+        except ValueError:
+            new_type = 'wall'  # Default to wall if unknown
+
+        self._set_connection_type(new_type)
+
+    def _set_connection_type(self, new_type: str):
+        """Update the connection type in the document."""
+        if self.document:
+            self.document.set_connection_type(
+                self.connection.room_a_id,
+                self.connection.room_b_id,
+                new_type
+            )
+            self.connection.connection_type = new_type
+            self.update()  # Trigger repaint
+
+
+class RoomResizeGrip(QGraphicsItem):
+    """Resize grip for room edges - moves entire edge (both vertices)."""
+
+    def __init__(self, room_item, edge_index, parent=None):
+        super().__init__(parent)
+        self.room_item = room_item
+        self.edge_index = edge_index  # Index of first vertex of edge
+        self._dragging = False
+        self._drag_start_pos = None
+        self._drag_start_v1 = None
+        self._drag_start_v2 = None
+        self._is_horizontal = False  # True if edge is horizontal
+
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+        self.setZValue(200)  # Above everything
+
+    def _get_edge_vertices(self):
+        """Get the two vertex indices for this edge."""
+        n = len(self.room_item.room.vertices)
+        v1_idx = self.edge_index
+        v2_idx = (self.edge_index + 1) % n
+        return v1_idx, v2_idx
+
+    def _update_cursor_and_orientation(self):
+        """Set cursor based on edge orientation."""
+        v1_idx, v2_idx = self._get_edge_vertices()
+        v1 = self.room_item.room.vertices[v1_idx]
+        v2 = self.room_item.room.vertices[v2_idx]
+
+        # Check if horizontal or vertical
+        if abs(v1[1] - v2[1]) < abs(v1[0] - v2[0]):
+            # Horizontal edge - moves vertically
+            self._is_horizontal = True
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+        else:
+            # Vertical edge - moves horizontally
+            self._is_horizontal = False
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(-120, -120, 240, 240)
+
+    def paint(self, painter: QPainter, option, widget):
+        # Only show at LOD 1 and when room is selected
+        if not self.room_item._view or self.room_item._view.lod_level != 1:
+            return
+        if not self.room_item.isSelected():
+            return
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Draw grip as a rectangle/bar indicating edge direction
+        painter.setBrush(QBrush(QColor("#4488FF")))
+        painter.setPen(QPen(QColor("#FFFFFF"), 20))
+
+        if self._is_horizontal:
+            # Horizontal edge - draw horizontal bar
+            painter.drawRoundedRect(QRectF(-80, -40, 160, 80), 20, 20)
+            # Draw arrows indicating vertical movement
+            painter.setPen(QPen(QColor("#FFFFFF"), 15))
+            painter.drawLine(QPointF(0, -60), QPointF(0, -30))
+            painter.drawLine(QPointF(0, 30), QPointF(0, 60))
+        else:
+            # Vertical edge - draw vertical bar
+            painter.drawRoundedRect(QRectF(-40, -80, 80, 160), 20, 20)
+            # Draw arrows indicating horizontal movement
+            painter.setPen(QPen(QColor("#FFFFFF"), 15))
+            painter.drawLine(QPointF(-60, 0), QPointF(-30, 0))
+            painter.drawLine(QPointF(30, 0), QPointF(60, 0))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._drag_start_pos = event.scenePos()
+
+            v1_idx, v2_idx = self._get_edge_vertices()
+            v1 = self.room_item.room.vertices[v1_idx]
+            v2 = self.room_item.room.vertices[v2_idx]
+            self._drag_start_v1 = [v1[0], v1[1]]
+            self._drag_start_v2 = [v2[0], v2[1]]
+
+            self._update_cursor_and_orientation()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._dragging and self._drag_start_pos:
+            delta = event.scenePos() - self._drag_start_pos
+
+            v1_idx, v2_idx = self._get_edge_vertices()
+
+            if self._is_horizontal:
+                # Horizontal edge moves vertically only
+                dy = delta.y()
+                self.room_item.room.vertices[v1_idx] = [self._drag_start_v1[0], self._drag_start_v1[1] + dy]
+                self.room_item.room.vertices[v2_idx] = [self._drag_start_v2[0], self._drag_start_v2[1] + dy]
+            else:
+                # Vertical edge moves horizontally only
+                dx = delta.x()
+                self.room_item.room.vertices[v1_idx] = [self._drag_start_v1[0] + dx, self._drag_start_v1[1]]
+                self.room_item.room.vertices[v2_idx] = [self._drag_start_v2[0] + dx, self._drag_start_v2[1]]
+
+            # Update grip position to edge midpoint
+            v1 = self.room_item.room.vertices[v1_idx]
+            v2 = self.room_item.room.vertices[v2_idx]
+            mid_x = (v1[0] + v2[0]) / 2
+            mid_y = (v1[1] + v2[1]) / 2
+            self.setPos(mid_x, mid_y)
+
+            # Update room item
+            self.room_item._update_room_geometry()
+            self.room_item._update_grip_positions()
+            self.room_item.prepareGeometryChange()
+            self.room_item.update()
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if self._dragging:
+            self._dragging = False
+            self._drag_start_pos = None
+            self._drag_start_v1 = None
+            self._drag_start_v2 = None
+            # Recalculate adjacencies
+            if self.room_item.document:
+                self.room_item.document.detect_room_adjacencies()
+                if self.room_item._view and hasattr(self.room_item._view, 'refresh_connections'):
+                    self.room_item._view.refresh_connections()
+                event_bus.document_modified.emit()
+            event.accept()
+
+
 class RoomItem(QGraphicsItem):
     """Graphics item representing a room."""
 
-    def __init__(self, room: Room, document=None, parent=None):
+    # Room type colors
+    ROOM_COLORS = {
+        'entrance': ("#FF6B6B", "Entrance"),  # Anchor entrance
+        'porch': ("#4ECDC4", "Porch"),         # Front porch
+        'living': ("#7CB9E8", "Living"),
+        'bedroom': ("#9370DB", "Bedroom"),
+        'bathroom': ("#5DADE2", "Bathroom"),
+        'kitchen': ("#F5B041", "Kitchen"),
+        'dining': ("#58D68D", "Dining"),
+        'office': ("#AF7AC5", "Office"),
+        'garage': ("#95A5A6", "Garage"),
+        'hallway': ("#D5DBDB", "Hallway"),
+        'closet': ("#BFC9CA", "Closet"),
+        'laundry': ("#85C1E9", "Laundry"),
+        'entry': ("#EDBB99", "Entry"),
+        'utility': ("#A9A9A9", "Utility"),
+        'generic': ("#888888", "Room"),
+    }
+
+    def __init__(self, room: Room, document=None, view=None, parent=None):
         super().__init__(parent)
         self.room = room
         self.document = document
+        self._view = view  # Reference to plan view for mode/LOD
+        self._drag_start_vertices = None  # Store original vertices during drag
+        self._drag_start_pos = None
+        self._is_dragging = False
+        self._resize_grips = []  # Corner resize handles
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
-        self.setZValue(-10)  # Draw rooms behind walls
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable)
+        # Don't use ItemIsMovable - we handle movement manually via vertices
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+        self._update_z_for_lod()
+
+    def keyPressEvent(self, event):
+        """Handle delete key to remove room."""
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self._delete_room()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def _delete_room(self):
+        """Delete this room from document and scene."""
+        if self.document and self.room.id in self.document._rooms:
+            # Remove from document
+            del self.document._rooms[self.room.id]
+            # Remove from scene
+            if self.scene():
+                self.scene().removeItem(self)
+            # Remove from view's room list
+            if self._view and hasattr(self._view, '_room_items'):
+                if self in self._view._room_items:
+                    self._view._room_items.remove(self)
+            # Emit modified
+            event_bus.document_modified.emit()
+            print(f"[RoomItem] Deleted room: {self.room.name}")
+
+    def _update_z_for_lod(self):
+        """Update z-value based on LOD level."""
+        lod = self._view.lod_level if self._view else 2
+        if lod == 1:
+            # LOD 1 (blob view) - rooms on top, fully interactive
+            self.setZValue(100)
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        else:
+            # Other LODs - rooms behind walls
+            self.setZValue(-10)
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+            # Remove grips when not in LOD 1
+            self._remove_grips()
+        # Always ensure pos is at origin - we use absolute scene coords in vertices
+        self.setPos(0, 0)
+
+    def _create_grips(self):
+        """Create resize grips at each edge midpoint."""
+        if not self.room.vertices or not self.scene():
+            return
+
+        # Remove existing grips first
+        self._remove_grips()
+
+        # Create a grip for each edge (at midpoint)
+        n = len(self.room.vertices)
+        for i in range(n):
+            v1 = self.room.vertices[i]
+            v2 = self.room.vertices[(i + 1) % n]
+            mid_x = (v1[0] + v2[0]) / 2
+            mid_y = (v1[1] + v2[1]) / 2
+
+            grip = RoomResizeGrip(self, i)
+            grip.setPos(mid_x, mid_y)
+            grip._update_cursor_and_orientation()
+            self.scene().addItem(grip)
+            self._resize_grips.append(grip)
+
+    def _remove_grips(self):
+        """Remove all resize grips."""
+        for grip in self._resize_grips:
+            if grip.scene():
+                grip.scene().removeItem(grip)
+        self._resize_grips.clear()
+
+    def _update_grip_positions(self):
+        """Update grip positions to match current edge midpoints."""
+        if not self.room.vertices:
+            return
+        n = len(self.room.vertices)
+        for i, grip in enumerate(self._resize_grips):
+            if i < n:
+                v1 = self.room.vertices[i]
+                v2 = self.room.vertices[(i + 1) % n]
+                mid_x = (v1[0] + v2[0]) / 2
+                mid_y = (v1[1] + v2[1]) / 2
+                grip.setPos(mid_x, mid_y)
+                grip._update_cursor_and_orientation()
+
+    def _update_room_geometry(self):
+        """Update room bounds, center, and area from vertices."""
+        if not self.room.vertices:
+            return
+
+        xs = [v[0] for v in self.room.vertices]
+        ys = [v[1] for v in self.room.vertices]
+
+        # Update bounds
+        self.room.bounds = {
+            'x': min(xs),
+            'y': min(ys),
+            'width': max(xs) - min(xs),
+            'height': max(ys) - min(ys)
+        }
+
+        # Update center
+        self.room.center = {
+            'x': sum(xs) / len(xs),
+            'z': sum(ys) / len(ys)
+        }
+
+        # Update area (shoelace formula)
+        n = len(self.room.vertices)
+        area = 0
+        for i in range(n):
+            j = (i + 1) % n
+            area += self.room.vertices[i][0] * self.room.vertices[j][1]
+            area -= self.room.vertices[j][0] * self.room.vertices[i][1]
+        self.room.area = abs(area) / 2 / 1000000  # Convert to sq meters
+
+    def itemChange(self, change, value):
+        """Handle selection changes to show/hide grips."""
+        if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            lod = self._view.lod_level if self._view else 2
+            if value and lod == 1:
+                # Selected at LOD 1 - show grips
+                self._create_grips()
+            else:
+                # Deselected or not LOD 1 - hide grips
+                self._remove_grips()
+        return super().itemChange(change, value)
 
     def boundingRect(self) -> QRectF:
         """Return bounding rectangle."""
@@ -1888,25 +2342,231 @@ class RoomItem(QGraphicsItem):
             path.addPolygon(polygon)
         return path
 
+    def mousePressEvent(self, event):
+        """Store starting position for drag - only at LOD 1."""
+        # Check if view is panning - don't start room drag during pan
+        is_panning = self._view and hasattr(self._view, '_panning') and self._view._panning
+        if is_panning:
+            # Don't interfere with panning
+            event.ignore()
+            return
+
+        # Give focus to this item for key events (delete)
+        self.setFocus()
+
+        # Only allow dragging at LOD 1 (blob view)
+        lod = self._view.lod_level if self._view else 2
+        if lod == 1 and self.room.vertices and event.button() == Qt.MouseButton.LeftButton:
+            # Deep copy vertices at drag start
+            self._drag_start_vertices = [list(v) for v in self.room.vertices]
+            self._drag_start_pos = event.scenePos()
+            self._is_dragging = True
+            # Ensure we're at origin (no position offset)
+            self.setPos(0, 0)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def _find_snap_offset(self, proposed_vertices, snap_threshold=300.0):
+        """
+        Find snap offset to align with nearby room edges.
+
+        Args:
+            proposed_vertices: The vertices after applying current drag delta
+            snap_threshold: Distance in mm to trigger snap
+
+        Returns:
+            (snap_dx, snap_dy) offset to apply for snapping, or (0, 0) if no snap
+        """
+        if not self.document or not proposed_vertices:
+            return 0, 0
+
+        best_snap_x = None
+        best_snap_y = None
+        best_dist_x = snap_threshold
+        best_dist_y = snap_threshold
+
+        # Get edges of this room (proposed position)
+        my_edges = []
+        n = len(proposed_vertices)
+        for i in range(n):
+            p1 = proposed_vertices[i]
+            p2 = proposed_vertices[(i + 1) % n]
+            my_edges.append((p1, p2))
+
+        # Check against all other rooms
+        for room_id, other_room in self.document._rooms.items():
+            if room_id == self.room.id or not other_room.vertices:
+                continue
+
+            other_n = len(other_room.vertices)
+            for j in range(other_n):
+                o1 = other_room.vertices[j]
+                o2 = other_room.vertices[(j + 1) % other_n]
+
+                # Check each of my edges against this other edge
+                for p1, p2 in my_edges:
+                    # Check if edges are axis-aligned and could snap
+                    # Vertical edges (same x)
+                    if abs(p1[0] - p2[0]) < 10 and abs(o1[0] - o2[0]) < 10:
+                        # Both vertical - check x distance
+                        my_x = (p1[0] + p2[0]) / 2
+                        other_x = (o1[0] + o2[0]) / 2
+                        dist = abs(my_x - other_x)
+                        if dist < best_dist_x:
+                            # Check if y ranges overlap
+                            my_y_min, my_y_max = min(p1[1], p2[1]), max(p1[1], p2[1])
+                            other_y_min, other_y_max = min(o1[1], o2[1]), max(o1[1], o2[1])
+                            if my_y_max > other_y_min and my_y_min < other_y_max:
+                                best_dist_x = dist
+                                best_snap_x = other_x - my_x
+
+                    # Horizontal edges (same y)
+                    if abs(p1[1] - p2[1]) < 10 and abs(o1[1] - o2[1]) < 10:
+                        # Both horizontal - check y distance
+                        my_y = (p1[1] + p2[1]) / 2
+                        other_y = (o1[1] + o2[1]) / 2
+                        dist = abs(my_y - other_y)
+                        if dist < best_dist_y:
+                            # Check if x ranges overlap
+                            my_x_min, my_x_max = min(p1[0], p2[0]), max(p1[0], p2[0])
+                            other_x_min, other_x_max = min(o1[0], o2[0]), max(o1[0], o2[0])
+                            if my_x_max > other_x_min and my_x_min < other_x_max:
+                                best_dist_y = dist
+                                best_snap_y = other_y - my_y
+
+        snap_dx = best_snap_x if best_snap_x is not None else 0
+        snap_dy = best_snap_y if best_snap_y is not None else 0
+        return snap_dx, snap_dy
+
+    def mouseMoveEvent(self, event):
+        """Handle room dragging - move vertices (LOD 1 only)."""
+        # Don't drag room if view is panning
+        is_panning = self._view and hasattr(self._view, '_panning') and self._view._panning
+        if is_panning:
+            event.ignore()
+            return
+
+        if self._is_dragging and self._drag_start_vertices and self._drag_start_pos:
+            # Calculate delta from drag start
+            delta = event.scenePos() - self._drag_start_pos
+            dx, dy = delta.x(), delta.y()
+
+            # Calculate proposed vertices before snap
+            proposed_vertices = [[orig_v[0] + dx, orig_v[1] + dy]
+                                for orig_v in self._drag_start_vertices]
+
+            # Find snap offset
+            snap_dx, snap_dy = self._find_snap_offset(proposed_vertices)
+            dx += snap_dx
+            dy += snap_dy
+
+            # Update all vertices with snapped position
+            for i, orig_v in enumerate(self._drag_start_vertices):
+                self.room.vertices[i] = [orig_v[0] + dx, orig_v[1] + dy]
+
+            # Update center
+            if self.room.vertices:
+                xs = [v[0] for v in self.room.vertices]
+                zs = [v[1] for v in self.room.vertices]
+                self.room.center = {'x': sum(xs)/len(xs), 'z': sum(zs)/len(zs)}
+
+            # Update bound walls
+            if self.document:
+                self.document.move_room_walls(self.room.id, dx, dy, from_drag_start=True,
+                                              drag_start_vertices=self._drag_start_vertices)
+
+            # Update grip positions during drag
+            self._update_grip_positions()
+
+            self.prepareGeometryChange()
+            self.update()
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Finish drag - emit document modified."""
+        # Don't interfere with panning
+        if self._view and hasattr(self._view, '_panning') and self._view._panning:
+            self._drag_start_vertices = None
+            self._drag_start_pos = None
+            self._is_dragging = False
+            event.ignore()
+            return
+
+        was_dragging = self._is_dragging
+        # Always clear drag state on any release
+        self._drag_start_vertices = None
+        self._drag_start_pos = None
+        self._is_dragging = False
+
+        if was_dragging:
+            # Emit document modified for final state
+            if self.document:
+                # Recompute room adjacencies after move
+                self.document.detect_room_adjacencies()
+                # Refresh connection visualization
+                if self._view and hasattr(self._view, 'refresh_connections'):
+                    self._view.refresh_connections()
+                event_bus.document_modified.emit()
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
     def paint(self, painter: QPainter, option, widget):
-        """Paint the room."""
+        """Paint the room with mode-aware rendering."""
+        # Early return if no vertices
+        if not self.room.vertices:
+            return
+
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Room fill color based on type
-        room_colors = {
-            'living': QColor(200, 230, 200, 60),
-            'bedroom': QColor(200, 200, 230, 60),
-            'kitchen': QColor(230, 220, 200, 60),
-            'bathroom': QColor(200, 220, 230, 60),
-            'dining': QColor(230, 230, 200, 60),
-            'office': QColor(220, 220, 220, 60),
-            'garage': QColor(180, 180, 180, 60),
-            'generic': QColor(210, 210, 210, 40),
-        }
+        # Get view mode and LOD from view if available
+        view_mode = ViewMode.REALITY
+        lod_level = 2
+        if self._view:
+            view_mode = self._view.view_mode
+            lod_level = self._view.lod_level
 
-        fill_color = room_colors.get(self.room.room_type, room_colors['generic'])
+        # Get room color from type
+        color_hex, display_name = self.ROOM_COLORS.get(
+            self.room.room_type, self.ROOM_COLORS['generic']
+        )
+        base_color = QColor(color_hex)
+
+        # Adjust fill based on view mode
+        if view_mode == ViewMode.WIREFRAME:
+            fill_alpha = 0  # No fill in wireframe
+            border_width = 30
+        elif view_mode == ViewMode.VISION:
+            fill_alpha = 100  # More visible fills for design view
+            border_width = 40
+        elif view_mode == ViewMode.BUDGET:
+            fill_alpha = 60  # Moderate fills
+            border_width = 30
+        elif view_mode == ViewMode.CRAFT:
+            fill_alpha = 40  # Subtle fills, focus on structure
+            border_width = 50
+        else:  # REALITY
+            fill_alpha = 70
+            border_width = 35
+
+        # LOD affects visibility - rooms are most visible at LOD 1 (blobs)
+        if lod_level == 1:
+            fill_alpha = min(fill_alpha + 50, 180)
+            border_width += 20
+        elif lod_level >= 4:
+            fill_alpha = max(fill_alpha - 30, 20)
+
+        fill_color = QColor(base_color)
+        fill_color.setAlpha(fill_alpha)
+
         if self.isSelected():
-            fill_color = QColor(100, 200, 255, 80)
+            fill_color = QColor(100, 200, 255, 120)
+            border_color = QColor(100, 200, 255)
+        else:
+            border_color = base_color.darker(120)
 
         # Draw room polygon
         if self.room.vertices:
@@ -1914,46 +2574,80 @@ class RoomItem(QGraphicsItem):
             for v in self.room.vertices:
                 polygon.append(QPointF(v[0], v[1]))
 
-            # Fill
+            # Fill and border
             painter.setBrush(QBrush(fill_color))
-            pen = QPen(QColor(100, 200, 255) if self.isSelected() else QColor(100, 100, 100), 20, Qt.PenStyle.DashLine)
-            painter.setPen(pen)
+            pen_style = Qt.PenStyle.SolidLine if lod_level <= 2 else Qt.PenStyle.DashLine
+            painter.setPen(QPen(border_color, border_width, pen_style))
             painter.drawPolygon(polygon)
 
-            # Draw room label at center
-            if self.room.center:
-                cx, cz = self.room.center['x'], self.room.center['z']
-            else:
-                xs = [v[0] for v in self.room.vertices]
-                zs = [v[1] for v in self.room.vertices]
-                cx = (min(xs) + max(xs)) / 2
-                cz = (min(zs) + max(zs)) / 2
+            # Calculate center from vertices (more reliable than stored center)
+            xs = [v[0] for v in self.room.vertices]
+            zs = [v[1] for v in self.room.vertices]
+            cx = (min(xs) + max(xs)) / 2
+            cz = (min(zs) + max(zs)) / 2
 
-            # Room name
-            painter.setPen(QPen(Qt.GlobalColor.white))
+            # Room name - always visible, size based on LOD
+            name_text = self.room.name or display_name
             font = painter.font()
-            font.setPointSize(100)
+
+            # Font size based on LOD - larger at topology level
+            if lod_level == 1:
+                font_size = 250  # Large blob labels
+            elif lod_level == 2:
+                font_size = 180
+            elif lod_level == 3:
+                font_size = 140
+            else:
+                font_size = 100
+
+            font.setPointSize(font_size)
             font.setBold(True)
             painter.setFont(font)
 
-            name_text = self.room.name or self.room.room_type.capitalize()
-            painter.drawText(QPointF(cx - 400, cz), name_text)
+            # Text color with outline for visibility
+            painter.save()
 
-            # Area text
-            font.setPointSize(80)
-            font.setBold(False)
-            painter.setFont(font)
-            area_m2 = self.room.area / 1e6 if self.room.area else 0
-            painter.drawText(QPointF(cx - 300, cz + 200), f"{area_m2:.1f} m²")
+            # Draw text outline (shadow)
+            painter.setPen(QPen(QColor(0, 0, 0, 180), 20))
+            text_rect = QRectF(cx - 1500, cz - font_size, 3000, font_size * 2)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, name_text)
+
+            # Draw text
+            text_color = QColor(255, 255, 255) if fill_alpha > 50 else base_color.lighter(150)
+            painter.setPen(text_color)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, name_text)
+
+            painter.restore()
+
+            # Area text - show at LOD 1-3
+            if lod_level <= 3:
+                area_m2 = self.room.area / 1e6 if self.room.area else 0
+                if area_m2 > 0:
+                    font.setPointSize(int(font_size * 0.6))
+                    font.setBold(False)
+                    painter.setFont(font)
+                    painter.setPen(QColor(200, 200, 200, 200))
+                    area_rect = QRectF(cx - 1000, cz + font_size * 0.3, 2000, font_size)
+                    painter.drawText(area_rect, Qt.AlignmentFlag.AlignCenter, f"{area_m2:.1f} m²")
+
+            # Room type icon/indicator at LOD 1
+            if lod_level == 1:
+                painter.save()
+                icon_size = 200
+                icon_rect = QRectF(cx - icon_size/2, cz - font_size - icon_size - 100, icon_size, icon_size)
+                painter.setBrush(base_color)
+                painter.setPen(QPen(base_color.darker(130), 15))
+                painter.drawEllipse(icon_rect)
+                painter.restore()
 
             # Draw pin indicator if pinned
             if self.room.is_pinned:
                 painter.save()
                 painter.setPen(QPen(QColor(255, 100, 100), 30))
                 painter.setBrush(QBrush(QColor(255, 100, 100, 180)))
-                painter.drawEllipse(QPointF(cx, cz - 300), 120, 120)
+                painter.drawEllipse(QPointF(cx + 800, cz - font_size), 120, 120)
                 painter.setPen(QPen(Qt.GlobalColor.white, 40))
-                painter.drawPoint(QPointF(cx, cz - 300))
+                painter.drawPoint(QPointF(cx + 800, cz - font_size))
                 painter.restore()
 
 
@@ -1974,6 +2668,7 @@ class PlanView(BaseView):
         self._window_items: List[WindowItem] = []
         self._room_items: List[RoomItem] = []
         self._room_labels: List[RoomLabelItem] = []
+        self._connection_items: List[ConnectionItem] = []
 
         # Snap system
         self._snap_manager = SnapManager(document, config)
@@ -1997,6 +2692,90 @@ class PlanView(BaseView):
         # Enable mouse tracking for tool preview
         self.setMouseTracking(True)
 
+        # Enable drop for room palette
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        """Accept room drops from palette."""
+        if event.mimeData().hasText() and event.mimeData().text().startswith("room:"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        """Track drag position."""
+        if event.mimeData().hasText() and event.mimeData().text().startswith("room:"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        """Create new room where dropped."""
+        text = event.mimeData().text()
+        if not text.startswith("room:"):
+            event.ignore()
+            return
+
+        # Parse room data: "room:type:name:color"
+        parts = text.split(":")
+        if len(parts) < 4:
+            event.ignore()
+            return
+
+        room_type = parts[1]
+        room_name = parts[2]
+
+        # Get drop position in scene coordinates
+        drop_pos = self.mapToScene(event.position().toPoint())
+
+        # Create new room at drop position with default size (3m x 3m = 3000mm x 3000mm)
+        room_size = 3000
+        x, y = drop_pos.x() - room_size/2, drop_pos.y() - room_size/2
+
+        # Generate unique room ID
+        import uuid
+        room_id = f"{room_type}_{str(uuid.uuid4())[:8]}"
+
+        # Create room
+        from core.document import Room
+        vertices = [
+            [x, y],
+            [x + room_size, y],
+            [x + room_size, y + room_size],
+            [x, y + room_size]
+        ]
+        center = {'x': x + room_size/2, 'z': y + room_size/2}
+
+        room = Room(
+            id=room_id,
+            name=room_name,
+            room_type=room_type,
+            bounds={'x': x, 'y': y, 'width': room_size, 'height': room_size},
+            area=(room_size * room_size) / 1000000,  # sq meters
+            center=center,
+            vertices=vertices
+        )
+
+        # Add to document
+        self.document._rooms[room_id] = room
+
+        # Create room item and add to scene
+        room_item = RoomItem(room, document=self.document, view=self)
+        self.scene.addItem(room_item)
+        self._room_items.append(room_item)
+
+        # Detect adjacencies with new room
+        self.document.detect_room_adjacencies()
+
+        # Refresh connection visualization
+        self.refresh_connections()
+
+        # Emit document modified
+        event_bus.document_modified.emit()
+
+        event.acceptProposedAction()
+        print(f"[PlanView] Created new room: {room_name} ({room_type}) at ({x:.0f}, {y:.0f})")
+
     def set_tool_manager(self, tool_manager):
         """Set the tool manager."""
         self._tool_manager = tool_manager
@@ -2005,6 +2784,53 @@ class PlanView(BaseView):
     def tool_manager(self):
         """Get tool manager."""
         return self._tool_manager
+
+    def set_lod_level(self, level: int):
+        """Override to update room z-values when LOD changes."""
+        super().set_lod_level(level)
+        # Update room item z-values for LOD 1 blob mode
+        for room_item in self._room_items:
+            room_item._update_z_for_lod()
+        # Update wall/door/window visibility for LOD 1 (blob view = rooms only)
+        blob_mode = (level == 1)
+        for wall_item in self._wall_items:
+            wall_item.setOpacity(0.0 if blob_mode else 1.0)
+            wall_item.setVisible(not blob_mode)
+            # Also hide wall layer items
+            if hasattr(wall_item, '_layer_items'):
+                for layer_item in wall_item._layer_items:
+                    layer_item.setOpacity(0.0 if blob_mode else 1.0)
+                    layer_item.setVisible(not blob_mode)
+        for door_item in self._door_items:
+            door_item.setOpacity(0.0 if blob_mode else 1.0)
+            door_item.setVisible(not blob_mode)
+        for window_item in self._window_items:
+            window_item.setOpacity(0.0 if blob_mode else 1.0)
+            window_item.setVisible(not blob_mode)
+        # Connection lines only visible at LOD 1
+        for conn_item in self._connection_items:
+            conn_item.setVisible(blob_mode)
+            conn_item.update()
+
+    def refresh_connections(self):
+        """Refresh just the connection items (after adjacency recalculation)."""
+        # Remove existing connection items
+        for item in self._connection_items:
+            self.scene.removeItem(item)
+        self._connection_items.clear()
+
+        # Add new connection items
+        for connection in self.document.room_connections:
+            item = ConnectionItem(connection, document=self.document, view=self)
+            self.scene.addItem(item)
+            self._connection_items.append(item)
+
+        # Update visibility based on current LOD
+        blob_mode = (self.lod_level == 1)
+        for conn_item in self._connection_items:
+            conn_item.setVisible(blob_mode)
+
+        self.viewport().update()
 
     def refresh(self):
         """Rebuild the entire view from document data."""
@@ -2029,12 +2855,15 @@ class PlanView(BaseView):
             self.scene.removeItem(item)
         for item in self._room_labels:
             self.scene.removeItem(item)
+        for item in self._connection_items:
+            self.scene.removeItem(item)
 
         self._wall_items.clear()
         self._door_items.clear()
         self._window_items.clear()
         self._room_items.clear()
         self._room_labels.clear()
+        self._connection_items.clear()
 
         # Add walls
         for wall in self.document.walls:
@@ -2061,18 +2890,23 @@ class PlanView(BaseView):
             self._window_items.append(item)
 
         # Add rooms (polygon rooms with RoomItem, bounds-only with RoomLabelItem)
-        # TEMPORARILY DISABLED to debug segfault
-        # for room_id, room in self.document.rooms.items():
-        #     if room.vertices:
-        #         # Polygon room - use RoomItem
-        #         item = RoomItem(room, document=self.document)
-        #         self.scene.addItem(item)
-        #         self._room_items.append(item)
-        #     else:
-        #         # Bounds-only room - use legacy label
-        #         label = RoomLabelItem(room)
-        #         self.scene.addItem(label)
-        #         self._room_labels.append(label)
+        for room_id, room in self.document.rooms.items():
+            if room.vertices:
+                # Polygon room - use RoomItem with view reference for LOD/mode
+                item = RoomItem(room, document=self.document, view=self)
+                self.scene.addItem(item)
+                self._room_items.append(item)
+            else:
+                # Bounds-only room - use legacy label
+                label = RoomLabelItem(room)
+                self.scene.addItem(label)
+                self._room_labels.append(label)
+
+        # Add room connections (adjacency visualization)
+        for connection in self.document.room_connections:
+            item = ConnectionItem(connection, document=self.document, view=self)
+            self.scene.addItem(item)
+            self._connection_items.append(item)
 
         self.viewport().update()
 
@@ -2155,7 +2989,7 @@ class PlanView(BaseView):
 
         # Check if clicking on a grip - let QGraphicsView handle it
         item = self.scene.itemAt(scene_pos, self.transform())
-        if isinstance(item, GripItem):
+        if isinstance(item, (GripItem, RoomResizeGrip)):
             super().mousePressEvent(event)
             return
 
@@ -2173,9 +3007,9 @@ class PlanView(BaseView):
             super().mouseMoveEvent(event)
             return
 
-        # Check if a grip is being dragged - let Qt handle it
+        # Check if a grip or room is being dragged - let Qt handle it
         grabber = self.scene.mouseGrabberItem()
-        if isinstance(grabber, GripItem):
+        if isinstance(grabber, (GripItem, RoomItem, RoomResizeGrip)):
             super().mouseMoveEvent(event)
             # Still update status bar
             scene_pos = self.mapToScene(event.position().toPoint())
@@ -2203,16 +3037,16 @@ class PlanView(BaseView):
             super().mouseReleaseEvent(event)
             return
 
-        # Check if a grip was being dragged - let Qt handle it
+        # Check if a grip or room was being dragged - let Qt handle it
         grabber = self.scene.mouseGrabberItem()
-        if isinstance(grabber, GripItem):
+        if isinstance(grabber, (GripItem, RoomItem, RoomResizeGrip)):
             super().mouseReleaseEvent(event)
             return
 
-        # Check if click was on a grip
+        # Check if click was on a grip or room
         scene_pos = self.mapToScene(event.position().toPoint())
         item = self.scene.itemAt(scene_pos, self.transform())
-        if isinstance(item, GripItem):
+        if isinstance(item, (GripItem, RoomItem, RoomResizeGrip)):
             super().mouseReleaseEvent(event)
             return
 

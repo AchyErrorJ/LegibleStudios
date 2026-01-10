@@ -412,6 +412,53 @@ ARCH_API void arch_set_tonemap_mode(int mode);
  */
 ARCH_API int arch_get_tonemap_mode(void);
 
+// =============================================================================
+// Room Data Export API
+// =============================================================================
+
+/**
+ * Room data structure for export to Python.
+ * All coordinates in mm.
+ */
+typedef struct {
+    char id[64];           // Room ID
+    char name[128];        // Room name
+    char room_type[64];    // Room type (bedroom, kitchen, etc.)
+    float bounds_x;        // Bounding box X
+    float bounds_y;        // Bounding box Y
+    float bounds_width;    // Bounding box width
+    float bounds_height;   // Bounding box height
+    float center_x;        // Center X
+    float center_y;        // Center Y (actually Z in 3D)
+    float area;            // Area in sq ft
+    int zone;              // Zone (0=Public, 1=Private, 2=Service, 3=Circulation)
+} ArchRoomData;
+
+/**
+ * Get the number of rooms in the current layout.
+ *
+ * @return Number of rooms
+ */
+ARCH_API int arch_get_room_count(void);
+
+/**
+ * Get room data by index.
+ *
+ * @param index Room index (0 to room_count-1)
+ * @param out_room Pointer to room data struct to fill
+ * @return 0 on success, non-zero if index out of bounds
+ */
+ARCH_API int arch_get_room_data(int index, ArchRoomData* out_room);
+
+/**
+ * Get all room data at once.
+ *
+ * @param out_rooms Array to fill (must have space for room_count rooms)
+ * @param max_rooms Maximum rooms to return
+ * @return Number of rooms filled
+ */
+ARCH_API int arch_get_all_rooms(ArchRoomData* out_rooms, int max_rooms);
+
 #ifdef __cplusplus
 }
 #endif

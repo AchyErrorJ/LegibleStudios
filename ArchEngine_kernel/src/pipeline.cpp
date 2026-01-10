@@ -1,7 +1,87 @@
 #include "pipeline.hpp"
+#include <filesystem>
 #include <stdexcept>
+#include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+extern "C" IMAGE_DOS_HEADER __ImageBase;
+#endif
 
 namespace arch {
+
+namespace {
+
+std::filesystem::path getExecutableDir() {
+#ifdef _WIN32
+    wchar_t buffer[MAX_PATH] = {};
+    DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+    if (length == 0 || length == MAX_PATH) {
+        return {};
+    }
+    return std::filesystem::path(buffer).parent_path();
+#else
+    return {};
+#endif
+}
+
+std::filesystem::path getModuleDir() {
+#ifdef _WIN32
+    HMODULE module = reinterpret_cast<HMODULE>(&::__ImageBase);
+    wchar_t buffer[MAX_PATH] = {};
+    DWORD length = GetModuleFileNameW(module, buffer, MAX_PATH);
+    if (length == 0 || length == MAX_PATH) {
+        return {};
+    }
+    return std::filesystem::path(buffer).parent_path();
+#else
+    return {};
+#endif
+}
+
+void addSearchRoots(std::vector<std::filesystem::path>& roots, const std::filesystem::path& base) {
+    if (base.empty()) {
+        return;
+    }
+
+    std::filesystem::path root = base;
+    for (int i = 0; i < 6 && !root.empty(); ++i) {
+        roots.push_back(root);
+        roots.push_back(root / "ArchEngine_CAD");
+        roots.push_back(root / "ArchEngine_kernel");
+        root = root.parent_path();
+    }
+}
+
+std::filesystem::path resolveShaderPath(const std::string& filepath) {
+    std::filesystem::path path(filepath);
+    if (path.is_absolute() && std::filesystem::exists(path)) {
+        return path;
+    }
+
+    if (std::filesystem::exists(path)) {
+        return path;
+    }
+
+    std::vector<std::filesystem::path> roots;
+    auto moduleDir = getModuleDir();
+    auto exeDir = getExecutableDir();
+    addSearchRoots(roots, moduleDir);
+    if (exeDir != moduleDir) {
+        addSearchRoots(roots, exeDir);
+    }
+
+    for (const auto& root : roots) {
+        auto candidate = root / path;
+        if (std::filesystem::exists(candidate)) {
+            return candidate;
+        }
+    }
+
+    return path;
+}
+
+} // namespace
 
 // PipelineConfig default
 PipelineConfig PipelineConfig::defaultConfig() {
@@ -136,9 +216,11 @@ void Pipeline::bind(VkCommandBuffer commandBuffer) {
 }
 
 std::vector<char> Pipeline::readFile(const std::string& filepath) {
-    std::ifstream file(filepath, std::ios::ate | std::ios::binary);
+    auto resolvedPath = resolveShaderPath(filepath);
+    std::ifstream file(resolvedPath, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        throw std::runtime_error("Failed to open shader file: " + filepath);
+        throw std::runtime_error(
+            "Failed to open shader file: " + filepath + " (resolved: " + resolvedPath.string() + ")");
     }
 
     size_t fileSize = static_cast<size_t>(file.tellg());

@@ -31,6 +31,7 @@ namespace {
     std::unique_ptr<VulkanContext> g_context;
     std::unique_ptr<Renderer> g_renderer;
     Building g_building;
+    qbd::QBDLayout g_layout;  // Store layout for room access
 
     // Camera state
     float g_cameraYaw = 0.5f;
@@ -214,7 +215,8 @@ ARCH_API int arch_load_json(const char* json_str) {
             return -2;
         }
 
-        g_building = qbd.toBuilding(*layoutOpt);
+        g_layout = *layoutOpt;  // Store layout for room access
+        g_building = qbd.toBuilding(g_layout);
         g_building.name = "Loaded Building";
 
         // Scale from mm to feet
@@ -259,7 +261,8 @@ ARCH_API int arch_load_file(const char* file_path) {
             return -2;
         }
 
-        g_building = qbd.toBuilding(*layoutOpt);
+        g_layout = *layoutOpt;  // Store layout for room access
+        g_building = qbd.toBuilding(g_layout);
         g_building.name = file_path;
 
         // Scale from mm to feet
@@ -634,6 +637,89 @@ ARCH_API void arch_set_tonemap_mode(int mode) {
 ARCH_API int arch_get_tonemap_mode(void) {
     std::lock_guard<std::mutex> lock(g_mutex);
     return g_renderer ? static_cast<int>(g_renderer->getTonemapMode()) : 1; // Default: ACES
+}
+
+// =============================================================================
+// Room Data Export
+// =============================================================================
+
+ARCH_API int arch_get_room_count(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return static_cast<int>(g_layout.rooms.size());
+}
+
+ARCH_API int arch_get_room_data(int index, ArchRoomData* out_room) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!out_room) return -1;
+    if (index < 0 || index >= static_cast<int>(g_layout.rooms.size())) return -2;
+
+    // Get room by index (iterate the map)
+    auto it = g_layout.rooms.begin();
+    std::advance(it, index);
+
+    const auto& room = it->second;
+
+    // Copy strings safely
+    strncpy(out_room->id, room.id.c_str(), sizeof(out_room->id) - 1);
+    out_room->id[sizeof(out_room->id) - 1] = '\0';
+
+    strncpy(out_room->name, room.name.c_str(), sizeof(out_room->name) - 1);
+    out_room->name[sizeof(out_room->name) - 1] = '\0';
+
+    strncpy(out_room->room_type, room.roomType.c_str(), sizeof(out_room->room_type) - 1);
+    out_room->room_type[sizeof(out_room->room_type) - 1] = '\0';
+
+    // Copy bounds (in mm)
+    out_room->bounds_x = room.bounds.x;
+    out_room->bounds_y = room.bounds.y;
+    out_room->bounds_width = room.bounds.width;
+    out_room->bounds_height = room.bounds.height;
+
+    // Copy center (in mm)
+    out_room->center_x = room.center.x;
+    out_room->center_y = room.center.y;
+
+    // Area and zone
+    out_room->area = room.area;
+    out_room->zone = static_cast<int>(room.zone);
+
+    return 0;
+}
+
+ARCH_API int arch_get_all_rooms(ArchRoomData* out_rooms, int max_rooms) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!out_rooms || max_rooms <= 0) return 0;
+
+    int count = 0;
+    for (const auto& [id, room] : g_layout.rooms) {
+        if (count >= max_rooms) break;
+
+        ArchRoomData& out = out_rooms[count];
+
+        strncpy(out.id, room.id.c_str(), sizeof(out.id) - 1);
+        out.id[sizeof(out.id) - 1] = '\0';
+
+        strncpy(out.name, room.name.c_str(), sizeof(out.name) - 1);
+        out.name[sizeof(out.name) - 1] = '\0';
+
+        strncpy(out.room_type, room.roomType.c_str(), sizeof(out.room_type) - 1);
+        out.room_type[sizeof(out.room_type) - 1] = '\0';
+
+        out.bounds_x = room.bounds.x;
+        out.bounds_y = room.bounds.y;
+        out.bounds_width = room.bounds.width;
+        out.bounds_height = room.bounds.height;
+        out.center_x = room.center.x;
+        out.center_y = room.center.y;
+        out.area = room.area;
+        out.zone = static_cast<int>(room.zone);
+
+        count++;
+    }
+
+    return count;
 }
 
 } // extern "C"

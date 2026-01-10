@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QScrollArea, QGroupBox
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 
 from panels.smart_panels import (
     PanelDefinition, PanelConditions, GravityCondition,
@@ -60,15 +60,129 @@ class PlaceholderPanel(QWidget):
         layout.addStretch()
 
 
-class BlobPalettePanel(PlaceholderPanel):
-    """Room/blob palette for LegiQBD."""
+class RoomTypeButton(QPushButton):
+    """Draggable room type button for the blob palette."""
+    room_type_selected = pyqtSignal(str, str)  # room_type, name
+
+    ROOM_TYPES = {
+        "entrance": ("Entrance", "#FF6B6B"),  # Anchor entrance with front door
+        "porch": ("Porch", "#4ECDC4"),         # Front porch
+        "living": ("Living Room", "#7CB9E8"),
+        "bedroom": ("Bedroom", "#9370DB"),
+        "bathroom": ("Bathroom", "#5DADE2"),
+        "kitchen": ("Kitchen", "#F5B041"),
+        "dining": ("Dining Room", "#58D68D"),
+        "office": ("Office", "#AF7AC5"),
+        "garage": ("Garage", "#95A5A6"),
+        "hallway": ("Hallway", "#D5DBDB"),
+        "closet": ("Closet", "#BFC9CA"),
+        "laundry": ("Laundry", "#85C1E9"),
+        "entry": ("Entry", "#EDBB99"),
+        "utility": ("Utility", "#A9A9A9"),
+    }
+
+    def __init__(self, room_type: str, parent=None):
+        name, color = self.ROOM_TYPES.get(room_type, (room_type.title(), "#888888"))
+        super().__init__(name, parent)
+        self._room_type = room_type
+        self._name = name
+        self._color = color
+        self._drag_start_pos = None
+
+        self.setFixedSize(80, 50)
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background: {color}44;
+                border: 2px solid {color};
+                border-radius: 6px;
+                color: white;
+                font-size: 9px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background: {color}88;
+                border-color: white;
+            }}
+            QPushButton:pressed {{
+                background: {color}CC;
+            }}
+        """)
+        self.setToolTip(f"Drag to add {name}")
+        self.clicked.connect(self._on_clicked)
+
+    def _on_clicked(self):
+        self.room_type_selected.emit(self._room_type, self._name)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start_pos is None:
+            return
+        # Check if moved enough to start drag
+        if (event.pos() - self._drag_start_pos).manhattanLength() < 10:
+            return
+
+        # Start drag
+        from PyQt6.QtGui import QDrag
+        from PyQt6.QtCore import QMimeData
+
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        mime_data.setText(f"room:{self._room_type}:{self._name}:{self._color}")
+        drag.setMimeData(mime_data)
+
+        # Execute drag
+        drag.exec(Qt.DropAction.CopyAction)
+        self._drag_start_pos = None
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_pos = None
+        super().mouseReleaseEvent(event)
+
+
+class BlobPalettePanel(QWidget):
+    """Room/blob palette for LegiQBD - shows room types to add to the design."""
+    room_type_selected = pyqtSignal(str, str)  # room_type, name
+
     def __init__(self, parent=None):
-        super().__init__(
-            "Rooms",
-            "Drag room types onto the canvas",
-            "#6495ED",  # Cornflower blue (Design)
-            parent
-        )
+        super().__init__(parent)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        from PyQt6.QtWidgets import QGridLayout
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        # Title
+        title = QLabel("Room Types")
+        title.setStyleSheet("font-weight: bold; color: #6495ED; font-size: 11px;")
+        layout.addWidget(title)
+
+        # Description
+        desc = QLabel("Click a room type to add it to your design")
+        desc.setStyleSheet("color: #888; font-size: 10px;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        # Grid of room type buttons
+        grid = QGridLayout()
+        grid.setSpacing(6)
+
+        room_types = list(RoomTypeButton.ROOM_TYPES.keys())
+        for i, room_type in enumerate(room_types):
+            btn = RoomTypeButton(room_type)
+            btn.room_type_selected.connect(self.room_type_selected.emit)
+            row = i // 2
+            col = i % 2
+            grid.addWidget(btn, row, col)
+
+        layout.addLayout(grid)
+        layout.addStretch()
 
 
 class RelationshipToolsPanel(PlaceholderPanel):
@@ -93,26 +207,398 @@ class ScorePanel(PlaceholderPanel):
         )
 
 
-class WallToolsPanel(PlaceholderPanel):
-    """Wall editing tools for LegiCAD."""
+class WallToolsPanel(QWidget):
+    """Wall editing tools for LegiCAD - shows controls for selected walls."""
+
     def __init__(self, parent=None):
-        super().__init__(
-            "Wall Properties",
-            "Edit wall type, thickness, materials",
-            "#90EE90",  # Light green (Client-ish)
-            parent
-        )
+        super().__init__(parent)
+        from core.events import event_bus
+        self._selected_walls = []
+        self._updating = False
+        self._setup_ui()
+        event_bus.selection_changed.connect(self._on_selection_changed)
+
+    def _setup_ui(self):
+        from PyQt6.QtWidgets import QComboBox, QSpinBox, QCheckBox, QFormLayout
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        # Category selector
+        category_group = QGroupBox("Category")
+        category_layout = QVBoxLayout(category_group)
+        self._category_combo = QComboBox()
+        self._category_combo.addItems(["exterior", "interior", "wet_wall"])
+        self._category_combo.currentTextChanged.connect(self._on_category_changed)
+        category_layout.addWidget(self._category_combo)
+        layout.addWidget(category_group)
+
+        # Wall type selector
+        type_group = QGroupBox("Wall Type")
+        type_layout = QVBoxLayout(type_group)
+        self._type_combo = QComboBox()
+        self._type_combo.addItem("(default)", "")
+        self._type_combo.currentIndexChanged.connect(self._on_type_changed)
+        type_layout.addWidget(self._type_combo)
+        layout.addWidget(type_group)
+
+        # Height control
+        height_group = QGroupBox("Height")
+        height_layout = QFormLayout(height_group)
+        self._height_spin = QSpinBox()
+        self._height_spin.setRange(1000, 10000)
+        self._height_spin.setSingleStep(100)
+        self._height_spin.setSuffix(" mm")
+        self._height_spin.setValue(2700)
+        self._height_spin.valueChanged.connect(self._on_height_changed)
+        height_layout.addRow("Height:", self._height_spin)
+        layout.addWidget(height_group)
+
+        # Structural binding
+        struct_group = QGroupBox("Structure")
+        struct_layout = QVBoxLayout(struct_group)
+        self._structural_check = QCheckBox("Structural (bound to room)")
+        self._structural_check.toggled.connect(self._on_structural_toggled)
+        struct_layout.addWidget(self._structural_check)
+        self._bound_room_label = QLabel("Room: -")
+        self._bound_room_label.setStyleSheet("color: #888; font-size: 10px;")
+        struct_layout.addWidget(self._bound_room_label)
+        layout.addWidget(struct_group)
+
+        # Pin control
+        pin_group = QGroupBox("Constraints")
+        pin_layout = QVBoxLayout(pin_group)
+        self._pin_check = QCheckBox("Pin wall (prevent modifications)")
+        self._pin_check.toggled.connect(self._on_pin_toggled)
+        pin_layout.addWidget(self._pin_check)
+        layout.addWidget(pin_group)
+
+        # Status label
+        self._status_label = QLabel("Select a wall to edit")
+        self._status_label.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(self._status_label)
+
+        layout.addStretch()
+
+    def _on_selection_changed(self, selected_items):
+        """Update panel when selection changes."""
+        self._selected_walls = []
+        for item in selected_items:
+            if type(item).__name__ == "WallItem" and hasattr(item, 'wall'):
+                self._selected_walls.append(item)
+
+        self._update_ui()
+
+    def _update_ui(self):
+        """Update UI to reflect selected wall(s)."""
+        self._updating = True
+        try:
+            if not self._selected_walls:
+                self._status_label.setText("Select a wall to edit")
+                self._category_combo.setEnabled(False)
+                self._type_combo.setEnabled(False)
+                self._height_spin.setEnabled(False)
+                self._structural_check.setEnabled(False)
+                self._bound_room_label.setText("Room: -")
+                self._pin_check.setEnabled(False)
+                return
+
+            wall = self._selected_walls[0].wall
+            count = len(self._selected_walls)
+            self._status_label.setText(f"{count} wall(s) selected")
+
+            self._category_combo.setEnabled(True)
+            self._type_combo.setEnabled(True)
+            self._height_spin.setEnabled(True)
+            self._structural_check.setEnabled(True)
+            self._pin_check.setEnabled(True)
+
+            # Set values from first selected wall
+            idx = self._category_combo.findText(wall.category)
+            if idx >= 0:
+                self._category_combo.setCurrentIndex(idx)
+
+            self._height_spin.setValue(int(wall.height))
+            self._pin_check.setChecked(wall.is_pinned)
+
+            # Structural binding info
+            self._structural_check.setChecked(wall.is_structural)
+            if wall.bound_room_id:
+                self._bound_room_label.setText(f"Room: {wall.bound_room_id}")
+                self._bound_room_label.setStyleSheet("color: #4CAF50; font-size: 10px;")
+            else:
+                self._bound_room_label.setText("Room: (unbound partition)")
+                self._bound_room_label.setStyleSheet("color: #888; font-size: 10px;")
+        finally:
+            self._updating = False
+
+    def _on_category_changed(self, category: str):
+        if self._updating or not self._selected_walls:
+            return
+        from core.events import event_bus
+        for item in self._selected_walls:
+            item.wall.category = category
+        event_bus.document_modified.emit()
+
+    def _on_type_changed(self, index: int):
+        if self._updating or not self._selected_walls:
+            return
+        from core.events import event_bus
+        wall_type = self._type_combo.currentData() or ""
+        for item in self._selected_walls:
+            item.wall.wall_type = wall_type
+        event_bus.document_modified.emit()
+
+    def _on_height_changed(self, height: int):
+        if self._updating or not self._selected_walls:
+            return
+        from core.events import event_bus
+        for item in self._selected_walls:
+            item.wall.height = height
+        event_bus.document_modified.emit()
+
+    def _on_structural_toggled(self, checked: bool):
+        if self._updating or not self._selected_walls:
+            return
+        from core.events import event_bus
+        for item in self._selected_walls:
+            item.wall.is_structural = checked
+            if not checked:
+                # Unbind from room when marking as non-structural
+                item.wall.bound_room_id = ""
+                item.wall.edge_index = -1
+        self._update_ui()  # Refresh to show updated binding
+        event_bus.document_modified.emit()
+
+    def _on_pin_toggled(self, checked: bool):
+        if self._updating or not self._selected_walls:
+            return
+        from core.events import event_bus
+        for item in self._selected_walls:
+            item.wall.is_pinned = checked
+        event_bus.document_modified.emit()
 
 
-class OpeningToolsPanel(PlaceholderPanel):
-    """Door/window editing tools."""
+class OpeningToolsPanel(QWidget):
+    """Door/window editing tools - shows controls for selected openings."""
+
     def __init__(self, parent=None):
-        super().__init__(
-            "Opening Properties",
-            "Edit door/window size and type",
-            "#90EE90",
-            parent
-        )
+        super().__init__(parent)
+        from core.events import event_bus
+        self._selected_doors = []
+        self._selected_windows = []
+        self._updating = False
+        self._setup_ui()
+        event_bus.selection_changed.connect(self._on_selection_changed)
+
+    def _setup_ui(self):
+        from PyQt6.QtWidgets import QComboBox, QSpinBox, QCheckBox, QFormLayout, QStackedWidget
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        # Stacked widget for door/window specific controls
+        self._stack = QStackedWidget()
+
+        # Door controls page
+        door_page = QWidget()
+        door_layout = QVBoxLayout(door_page)
+        door_layout.setContentsMargins(0, 0, 0, 0)
+
+        door_type_group = QGroupBox("Door Type")
+        door_type_layout = QVBoxLayout(door_type_group)
+        self._door_type_combo = QComboBox()
+        self._door_type_combo.addItems(["swing", "sliding", "pocket", "bifold", "double"])
+        self._door_type_combo.currentTextChanged.connect(self._on_door_type_changed)
+        door_type_layout.addWidget(self._door_type_combo)
+        door_layout.addWidget(door_type_group)
+
+        swing_group = QGroupBox("Swing Direction")
+        swing_layout = QVBoxLayout(swing_group)
+        self._swing_combo = QComboBox()
+        self._swing_combo.addItems(["left_in", "right_in", "left_out", "right_out"])
+        self._swing_combo.currentTextChanged.connect(self._on_swing_changed)
+        swing_layout.addWidget(self._swing_combo)
+        door_layout.addWidget(swing_group)
+
+        door_layout.addStretch()
+        self._stack.addWidget(door_page)
+
+        # Window controls page
+        window_page = QWidget()
+        window_layout = QVBoxLayout(window_page)
+        window_layout.setContentsMargins(0, 0, 0, 0)
+
+        sill_group = QGroupBox("Sill Height")
+        sill_layout = QFormLayout(sill_group)
+        self._sill_spin = QSpinBox()
+        self._sill_spin.setRange(0, 2000)
+        self._sill_spin.setSingleStep(50)
+        self._sill_spin.setSuffix(" mm")
+        self._sill_spin.setValue(900)
+        self._sill_spin.valueChanged.connect(self._on_sill_changed)
+        sill_layout.addRow("Height:", self._sill_spin)
+        window_layout.addWidget(sill_group)
+
+        window_layout.addStretch()
+        self._stack.addWidget(window_page)
+
+        layout.addWidget(self._stack)
+
+        # Common controls for both doors and windows
+        dims_group = QGroupBox("Dimensions")
+        dims_layout = QFormLayout(dims_group)
+
+        self._width_spin = QSpinBox()
+        self._width_spin.setRange(300, 5000)
+        self._width_spin.setSingleStep(50)
+        self._width_spin.setSuffix(" mm")
+        self._width_spin.valueChanged.connect(self._on_width_changed)
+        dims_layout.addRow("Width:", self._width_spin)
+
+        self._height_spin = QSpinBox()
+        self._height_spin.setRange(300, 3000)
+        self._height_spin.setSingleStep(50)
+        self._height_spin.setSuffix(" mm")
+        self._height_spin.valueChanged.connect(self._on_height_changed)
+        dims_layout.addRow("Height:", self._height_spin)
+
+        layout.addWidget(dims_group)
+
+        # Pin control
+        pin_group = QGroupBox("Constraints")
+        pin_layout = QVBoxLayout(pin_group)
+        self._pin_check = QCheckBox("Pin opening (prevent modifications)")
+        self._pin_check.toggled.connect(self._on_pin_toggled)
+        pin_layout.addWidget(self._pin_check)
+        layout.addWidget(pin_group)
+
+        # Status label
+        self._status_label = QLabel("Select a door or window to edit")
+        self._status_label.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(self._status_label)
+
+        layout.addStretch()
+
+    def _on_selection_changed(self, selected_items):
+        """Update panel when selection changes."""
+        self._selected_doors = []
+        self._selected_windows = []
+        for item in selected_items:
+            item_type = type(item).__name__
+            if item_type == "DoorItem" and hasattr(item, 'door'):
+                self._selected_doors.append(item)
+            elif item_type == "WindowItem" and hasattr(item, 'window'):
+                self._selected_windows.append(item)
+
+        self._update_ui()
+
+    def _update_ui(self):
+        """Update UI to reflect selected opening(s)."""
+        self._updating = True
+        try:
+            has_doors = len(self._selected_doors) > 0
+            has_windows = len(self._selected_windows) > 0
+
+            if not has_doors and not has_windows:
+                self._status_label.setText("Select a door or window to edit")
+                self._stack.setEnabled(False)
+                self._width_spin.setEnabled(False)
+                self._height_spin.setEnabled(False)
+                self._pin_check.setEnabled(False)
+                return
+
+            self._stack.setEnabled(True)
+            self._width_spin.setEnabled(True)
+            self._height_spin.setEnabled(True)
+            self._pin_check.setEnabled(True)
+
+            if has_doors and not has_windows:
+                self._stack.setCurrentIndex(0)  # Door page
+                door = self._selected_doors[0].door
+                self._status_label.setText(f"{len(self._selected_doors)} door(s) selected")
+
+                idx = self._door_type_combo.findText(door.door_type)
+                if idx >= 0:
+                    self._door_type_combo.setCurrentIndex(idx)
+                idx = self._swing_combo.findText(door.swing)
+                if idx >= 0:
+                    self._swing_combo.setCurrentIndex(idx)
+                self._width_spin.setValue(int(door.width))
+                self._height_spin.setValue(int(door.height))
+                self._pin_check.setChecked(door.is_pinned)
+
+            elif has_windows and not has_doors:
+                self._stack.setCurrentIndex(1)  # Window page
+                window = self._selected_windows[0].window
+                self._status_label.setText(f"{len(self._selected_windows)} window(s) selected")
+
+                self._sill_spin.setValue(int(window.sill_height))
+                self._width_spin.setValue(int(window.width))
+                self._height_spin.setValue(int(window.height))
+                self._pin_check.setChecked(window.is_pinned)
+
+            else:
+                # Mixed selection
+                self._status_label.setText(f"{len(self._selected_doors)} door(s), {len(self._selected_windows)} window(s)")
+        finally:
+            self._updating = False
+
+    def _on_door_type_changed(self, door_type: str):
+        if self._updating or not self._selected_doors:
+            return
+        from core.events import event_bus
+        for item in self._selected_doors:
+            item.door.door_type = door_type
+        event_bus.document_modified.emit()
+
+    def _on_swing_changed(self, swing: str):
+        if self._updating or not self._selected_doors:
+            return
+        from core.events import event_bus
+        for item in self._selected_doors:
+            item.door.swing = swing
+        event_bus.document_modified.emit()
+
+    def _on_sill_changed(self, sill_height: int):
+        if self._updating or not self._selected_windows:
+            return
+        from core.events import event_bus
+        for item in self._selected_windows:
+            item.window.sill_height = sill_height
+        event_bus.document_modified.emit()
+
+    def _on_width_changed(self, width: int):
+        if self._updating:
+            return
+        from core.events import event_bus
+        for item in self._selected_doors:
+            item.door.width = width
+        for item in self._selected_windows:
+            item.window.width = width
+        event_bus.document_modified.emit()
+
+    def _on_height_changed(self, height: int):
+        if self._updating:
+            return
+        from core.events import event_bus
+        for item in self._selected_doors:
+            item.door.height = height
+        for item in self._selected_windows:
+            item.window.height = height
+        event_bus.document_modified.emit()
+
+    def _on_pin_toggled(self, checked: bool):
+        if self._updating:
+            return
+        from core.events import event_bus
+        for item in self._selected_doors:
+            item.door.is_pinned = checked
+        for item in self._selected_windows:
+            item.window.is_pinned = checked
+        event_bus.document_modified.emit()
 
 
 class FixturePalettePanel(PlaceholderPanel):

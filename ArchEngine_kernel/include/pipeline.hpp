@@ -35,8 +35,9 @@ public:
     VkPipeline getHandle() const { return m_pipeline; }
     VkPipelineLayout getLayout() const { return m_pipelineLayout; }
 
-private:
     static std::vector<char> readFile(const std::string& filepath);
+
+private:
     VkShaderModule createShaderModule(const std::vector<char>& code);
 
     VulkanContext& m_context;
