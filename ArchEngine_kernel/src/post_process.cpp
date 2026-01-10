@@ -63,7 +63,7 @@ void PostProcess::resize(u32 width, u32 height) {
 
     m_context.waitIdle();
     cleanupHDRTargets();
-    cleanupSSAO();
+    cleanupSSAOSizeDependent();
     cleanupBloom();
 
     m_width = width;
@@ -71,7 +71,8 @@ void PostProcess::resize(u32 width, u32 height) {
 
     createHDRTargets();
     createSSAOResources();
-    // Pipelines don't need to be recreated
+    createBloomResources();
+    std::cout << "[PostProcess] Resized to " << width << "x" << height << std::endl;
 }
 
 void PostProcess::createSSAOKernel() {
@@ -1495,10 +1496,10 @@ void PostProcess::composite(VkCommandBuffer cmd, VkRenderPass renderPass, VkFram
     imageInfos[1].imageView = m_ssaoBlurredView ? m_ssaoBlurredView : m_ssaoView;
     imageInfos[1].sampler = m_ssaoSampler;
 
-    // Bloom
+    // Bloom (use HDR view as fallback if bloom not ready)
     imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfos[2].imageView = m_bloomResultView;
-    imageInfos[2].sampler = m_bloomSampler;
+    imageInfos[2].imageView = m_bloomResultView ? m_bloomResultView : m_hdrColorView;
+    imageInfos[2].sampler = m_bloomSampler ? m_bloomSampler : m_hdrSampler;
 
     std::array<VkWriteDescriptorSet, 3> writes{};
     for (u32 i = 0; i < 3; i++) {
@@ -1640,6 +1641,32 @@ void PostProcess::cleanupComposite() {
     m_compositePipelineLayout = VK_NULL_HANDLE;
     m_compositeDescLayout = VK_NULL_HANDLE;
     m_compositeDescSets.clear();  // Freed with pool
+}
+
+void PostProcess::cleanupSSAOSizeDependent() {
+    // Cleanup only size-dependent SSAO resources (for resize)
+    // Keeps noise texture, pipelines, and layouts intact
+    auto device = m_context.getDevice();
+
+    if (m_ssaoFramebuffer) vkDestroyFramebuffer(device, m_ssaoFramebuffer, nullptr);
+    if (m_ssaoBlurFramebuffer) vkDestroyFramebuffer(device, m_ssaoBlurFramebuffer, nullptr);
+
+    if (m_ssaoView) vkDestroyImageView(device, m_ssaoView, nullptr);
+    if (m_ssaoImage) vkDestroyImage(device, m_ssaoImage, nullptr);
+    if (m_ssaoMemory) vkFreeMemory(device, m_ssaoMemory, nullptr);
+
+    if (m_ssaoBlurredView) vkDestroyImageView(device, m_ssaoBlurredView, nullptr);
+    if (m_ssaoBlurredImage) vkDestroyImage(device, m_ssaoBlurredImage, nullptr);
+    if (m_ssaoBlurredMemory) vkFreeMemory(device, m_ssaoBlurredMemory, nullptr);
+
+    m_ssaoFramebuffer = VK_NULL_HANDLE;
+    m_ssaoBlurFramebuffer = VK_NULL_HANDLE;
+    m_ssaoView = VK_NULL_HANDLE;
+    m_ssaoImage = VK_NULL_HANDLE;
+    m_ssaoMemory = VK_NULL_HANDLE;
+    m_ssaoBlurredView = VK_NULL_HANDLE;
+    m_ssaoBlurredImage = VK_NULL_HANDLE;
+    m_ssaoBlurredMemory = VK_NULL_HANDLE;
 }
 
 void PostProcess::cleanupSSAO() {
