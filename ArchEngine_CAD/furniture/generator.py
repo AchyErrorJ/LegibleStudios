@@ -5,7 +5,9 @@ Generates geometry at different LOD levels:
 - LOD0: 2D SVG symbols for floor plans
 - LOD1: 3D bounding boxes (distant view)
 - LOD2: 3D composed primitives (mid-range)
-- LOD3+: Reserved for AI-generated detailed meshes
+- LOD3: AI-generated base mesh (no materials, for iteration)
+- LOD4: AI-generated mesh with materials
+- LOD5: Reserved for documentation/reference
 
 All dimensions in millimeters.
 """
@@ -35,6 +37,22 @@ from furniture.primitives import (
 )
 from furniture.catalog import FurnitureCatalog, get_default_catalog
 
+# AI generation (optional, for LOD3/LOD4)
+_AI_AVAILABLE = False
+try:
+    from furniture.ai_generator import (
+        AIFurnitureGenerator,
+        get_ai_generator,
+        GenerationQuality,
+    )
+    from furniture.backends.lm_studio import LMStudioBackend
+    _AI_AVAILABLE = True
+except ImportError:
+    AIFurnitureGenerator = None
+    get_ai_generator = None
+    GenerationQuality = None
+    LMStudioBackend = None
+
 
 class FurnitureGenerator:
     """
@@ -44,10 +62,22 @@ class FurnitureGenerator:
     and style, with material-based coloring.
     """
 
-    def __init__(self, catalog: Optional[FurnitureCatalog] = None):
+    def __init__(
+        self,
+        catalog: Optional[FurnitureCatalog] = None,
+        lm_studio_url: str = "http://localhost:1234/v1",
+    ):
         self.catalog = catalog or get_default_catalog()
         self._template_registry: Dict[str, Callable] = {}
         self._register_default_templates()
+
+        # Initialize AI generator for LOD3/LOD4
+        self._ai_generator: Optional[AIFurnitureGenerator] = None
+        if _AI_AVAILABLE:
+            self._ai_generator = get_ai_generator()
+            # Register LM Studio backend
+            backend = LMStudioBackend(base_url=lm_studio_url)
+            self._ai_generator.register_backend(backend)
 
     def _register_default_templates(self):
         """Register built-in parametric templates."""
@@ -122,9 +152,13 @@ class FurnitureGenerator:
             geometry = self._generate_lod1(item)
         elif lod == LODLevel.LOD2:
             geometry = self._generate_lod2(item)
+        elif lod == LODLevel.LOD3:
+            geometry = self._generate_lod3(item)
+        elif lod == LODLevel.LOD4:
+            geometry = self._generate_lod4(item)
         else:
-            # LOD3+ not yet implemented
-            geometry = self._generate_lod2(item)  # Fallback to LOD2
+            # LOD5 is documentation, fallback to LOD4
+            geometry = self._generate_lod4(item)
 
         # Cache the result
         item._geometry_cache[lod] = geometry
@@ -413,6 +447,210 @@ class FurnitureGenerator:
                 (d.width/2, d.height, d.depth/2)
             ),
         )
+
+    # =========================================================================
+    # LOD3: AI-Generated Base Mesh (No Materials)
+    # =========================================================================
+
+    def _generate_lod3(
+        self,
+        item: FurnitureItem,
+        reference_image: Optional[str] = None,
+    ) -> LODGeometry:
+        """
+        Generate AI-created base mesh without materials.
+
+        Uses VL model to analyze furniture and create detailed geometry.
+        Falls back to LOD2 if AI is not available.
+        """
+        if self._ai_generator is None or not self._ai_generator.get_available_backends():
+            # Fallback to LOD2 if AI not available
+            return self._generate_lod2(item)
+
+        # Use reference image from item if not provided
+        ref_image = reference_image or item.reference_image
+
+        result = self._ai_generator.generate_lod3(
+            item,
+            reference_image=ref_image,
+            quality=GenerationQuality.STANDARD,
+        )
+
+        if not result.success or result.mesh is None:
+            # Fallback to LOD2 on failure
+            print(f"[FurnitureGen] LOD3 generation failed: {result.error_message}")
+            return self._generate_lod2(item)
+
+        d = item.dimensions
+        return LODGeometry(
+            lod=LODLevel.LOD3,
+            mesh=result.mesh,
+            svg_symbol=None,
+            bounding_box=(
+                (-d.width/2, 0, -d.depth/2),
+                (d.width/2, d.height, d.depth/2)
+            ),
+        )
+
+    def generate_lod3_with_image(
+        self,
+        item: FurnitureItem,
+        image_path: str,
+        quality: str = "standard",
+    ) -> LODGeometry:
+        """
+        Generate LOD3 with a specific reference image.
+
+        Args:
+            item: Furniture item definition
+            image_path: Path to reference image
+            quality: "draft", "standard", or "high"
+
+        Returns:
+            LODGeometry with AI-generated mesh
+        """
+        if self._ai_generator is None:
+            return self._generate_lod2(item)
+
+        quality_map = {
+            "draft": GenerationQuality.DRAFT,
+            "standard": GenerationQuality.STANDARD,
+            "high": GenerationQuality.HIGH,
+        }
+        gen_quality = quality_map.get(quality, GenerationQuality.STANDARD)
+
+        result = self._ai_generator.generate_lod3(
+            item,
+            reference_image=image_path,
+            quality=gen_quality,
+        )
+
+        if not result.success or result.mesh is None:
+            return self._generate_lod2(item)
+
+        d = item.dimensions
+        return LODGeometry(
+            lod=LODLevel.LOD3,
+            mesh=result.mesh,
+            svg_symbol=None,
+            bounding_box=(
+                (-d.width/2, 0, -d.depth/2),
+                (d.width/2, d.height, d.depth/2)
+            ),
+        )
+
+    # =========================================================================
+    # LOD4: AI-Generated Mesh with Materials
+    # =========================================================================
+
+    def _generate_lod4(
+        self,
+        item: FurnitureItem,
+        reference_image: Optional[str] = None,
+    ) -> LODGeometry:
+        """
+        Generate AI-created mesh with materials.
+
+        Uses VL model to create detailed geometry with PBR materials.
+        Falls back to LOD3 if AI is not available.
+        """
+        if self._ai_generator is None or not self._ai_generator.get_available_backends():
+            # Fallback to LOD3 if AI not available
+            return self._generate_lod3(item, reference_image)
+
+        # Use reference image from item if not provided
+        ref_image = reference_image or item.reference_image
+
+        # Try to get LOD3 mesh first for better consistency
+        lod3_geometry = self._generate_lod3(item, ref_image)
+        lod3_mesh = lod3_geometry.mesh if lod3_geometry else None
+
+        result = self._ai_generator.generate_lod4(
+            item,
+            reference_image=ref_image,
+            quality=GenerationQuality.STANDARD,
+            lod3_mesh=lod3_mesh,
+        )
+
+        if not result.success or result.mesh is None:
+            # Fallback to LOD3 on failure
+            print(f"[FurnitureGen] LOD4 generation failed: {result.error_message}")
+            return self._generate_lod3(item, reference_image)
+
+        d = item.dimensions
+        return LODGeometry(
+            lod=LODLevel.LOD4,
+            mesh=result.mesh,
+            svg_symbol=None,
+            bounding_box=(
+                (-d.width/2, 0, -d.depth/2),
+                (d.width/2, d.height, d.depth/2)
+            ),
+        )
+
+    def generate_lod4_with_image(
+        self,
+        item: FurnitureItem,
+        image_path: str,
+        quality: str = "standard",
+    ) -> LODGeometry:
+        """
+        Generate LOD4 with a specific reference image.
+
+        Args:
+            item: Furniture item definition
+            image_path: Path to reference image
+            quality: "draft", "standard", or "high"
+
+        Returns:
+            LODGeometry with AI-generated mesh and materials
+        """
+        if self._ai_generator is None:
+            return self._generate_lod3(item, image_path)
+
+        quality_map = {
+            "draft": GenerationQuality.DRAFT,
+            "standard": GenerationQuality.STANDARD,
+            "high": GenerationQuality.HIGH,
+        }
+        gen_quality = quality_map.get(quality, GenerationQuality.STANDARD)
+
+        result = self._ai_generator.generate_lod4(
+            item,
+            reference_image=image_path,
+            quality=gen_quality,
+        )
+
+        if not result.success or result.mesh is None:
+            return self._generate_lod3(item, image_path)
+
+        d = item.dimensions
+        return LODGeometry(
+            lod=LODLevel.LOD4,
+            mesh=result.mesh,
+            svg_symbol=None,
+            bounding_box=(
+                (-d.width/2, 0, -d.depth/2),
+                (d.width/2, d.height, d.depth/2)
+            ),
+        )
+
+    # =========================================================================
+    # AI Generation Utilities
+    # =========================================================================
+
+    def is_ai_available(self) -> bool:
+        """Check if AI generation is available."""
+        return (
+            self._ai_generator is not None and
+            len(self._ai_generator.get_available_backends()) > 0
+        )
+
+    def get_ai_backends(self) -> List[str]:
+        """Get list of available AI backends."""
+        if self._ai_generator is None:
+            return []
+        return self._ai_generator.get_available_backends()
 
     # =========================================================================
     # Parametric Templates (LOD2)

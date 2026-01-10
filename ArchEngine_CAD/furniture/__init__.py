@@ -36,6 +36,29 @@ from furniture.primitives import (
     transform_mesh,
 )
 
+# AI generation (optional)
+try:
+    from furniture.ai_generator import (
+        AIFurnitureGenerator,
+        AIBackend,
+        GenerationRequest,
+        GenerationResult,
+        GenerationQuality,
+        get_ai_generator,
+    )
+    from furniture.backends import LMStudioBackend
+    _AI_EXPORTS = [
+        "AIFurnitureGenerator",
+        "AIBackend",
+        "GenerationRequest",
+        "GenerationResult",
+        "GenerationQuality",
+        "get_ai_generator",
+        "LMStudioBackend",
+    ]
+except ImportError:
+    _AI_EXPORTS = []
+
 __all__ = [
     # Models
     "FurnitureCategory",
@@ -64,4 +87,4 @@ __all__ = [
     "create_rounded_box",
     "merge_meshes",
     "transform_mesh",
-]
+] + _AI_EXPORTS
