@@ -1047,6 +1047,56 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                 ImGui::TreePop();
             }
 
+            // Height map generation
+            if (ImGui::TreeNode("Generate Height Map")) {
+                if (!m_applyMaterialName.empty()) {
+                    ImGui::Text("Material: %s", m_applyMaterialName.c_str());
+
+                    // Method selector
+                    const char* heightMethods[] = { "Hybrid (Auto)", "From Normal Map", "From Diffuse (AI)" };
+                    ImGui::Combo("Method", &m_heightGenMethod, heightMethods, 3);
+
+                    ImGui::SliderFloat("Blur", &m_heightGenBlur, 0.0f, 5.0f, "%.1f");
+                    ImGui::SetItemTooltip("Smoothing to reduce noise");
+
+                    ImGui::SliderFloat("Contrast", &m_heightGenContrast, 0.5f, 2.0f, "%.2f");
+                    ImGui::SetItemTooltip("Increase/decrease height variation");
+
+                    ImGui::Checkbox("Invert", &m_heightGenInvert);
+                    ImGui::SetItemTooltip("Swap peaks and valleys");
+
+                    ImGui::TextDisabled("Generates height.png for tessellation/displacement");
+
+                    bool canGenerate = !m_heightGenInFlight;
+                    if (!canGenerate) {
+                        ImGui::BeginDisabled();
+                    }
+
+                    if (ImGui::Button("Generate Height Map", ImVec2(-1, 25))) {
+                        m_heightGenRequest.materialName = m_applyMaterialName;
+                        m_heightGenRequest.materialPath = std::string(m_materialRoot) + "/" + m_applyMaterialName;
+                        m_heightGenRequest.serverUrl = m_materialServerUrl;
+                        m_heightGenRequest.method = m_heightGenMethod;
+                        m_heightGenRequest.blur = m_heightGenBlur;
+                        m_heightGenRequest.contrast = m_heightGenContrast;
+                        m_heightGenRequest.invert = m_heightGenInvert;
+                        m_heightGenRequested = true;
+                    }
+
+                    if (!canGenerate) {
+                        ImGui::EndDisabled();
+                    }
+
+                    if (!m_heightGenStatus.empty()) {
+                        ImGui::Text("Status: %s", m_heightGenStatus.c_str());
+                    }
+                } else {
+                    ImGui::TextDisabled("Select a material from the list above");
+                }
+
+                ImGui::TreePop();
+            }
+
             if (m_materialDragActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
                     m_materialDropRequested = true;
@@ -1496,6 +1546,16 @@ ImGuiLayer::MaterialUpscaleRequest ImGuiLayer::takeMaterialUpscaleRequest() {
 void ImGuiLayer::setMaterialUpscaleState(bool inFlight, const std::string& status) {
     m_materialUpscaleInFlight = inFlight;
     m_materialUpscaleStatus = status;
+}
+
+ImGuiLayer::HeightGenRequest ImGuiLayer::takeHeightGenRequest() {
+    m_heightGenRequested = false;
+    return m_heightGenRequest;
+}
+
+void ImGuiLayer::setHeightGenState(bool inFlight, const std::string& status) {
+    m_heightGenInFlight = inFlight;
+    m_heightGenStatus = status;
 }
 
 ImGuiLayer::HighResRenderRequest ImGuiLayer::takeHighResRenderRequest() {

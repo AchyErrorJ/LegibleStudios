@@ -378,9 +378,11 @@ int main(int argc, char* argv[]) {
         ImGuiLayer imgui(context, window.getHandle(), renderer.getRenderPass());
         std::atomic<bool> materialGenInFlight(false);
         std::atomic<bool> materialUpscaleInFlight(false);
+        std::atomic<bool> heightGenInFlight(false);
         std::atomic<bool> highResRenderInFlight(false);
         std::mutex materialGenMutex;
         std::string materialGenStatus = "Idle";
+        std::string heightGenStatus = "Idle";
         std::string materialUpscaleStatus = "Idle";
         std::string highResRenderStatus = "Idle";
         float highResRenderProgress = 0.0f;
@@ -986,6 +988,7 @@ int main(int argc, char* argv[]) {
                     std::lock_guard<std::mutex> lock(materialGenMutex);
                     imgui.setMaterialGenerationState(materialGenInFlight.load(), materialGenStatus);
                     imgui.setMaterialUpscaleState(materialUpscaleInFlight.load(), materialUpscaleStatus);
+                    imgui.setHeightGenState(heightGenInFlight.load(), heightGenStatus);
                     imgui.setHighResRenderState(highResRenderInFlight.load(), highResRenderStatus, highResRenderProgress);
                 }
                 imgui.drawRenderSettingsPanel(renderer, showRenderSettings);
@@ -1278,6 +1281,50 @@ int main(int argc, char* argv[]) {
                                 materialUpscaleStatus = (rc == 0) ? "Upscale complete" : "Upscale failed (check console)";
                             }
                             materialUpscaleInFlight = false;
+                        }).detach();
+                    }
+                }
+
+                // Handle height map generation requests
+                if (imgui.wasHeightGenRequested()) {
+                    auto request = imgui.takeHeightGenRequest();
+                    if (request.materialName.empty()) {
+                        std::lock_guard<std::mutex> lock(materialGenMutex);
+                        heightGenStatus = "No material selected.";
+                    } else if (!heightGenInFlight.exchange(true)) {
+                        {
+                            std::lock_guard<std::mutex> lock(materialGenMutex);
+                            heightGenStatus = "Generating height map...";
+                        }
+
+                        // Build HTTP request to render server
+                        std::string serverUrl = request.serverUrl;
+                        std::string materialPath = request.materialPath;
+                        const char* methods[] = { "hybrid", "normal", "diffuse" };
+                        std::string method = methods[request.method];
+                        float blur = request.blur;
+                        float contrast = request.contrast;
+                        bool invert = request.invert;
+
+                        std::thread([serverUrl, materialPath, method, blur, contrast, invert,
+                                    &heightGenInFlight, &materialGenMutex, &heightGenStatus]() {
+                            // Use curl or simple HTTP client
+                            std::ostringstream curlCmd;
+                            curlCmd << "curl -s -X POST \"" << serverUrl << "/api/materials/generate_height\" "
+                                   << "-H \"Content-Type: application/json\" "
+                                   << "-d \"{\\\"material_path\\\": \\\"" << materialPath << "\\\", "
+                                   << "\\\"method\\\": \\\"" << method << "\\\", "
+                                   << "\\\"blur\\\": " << blur << ", "
+                                   << "\\\"contrast\\\": " << contrast << ", "
+                                   << "\\\"invert\\\": " << (invert ? "true" : "false") << "}\"";
+
+                            std::cout << "[HeightGen] " << curlCmd.str() << std::endl;
+                            int rc = std::system(curlCmd.str().c_str());
+                            {
+                                std::lock_guard<std::mutex> lock(materialGenMutex);
+                                heightGenStatus = (rc == 0) ? "Height map generated" : "Generation failed";
+                            }
+                            heightGenInFlight = false;
                         }).detach();
                     }
                 }

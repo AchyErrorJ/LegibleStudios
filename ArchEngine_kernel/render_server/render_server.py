@@ -1336,6 +1336,108 @@ def api_generate_material():
     })
 
 
+@app.route('/api/materials/generate_height', methods=['POST'])
+def api_generate_height():
+    """
+    Generate a height/displacement map for an existing material using hybrid approach.
+
+    Uses normal map integration if available, falls back to Depth Anything v2 on diffuse.
+
+    POST body (JSON):
+        material_path: Path to material directory containing textures
+        output_path: Optional output path (default: material_path/height.png)
+        method: "hybrid" (auto), "normal" (from normal map), "diffuse" (AI depth)
+        blur: Gaussian blur radius (default 1.0)
+        contrast: Height contrast multiplier (default 1.0)
+        invert: Flip height values (default false)
+
+    OR for direct image input:
+        diffuse_base64: Base64 encoded diffuse image
+        normal_base64: Optional base64 encoded normal map
+    """
+    from height_generator import generate_height_map, generate_height_map_from_image
+    import base64
+    import io
+
+    data = request.json or {}
+
+    # Check for direct image input
+    diffuse_b64 = data.get('diffuse_base64')
+    if diffuse_b64:
+        # Decode images
+        diffuse_data = base64.b64decode(diffuse_b64)
+        diffuse_img = Image.open(io.BytesIO(diffuse_data))
+
+        normal_img = None
+        normal_b64 = data.get('normal_base64')
+        if normal_b64:
+            normal_data = base64.b64decode(normal_b64)
+            normal_img = Image.open(io.BytesIO(normal_data))
+
+        method = data.get('method', 'hybrid')
+        blur = float(data.get('blur', 1.0))
+        contrast = float(data.get('contrast', 1.0))
+        invert = bool(data.get('invert', False))
+
+        try:
+            height_img = generate_height_map_from_image(
+                diffuse_img,
+                normal_image=normal_img,
+                method=method,
+                blur_radius=blur,
+                contrast=contrast,
+                invert=invert
+            )
+
+            # Convert to base64
+            buffer = io.BytesIO()
+            height_img.save(buffer, format='PNG')
+            height_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+            return jsonify({
+                "status": "ok",
+                "height_base64": height_b64,
+                "width": height_img.width,
+                "height": height_img.height
+            })
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({"error": str(e)}), 500
+
+    # File-based input
+    material_path = data.get('material_path')
+    if not material_path:
+        return jsonify({"error": "material_path or diffuse_base64 required"}), 400
+
+    output_path = data.get('output_path')
+    method = data.get('method', 'hybrid')
+    blur = float(data.get('blur', 1.0))
+    contrast = float(data.get('contrast', 1.0))
+    invert = bool(data.get('invert', False))
+
+    try:
+        result_path = generate_height_map(
+            material_path,
+            output_path=output_path,
+            method=method,
+            blur_radius=blur,
+            contrast=contrast,
+            invert=invert
+        )
+
+        return jsonify({
+            "status": "ok",
+            "height_path": result_path
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/upload_base', methods=['POST'])
 def api_upload_base():
     """Upload a base image for AI enhancement."""

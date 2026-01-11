@@ -52,6 +52,16 @@ public:
         int method = 0;     // 0=realesrgan, 1=lanczos
     };
 
+    struct HeightGenRequest {
+        std::string materialName;
+        std::string materialPath;
+        std::string serverUrl;
+        int method = 0;     // 0=hybrid, 1=normal, 2=diffuse
+        float blur = 1.0f;
+        float contrast = 1.0f;
+        bool invert = false;
+    };
+
     struct HighResRenderRequest {
         std::string outputPath;
         int resolution = 0;     // 0=4K, 1=6K, 2=8K
@@ -179,6 +189,11 @@ public:
     MaterialUpscaleRequest takeMaterialUpscaleRequest();
     void setMaterialUpscaleState(bool inFlight, const std::string& status);
 
+    // Height map generation
+    bool wasHeightGenRequested() const { return m_heightGenRequested; }
+    HeightGenRequest takeHeightGenRequest();
+    void setHeightGenState(bool inFlight, const std::string& status);
+
     // High-res rendering
     bool wasHighResRenderRequested() const { return m_highResRenderRequested; }
     HighResRenderRequest takeHighResRenderRequest();
@@ -253,6 +268,16 @@ private:
     std::string m_materialUpscaleStatus;
     int m_upscaleScale = 4;
     int m_upscaleMethod = 0;
+
+    // Height map generation state
+    bool m_heightGenRequested = false;
+    HeightGenRequest m_heightGenRequest;
+    bool m_heightGenInFlight = false;
+    std::string m_heightGenStatus;
+    int m_heightGenMethod = 0;      // 0=hybrid, 1=normal, 2=diffuse
+    float m_heightGenBlur = 1.0f;
+    float m_heightGenContrast = 1.0f;
+    bool m_heightGenInvert = false;
 
     // High-res render state
     bool m_highResRenderRequested = false;
