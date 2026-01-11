@@ -3,6 +3,9 @@
 #include "renderer.hpp"
 #include <GLFW/glfw3.h>
 #include <algorithm>
+#include <chrono>
+#include <ctime>
+#include <filesystem>
 #include <stdexcept>
 
 namespace arch {
@@ -937,7 +940,7 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
 
             // Quick preview controls
             float uvScale = renderer.getMaterialUVScale();
-            if (ImGui::SliderFloat("UV Scale", &uvScale, 0.05f, 100.0f, "%.2f")) {
+            if (ImGui::SliderFloat("UV Scale", &uvScale, 0.01f, 500.0f, "%.2f")) {
                 renderer.setMaterialUVScale(uvScale);
             }
 
@@ -1059,7 +1062,7 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
         if (ImGui::CollapsingHeader("Material Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::TreeNode("Texture Settings")) {
                 float uvScale = renderer.getMaterialUVScale();
-                if (ImGui::SliderFloat("UV Scale", &uvScale, 0.05f, 100.0f, "%.2f")) {
+                if (ImGui::SliderFloat("UV Scale", &uvScale, 0.01f, 500.0f, "%.2f")) {
                     renderer.setMaterialUVScale(uvScale);
                 }
 
@@ -1067,6 +1070,62 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                 if (ImGui::SliderFloat("Normal Strength", &normalStrength, 0.0f, 2.0f, "%.2f")) {
                     renderer.setNormalStrength(normalStrength);
                 }
+                ImGui::TreePop();
+            }
+
+            if (ImGui::TreeNode("Material Adjustments")) {
+                ImGui::TextDisabled("Color Adjustments");
+
+                float brightness = renderer.getMaterialBrightness();
+                if (ImGui::SliderFloat("Brightness", &brightness, -0.5f, 0.5f, "%.2f")) {
+                    renderer.setMaterialBrightness(brightness);
+                }
+
+                float contrast = renderer.getMaterialContrast();
+                if (ImGui::SliderFloat("Contrast", &contrast, 0.5f, 2.0f, "%.2f")) {
+                    renderer.setMaterialContrast(contrast);
+                }
+
+                float saturation = renderer.getMaterialSaturation();
+                if (ImGui::SliderFloat("Saturation", &saturation, 0.0f, 2.0f, "%.2f")) {
+                    renderer.setMaterialSaturation(saturation);
+                }
+
+                vec3 tint = renderer.getMaterialTint();
+                float tintArr[3] = {tint.r, tint.g, tint.b};
+                if (ImGui::ColorEdit3("Tint", tintArr)) {
+                    renderer.setMaterialTint(vec3(tintArr[0], tintArr[1], tintArr[2]));
+                }
+
+                ImGui::Separator();
+                ImGui::TextDisabled("PBR Adjustments");
+
+                float roughnessOffset = renderer.getMaterialRoughnessOffset();
+                if (ImGui::SliderFloat("Roughness Offset", &roughnessOffset, -0.5f, 0.5f, "%.2f")) {
+                    renderer.setMaterialRoughnessOffset(roughnessOffset);
+                }
+
+                float metallicOffset = renderer.getMaterialMetallicOffset();
+                if (ImGui::SliderFloat("Metallic Offset", &metallicOffset, -0.5f, 0.5f, "%.2f")) {
+                    renderer.setMaterialMetallicOffset(metallicOffset);
+                }
+
+                float aoStrength = renderer.getMaterialAOStrength();
+                if (ImGui::SliderFloat("AO Strength", &aoStrength, 0.0f, 2.0f, "%.2f")) {
+                    renderer.setMaterialAOStrength(aoStrength);
+                }
+
+                ImGui::Separator();
+                if (ImGui::Button("Reset All")) {
+                    renderer.setMaterialBrightness(0.0f);
+                    renderer.setMaterialContrast(1.0f);
+                    renderer.setMaterialSaturation(1.0f);
+                    renderer.setMaterialTint(vec3(1.0f));
+                    renderer.setMaterialRoughnessOffset(0.0f);
+                    renderer.setMaterialMetallicOffset(0.0f);
+                    renderer.setMaterialAOStrength(1.0f);
+                }
+
                 ImGui::TreePop();
             }
 
@@ -1237,6 +1296,164 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
 
         ImGui::Separator();
 
+        // High-Resolution Render
+        if (ImGui::CollapsingHeader("High-Resolution Render")) {
+            ImGui::TextDisabled("Render high-quality images for presentations");
+
+            // Resolution selector
+            const char* resolutionItems[] = { "4K (3840x2160)", "6K (6144x3456)", "8K (7680x4320)" };
+            ImGui::Combo("Resolution", &m_renderResolution, resolutionItems, 3);
+
+            // Samples selector (for accumulation/AA)
+            const char* sampleItems[] = { "1 (Fast)", "16 (Good)", "64 (High)", "256 (Best)" };
+            ImGui::Combo("Samples", &m_renderSamples, sampleItems, 4);
+            ImGui::SetItemTooltip("Higher samples = less noise, longer render time");
+
+            // Format selector
+            const char* formatItems[] = { "PNG (8-bit)", "EXR (HDR 32-bit)" };
+            ImGui::Combo("Format", &m_renderFormat, formatItems, 2);
+
+            // Brightness compensation (for matching HDR viewport with bloom)
+            ImGui::SliderFloat("Brightness", &m_renderBrightness, 0.5f, 3.0f, "%.1fx");
+            ImGui::SetItemTooltip("Increase to match HDR viewport with bloom enabled (default 1.3x)");
+
+            ImGui::Separator();
+
+            // Upscaling option
+            ImGui::Checkbox("Upscale to target", &m_renderUpscale);
+            ImGui::SetItemTooltip("Render at 4K and AI-upscale to 6K/8K (faster, nearly same quality)");
+
+            if (m_renderUpscale && m_renderResolution > 0) {
+                const char* upscaleMethodItems[] = { "Real-ESRGAN (AI)", "Lanczos (Fast)" };
+                ImGui::Combo("Upscale Method", &m_renderUpscaleMethod, upscaleMethodItems, 2);
+
+                if (m_renderResolution == 1) {
+                    ImGui::TextDisabled("Will render 4K -> upscale 1.6x to 6K");
+                } else if (m_renderResolution == 2) {
+                    ImGui::TextDisabled("Will render 4K -> upscale 2x to 8K");
+                }
+
+                // Server controls for AI upscaling
+                if (m_renderUpscaleMethod == 0) {
+                    ImGui::Spacing();
+                    if (ImGui::Button("Start Upscale Server")) {
+                        m_startRenderServerRequested = true;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Stop Server")) {
+                        m_stopRenderServerRequested = true;
+                    }
+                    ImGui::SetItemTooltip("Real-ESRGAN requires the render server running on port 5000");
+                }
+            }
+
+            ImGui::Separator();
+
+            // Output path with auto-generate button
+            ImGui::Text("Output:");
+            ImGui::InputText("##OutputPath", m_renderOutputPath, sizeof(m_renderOutputPath));
+            ImGui::SameLine();
+            if (ImGui::Button("New")) {
+                // Generate timestamped filename
+                auto now = std::chrono::system_clock::now();
+                auto time = std::chrono::system_clock::to_time_t(now);
+                std::tm tm = *std::localtime(&time);
+
+                const char* resNames[] = { "4K", "6K", "8K" };
+                const int sampleCounts[] = { 1, 16, 64, 256 };
+
+                char timestamp[64];
+                std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm);
+
+                const char* ext = (m_renderFormat == 0) ? "png" : "exr";
+                snprintf(m_renderOutputPath, sizeof(m_renderOutputPath),
+                    "renders/render_%s_%s_%dspp.%s",
+                    timestamp, resNames[m_renderResolution],
+                    sampleCounts[m_renderSamples], ext);
+            }
+            ImGui::SetItemTooltip("Generate unique timestamped filename");
+
+            // Show estimated file size
+            const char* resNames[] = { "4K", "6K", "8K" };
+            const int widths[] = { 3840, 6144, 7680 };
+            const int heights[] = { 2160, 3456, 4320 };
+            size_t pixels = static_cast<size_t>(widths[m_renderResolution]) * heights[m_renderResolution];
+            size_t estimatedSize = (m_renderFormat == 0) ? pixels * 4 / 3 : pixels * 16; // PNG compressed, EXR HDR
+            ImGui::TextDisabled("Est. size: %.1f MB (%s)", estimatedSize / (1024.0f * 1024.0f), resNames[m_renderResolution]);
+
+            // Render button
+            bool canRender = !m_highResRenderInFlight;
+            if (!canRender) {
+                ImGui::BeginDisabled();
+            }
+
+            if (ImGui::Button("Render Image", ImVec2(-1, 30))) {
+                // Auto-generate unique filename if using default or file exists
+                std::string currentPath(m_renderOutputPath);
+                bool isDefault = (currentPath == "renders/render.png" || currentPath == "renders/render.exr");
+                bool fileExists = std::filesystem::exists(currentPath);
+
+                if (isDefault || fileExists) {
+                    // Generate timestamped filename
+                    auto now = std::chrono::system_clock::now();
+                    auto time = std::chrono::system_clock::to_time_t(now);
+                    std::tm tm = *std::localtime(&time);
+
+                    const char* resNamesAuto[] = { "4K", "6K", "8K" };
+                    const int sampleCountsAuto[] = { 1, 16, 64, 256 };
+
+                    char timestamp[64];
+                    std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm);
+
+                    const char* ext = (m_renderFormat == 0) ? "png" : "exr";
+                    snprintf(m_renderOutputPath, sizeof(m_renderOutputPath),
+                        "renders/render_%s_%s_%dspp.%s",
+                        timestamp, resNamesAuto[m_renderResolution],
+                        sampleCountsAuto[m_renderSamples], ext);
+                }
+
+                // Build the request
+                m_highResRenderRequest.outputPath = m_renderOutputPath;
+                m_highResRenderRequest.resolution = m_renderResolution;
+
+                // Convert sample index to actual sample count
+                const int sampleCounts[] = { 1, 16, 64, 256 };
+                m_highResRenderRequest.samples = sampleCounts[m_renderSamples];
+
+                m_highResRenderRequest.format = m_renderFormat;
+                m_highResRenderRequest.upscale = m_renderUpscale && m_renderResolution > 0;
+                m_highResRenderRequest.upscaleMethod = m_renderUpscaleMethod;
+                m_highResRenderRequest.brightness = m_renderBrightness;
+
+                m_highResRenderRequested = true;
+            }
+
+            if (!canRender) {
+                ImGui::EndDisabled();
+            }
+
+            // Progress and status
+            if (m_highResRenderInFlight) {
+                ImGui::ProgressBar(m_highResRenderProgress, ImVec2(-1, 0));
+            }
+
+            if (!m_highResRenderStatus.empty()) {
+                ImGui::Text("Status: %s", m_highResRenderStatus.c_str());
+            }
+
+            // Resolution info
+            ImGui::Separator();
+            ImGui::TextDisabled("Resolution Details:");
+            const char* resInfo[] = {
+                "4K: 3840x2160 (8.3 MP) - Standard presentation",
+                "6K: 6144x3456 (21 MP) - Large format print",
+                "8K: 7680x4320 (33 MP) - Ultra high detail"
+            };
+            ImGui::TextWrapped("%s", resInfo[m_renderResolution]);
+        }
+
+        ImGui::Separator();
+
         // Visualization mode (moved from elsewhere for convenience)
         if (ImGui::CollapsingHeader("Visualization")) {
             VisualizationMode mode = renderer.getVisualizationMode();
@@ -1279,6 +1496,17 @@ ImGuiLayer::MaterialUpscaleRequest ImGuiLayer::takeMaterialUpscaleRequest() {
 void ImGuiLayer::setMaterialUpscaleState(bool inFlight, const std::string& status) {
     m_materialUpscaleInFlight = inFlight;
     m_materialUpscaleStatus = status;
+}
+
+ImGuiLayer::HighResRenderRequest ImGuiLayer::takeHighResRenderRequest() {
+    m_highResRenderRequested = false;
+    return m_highResRenderRequest;
+}
+
+void ImGuiLayer::setHighResRenderState(bool inFlight, const std::string& status, float progress) {
+    m_highResRenderInFlight = inFlight;
+    m_highResRenderStatus = status;
+    m_highResRenderProgress = progress;
 }
 
 } // namespace arch

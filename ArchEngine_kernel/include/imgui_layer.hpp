@@ -52,6 +52,16 @@ public:
         int method = 0;     // 0=realesrgan, 1=lanczos
     };
 
+    struct HighResRenderRequest {
+        std::string outputPath;
+        int resolution = 0;     // 0=4K, 1=6K, 2=8K
+        int samples = 1;        // 1, 16, 64, 256
+        int format = 0;         // 0=PNG, 1=EXR
+        bool upscale = false;   // If true, render at 4K and upscale to target
+        int upscaleMethod = 0;  // 0=realesrgan, 1=lanczos
+        float brightness = 1.3f; // Brightness multiplier to compensate for no bloom
+    };
+
     ImGuiLayer(VulkanContext& context, GLFWwindow* window, VkRenderPass renderPass);
     ~ImGuiLayer();
 
@@ -169,6 +179,12 @@ public:
     MaterialUpscaleRequest takeMaterialUpscaleRequest();
     void setMaterialUpscaleState(bool inFlight, const std::string& status);
 
+    // High-res rendering
+    bool wasHighResRenderRequested() const { return m_highResRenderRequested; }
+    HighResRenderRequest takeHighResRenderRequest();
+    void setHighResRenderState(bool inFlight, const std::string& status, float progress = 0.0f);
+    float getHighResRenderProgress() const { return m_highResRenderProgress; }
+
 private:
     void createDescriptorPool();
     void uploadFonts();
@@ -237,6 +253,23 @@ private:
     std::string m_materialUpscaleStatus;
     int m_upscaleScale = 4;
     int m_upscaleMethod = 0;
+
+    // High-res render state
+    bool m_highResRenderRequested = false;
+    HighResRenderRequest m_highResRenderRequest;
+    bool m_highResRenderInFlight = false;
+    std::string m_highResRenderStatus;
+    float m_highResRenderProgress = 0.0f;
+    int m_renderResolution = 0;     // 0=4K, 1=6K, 2=8K
+    int m_renderSamples = 0;        // 0=1, 1=16, 2=64, 3=256
+    int m_renderFormat = 0;         // 0=PNG, 1=EXR
+    bool m_renderUpscale = false;
+    int m_renderUpscaleMethod = 0;
+    float m_renderBrightness = 1.3f; // Brightness multiplier to compensate for missing bloom
+    char m_renderOutputPath[260] = "renders/render.png";
+
+public:
+    float getRenderBrightness() const { return m_renderBrightness; }
 };
 
 } // namespace arch

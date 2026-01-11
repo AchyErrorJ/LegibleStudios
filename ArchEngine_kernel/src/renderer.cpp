@@ -5,6 +5,10 @@
 #include <iostream>
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 
 namespace arch {
 
@@ -621,6 +625,15 @@ void Renderer::createPipeline() {
 
         m_hdrWireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                                             "shaders/structural.frag.spv", hdrWireframeConfig);
+
+        // HDR transparent pipeline for glass/windows
+        PipelineConfig hdrTransparentConfig = PipelineConfig::transparentConfig();
+        hdrTransparentConfig.renderPass = m_postProcess->getHDRRenderPass();
+        hdrTransparentConfig.pipelineLayout = m_pipelineLayout;
+        hdrTransparentConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        m_hdrTransparentPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                               "shaders/structural.frag.spv", hdrTransparentConfig);
     }
 
     // Sky pipeline - renders fullscreen triangle behind everything
@@ -1391,10 +1404,15 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
 
     // HDR output mode (skip tonemapping in shader when rendering to HDR buffer)
     ubo.outputLinearHDR = m_outputLinearHDR ? 1 : 0;
-    ubo._padding0 = 0;
+    ubo.exposure = getExposure();
     ubo._padding1 = 0;
     ubo._padding2 = 0;
-    ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, 0.0f, 0.0f);
+    // Material params: uvScale, normalStrength, brightness, contrast
+    ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, m_materialBrightness, m_materialContrast);
+    // Material params2: saturation, roughnessOffset, metallicOffset, aoStrength
+    ubo.materialParams2 = vec4(m_materialSaturation, m_materialRoughnessOffset, m_materialMetallicOffset, m_materialAOStrength);
+    // Material tint
+    ubo.materialTint = vec4(m_materialTint, 1.0f);
 
     std::memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
 }
@@ -2316,10 +2334,10 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
     }
 
     // Second pass: Render transparent windows with alpha blending
-    // Skip in HDR path (transparent HDR pipeline not implemented yet).
-    if (m_transparentPipeline && !m_outputLinearHDR) {
+    Pipeline* transparentPipeline = m_outputLinearHDR ? m_hdrTransparentPipeline.get() : m_transparentPipeline.get();
+    if (transparentPipeline) {
         m_context.beginDebugLabel(m_currentCommandBuffer, "Transparent Windows", {0.4f, 0.7f, 0.9f, 1.0f});
-        m_transparentPipeline->bind(m_currentCommandBuffer);
+        transparentPipeline->bind(m_currentCommandBuffer);
 
         index = 0;
         for (const auto& element : elements) {
@@ -2813,5 +2831,733 @@ void Renderer::setRTDenoiseStrength(f32 strength) {
     }
 }
 #endif  // Ray tracing disabled
+
+// =============================================================================
+// High-Resolution Rendering Implementation
+// =============================================================================
+
+void Renderer::createHighResResources(u32 width, u32 height) {
+    // Cleanup any existing resources
+    cleanupHighResResources();
+
+    m_highResWidth = width;
+    m_highResHeight = height;
+
+    VkDevice device = m_context.getDevice();
+
+    // Create color image (RGBA8 for LDR output)
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.extent = { width, height, 1 };
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(device, &imageInfo, nullptr, &m_highResImage) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res image");
+    }
+
+    // Allocate memory
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(device, m_highResImage, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &m_highResMemory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate high-res image memory");
+    }
+
+    vkBindImageMemory(device, m_highResImage, m_highResMemory, 0);
+
+    // Create image view
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_highResImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &m_highResView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res image view");
+    }
+
+    // Create depth image
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+    VkImageCreateInfo depthImageInfo = imageInfo;
+    depthImageInfo.format = depthFormat;
+    depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+    if (vkCreateImage(device, &depthImageInfo, nullptr, &m_highResDepthImage) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res depth image");
+    }
+
+    vkGetImageMemoryRequirements(device, m_highResDepthImage, &memReqs);
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &m_highResDepthMemory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate high-res depth memory");
+    }
+
+    vkBindImageMemory(device, m_highResDepthImage, m_highResDepthMemory, 0);
+
+    viewInfo.image = m_highResDepthImage;
+    viewInfo.format = depthFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &m_highResDepthView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res depth view");
+    }
+
+    // Create render pass for high-res rendering (simple, no MSAA)
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = depthFormat;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = 1;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    std::array<VkAttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = static_cast<u32>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &m_highResRenderPass) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res render pass");
+    }
+
+    // Create framebuffer
+    std::array<VkImageView, 2> fbAttachments = { m_highResView, m_highResDepthView };
+
+    VkFramebufferCreateInfo fbInfo{};
+    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbInfo.renderPass = m_highResRenderPass;
+    fbInfo.attachmentCount = static_cast<u32>(fbAttachments.size());
+    fbInfo.pAttachments = fbAttachments.data();
+    fbInfo.width = width;
+    fbInfo.height = height;
+    fbInfo.layers = 1;
+
+    if (vkCreateFramebuffer(device, &fbInfo, nullptr, &m_highResFramebuffer) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res framebuffer");
+    }
+
+    // Create single-sample pipeline for high-res rendering
+    PipelineConfig highResConfig = PipelineConfig::defaultConfig();
+    highResConfig.renderPass = m_highResRenderPass;
+    highResConfig.pipelineLayout = m_pipelineLayout;
+    highResConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    highResConfig.multisample.sampleShadingEnable = VK_FALSE;
+
+    m_highResPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                    "shaders/structural.frag.spv", highResConfig);
+
+    // Create high-res transparent pipeline for glass/windows
+    PipelineConfig highResTransparentConfig = PipelineConfig::transparentConfig();
+    highResTransparentConfig.renderPass = m_highResRenderPass;
+    highResTransparentConfig.pipelineLayout = m_pipelineLayout;
+    highResTransparentConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    m_highResTransparentPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                               "shaders/structural.frag.spv", highResTransparentConfig);
+
+    std::cout << "[Renderer] High-res resources created: " << width << "x" << height << std::endl;
+}
+
+void Renderer::cleanupHighResResources() {
+    VkDevice device = m_context.getDevice();
+
+    // Destroy pipelines first (uses render pass)
+    m_highResPipeline.reset();
+    m_highResTransparentPipeline.reset();
+
+    if (m_highResFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(device, m_highResFramebuffer, nullptr);
+        m_highResFramebuffer = VK_NULL_HANDLE;
+    }
+    if (m_highResRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_highResRenderPass, nullptr);
+        m_highResRenderPass = VK_NULL_HANDLE;
+    }
+    if (m_highResDepthView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_highResDepthView, nullptr);
+        m_highResDepthView = VK_NULL_HANDLE;
+    }
+    if (m_highResDepthImage != VK_NULL_HANDLE) {
+        vkDestroyImage(device, m_highResDepthImage, nullptr);
+        m_highResDepthImage = VK_NULL_HANDLE;
+    }
+    if (m_highResDepthMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_highResDepthMemory, nullptr);
+        m_highResDepthMemory = VK_NULL_HANDLE;
+    }
+    if (m_highResView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_highResView, nullptr);
+        m_highResView = VK_NULL_HANDLE;
+    }
+    if (m_highResImage != VK_NULL_HANDLE) {
+        vkDestroyImage(device, m_highResImage, nullptr);
+        m_highResImage = VK_NULL_HANDLE;
+    }
+    if (m_highResMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_highResMemory, nullptr);
+        m_highResMemory = VK_NULL_HANDLE;
+    }
+}
+
+void Renderer::copyHighResImageToBuffer() {
+    VkDevice device = m_context.getDevice();
+    size_t imageSize = m_highResWidth * m_highResHeight * 4;
+
+    // Create staging buffer
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingMemory;
+
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = imageSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    vkCreateBuffer(device, &bufferInfo, nullptr, &stagingBuffer);
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(device, stagingBuffer, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(
+        memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+
+    vkAllocateMemory(device, &allocInfo, nullptr, &stagingMemory);
+    vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
+
+    // Copy image to buffer
+    VkCommandBuffer cmd = m_context.beginSingleTimeCommands();
+
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = { 0, 0, 0 };
+    region.imageExtent = { m_highResWidth, m_highResHeight, 1 };
+
+    vkCmdCopyImageToBuffer(cmd, m_highResImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer, 1, &region);
+
+    m_context.endSingleTimeCommands(cmd);
+
+    // Map and copy to CPU memory
+    m_highResPixels.resize(imageSize);
+    void* data;
+    vkMapMemory(device, stagingMemory, 0, imageSize, 0, &data);
+    memcpy(m_highResPixels.data(), data, imageSize);
+    vkUnmapMemory(device, stagingMemory);
+
+    // Cleanup
+    vkDestroyBuffer(device, stagingBuffer, nullptr);
+    vkFreeMemory(device, stagingMemory, nullptr);
+}
+
+// Halton sequence for sub-pixel jitter (better than random for AA)
+static float halton(int index, int base) {
+    float result = 0.0f;
+    float f = 1.0f / static_cast<float>(base);
+    int i = index;
+    while (i > 0) {
+        result += f * static_cast<float>(i % base);
+        i /= base;
+        f /= static_cast<float>(base);
+    }
+    return result;
+}
+
+bool Renderer::renderHighRes(
+    const std::vector<StructuralElement>& elements,
+    const Building& building,
+    u32 width,
+    u32 height,
+    int samples,
+    float brightness,
+    std::function<void(float)> progressCallback
+) {
+    std::cout << "[Renderer] Starting high-res render: " << width << "x" << height << " with " << samples << " samples" << std::endl;
+
+    try {
+        // Create resources at target resolution
+        createHighResResources(width, height);
+
+        // Wait for any pending operations
+        m_context.waitIdle();
+
+        // Initialize HDR accumulation buffer for multi-sample AA
+        size_t pixelCount = static_cast<size_t>(width) * height;
+        std::vector<float> accumBuffer(pixelCount * 4, 0.0f);  // RGBA float accumulation
+
+        float aspect = static_cast<float>(width) / static_cast<float>(height);
+        mat4 baseProj = m_camera.getProjectionMatrix(aspect);
+        baseProj[1][1] *= -1; // Vulkan Y flip
+
+        // Create fence for synchronization
+        VkFence fence;
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        vkCreateFence(m_context.getDevice(), &fenceInfo, nullptr, &fence);
+
+        // Render each sample with sub-pixel jitter
+        for (int sampleIdx = 0; sampleIdx < samples; ++sampleIdx) {
+            // Report progress
+            if (progressCallback) {
+                float progress = static_cast<float>(sampleIdx) / static_cast<float>(samples) * 0.9f;
+                progressCallback(progress);
+            }
+
+            std::cout << "[Renderer] Rendering sample " << (sampleIdx + 1) << "/" << samples << std::endl;
+
+            // Compute sub-pixel jitter using Halton sequence
+            float jitterX = 0.0f;
+            float jitterY = 0.0f;
+            if (samples > 1) {
+                // Halton(2) and Halton(3) for X and Y jitter
+                jitterX = halton(sampleIdx + 1, 2) - 0.5f;
+                jitterY = halton(sampleIdx + 1, 3) - 0.5f;
+            }
+
+            // Apply jitter to projection matrix (sub-pixel offset)
+            mat4 jitteredProj = baseProj;
+            if (samples > 1) {
+                // Jitter in NDC space: offset by fraction of pixel
+                float pixelWidth = 2.0f / static_cast<float>(width);
+                float pixelHeight = 2.0f / static_cast<float>(height);
+                jitteredProj[2][0] += jitterX * pixelWidth;
+                jitteredProj[2][1] += jitterY * pixelHeight;
+            }
+
+            // Allocate command buffer
+            VkCommandBufferAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.commandPool = m_context.getCommandPool();
+            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandBufferCount = 1;
+
+            VkCommandBuffer cmd;
+            vkAllocateCommandBuffers(m_context.getDevice(), &allocInfo, &cmd);
+
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vkBeginCommandBuffer(cmd, &beginInfo);
+
+            // Begin render pass
+            VkRenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass = m_highResRenderPass;
+            renderPassInfo.framebuffer = m_highResFramebuffer;
+            renderPassInfo.renderArea.offset = { 0, 0 };
+            renderPassInfo.renderArea.extent = { width, height };
+
+            std::array<VkClearValue, 2> clearValues{};
+            clearValues[0].color = { { 0.529f, 0.808f, 0.922f, 1.0f } };  // Sky blue background
+            clearValues[1].depthStencil = { 1.0f, 0 };
+
+            renderPassInfo.clearValueCount = static_cast<u32>(clearValues.size());
+            renderPassInfo.pClearValues = clearValues.data();
+
+            vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            // Set viewport and scissor
+            VkViewport viewport{};
+            viewport.x = 0.0f;
+            viewport.y = 0.0f;
+            viewport.width = static_cast<float>(width);
+            viewport.height = static_cast<float>(height);
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+            VkRect2D scissor{};
+            scissor.offset = { 0, 0 };
+            scissor.extent = { width, height };
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            // Update uniform buffer with jittered projection
+            UniformBufferObject ubo{};
+            ubo.view = m_camera.getViewMatrix();
+            ubo.proj = jitteredProj;
+            ubo.lightViewProj = m_shadowMap ? m_shadowMap->getLightViewProj() : mat4(1.0f);
+            ubo.lightDirection = vec4(m_lightDirection, 0.0f);
+            ubo.clipPlane = m_clippingEnabled ? m_clipPlane : vec4(0.0f);
+            ubo.time = m_time;
+            ubo.shadowBias = m_shadowBias;
+            ubo.enableClipping = m_clippingEnabled ? 1 : 0;
+            ubo.enableShadows = m_shadowsEnabled ? 1 : 0;
+            ubo.outputLinearHDR = 0;
+            // Apply user-controlled brightness to compensate for missing bloom
+            ubo.exposure = getExposure() * brightness;
+            // Also boost material brightness slightly for similar effect
+            ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, m_materialBrightness + (brightness - 1.0f) * 0.1f, m_materialContrast);
+            ubo.materialParams2 = vec4(m_materialSaturation, m_materialRoughnessOffset, m_materialMetallicOffset, m_materialAOStrength);
+            ubo.materialTint = vec4(m_materialTint, 1.0f);
+
+            memcpy(m_uniformBuffersMapped[0], &ubo, sizeof(ubo));
+
+            // Set current command buffer so draw functions use the right one
+            VkCommandBuffer oldCmd = m_currentCommandBuffer;
+            m_currentCommandBuffer = cmd;
+
+            // Bind high-res pipeline (single-sample) and descriptor sets
+            m_highResPipeline->bind(cmd);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[0], 0, nullptr);
+
+            // Draw all elements
+            for (size_t i = 0; i < elements.size(); ++i) {
+                const auto& elem = elements[i];
+                vec3 color = getElementColor(elem, building, i);
+
+                // Bind material
+                std::string matName = resolveMaterialName(elem);
+                bindMaterialDescriptorSet(matName);
+
+                // Get material preset
+                auto preset = getMaterialForElement(elem.type);
+                vec4 material(preset.metallic, preset.roughness, preset.ao, preset.emission);
+
+                // Compute stress for shader
+                f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? elem.stress : 0.0f;
+
+                // Draw based on element type (matching main render loop logic)
+                switch (elem.type) {
+                    case ElementType::Beam:
+                        drawBeam(elem.start, elem.end, elem.width, elem.depth, color, stressForShader, elem.deflection);
+                        break;
+                    case ElementType::Column: {
+                        float colHeight = elem.end.y - elem.start.y;
+                        drawColumnWithMaterial(elem.start, elem.width, elem.depth, colHeight, color, stressForShader, material);
+                        break;
+                    }
+                    case ElementType::Floor:
+                        if (elem.mesh.hasData()) {
+                            drawCustomMesh(elem.mesh, color, stressForShader);
+                        } else {
+                            vec3 center = (elem.start + elem.end) * 0.5f;
+                            center.y = elem.start.y;
+                            float thickness = elem.end.y - elem.start.y;
+                            drawFloor(center, elem.end.x - elem.start.x, elem.end.z - elem.start.z, thickness, color, stressForShader);
+                        }
+                        break;
+                    case ElementType::Wall: {
+                        if (elem.mesh.hasData()) {
+                            drawCustomMesh(elem.mesh, color, stressForShader);
+                        } else {
+                            // Generate wall geometry - supports diagonal walls
+                            float xExtent = elem.end.x - elem.start.x;
+                            float zExtent = elem.end.z - elem.start.z;
+                            float wallHeight = elem.end.y - elem.start.y;
+                            bool isDiagonal = std::abs(xExtent) > 0.1f && std::abs(zExtent) > 0.1f;
+                            vec4 wallMat = vec4(m_wallMetallic, m_wallRoughness, m_wallAO, m_wallEmission);
+
+                            if (isDiagonal) {
+                                float midHeight = elem.start.y + wallHeight * 0.5f;
+                                vec3 wallStart = vec3(elem.start.x, midHeight, elem.start.z);
+                                vec3 wallEnd = vec3(elem.end.x, midHeight, elem.end.z);
+                                float thickness = elem.depth > 0.01f ? elem.depth : 0.5f;
+
+                                std::string key = "diagwall_" + std::to_string(xExtent) + "_" +
+                                                 std::to_string(zExtent) + "_" + std::to_string(wallHeight) + "_" +
+                                                 std::to_string(thickness);
+                                if (m_meshCache.find(key) == m_meshCache.end()) {
+                                    auto [verts, indices] = Geometry::createBeam(wallStart, wallEnd, thickness, wallHeight, vec3(1.0f));
+                                    m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                                }
+                                drawMeshWithMaterial(*m_meshCache[key], mat4(1.0f), color, stressForShader, wallMat);
+                            } else {
+                                vec3 center = (elem.start + elem.end) * 0.5f;
+                                center.y = elem.start.y;
+                                float wallThickness = elem.depth > 0.01f ? elem.depth : 0.5f;
+
+                                if (std::abs(xExtent) > std::abs(zExtent)) {
+                                    drawColumnWithMaterial(center, std::abs(xExtent), wallThickness, wallHeight, color, stressForShader, wallMat);
+                                } else {
+                                    drawColumnWithMaterial(center, wallThickness, std::abs(zExtent), wallHeight, color, stressForShader, wallMat);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    case ElementType::Door: {
+                        if (elem.mesh.hasData()) {
+                            drawCustomMeshWithMaterial(elem.mesh, color, stressForShader, material);
+                        } else {
+                            // Generate door geometry
+                            float xExtent = elem.end.x - elem.start.x;
+                            float zExtent = elem.end.z - elem.start.z;
+                            float doorHeight = elem.end.y - elem.start.y;
+                            float doorDepth = elem.depth > 0.1f ? elem.depth : 0.5f;
+
+                            if (doorHeight > 0.01f) {
+                                float doorWidth = glm::length(vec2(xExtent, zExtent));
+                                if (doorWidth <= 0.01f) doorWidth = elem.width > 0.01f ? elem.width : 3.0f;
+
+                                vec3 doorPos = vec3((elem.start.x + elem.end.x) * 0.5f, elem.start.y,
+                                                    (elem.start.z + elem.end.z) * 0.5f);
+                                float angle = -std::atan2(zExtent, xExtent);
+                                mat4 transform = glm::translate(mat4(1.0f), doorPos);
+                                transform = glm::rotate(transform, angle, vec3(0, 1, 0));
+
+                                vec4 doorMat = vec4(0.0f, 0.75f, 1.0f, 0.0f);
+                                std::string key = "door_proper_" + std::to_string(static_cast<int>(doorWidth * 100)) + "_" +
+                                                 std::to_string(static_cast<int>(doorHeight * 100)) + "_" +
+                                                 std::to_string(static_cast<int>(doorDepth * 100));
+                                if (m_meshCache.find(key) == m_meshCache.end()) {
+                                    auto [verts, indices] = Geometry::createDoor(vec3(0), doorWidth, doorHeight, doorDepth, vec3(0.55f, 0.35f, 0.2f));
+                                    m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                                }
+                                drawMeshWithMaterial(*m_meshCache[key], transform, color, stressForShader, doorMat);
+                            }
+                        }
+                        break;
+                    }
+                    case ElementType::Window:
+                        // Windows rendered in transparent pass below
+                        break;
+                    case ElementType::Roof: {
+                        vec4 roofMat = vec4(m_roofMetallic, m_roofRoughness, m_roofAO, m_roofEmission);
+                        if (elem.mesh.hasData()) {
+                            drawCustomMeshWithMaterial(elem.mesh, color, stressForShader, roofMat);
+                        } else {
+                            float roofWidth = std::abs(elem.end.x - elem.start.x);
+                            float roofDepthZ = std::abs(elem.end.z - elem.start.z);
+                            float roofThickness = elem.end.y - elem.start.y;
+                            if (roofThickness < 0.1f) roofThickness = 0.5f;
+
+                            vec3 center = (elem.start + elem.end) * 0.5f;
+                            center.y = elem.start.y;
+
+                            std::string key = "roof_" + std::to_string(roofWidth) + "_" + std::to_string(roofDepthZ) + "_" + std::to_string(roofThickness);
+                            if (m_meshCache.find(key) == m_meshCache.end()) {
+                                auto [verts, indices] = Geometry::createFloorSlab(vec3(0), roofWidth, roofDepthZ, roofThickness);
+                                m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                            }
+                            mat4 roofTransform = glm::translate(mat4(1.0f), center);
+                            drawMeshWithMaterial(*m_meshCache[key], roofTransform, color, stressForShader, roofMat);
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+
+            // Note: Sky is skipped in high-res render as the sky pipeline uses
+            // the swapchain render pass (MSAA) and different command buffer.
+            // A solid background color is used instead (set in clear values).
+
+            // Second pass: Render transparent windows with alpha blending
+            if (m_highResTransparentPipeline) {
+                m_highResTransparentPipeline->bind(cmd);
+
+                for (size_t i = 0; i < elements.size(); ++i) {
+                    const auto& elem = elements[i];
+                    if (elem.type != ElementType::Window) continue;
+
+                    vec3 color = getElementColor(elem, building, i);
+                    f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? elem.stress : 0.0f;
+
+                    // Bind material
+                    std::string matName = resolveMaterialName(elem);
+                    bindMaterialDescriptorSet(matName);
+
+                    // Generate window geometry
+                    float xExtent = elem.end.x - elem.start.x;
+                    float zExtent = elem.end.z - elem.start.z;
+                    float winHeight = elem.end.y - elem.start.y;
+                    float winDepth = elem.depth > 0.01f ? elem.depth : 0.15f;
+
+                    if (winHeight > 0.01f) {
+                        float winWidth = glm::length(vec2(xExtent, zExtent));
+                        if (winWidth <= 0.01f) winWidth = elem.width > 0.01f ? elem.width : 1.2f;
+
+                        vec3 winPos = vec3((elem.start.x + elem.end.x) * 0.5f, elem.start.y,
+                                           (elem.start.z + elem.end.z) * 0.5f);
+                        float angle = -std::atan2(zExtent, xExtent);
+                        mat4 transform = glm::translate(mat4(1.0f), winPos);
+                        transform = glm::rotate(transform, angle, vec3(0, 1, 0));
+
+                        vec4 glassMat = vec4(0.0f, 0.1f, 1.0f, 0.0f);  // Smooth glass
+                        std::string key = "window_proper_" + std::to_string(static_cast<int>(winWidth * 100)) + "_" +
+                                         std::to_string(static_cast<int>(winHeight * 100)) + "_" +
+                                         std::to_string(static_cast<int>(winDepth * 100));
+                        if (m_meshCache.find(key) == m_meshCache.end()) {
+                            auto [verts, indices] = Geometry::createWindow(vec3(0), winWidth, winHeight, winDepth, vec3(0.8f, 0.9f, 0.95f));
+                            m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                        }
+                        drawMeshWithMaterial(*m_meshCache[key], transform, color, stressForShader, glassMat);
+                    }
+                }
+            }
+
+            vkCmdEndRenderPass(cmd);
+            vkEndCommandBuffer(cmd);
+
+            // Restore the original command buffer
+            m_currentCommandBuffer = oldCmd;
+
+            // Submit and wait
+            VkSubmitInfo submitInfo{};
+            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &cmd;
+
+            vkResetFences(m_context.getDevice(), 1, &fence);
+            vkQueueSubmit(m_context.getGraphicsQueue(), 1, &submitInfo, fence);
+            vkWaitForFences(m_context.getDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
+
+            vkFreeCommandBuffers(m_context.getDevice(), m_context.getCommandPool(), 1, &cmd);
+
+            // Copy this sample's result to CPU
+            copyHighResImageToBuffer();
+
+            // Accumulate this sample into the float buffer
+            for (size_t p = 0; p < pixelCount; ++p) {
+                accumBuffer[p * 4 + 0] += static_cast<float>(m_highResPixels[p * 4 + 0]);
+                accumBuffer[p * 4 + 1] += static_cast<float>(m_highResPixels[p * 4 + 1]);
+                accumBuffer[p * 4 + 2] += static_cast<float>(m_highResPixels[p * 4 + 2]);
+                accumBuffer[p * 4 + 3] += static_cast<float>(m_highResPixels[p * 4 + 3]);
+            }
+        }
+
+        vkDestroyFence(m_context.getDevice(), fence, nullptr);
+
+        // Average the accumulated samples and convert back to 8-bit
+        float invSamples = 1.0f / static_cast<float>(samples);
+        for (size_t p = 0; p < pixelCount; ++p) {
+            m_highResPixels[p * 4 + 0] = static_cast<u8>(std::min(255.0f, accumBuffer[p * 4 + 0] * invSamples));
+            m_highResPixels[p * 4 + 1] = static_cast<u8>(std::min(255.0f, accumBuffer[p * 4 + 1] * invSamples));
+            m_highResPixels[p * 4 + 2] = static_cast<u8>(std::min(255.0f, accumBuffer[p * 4 + 2] * invSamples));
+            m_highResPixels[p * 4 + 3] = static_cast<u8>(std::min(255.0f, accumBuffer[p * 4 + 3] * invSamples));
+        }
+
+        // Store HDR data for potential EXR export
+        m_highResHDRPixels.resize(pixelCount * 4);
+        for (size_t p = 0; p < pixelCount; ++p) {
+            m_highResHDRPixels[p * 4 + 0] = accumBuffer[p * 4 + 0] * invSamples / 255.0f;
+            m_highResHDRPixels[p * 4 + 1] = accumBuffer[p * 4 + 1] * invSamples / 255.0f;
+            m_highResHDRPixels[p * 4 + 2] = accumBuffer[p * 4 + 2] * invSamples / 255.0f;
+            m_highResHDRPixels[p * 4 + 3] = accumBuffer[p * 4 + 3] * invSamples / 255.0f;
+        }
+
+        if (progressCallback) progressCallback(1.0f);
+
+        std::cout << "[Renderer] High-res render complete with " << samples << " samples" << std::endl;
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "[Renderer] High-res render failed: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool Renderer::saveHighResPNG(const std::string& filepath) {
+    if (m_highResPixels.empty() || m_highResWidth == 0 || m_highResHeight == 0) {
+        std::cerr << "[Renderer] No high-res image to save" << std::endl;
+        return false;
+    }
+
+    // Create directory if needed
+    std::filesystem::path path(filepath);
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+
+    // stb_image_write expects top-to-bottom, which is what we have
+    int result = stbi_write_png(
+        filepath.c_str(),
+        static_cast<int>(m_highResWidth),
+        static_cast<int>(m_highResHeight),
+        4,  // RGBA
+        m_highResPixels.data(),
+        static_cast<int>(m_highResWidth * 4)
+    );
+
+    if (result) {
+        std::cout << "[Renderer] Saved high-res image to: " << filepath << std::endl;
+        return true;
+    } else {
+        std::cerr << "[Renderer] Failed to save PNG: " << filepath << std::endl;
+        return false;
+    }
+}
+
+bool Renderer::saveHighResEXR(const std::string& filepath) {
+    // EXR export requires additional library (tinyexr or OpenEXR)
+    // For now, fall back to PNG with a warning
+    std::cerr << "[Renderer] EXR export not yet implemented, saving as PNG instead" << std::endl;
+    std::string pngPath = filepath;
+    size_t extPos = pngPath.rfind(".exr");
+    if (extPos != std::string::npos) {
+        pngPath.replace(extPos, 4, ".png");
+    }
+    return saveHighResPNG(pngPath);
+}
 
 } // namespace arch

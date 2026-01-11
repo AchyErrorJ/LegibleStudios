@@ -378,9 +378,12 @@ int main(int argc, char* argv[]) {
         ImGuiLayer imgui(context, window.getHandle(), renderer.getRenderPass());
         std::atomic<bool> materialGenInFlight(false);
         std::atomic<bool> materialUpscaleInFlight(false);
+        std::atomic<bool> highResRenderInFlight(false);
         std::mutex materialGenMutex;
         std::string materialGenStatus = "Idle";
         std::string materialUpscaleStatus = "Idle";
+        std::string highResRenderStatus = "Idle";
+        float highResRenderProgress = 0.0f;
 
         // Load sample buildings
         std::vector<Building> buildings = {
@@ -983,6 +986,7 @@ int main(int argc, char* argv[]) {
                     std::lock_guard<std::mutex> lock(materialGenMutex);
                     imgui.setMaterialGenerationState(materialGenInFlight.load(), materialGenStatus);
                     imgui.setMaterialUpscaleState(materialUpscaleInFlight.load(), materialUpscaleStatus);
+                    imgui.setHighResRenderState(highResRenderInFlight.load(), highResRenderStatus, highResRenderProgress);
                 }
                 imgui.drawRenderSettingsPanel(renderer, showRenderSettings);
 
@@ -1276,6 +1280,97 @@ int main(int argc, char* argv[]) {
                             materialUpscaleInFlight = false;
                         }).detach();
                     }
+                }
+
+                // Handle high-res render requests (runs synchronously to avoid Vulkan threading issues)
+                if (imgui.wasHighResRenderRequested()) {
+                    auto request = imgui.takeHighResRenderRequest();
+
+                    highResRenderStatus = "Preparing...";
+                    highResRenderProgress = 0.0f;
+                    imgui.setHighResRenderState(true, highResRenderStatus, highResRenderProgress);
+
+                    // Compute target resolution from request
+                    u32 targetWidth, targetHeight;
+                    switch (request.resolution) {
+                        case 1: targetWidth = 6144; targetHeight = 3456; break;  // 6K
+                        case 2: targetWidth = 7680; targetHeight = 4320; break;  // 8K
+                        default: targetWidth = 3840; targetHeight = 2160; break; // 4K
+                    }
+
+                    // If upscaling, render at 4K and upscale to target
+                    u32 renderWidth = targetWidth;
+                    u32 renderHeight = targetHeight;
+                    bool useUpscale = request.upscale && (request.resolution > 0);
+
+                    if (useUpscale) {
+                        renderWidth = 3840;
+                        renderHeight = 2160;
+                    }
+
+                    int samples = request.samples;
+                    int format = request.format;
+                    std::string outputPath = request.outputPath;
+
+                    auto& renderElements = buildings[currentBuilding].elements;
+                    auto& renderBuilding = buildings[currentBuilding];
+
+                    // Wait for GPU to be idle before high-res render
+                    context.waitIdle();
+
+                    highResRenderStatus = useUpscale ? "Rendering at 4K..." : "Rendering...";
+                    imgui.setHighResRenderState(true, highResRenderStatus, 0.1f);
+
+                    // Render synchronously (blocks UI but avoids threading issues)
+                    float renderBrightness = request.brightness;
+                    bool success = renderer.renderHighRes(
+                        renderElements, renderBuilding,
+                        renderWidth, renderHeight,
+                        samples, renderBrightness, nullptr  // No progress callback for sync render
+                    );
+
+                    if (success) {
+                        std::string savePath = outputPath;
+                        if (useUpscale) {
+                            std::filesystem::path p(outputPath);
+                            savePath = (p.parent_path() / ("_temp_4k_" + p.filename().string())).string();
+                        }
+
+                        highResRenderStatus = "Saving...";
+                        imgui.setHighResRenderState(true, highResRenderStatus, 0.8f);
+
+                        bool saved = (format == 1) ?
+                            renderer.saveHighResEXR(savePath) :
+                            renderer.saveHighResPNG(savePath);
+
+                        if (saved && useUpscale) {
+                            highResRenderStatus = "Upscaling...";
+                            imgui.setHighResRenderState(true, highResRenderStatus, 0.9f);
+
+                            int upscaleFactor = 2;
+                            std::string method = (request.upscaleMethod == 0) ? "realesrgan" : "lanczos";
+                            std::string upscaleCmd = "python scripts/render_upscale.py "
+                                        "--input \"" + savePath + "\" "
+                                        "--output \"" + outputPath + "\" "
+                                        "--scale " + std::to_string(upscaleFactor) + " "
+                                        "--method " + method;
+
+                            int upscaleResult = std::system(upscaleCmd.c_str());
+                            std::filesystem::remove(savePath);
+
+                            highResRenderStatus = (upscaleResult == 0) ?
+                                "Saved: " + outputPath : "Upscale failed";
+                        } else if (saved) {
+                            highResRenderStatus = "Saved: " + outputPath;
+                        } else {
+                            highResRenderStatus = "Save failed";
+                        }
+                    } else {
+                        highResRenderStatus = "Render failed";
+                    }
+
+                    highResRenderProgress = 1.0f;
+                    imgui.setHighResRenderState(false, highResRenderStatus, highResRenderProgress);
                 }
 
                 if (showDemo) ImGui::ShowDemoWindow(&showDemo);

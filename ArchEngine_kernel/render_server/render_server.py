@@ -1876,6 +1876,68 @@ def api_upscale():
         traceback.print_exc()
         progress.fail(str(e))
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/upscale_image', methods=['POST'])
+def api_upscale_image():
+    """
+    Upscale an image file directly using Real-ESRGAN.
+
+    Parameters:
+        input_path: Path to the input image file
+        output_path: Path where the upscaled image will be saved
+        scale: Upscale factor (2 or 4, default 2)
+        method: "realesrgan" (default) or "simple" (Lanczos)
+    """
+    from upscaler import get_upscaler
+
+    data = request.json or {}
+    input_path = data.get('input_path')
+    output_path = data.get('output_path')
+    scale = data.get('scale', 2)
+    method = data.get('method', 'realesrgan')
+
+    if not input_path or not output_path:
+        return jsonify({"error": "input_path and output_path are required"}), 400
+
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    if not input_path.exists():
+        return jsonify({"error": f"Input file not found: {input_path}"}), 404
+
+    # Ensure output directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"[Upscale] {input_path} -> {output_path} (scale={scale}, method={method})")
+
+    try:
+        t0 = time.time()
+
+        if method == 'simple' or method == 'lanczos':
+            # Use PIL for simple upscaling
+            img = Image.open(input_path)
+            new_size = (img.width * scale, img.height * scale)
+            upscaled = img.resize(new_size, Image.Resampling.LANCZOS)
+            upscaled.save(output_path)
+        else:
+            # Use Real-ESRGAN
+            upscaler = get_upscaler('realesrgan')
+            upscaler.upscale(str(input_path), str(output_path))
+
+        elapsed = time.time() - t0
+        print(f"[Upscale] Complete in {elapsed:.1f}s")
+
+        return jsonify({
+            "status": "ok",
+            "output_path": str(output_path),
+            "elapsed": elapsed
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/load', methods=['POST'])
 def api_load():
     try:

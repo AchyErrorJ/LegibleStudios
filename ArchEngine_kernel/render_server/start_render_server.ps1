@@ -1,16 +1,30 @@
 param(
-    [string]$VenvPath = (Join-Path $PSScriptRoot "..\\.venv-sd"),
+    [string]$VenvPath = "",
     [string]$Port = "5000"
 )
 
 $ErrorActionPreference = "Stop"
 
-$venvFull = Resolve-Path -LiteralPath $VenvPath -ErrorAction SilentlyContinue
-if (-not $venvFull) {
-    $venvFull = [System.IO.Path]::GetFullPath($VenvPath, $PSScriptRoot)
+# Default venv path - check common locations
+if ([string]::IsNullOrEmpty($VenvPath)) {
+    # First check for existing stable diffusion venv at RevitMCP
+    $revitVenv = "C:\RevitMCP\.venv-sd"
+    if (Test-Path $revitVenv) {
+        $VenvPath = $revitVenv
+    } else {
+        # Fallback to parent directory's .venv-sd
+        $VenvPath = Join-Path (Split-Path $PSScriptRoot -Parent) ".venv-sd"
+    }
 }
 
-$venvPython = Join-Path $venvFull "Scripts\\python.exe"
+# Try to resolve the path
+if (Test-Path $VenvPath) {
+    $venvFull = (Get-Item $VenvPath).FullName
+} else {
+    $venvFull = $VenvPath
+}
+
+$venvPython = Join-Path (Join-Path $venvFull "Scripts") "python.exe"
 if (-not (Test-Path -LiteralPath $venvPython)) {
     throw "Venv python not found at $venvPython. Run bootstrap_render_server.ps1 first."
 }
