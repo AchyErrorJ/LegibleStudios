@@ -17,6 +17,16 @@ from core.document import ArchDocument
 from core.events import event_bus
 from core.config import is_api_enabled, get_config
 
+# Diagnostics
+try:
+    from core.diagnostics import get_diagnostics, log_memory, diag_log
+    HAS_DIAGNOSTICS = True
+except ImportError:
+    HAS_DIAGNOSTICS = False
+    def get_diagnostics(): return None
+    def log_memory(label=""): pass
+    def diag_log(msg): pass
+
 # API backend support
 try:
     from client import APIDocumentAdapter
@@ -31,6 +41,7 @@ _api_server_process = None
 from sheets.sheet_registry import SheetRegistry
 from panels.sheet_manager import SheetManagerPanel
 from panels.chat_panel import ChatPanel
+from panels.materials_panel import MaterialsPanel
 from generators.generator_service import GeneratorService
 
 # Optional viewport imports
@@ -69,6 +80,13 @@ class ArchEngineApplication(QMainWindow):
     def __init__(self, config: Config, parent=None):
         super().__init__(parent)
         self.config = config
+
+        # Initialize diagnostics
+        if HAS_DIAGNOSTICS:
+            diag = get_diagnostics()
+            diag.log("Application starting")
+            diag.log_memory("startup")
+            diag.start_monitoring(interval_seconds=60)  # Log memory every 60s
 
         # Create document - use API backend if enabled
         if HAS_API_BACKEND and is_api_enabled():
@@ -286,6 +304,39 @@ class ArchEngineApplication(QMainWindow):
             self.action_3d_split.setCheckable(True)
             self.action_3d_split.triggered.connect(self._toggle_split_view)
 
+            # Render menu actions
+            self.action_render_realistic = QAction("&Realistic", self)
+            self.action_render_realistic.setCheckable(True)
+            self.action_render_realistic.triggered.connect(lambda: self._set_material_style(0))
+
+            self.action_render_clean = QAction("&Clean", self)
+            self.action_render_clean.setCheckable(True)
+            self.action_render_clean.setChecked(True)
+            self.action_render_clean.triggered.connect(lambda: self._set_material_style(1))
+
+            self.action_render_schematic = QAction("&Schematic", self)
+            self.action_render_schematic.setCheckable(True)
+            self.action_render_schematic.triggered.connect(lambda: self._set_material_style(2))
+
+            self.action_render_blueprint = QAction("&Blueprint", self)
+            self.action_render_blueprint.setCheckable(True)
+            self.action_render_blueprint.triggered.connect(lambda: self._set_material_style(3))
+
+            self.action_shadows = QAction("&Shadows", self)
+            self.action_shadows.setCheckable(True)
+            self.action_shadows.setChecked(True)
+            self.action_shadows.triggered.connect(self._toggle_shadows)
+
+            self.action_ssao = QAction("SS&AO", self)
+            self.action_ssao.setCheckable(True)
+            self.action_ssao.setChecked(True)
+            self.action_ssao.triggered.connect(self._toggle_ssao)
+
+            self.action_bloom = QAction("B&loom", self)
+            self.action_bloom.setCheckable(True)
+            self.action_bloom.setChecked(True)
+            self.action_bloom.triggered.connect(self._toggle_bloom)
+
     def _create_menus(self):
         """Create menu bar."""
         menubar = self.menuBar()
@@ -350,6 +401,64 @@ class ArchEngineApplication(QMainWindow):
             view_3d_menu.addSeparator()
             view_3d_menu.addAction(self.action_toggle_3d_view)
             view_3d_menu.addAction(self.action_3d_split)
+
+            # Render menu
+            render_menu = menubar.addMenu("&Render")
+
+            # Style submenu
+            style_menu = render_menu.addMenu("Material &Style")
+            style_menu.addAction(self.action_render_realistic)
+            style_menu.addAction(self.action_render_clean)
+            style_menu.addAction(self.action_render_schematic)
+            style_menu.addAction(self.action_render_blueprint)
+
+            render_menu.addSeparator()
+
+            # Lighting submenu
+            lighting_menu = render_menu.addMenu("&Lighting")
+            lighting_menu.addAction(self.action_shadows)
+
+            # Post-processing submenu
+            postproc_menu = render_menu.addMenu("&Post-Processing")
+            postproc_menu.addAction(self.action_ssao)
+            postproc_menu.addAction(self.action_bloom)
+
+            render_menu.addSeparator()
+
+            # Quick access to panels
+            self.action_show_3d_controls = QAction("Show 3D &Controls Panel", self)
+            self.action_show_3d_controls.triggered.connect(lambda: self.viewport_panel_dock.show() and self.viewport_panel_dock.raise_())
+            render_menu.addAction(self.action_show_3d_controls)
+
+            self.action_show_materials = QAction("Show &Materials Panel", self)
+            self.action_show_materials.triggered.connect(lambda: self.materials_dock.show() and self.materials_dock.raise_())
+            render_menu.addAction(self.action_show_materials)
+
+        # Debug/Diagnostics menu
+        if HAS_DIAGNOSTICS:
+            debug_menu = menubar.addMenu("&Debug")
+
+            self.action_diag_memory = QAction("Log &Memory Snapshot", self)
+            self.action_diag_memory.triggered.connect(self._diag_log_memory)
+            debug_menu.addAction(self.action_diag_memory)
+
+            self.action_diag_gc = QAction("Force &Garbage Collection", self)
+            self.action_diag_gc.triggered.connect(self._diag_gc_collect)
+            debug_menu.addAction(self.action_diag_gc)
+
+            self.action_diag_leaks = QAction("Find Memory &Leaks", self)
+            self.action_diag_leaks.triggered.connect(self._diag_find_leaks)
+            debug_menu.addAction(self.action_diag_leaks)
+
+            debug_menu.addSeparator()
+
+            self.action_diag_report = QAction("Generate &Report", self)
+            self.action_diag_report.triggered.connect(self._diag_generate_report)
+            debug_menu.addAction(self.action_diag_report)
+
+            self.action_diag_save_report = QAction("&Save Report to File", self)
+            self.action_diag_save_report.triggered.connect(self._diag_save_report)
+            debug_menu.addAction(self.action_diag_save_report)
 
     def _create_toolbars(self):
         """Create toolbars."""
@@ -481,12 +590,52 @@ class ArchEngineApplication(QMainWindow):
         self._generator_service.progress_updated.connect(self.sheet_manager.show_progress)
         self._generator_service.all_generation_completed.connect(self.sheet_manager.hide_progress)
 
-        # Version History dock (right side, tabbed with properties)
-        self.history_dock = QDockWidget("Version History", self)
-        self.history_dock.setObjectName("history_dock")
-        self.history_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea |
-            Qt.DockWidgetArea.RightDockWidgetArea
+        # 3D Viewport setup (actual widget created in _create_central_widget)
+        if HAS_VIEWPORT:
+            # Connect document changes to viewport
+            self.document.document_changed.connect(self._on_document_changed_viewport)
+
+            # Create viewport panel (for gravity/LOD/section controls)
+            self.viewport_panel = ViewportPanel()
+
+            # Create dock for viewport panel
+            self.viewport_panel_dock = QDockWidget("3D Controls", self)
+            self.viewport_panel_dock.setObjectName("viewport_panel_dock")
+            self.viewport_panel_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+            self.viewport_panel_dock.setFeatures(
+                QDockWidget.DockWidgetFeature.DockWidgetMovable |
+                QDockWidget.DockWidgetFeature.DockWidgetFloatable |
+                QDockWidget.DockWidgetFeature.DockWidgetClosable
+            )
+            self.viewport_panel_dock.setWidget(self.viewport_panel)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.viewport_panel_dock)
+            self.window_menu.addAction(self.viewport_panel_dock.toggleViewAction())
+
+            # Create materials panel dock
+            self.materials_panel = MaterialsPanel()
+            self.materials_dock = QDockWidget("Materials", self)
+            self.materials_dock.setObjectName("materials_dock")
+            self.materials_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+            self.materials_dock.setFeatures(
+                QDockWidget.DockWidgetFeature.DockWidgetMovable |
+                QDockWidget.DockWidgetFeature.DockWidgetFloatable |
+                QDockWidget.DockWidgetFeature.DockWidgetClosable
+            )
+            self.materials_dock.setWidget(self.materials_panel)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.materials_dock)
+            self.tabifyDockWidget(self.viewport_panel_dock, self.materials_dock)
+            self.viewport_panel_dock.raise_()  # Show 3D Controls by default
+            self.window_menu.addAction(self.materials_dock.toggleViewAction())
+
+        # =================================================================
+        # Chat Dock - Design conversation (always visible)
+        # ==================================================================
+        self.chat_dock = QDockWidget("Chat", self)
+        self.chat_dock.setObjectName("chat_dock")
+        self.chat_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.chat_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable |
+            QDockWidget.DockWidgetFeature.DockWidgetFloatable
         )
         self.history_panel = VersionHistoryPanel(self.document)
         self.history_panel.setMinimumWidth(250)
@@ -643,7 +792,54 @@ class ArchEngineApplication(QMainWindow):
         self._generator_service.connect_to_document(self.document)
 
     def _on_selection_changed(self, selected_items):
-        """Handle selection change - update pin button state."""
+        """Handle selection change - update pin button state, smart panels, and 3D viewport."""
+        # Sync to 3D viewport (if available and not already syncing)
+        if HAS_VIEWPORT and hasattr(self, 'viewport_3d') and not getattr(self, '_syncing_selection', False):
+            self._syncing_selection = True
+            try:
+                if selected_items:
+                    # Get first selected item and sync to 3D
+                    item = selected_items[0]
+                    item_type = type(item).__name__
+                    if item_type == "WallItem" and hasattr(item, 'wall'):
+                        idx = item.wall.index
+                        if self.viewport_3d.is_initialized:
+                            self.viewport_3d.select_element(idx)
+                    elif item_type == "RoomItem" and hasattr(item, 'room'):
+                        # Rooms are after walls in the element list
+                        room_ids = list(self.document._rooms.keys())
+                        if item.room.id in room_ids:
+                            idx = len(self.document.walls) + room_ids.index(item.room.id)
+                            if self.viewport_3d.is_initialized:
+                                self.viewport_3d.select_element(idx)
+                else:
+                    # Clear 3D selection
+                    if self.viewport_3d.is_initialized:
+                        self.viewport_3d.select_element(-1)
+            finally:
+                self._syncing_selection = False
+
+        # Update smart panel container with selection info
+        if hasattr(self, 'smart_panel_container'):
+            element_ids = []
+            element_types = []
+            for item in selected_items:
+                item_type = type(item).__name__
+                # Extract element ID and type from graphics items
+                if item_type == "WallItem" and hasattr(item, 'wall'):
+                    element_ids.append(str(id(item.wall)))
+                    element_types.append("wall")
+                elif item_type == "DoorItem" and hasattr(item, 'door'):
+                    element_ids.append(str(id(item.door)))
+                    element_types.append("door")
+                elif item_type == "WindowItem" and hasattr(item, 'window'):
+                    element_ids.append(str(id(item.window)))
+                    element_types.append("window")
+                elif item_type == "RoomItem" and hasattr(item, 'room'):
+                    element_ids.append(str(id(item.room)))
+                    element_types.append("room")
+            self.smart_panel_container.update_selection(element_ids, element_types)
+
         if not selected_items:
             self.action_pin.setChecked(False)
             self.action_pin.setEnabled(False)
@@ -672,6 +868,132 @@ class ArchEngineApplication(QMainWindow):
         self.action_pin.blockSignals(True)
         self.action_pin.setChecked(any_pinned)
         self.action_pin.blockSignals(False)
+
+    def _on_3d_element_selected(self, element_index: int):
+        """Handle selection from 3D viewport - sync to 2D plan view."""
+        if getattr(self, '_syncing_selection', False):
+            return  # Prevent infinite loop
+
+        if not hasattr(self, 'plan_view'):
+            return
+
+        self._syncing_selection = True
+        try:
+            # Clear 2D selection first
+            self.plan_view.scene.clearSelection()
+
+            if element_index < 0:
+                return  # Deselection
+
+            # Determine which element type based on index ranges
+            # Order: walls, rooms, doors, windows
+            walls = self.document.walls
+            rooms = list(self.document._rooms.values())
+            doors = self.document.doors
+            windows = self.document.windows
+
+            offset = 0
+
+            # Check if wall
+            if element_index < offset + len(walls):
+                wall_idx = element_index - offset
+                # Find and select wall item in 2D
+                for wall_item in self.plan_view._wall_items:
+                    if hasattr(wall_item, 'wall') and wall_item.wall.index == wall_idx:
+                        wall_item.setSelected(True)
+                        # Scroll to show selected item
+                        self.plan_view.centerOn(wall_item)
+                        break
+                return
+
+            offset += len(walls)
+
+            # Check if room
+            if element_index < offset + len(rooms):
+                room_idx = element_index - offset
+                if room_idx < len(rooms):
+                    room = rooms[room_idx]
+                    # Find and select room item in 2D
+                    for room_item in self.plan_view._room_items:
+                        if hasattr(room_item, 'room') and room_item.room.id == room.id:
+                            room_item.setSelected(True)
+                            self.plan_view.centerOn(room_item)
+                            break
+                return
+
+            offset += len(rooms)
+
+            # Check if door
+            if element_index < offset + len(doors):
+                door_idx = element_index - offset
+                # Find and select door item in 2D
+                for door_item in self.plan_view._door_items:
+                    if hasattr(door_item, 'door') and door_item.door.index == door_idx:
+                        door_item.setSelected(True)
+                        self.plan_view.centerOn(door_item)
+                        break
+                return
+
+            offset += len(doors)
+
+            # Check if window
+            if element_index < offset + len(windows):
+                window_idx = element_index - offset
+                # Find and select window item in 2D
+                for window_item in self.plan_view._window_items:
+                    if hasattr(window_item, 'window') and window_item.window.index == window_idx:
+                        window_item.setSelected(True)
+                        self.plan_view.centerOn(window_item)
+                        break
+
+        finally:
+            self._syncing_selection = False
+
+    def _on_material_assigned(self, element_type: str, material_id: str):
+        """Handle material assignment from materials panel."""
+        print(f"[App] Applying material '{material_id}' to {element_type}")
+
+        if element_type == "selection":
+            # Apply to currently selected walls
+            selected_walls = []
+            for item in self.plan_view.scene().selectedItems():
+                if hasattr(item, 'wall'):
+                    selected_walls.append(item.wall.index)
+
+            if selected_walls:
+                for wall_idx in selected_walls:
+                    self.document.set_wall_material(wall_idx, material_id)
+                print(f"[App] Applied material to {len(selected_walls)} selected walls")
+            else:
+                print("[App] No walls selected")
+
+        elif element_type == "exterior_wall":
+            self.document.set_walls_material_by_category("exterior", material_id)
+            print("[App] Applied material to all exterior walls")
+
+        elif element_type == "interior_wall":
+            self.document.set_walls_material_by_category("interior", material_id)
+            print("[App] Applied material to all interior walls")
+
+        # Refresh 3D viewport
+        if hasattr(self, 'viewport_3d'):
+            self._on_document_changed_vulkan()
+
+    def _on_tool_changed(self, tool_name: str):
+        """Handle tool change - update smart panels task state."""
+        if hasattr(self, 'smart_panel_container'):
+            # Map tool names to task types
+            # Tools like 'wall', 'door', 'window' indicate active drawing/placement
+            # The 'select' tool means idle state
+            task_map = {
+                'select': 'idle',
+                'wall': 'dragging_wall',
+                'door': 'dragging_opening',
+                'window': 'dragging_opening',
+                'room': 'dragging_blob',
+            }
+            task = task_map.get(tool_name.lower(), 'idle')
+            self.smart_panel_container.update_task(task)
 
     def _restore_state(self):
         """Restore window geometry and state."""
@@ -832,6 +1154,112 @@ class ArchEngineApplication(QMainWindow):
             self.status_bar.showMessage(f"Snap {snap_type.title()}: {'On' if new_value else 'Off'}", 2000)
 
     # =========================================================================
+    # Render Settings
+    # =========================================================================
+
+    def _set_material_style(self, style: int):
+        """Set material rendering style (0=Realistic, 1=Clean, 2=Schematic, 3=Blueprint)."""
+        if not HAS_VIEWPORT:
+            return
+
+        # Update action check states
+        self.action_render_realistic.setChecked(style == 0)
+        self.action_render_clean.setChecked(style == 1)
+        self.action_render_schematic.setChecked(style == 2)
+        self.action_render_blueprint.setChecked(style == 3)
+
+        # Apply to viewport
+        viewport = self._get_active_viewport()
+        if viewport and viewport.is_initialized:
+            viewport.set_material_style(style)
+
+        # Update viewport panel if available
+        if hasattr(self, 'viewport_panel'):
+            self.viewport_panel.set_material_style(style)
+
+        style_names = ["Realistic", "Clean", "Schematic", "Blueprint"]
+        self.status_bar.showMessage(f"Material Style: {style_names[style]}", 2000)
+
+    def _toggle_shadows(self, checked: bool):
+        """Toggle shadow rendering."""
+        if not HAS_VIEWPORT:
+            return
+
+        viewport = self._get_active_viewport()
+        if viewport and viewport.is_initialized:
+            viewport.set_shadows_enabled(checked)
+
+        self.status_bar.showMessage(f"Shadows: {'On' if checked else 'Off'}", 2000)
+
+    def _toggle_ssao(self, checked: bool):
+        """Toggle screen-space ambient occlusion."""
+        if not HAS_VIEWPORT:
+            return
+
+        viewport = self._get_active_viewport()
+        if viewport and viewport.is_initialized:
+            viewport.set_ssao_enabled(checked)
+
+        self.status_bar.showMessage(f"SSAO: {'On' if checked else 'Off'}", 2000)
+
+    def _toggle_bloom(self, checked: bool):
+        """Toggle bloom effect."""
+        if not HAS_VIEWPORT:
+            return
+
+        viewport = self._get_active_viewport()
+        if viewport and viewport.is_initialized:
+            viewport.set_bloom_enabled(checked)
+
+        self.status_bar.showMessage(f"Bloom: {'On' if checked else 'Off'}", 2000)
+
+    # =========================================================================
+    # Diagnostics
+    # =========================================================================
+
+    def _diag_log_memory(self):
+        """Log a memory snapshot."""
+        if HAS_DIAGNOSTICS:
+            diag = get_diagnostics()
+            snapshot = diag.log_memory("manual")
+            self.status_bar.showMessage(
+                f"Memory: RSS={snapshot.rss_mb:.1f}MB, Objects={snapshot.gc_objects}", 3000
+            )
+
+    def _diag_gc_collect(self):
+        """Force garbage collection."""
+        if HAS_DIAGNOSTICS:
+            diag = get_diagnostics()
+            freed = diag.gc_collect()
+            self.status_bar.showMessage(f"GC freed {freed} objects", 3000)
+
+    def _diag_find_leaks(self):
+        """Find potential memory leaks."""
+        if HAS_DIAGNOSTICS:
+            diag = get_diagnostics()
+            leaks = diag.find_leaks()
+            # Show top 5 in status bar
+            top = list(leaks.items())[:5]
+            msg = ", ".join(f"{k}:{v}" for k, v in top)
+            self.status_bar.showMessage(f"Top objects: {msg}", 5000)
+
+    def _diag_generate_report(self):
+        """Generate and print diagnostic report."""
+        if HAS_DIAGNOSTICS:
+            diag = get_diagnostics()
+            report = diag.generate_report()
+            print(report)
+            self.status_bar.showMessage("Diagnostic report printed to console", 3000)
+
+    def _diag_save_report(self):
+        """Save diagnostic report to file."""
+        if HAS_DIAGNOSTICS:
+            diag = get_diagnostics()
+            path = diag.save_report()
+            self.status_bar.showMessage(f"Report saved to {path}", 3000)
+            QMessageBox.information(self, "Diagnostic Report", f"Report saved to:\n{path}")
+
+    # =========================================================================
     # Pin/LLM Operations
     # =========================================================================
 
@@ -947,9 +1375,13 @@ class ArchEngineApplication(QMainWindow):
         if not data:
             return
 
+        print(f"[App] Viewport update: {len(data.get('walls_batch', []))} walls, {len(data.get('rooms', []))} rooms", flush=True)
+
         # Update dock viewport
         if hasattr(self, 'viewport_3d') and self.viewport_3d.is_initialized:
+            print("[App] Calling viewport_3d.load_json...", flush=True)
             self.viewport_3d.load_json(data)
+            print("[App] viewport_3d.load_json returned", flush=True)
 
         # Update split viewport if in split mode
         if self._split_viewport and self._split_viewport.is_initialized:
@@ -958,6 +1390,16 @@ class ArchEngineApplication(QMainWindow):
     def _on_viewport_initialized(self):
         """Handle viewport initialization complete."""
         self.status_bar.showMessage("3D Viewport ready", 3000)
+
+        # Connect document for Python-side picking
+        if hasattr(self, 'viewport_3d') and self.viewport_3d.is_initialized:
+            self.viewport_3d.set_document(self.document)
+            # Connect 3D selection to sync to 2D
+            self.viewport_3d.element_selected.connect(self._on_3d_element_selected)
+        if self._split_viewport and self._split_viewport.is_initialized:
+            self._split_viewport.set_document(self.document)
+            self._split_viewport.element_selected.connect(self._on_3d_element_selected)
+
         # Load current document data if available
         data = self.document.get_data() if hasattr(self.document, 'get_data') else self.document._data
         if data:
@@ -970,14 +1412,235 @@ class ArchEngineApplication(QMainWindow):
         # Connect viewport panel to the viewport widget
         if hasattr(self, 'viewport_panel') and hasattr(self, 'viewport_3d'):
             self.viewport_panel.set_viewport(self.viewport_3d)
+            # Connect manual LOD changes (shift+scroll) from 3D viewport
+            self.viewport_3d.lod_level_changed.connect(
+                self.viewport_panel.set_lod_level
+            )
+            # Connect section changes from viewport (interactive drag)
+            self.viewport_3d.section_changed.connect(
+                self.viewport_panel.update_from_section
+            )
+
+        # Connect materials panel to the viewport widget
+        if hasattr(self, 'materials_panel') and hasattr(self, 'viewport_3d'):
+            self.materials_panel.set_viewport(self.viewport_3d)
+            self.materials_panel.set_document(self.document)
+            self.materials_panel.material_assigned.connect(self._on_material_assigned)
+
+            # Connect LOD changes from 2D plan view as well
+            if hasattr(self, 'plan_view'):
+                self.plan_view.lod_level_changed.connect(
+                    self.viewport_panel.set_lod_level
+                )
+
+            # Connect to smart panel container if available
+            if hasattr(self, 'smart_panel_container'):
+                # Connect gravity changes
+                self.viewport_panel.gravity_changed.connect(
+                    self.smart_panel_container.update_gravity
+                )
+                # Connect LOD changes
+                self.viewport_panel.lod_changed.connect(
+                    lambda level, trans: self.smart_panel_container.update_lod(level, trans)
+                )
+                # Connect hover-to-center: when user hovers a dimmed panel,
+                # auto-center gravity so all panels become accessible
+                self.smart_panel_container.request_gravity_center.connect(
+                    self._on_request_gravity_center
+                )
+
+                # Connect hover-to-LOD: switch to the LOD the panel needs
+                self.smart_panel_container.request_lod_change.connect(
+                    self._on_request_lod_change
+                )
+
+            # Connect floating navigation overlay (tetrahedron) to viewport + panels
+            if hasattr(self.viewport_3d, 'gravity_changed'):
+                self.viewport_3d.gravity_changed.connect(
+                    self.viewport_panel.set_gravity_weights
+                )
+                if hasattr(self, 'smart_panel_container'):
+                    self.viewport_3d.gravity_changed.connect(
+                        self.smart_panel_container.update_gravity
+                    )
+            # Connect tetrahedron mode changes to 2D plan view
+            if hasattr(self.viewport_3d, 'mode_changed'):
+                self.viewport_3d.mode_changed.connect(
+                    lambda mode: self.plan_view.set_view_mode(mode) if hasattr(self, 'plan_view') else None
+                )
+            if hasattr(self.viewport_3d, 'lod_changed'):
+                self.viewport_3d.lod_changed.connect(
+                    self.viewport_panel.set_lod_level
+                )
+                # Also update 2D plan view LOD
+                self.viewport_3d.lod_changed.connect(
+                    lambda level, trans: self.plan_view.set_lod_level(level) if hasattr(self, 'plan_view') else None
+                )
+                if hasattr(self, 'smart_panel_container'):
+                    self.viewport_3d.lod_changed.connect(
+                        lambda level, trans: self.smart_panel_container.update_lod(level, trans)
+                    )
+
+            # Keep overlay in sync if controls change elsewhere
+            if hasattr(self.viewport_3d, 'set_nav_gravity'):
+                self.viewport_panel.gravity_changed.connect(
+                    self.viewport_3d.set_nav_gravity
+                )
+            if hasattr(self.viewport_3d, 'set_nav_lod'):
+                self.viewport_panel.lod_changed.connect(
+                    lambda level, trans: self.viewport_3d.set_nav_lod(level)
+                )
+
+    def _on_request_gravity_center(self):
+        """Handle request to center gravity (from hovering a panel)."""
+        if hasattr(self, 'viewport_panel'):
+            self.viewport_panel.center_gravity()
+
+    def _on_request_lod_change(self, lod_level: int):
+        """Handle request to change LOD (from hovering a panel)."""
+        self._global_lod_level = lod_level
+        if hasattr(self, 'viewport_panel'):
+            self.viewport_panel.set_lod_level(lod_level)
+        # Show feedback
+        lod_names = {1: "Topology", 2: "Walls", 3: "Fixtures", 4: "Viewports", 5: "Documentation"}
+        self.status_bar.showMessage(
+            f"LOD {lod_level}: {lod_names.get(lod_level, '')} (panel hover)",
+            1500
+        )
 
     def _on_viewport_load_complete(self, element_count: int):
         """Handle viewport loaded building data."""
         self.status_bar.showMessage(f"3D View: {element_count} elements", 3000)
 
+    def _on_rooms_loaded(self, rooms: list):
+        """Handle rooms loaded from 3D renderer - sync to document."""
+        if not rooms:
+            return
+
+        # Skip sync if we're in the middle of wall generation (preserves user edits)
+        if getattr(self, '_syncing_walls', False):
+            print(f"[App] Skipping room sync during wall generation")
+            return
+
+        print(f"[App] Syncing {len(rooms)} rooms from renderer to document")
+
+        # Update document with rooms from renderer
+        for room_data in rooms:
+            room_id = room_data['id']
+            bounds = room_data['bounds']
+
+            # Generate vertices from bounds
+            x, y = bounds['x'], bounds['y']
+            w, h = bounds['width'], bounds['height']
+            vertices = [
+                [x, y],
+                [x + w, y],
+                [x + w, y + h],
+                [x, y + h]
+            ]
+
+            # Check if room exists in document
+            if room_id in self.document._rooms:
+                # Update existing room
+                room = self.document._rooms[room_id]
+                room.bounds = bounds
+                room.vertices = vertices
+                room.center = room_data['center']
+                room.name = room_data['name']
+                room.room_type = room_data['room_type']
+                room.area = room_data['area']
+            else:
+                # Add new room
+                from core.document import Room
+                room = Room(
+                    id=room_id,
+                    name=room_data['name'],
+                    room_type=room_data['room_type'],
+                    bounds=bounds,
+                    area=room_data['area'],
+                    center=room_data['center'],
+                    vertices=vertices
+                )
+                self.document._rooms[room_id] = room
+
+        # Auto-bind walls to rooms
+        self.document._auto_bind_walls_to_rooms()
+
+        # Recalculate room areas from vertices
+        self.document.recalculate_room_areas()
+
+        # Detect room adjacencies
+        self.document.detect_room_adjacencies()
+
+        # Refresh plan view
+        if hasattr(self, 'plan_view'):
+            self.plan_view.refresh()
+
+        self.status_bar.showMessage(f"Synced {len(rooms)} rooms from 3D renderer", 3000)
+
     def _on_viewport_error(self, error: str):
         """Handle viewport error."""
         self.status_bar.showMessage(f"3D Viewport Error: {error}", 5000)
+
+    def _on_sync_walls_to_connections(self):
+        """Generate walls from room edges based on connections."""
+        if not self.document:
+            self.status_bar.showMessage("No document loaded", 3000)
+            return
+
+        # Prevent room positions from being reset during wall sync
+        self._syncing_walls = True
+
+        try:
+            print("[App] Starting wall generation...", flush=True)
+
+            # Generate reference planes from building extents
+            self.document.generate_reference_planes_from_extents()
+
+            # Generate walls from room edges (with exterior wall merging)
+            exterior, interior, openings = self.document.generate_walls_from_rooms()
+            print(f"[App] Wall generation complete: {exterior} ext, {interior} int, {openings} open", flush=True)
+
+            # Snap exterior walls to reference planes
+            snapped = self.document.snap_exterior_walls_to_planes()
+            print(f"[App] Snap complete: {snapped} endpoints", flush=True)
+
+            # Switch to LOD 2 to show walls
+            self._global_lod_level = 2
+            if hasattr(self, 'plan_view'):
+                self.plan_view.set_lod_level(2)
+            print("[App] Switched to LOD 2", flush=True)
+
+            # Refresh plan view
+            print("[App] Refreshing plan view...", flush=True)
+            if hasattr(self, 'plan_view'):
+                self.plan_view.refresh()
+            print("[App] Plan view refreshed", flush=True)
+
+            # Force Qt to process events before continuing
+            print("[App] Processing events...", flush=True)
+            QApplication.processEvents()
+            print("[App] Events processed", flush=True)
+
+            # 3D view auto-reloads via document_changed signal
+
+            print("[App] Setting status bar message...", flush=True)
+            self.status_bar.showMessage(
+                f"Walls: {exterior} ext, {interior} int | Ref planes: {len(self.document.reference_planes)} | Snapped: {snapped}", 5000
+            )
+
+            # Clear syncing flag after viewport update completes (250ms > 150ms throttle)
+            QTimer.singleShot(250, self._clear_syncing_walls)
+        except Exception as e:
+            print(f"[App] Error in wall sync: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            self.status_bar.showMessage(f"Wall sync error: {e}", 5000)
+            self._syncing_walls = False
+
+    def _clear_syncing_walls(self):
+        """Clear the wall syncing flag (called after viewport update delay)."""
+        self._syncing_walls = False
 
     def _show_status_message(self, message: str, timeout: int):
         """Show message in status bar."""
@@ -1105,6 +1768,15 @@ class ArchEngineApplication(QMainWindow):
         if self._check_save():
             self._save_state()
             self.config.save()
+
+            # Generate diagnostic report on shutdown
+            if HAS_DIAGNOSTICS:
+                diag = get_diagnostics()
+                diag.log_memory("shutdown")
+                diag.stop_monitoring()
+                report = diag.generate_report()
+                print("[App] Diagnostic report saved to logs/")
+
             # Stop LiveSync server
             if self._livesync_server:
                 self._livesync_server.stop()
