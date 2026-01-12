@@ -16,6 +16,7 @@
 
 #include "types.hpp"
 #include <set>
+#include <functional>
 #include "vulkan_context.hpp"
 #include "pipeline.hpp"
 #include "mesh.hpp"
@@ -666,6 +667,44 @@ public:
      */
     void setNormalStrength(f32 strength) { m_normalStrength = strength; }
     f32 getNormalStrength() const { return m_normalStrength; }
+
+    // Material adjustment parameters
+    void setMaterialBrightness(f32 v) { m_materialBrightness = v; }
+    f32 getMaterialBrightness() const { return m_materialBrightness; }
+    void setMaterialContrast(f32 v) { m_materialContrast = v; }
+    f32 getMaterialContrast() const { return m_materialContrast; }
+    void setMaterialSaturation(f32 v) { m_materialSaturation = v; }
+    f32 getMaterialSaturation() const { return m_materialSaturation; }
+    void setMaterialRoughnessOffset(f32 v) { m_materialRoughnessOffset = v; }
+    f32 getMaterialRoughnessOffset() const { return m_materialRoughnessOffset; }
+    void setMaterialMetallicOffset(f32 v) { m_materialMetallicOffset = v; }
+    f32 getMaterialMetallicOffset() const { return m_materialMetallicOffset; }
+    void setMaterialAOStrength(f32 v) { m_materialAOStrength = v; }
+    f32 getMaterialAOStrength() const { return m_materialAOStrength; }
+    void setMaterialTint(vec3 v) { m_materialTint = v; }
+    vec3 getMaterialTint() const { return m_materialTint; }
+    /// @}
+
+    /// @name Tessellation Settings
+    /// @{
+
+    /** @brief Enable or disable tessellation-based displacement mapping */
+    void setTessellationEnabled(bool enabled) { m_tessellationEnabled = enabled; }
+    bool getTessellationEnabled() const { return m_tessellationEnabled; }
+
+    /**
+     * @brief Set tessellation subdivision level
+     * @param level Subdivision level (1-64, higher = more detail)
+     */
+    void setTessellationLevel(f32 level) { m_tessellationLevel = glm::clamp(level, 1.0f, 128.0f); }
+    f32 getTessellationLevel() const { return m_tessellationLevel; }
+
+    /**
+     * @brief Set displacement scale for height map
+     * @param scale Displacement amount (0 = flat, higher = more displacement)
+     */
+    void setDisplacementScale(f32 scale) { m_displacementScale = scale; }
+    f32 getDisplacementScale() const { return m_displacementScale; }
     /// @}
 
     /// @name Material Style
@@ -731,8 +770,69 @@ public:
     void onResize();
     /// @}
 
+    /// @name High-Resolution Rendering
+    /// @{
+
+    /**
+     * @brief Render the current scene to a high-resolution offscreen buffer
+     * @param elements Structural elements to render
+     * @param building Building data for visualization
+     * @param width Target width in pixels
+     * @param height Target height in pixels
+     * @param samples Number of samples for anti-aliasing accumulation
+     * @param progressCallback Optional callback for progress updates (0.0 - 1.0)
+     * @return true if rendering succeeded
+     *
+     * This function renders the scene to an offscreen buffer at the specified
+     * resolution. For multi-sample renders, it accumulates multiple frames with
+     * jittered camera positions for high-quality anti-aliasing.
+     */
+    bool renderHighRes(
+        const std::vector<StructuralElement>& elements,
+        const Building& building,
+        u32 width,
+        u32 height,
+        int samples = 1,
+        float brightness = 1.3f,
+        std::function<void(float)> progressCallback = nullptr
+    );
+
+    /**
+     * @brief Get the high-res render result as raw pixel data
+     * @return Vector of RGBA8 pixel data (4 bytes per pixel)
+     *
+     * Call after renderHighRes() to retrieve the rendered image.
+     * The data is in row-major order, top-to-bottom, left-to-right.
+     */
+    const std::vector<u8>& getHighResPixels() const { return m_highResPixels; }
+
+    /**
+     * @brief Get high-res render width
+     */
+    u32 getHighResWidth() const { return m_highResWidth; }
+
+    /**
+     * @brief Get high-res render height
+     */
+    u32 getHighResHeight() const { return m_highResHeight; }
+
+    /**
+     * @brief Save the high-res render to a PNG file
+     * @param filepath Output file path
+     * @return true if save succeeded
+     */
+    bool saveHighResPNG(const std::string& filepath);
+
+    /**
+     * @brief Save the high-res render to an EXR (HDR) file
+     * @param filepath Output file path
+     * @return true if save succeeded
+     */
+    bool saveHighResEXR(const std::string& filepath);
+    /// @}
+
 private:
-    static constexpr u32 kMaxMaterialSets = 64;
+    static constexpr u32 kMaxMaterialSets = 128;
 
     void createRenderPass();
     void createFramebuffers();
@@ -803,6 +903,13 @@ private:
     // HDR pipelines (for post-processing path - no MSAA, HDR render pass)
     std::unique_ptr<Pipeline> m_hdrPipeline;
     std::unique_ptr<Pipeline> m_hdrWireframePipeline;
+    std::unique_ptr<Pipeline> m_hdrTransparentPipeline;  // For glass/transparent in HDR mode
+
+    // Tessellation pipelines (with displacement mapping)
+    std::unique_ptr<Pipeline> m_tessPipeline;
+    std::unique_ptr<Pipeline> m_tessWireframePipeline;
+    std::unique_ptr<Pipeline> m_hdrTessPipeline;
+    std::unique_ptr<Pipeline> m_hdrTessWireframePipeline;
 
     // Sky pipeline
     VkPipelineLayout m_skyPipelineLayout = VK_NULL_HANDLE;
@@ -835,6 +942,7 @@ private:
     vec3 m_lightDirection = glm::normalize(vec3(-0.5f, -1.0f, -0.3f));
     f32 m_shadowBias = 0.02f;  // Adjustable shadow bias
     bool m_outputLinearHDR = false;  // True when rendering to HDR buffer (skip in-shader tonemapping)
+    VkDescriptorSet m_shadowHeightMapDescriptorSet = VK_NULL_HANDLE;  // For tessellated shadows
 
     // Environment mapping
     std::unique_ptr<EnvironmentMap> m_envMap;
@@ -876,9 +984,41 @@ private:
     f32 m_roofEmission = 0.0f;
     f32 m_materialUVScale = 1.0f;
     f32 m_normalStrength = 1.0f;
+    f32 m_materialBrightness = 0.0f;
+    f32 m_materialContrast = 1.0f;
+    f32 m_materialSaturation = 1.0f;
+    f32 m_materialRoughnessOffset = 0.0f;
+    f32 m_materialMetallicOffset = 0.0f;
+    f32 m_materialAOStrength = 1.0f;
+    vec3 m_materialTint = vec3(1.0f);
+
+    // Tessellation settings
+    bool m_tessellationEnabled = false;
+    f32 m_tessellationLevel = 8.0f;
+    f32 m_displacementScale = 0.1f;
 
     // Stats
     RenderStats m_stats;
+
+    // High-res rendering resources
+    VkImage m_highResImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_highResMemory = VK_NULL_HANDLE;
+    VkImageView m_highResView = VK_NULL_HANDLE;
+    VkImage m_highResDepthImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_highResDepthMemory = VK_NULL_HANDLE;
+    VkImageView m_highResDepthView = VK_NULL_HANDLE;
+    VkFramebuffer m_highResFramebuffer = VK_NULL_HANDLE;
+    VkRenderPass m_highResRenderPass = VK_NULL_HANDLE;
+    std::unique_ptr<Pipeline> m_highResPipeline;  // Single-sample pipeline for high-res
+    std::unique_ptr<Pipeline> m_highResTransparentPipeline;  // Transparent pipeline for high-res
+    std::vector<u8> m_highResPixels;
+    std::vector<f32> m_highResHDRPixels;  // For EXR export
+    u32 m_highResWidth = 0;
+    u32 m_highResHeight = 0;
+
+    void createHighResResources(u32 width, u32 height);
+    void cleanupHighResResources();
+    void copyHighResImageToBuffer();
 };
 
 } // namespace arch

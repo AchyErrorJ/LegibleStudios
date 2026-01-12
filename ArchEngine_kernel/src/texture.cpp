@@ -2,9 +2,13 @@
 #include <stdexcept>
 #include <iostream>
 #include <filesystem>
+#include <fstream>
 #include <cstring>
 
 #include "stb_image.h"
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 namespace arch {
 
@@ -336,6 +340,123 @@ void MaterialLibrary::createBuiltinMaterials() {
     createSolidMaterial("shingle", vec3(0.25f, 0.25f, 0.28f), 0.8f, 0.0f);
 
     std::cout << "[MaterialLibrary] Created " << m_materials.size() << " builtin materials" << std::endl;
+}
+
+void MaterialLibrary::loadMaterialSettings(const std::string& settingsPath) {
+    namespace fs = std::filesystem;
+    if (!fs::exists(settingsPath)) return;
+
+    try {
+        std::ifstream file(settingsPath);
+        json data = json::parse(file);
+
+        if (!data.contains("materials")) return;
+
+        for (auto& [name, settings] : data["materials"].items()) {
+            auto it = m_materials.find(name);
+            if (it == m_materials.end()) continue;
+
+            Material* mat = it->second.get();
+
+            if (settings.contains("uvScale")) {
+                auto& uv = settings["uvScale"];
+                if (uv.is_array() && uv.size() >= 2) {
+                    mat->uvScale = vec2(uv[0].get<float>(), uv[1].get<float>());
+                } else if (uv.is_number()) {
+                    float s = uv.get<float>();
+                    mat->uvScale = vec2(s, s);
+                }
+            }
+            if (settings.contains("brightness"))
+                mat->brightness = settings["brightness"].get<float>();
+            if (settings.contains("contrast"))
+                mat->contrast = settings["contrast"].get<float>();
+            if (settings.contains("saturation"))
+                mat->saturation = settings["saturation"].get<float>();
+            if (settings.contains("normalStrength"))
+                mat->normalStrength = settings["normalStrength"].get<float>();
+            if (settings.contains("roughnessOffset"))
+                mat->roughnessOffset = settings["roughnessOffset"].get<float>();
+            if (settings.contains("metallicOffset"))
+                mat->metallicOffset = settings["metallicOffset"].get<float>();
+            if (settings.contains("aoStrength"))
+                mat->aoStrength = settings["aoStrength"].get<float>();
+            if (settings.contains("tint")) {
+                auto& t = settings["tint"];
+                if (t.is_array() && t.size() >= 3) {
+                    mat->tint = vec3(t[0].get<float>(), t[1].get<float>(), t[2].get<float>());
+                }
+            }
+        }
+        std::cout << "[MaterialLibrary] Loaded material settings from " << settingsPath << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[MaterialLibrary] Error loading settings: " << e.what() << std::endl;
+    }
+}
+
+void MaterialLibrary::saveMaterialSettings(const std::string& settingsPath) {
+    json data;
+    data["materials"] = json::object();
+
+    for (const auto& [name, mat] : m_materials) {
+        json settings;
+        settings["uvScale"] = {mat->uvScale.x, mat->uvScale.y};
+        settings["brightness"] = mat->brightness;
+        settings["contrast"] = mat->contrast;
+        settings["saturation"] = mat->saturation;
+        settings["normalStrength"] = mat->normalStrength;
+        settings["roughnessOffset"] = mat->roughnessOffset;
+        settings["metallicOffset"] = mat->metallicOffset;
+        settings["aoStrength"] = mat->aoStrength;
+        settings["tint"] = {mat->tint.r, mat->tint.g, mat->tint.b};
+        data["materials"][name] = settings;
+    }
+
+    try {
+        std::ofstream file(settingsPath);
+        file << data.dump(2);
+        std::cout << "[MaterialLibrary] Saved material settings to " << settingsPath << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[MaterialLibrary] Error saving settings: " << e.what() << std::endl;
+    }
+}
+
+void MaterialLibrary::saveMaterialSettings(Material* material, const std::string& settingsPath) {
+    namespace fs = std::filesystem;
+    json data;
+
+    // Load existing settings if file exists
+    if (fs::exists(settingsPath)) {
+        try {
+            std::ifstream file(settingsPath);
+            data = json::parse(file);
+        } catch (...) {
+            data = json::object();
+        }
+    }
+
+    if (!data.contains("materials")) {
+        data["materials"] = json::object();
+    }
+
+    json settings;
+    settings["uvScale"] = {material->uvScale.x, material->uvScale.y};
+    settings["brightness"] = material->brightness;
+    settings["contrast"] = material->contrast;
+    settings["saturation"] = material->saturation;
+    settings["normalStrength"] = material->normalStrength;
+    settings["roughnessOffset"] = material->roughnessOffset;
+    settings["metallicOffset"] = material->metallicOffset;
+    settings["aoStrength"] = material->aoStrength;
+    settings["tint"] = {material->tint.r, material->tint.g, material->tint.b};
+    data["materials"][material->name] = settings;
+
+    try {
+        std::ofstream file(settingsPath);
+        file << data.dump(2);
+    } catch (const std::exception& e) {
+        std::cerr << "[MaterialLibrary] Error saving material: " << e.what() << std::endl;
+    }
 }
 
 } // namespace arch

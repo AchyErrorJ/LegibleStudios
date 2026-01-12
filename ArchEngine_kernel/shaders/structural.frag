@@ -24,10 +24,12 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     uint enableClipping;
     uint enableShadows;
     uint outputLinearHDR;  // If true, output linear HDR (tonemapping done in composite pass)
-    uint _padding0;
+    float exposure;        // Exposure multiplier for tonemapping
     uint _padding1;
     uint _padding2;
-    vec4 materialParams;
+    vec4 materialParams;    // x = UV scale, y = normal strength, z = brightness, w = contrast
+    vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
+    vec4 materialTint;      // RGB tint, w = unused
 } ubo;
 
 // Shadow map sampler with depth comparison
@@ -241,8 +243,35 @@ void main() {
     float materialAO = fragMaterial.z * texAO;
     float emission = fragMaterial.w;
 
+    // Apply material adjustments from UBO
+    float brightness = ubo.materialParams.z;
+    float contrast = ubo.materialParams.w;
+    float saturation = ubo.materialParams2.x;
+    float roughnessOffset = ubo.materialParams2.y;
+    float metallicOffset = ubo.materialParams2.z;
+    float aoStrength = ubo.materialParams2.w;
+    vec3 tint = ubo.materialTint.rgb;
+
+    // Apply roughness/metallic/AO offsets
+    roughness = clamp(roughness + roughnessOffset, 0.04, 1.0);
+    metallic = clamp(metallic + metallicOffset, 0.0, 1.0);
+    materialAO = clamp(materialAO * aoStrength, 0.0, 1.0);
+
     // Albedo: multiply texture by vertex color for tinting capability
     vec3 albedo = texAlbedo * fragColor;
+
+    // Apply brightness, contrast, saturation, and tint adjustments
+    // Brightness: add to color
+    albedo += vec3(brightness);
+    // Contrast: scale around 0.5
+    albedo = (albedo - 0.5) * contrast + 0.5;
+    // Saturation: lerp toward grayscale
+    float gray = dot(albedo, vec3(0.299, 0.587, 0.114));
+    albedo = mix(vec3(gray), albedo, saturation);
+    // Tint: multiply
+    albedo *= tint;
+    // Clamp to valid range
+    albedo = clamp(albedo, 0.0, 1.0);
 
     // Use stress coloring if stress is significant (override textures)
     if (fragStress > 0.01) {
@@ -341,9 +370,20 @@ void main() {
         return;
     }
 
-    // Direct rendering path: apply tonemapping and gamma correction here
-    // Tone mapping (Reinhard)
-    result = result / (result + vec3(1.0));
+    // Direct rendering path: apply exposure, tonemapping and gamma correction here
+    // Apply exposure
+    result = result * ubo.exposure;
+
+    // ACES Filmic Tonemapping (matches composite pass for consistent look)
+    // https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
+    {
+        float a = 2.51;
+        float b = 0.03;
+        float c = 2.43;
+        float d = 0.59;
+        float e = 0.14;
+        result = clamp((result * (a * result + b)) / (result * (c * result + d) + e), 0.0, 1.0);
+    }
 
     // Gamma correction
     result = pow(result, vec3(1.0 / 2.2));

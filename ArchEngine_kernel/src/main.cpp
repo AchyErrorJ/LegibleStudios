@@ -74,6 +74,19 @@ static std::string buildStopRenderServerCommand() {
     return cmd.str();
 }
 
+static std::string buildMaterialUpscaleCommand(const ImGuiLayer::MaterialUpscaleRequest& req) {
+    std::ostringstream cmd;
+    const char* methodNames[] = { "realesrgan", "simple" };
+    cmd << quoteShellArg(req.pythonExe)
+        << " " << quoteShellArg(req.scriptPath)
+        << " --upscale " << quoteShellArg(req.materialName)
+        << " --scale " << req.scale
+        << " --method " << methodNames[req.method]
+        << " --server " << quoteShellArg(req.serverUrl)
+        << " --path " << quoteShellArg(req.materialRoot);
+    return cmd.str();
+}
+
 static std::string detectMaterialRoot() {
     namespace fs = std::filesystem;
     const std::vector<std::string> candidates = {
@@ -125,9 +138,9 @@ void getElementBounds(const StructuralElement& elem, vec3& minB, vec3& maxB) {
             minB = glm::min(minB, v);
             maxB = glm::max(maxB, v);
         }
-        // Add small padding for easier selection
-        minB -= vec3(0.5f);
-        maxB += vec3(0.5f);
+        // Minimal padding for mesh elements (0.1ft instead of 0.5ft)
+        minB -= vec3(0.1f);
+        maxB += vec3(0.1f);
         return;
     }
 
@@ -138,6 +151,12 @@ void getElementBounds(const StructuralElement& elem, vec3& minB, vec3& maxB) {
     float hd = elem.depth / 2.0f;
     minB -= vec3(hw, 0, hd);
     maxB += vec3(hw, 0, hd);
+
+    // Ensure minimum bounds for thin elements (like walls viewed edge-on)
+    vec3 size = maxB - minB;
+    if (size.x < 0.2f) { minB.x -= 0.1f; maxB.x += 0.1f; }
+    if (size.y < 0.2f) { minB.y -= 0.1f; maxB.y += 0.1f; }
+    if (size.z < 0.2f) { minB.z -= 0.1f; maxB.z += 0.1f; }
 }
 
 // ============================================================================
@@ -358,8 +377,15 @@ int main(int argc, char* argv[]) {
         // Create ImGui layer
         ImGuiLayer imgui(context, window.getHandle(), renderer.getRenderPass());
         std::atomic<bool> materialGenInFlight(false);
+        std::atomic<bool> materialUpscaleInFlight(false);
+        std::atomic<bool> heightGenInFlight(false);
+        std::atomic<bool> highResRenderInFlight(false);
         std::mutex materialGenMutex;
         std::string materialGenStatus = "Idle";
+        std::string heightGenStatus = "Idle";
+        std::string materialUpscaleStatus = "Idle";
+        std::string highResRenderStatus = "Idle";
+        float highResRenderProgress = 0.0f;
 
         // Load sample buildings
         std::vector<Building> buildings = {
@@ -961,6 +987,9 @@ int main(int argc, char* argv[]) {
                 {
                     std::lock_guard<std::mutex> lock(materialGenMutex);
                     imgui.setMaterialGenerationState(materialGenInFlight.load(), materialGenStatus);
+                    imgui.setMaterialUpscaleState(materialUpscaleInFlight.load(), materialUpscaleStatus);
+                    imgui.setHeightGenState(heightGenInFlight.load(), heightGenStatus);
+                    imgui.setHighResRenderState(highResRenderInFlight.load(), highResRenderStatus, highResRenderProgress);
                 }
                 imgui.drawRenderSettingsPanel(renderer, showRenderSettings);
 
@@ -1128,34 +1157,48 @@ int main(int argc, char* argv[]) {
                     vec3 rayDir = glm::normalize(vec3(farPoint) - vec3(nearPoint));
 
                     auto& elements = buildings[currentBuilding].elements;
-                    int hitIndex = -1;
-                    float bestT = std::numeric_limits<float>::max();
+                    const auto& selected = imgui.getSelectedElements();
+
+                    // Collect all hits under cursor
+                    std::vector<std::pair<int, float>> materialHits;
                     for (size_t i = 0; i < elements.size(); i++) {
                         vec3 minB, maxB;
                         getElementBounds(elements[i], minB, maxB);
                         float t;
                         if (rayBoxIntersect(rayOrigin, rayDir, minB, maxB, t)) {
-                            if (t < bestT) {
-                                bestT = t;
-                                hitIndex = static_cast<int>(i);
+                            materialHits.push_back({static_cast<int>(i), t});
+                        }
+                    }
+
+                    int hitIndex = -1;
+                    if (!materialHits.empty()) {
+                        // First priority: if a selected element is under cursor, use it
+                        for (const auto& hit : materialHits) {
+                            if (selected.count(hit.first) > 0) {
+                                hitIndex = hit.first;
+                                break;
+                            }
+                        }
+                        // Second priority: closest element
+                        if (hitIndex < 0) {
+                            float bestT = std::numeric_limits<float>::max();
+                            for (const auto& hit : materialHits) {
+                                if (hit.second < bestT) {
+                                    bestT = hit.second;
+                                    hitIndex = hit.first;
+                                }
                             }
                         }
                     }
 
                     if (hitIndex >= 0) {
                         elements[hitIndex].material = droppedMaterial;
-                        std::cout << "Applied material to element #" << hitIndex << ": " << droppedMaterial << std::endl;
-                    } else {
-                        const auto& selected = imgui.getSelectedElements();
-                        if (!selected.empty()) {
-                            for (int idx : selected) {
-                                if (idx >= 0 && idx < static_cast<int>(elements.size())) {
-                                    elements[idx].material = droppedMaterial;
-                                }
+                    } else if (!selected.empty()) {
+                        // No hit under cursor - apply to all selected elements
+                        for (int idx : selected) {
+                            if (idx >= 0 && idx < static_cast<int>(elements.size())) {
+                                elements[idx].material = droppedMaterial;
                             }
-                            std::cout << "Applied material to selection: " << droppedMaterial << std::endl;
-                        } else {
-                            std::cout << "No surface under cursor for material drop: " << droppedMaterial << std::endl;
                         }
                     }
                 }
@@ -1216,6 +1259,167 @@ int main(int argc, char* argv[]) {
                         }
                     }).detach();
                 }
+
+                // Handle material upscale requests
+                if (imgui.wasMaterialUpscaleRequested()) {
+                    auto request = imgui.takeMaterialUpscaleRequest();
+                    if (request.materialName.empty()) {
+                        std::lock_guard<std::mutex> lock(materialGenMutex);
+                        materialUpscaleStatus = "No material selected.";
+                    } else if (!materialUpscaleInFlight.exchange(true)) {
+                        {
+                            std::lock_guard<std::mutex> lock(materialGenMutex);
+                            materialUpscaleStatus = "Upscaling...";
+                        }
+
+                        std::string cmd = buildMaterialUpscaleCommand(request);
+                        std::cout << "[Upscale] Running: " << cmd << std::endl;
+                        std::thread([cmd, &materialUpscaleInFlight, &materialGenMutex, &materialUpscaleStatus]() {
+                            int rc = std::system(cmd.c_str());
+                            {
+                                std::lock_guard<std::mutex> lock(materialGenMutex);
+                                materialUpscaleStatus = (rc == 0) ? "Upscale complete" : "Upscale failed (check console)";
+                            }
+                            materialUpscaleInFlight = false;
+                        }).detach();
+                    }
+                }
+
+                // Handle height map generation requests
+                if (imgui.wasHeightGenRequested()) {
+                    auto request = imgui.takeHeightGenRequest();
+                    if (request.materialName.empty()) {
+                        std::lock_guard<std::mutex> lock(materialGenMutex);
+                        heightGenStatus = "No material selected.";
+                    } else if (!heightGenInFlight.exchange(true)) {
+                        {
+                            std::lock_guard<std::mutex> lock(materialGenMutex);
+                            heightGenStatus = "Generating height map...";
+                        }
+
+                        // Build HTTP request to render server
+                        std::string serverUrl = request.serverUrl;
+                        std::string materialPath = request.materialPath;
+                        const char* methods[] = { "hybrid", "normal", "diffuse" };
+                        std::string method = methods[request.method];
+                        float blur = request.blur;
+                        float contrast = request.contrast;
+                        bool invert = request.invert;
+
+                        std::thread([serverUrl, materialPath, method, blur, contrast, invert,
+                                    &heightGenInFlight, &materialGenMutex, &heightGenStatus]() {
+                            // Use curl or simple HTTP client
+                            std::ostringstream curlCmd;
+                            curlCmd << "curl -s -X POST \"" << serverUrl << "/api/materials/generate_height\" "
+                                   << "-H \"Content-Type: application/json\" "
+                                   << "-d \"{\\\"material_path\\\": \\\"" << materialPath << "\\\", "
+                                   << "\\\"method\\\": \\\"" << method << "\\\", "
+                                   << "\\\"blur\\\": " << blur << ", "
+                                   << "\\\"contrast\\\": " << contrast << ", "
+                                   << "\\\"invert\\\": " << (invert ? "true" : "false") << "}\"";
+
+                            std::cout << "[HeightGen] " << curlCmd.str() << std::endl;
+                            int rc = std::system(curlCmd.str().c_str());
+                            {
+                                std::lock_guard<std::mutex> lock(materialGenMutex);
+                                heightGenStatus = (rc == 0) ? "Height map generated" : "Generation failed";
+                            }
+                            heightGenInFlight = false;
+                        }).detach();
+                    }
+                }
+
+                // Handle high-res render requests (runs synchronously to avoid Vulkan threading issues)
+                if (imgui.wasHighResRenderRequested()) {
+                    auto request = imgui.takeHighResRenderRequest();
+
+                    highResRenderStatus = "Preparing...";
+                    highResRenderProgress = 0.0f;
+                    imgui.setHighResRenderState(true, highResRenderStatus, highResRenderProgress);
+
+                    // Compute target resolution from request
+                    u32 targetWidth, targetHeight;
+                    switch (request.resolution) {
+                        case 1: targetWidth = 6144; targetHeight = 3456; break;  // 6K
+                        case 2: targetWidth = 7680; targetHeight = 4320; break;  // 8K
+                        default: targetWidth = 3840; targetHeight = 2160; break; // 4K
+                    }
+
+                    // If upscaling, render at 4K and upscale to target
+                    u32 renderWidth = targetWidth;
+                    u32 renderHeight = targetHeight;
+                    bool useUpscale = request.upscale && (request.resolution > 0);
+
+                    if (useUpscale) {
+                        renderWidth = 3840;
+                        renderHeight = 2160;
+                    }
+
+                    int samples = request.samples;
+                    int format = request.format;
+                    std::string outputPath = request.outputPath;
+
+                    auto& renderElements = buildings[currentBuilding].elements;
+                    auto& renderBuilding = buildings[currentBuilding];
+
+                    // Wait for GPU to be idle before high-res render
+                    context.waitIdle();
+
+                    highResRenderStatus = useUpscale ? "Rendering at 4K..." : "Rendering...";
+                    imgui.setHighResRenderState(true, highResRenderStatus, 0.1f);
+
+                    // Render synchronously (blocks UI but avoids threading issues)
+                    float renderBrightness = request.brightness;
+                    bool success = renderer.renderHighRes(
+                        renderElements, renderBuilding,
+                        renderWidth, renderHeight,
+                        samples, renderBrightness, nullptr  // No progress callback for sync render
+                    );
+
+                    if (success) {
+                        std::string savePath = outputPath;
+                        if (useUpscale) {
+                            std::filesystem::path p(outputPath);
+                            savePath = (p.parent_path() / ("_temp_4k_" + p.filename().string())).string();
+                        }
+
+                        highResRenderStatus = "Saving...";
+                        imgui.setHighResRenderState(true, highResRenderStatus, 0.8f);
+
+                        bool saved = (format == 1) ?
+                            renderer.saveHighResEXR(savePath) :
+                            renderer.saveHighResPNG(savePath);
+
+                        if (saved && useUpscale) {
+                            highResRenderStatus = "Upscaling...";
+                            imgui.setHighResRenderState(true, highResRenderStatus, 0.9f);
+
+                            int upscaleFactor = 2;
+                            std::string method = (request.upscaleMethod == 0) ? "realesrgan" : "lanczos";
+                            std::string upscaleCmd = "python scripts/render_upscale.py "
+                                        "--input \"" + savePath + "\" "
+                                        "--output \"" + outputPath + "\" "
+                                        "--scale " + std::to_string(upscaleFactor) + " "
+                                        "--method " + method;
+
+                            int upscaleResult = std::system(upscaleCmd.c_str());
+                            std::filesystem::remove(savePath);
+
+                            highResRenderStatus = (upscaleResult == 0) ?
+                                "Saved: " + outputPath : "Upscale failed";
+                        } else if (saved) {
+                            highResRenderStatus = "Saved: " + outputPath;
+                        } else {
+                            highResRenderStatus = "Save failed";
+                        }
+                    } else {
+                        highResRenderStatus = "Render failed";
+                    }
+
+                    highResRenderProgress = 1.0f;
+                    imgui.setHighResRenderState(false, highResRenderStatus, highResRenderProgress);
+                }
+
                 if (showDemo) ImGui::ShowDemoWindow(&showDemo);
                 if (showMetrics) ImGui::ShowMetricsWindow(&showMetrics);
 

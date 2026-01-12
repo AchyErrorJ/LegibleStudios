@@ -70,6 +70,7 @@ struct Material {
     Texture* aoMap = nullptr;          // Ambient occlusion (linear, grayscale)
     Texture* emissiveMap = nullptr;    // Emissive (sRGB)
     Texture* opacityMap = nullptr;     // Opacity (linear, grayscale)
+    Texture* heightMap = nullptr;      // Height/displacement map (linear, grayscale)
 
     // Fallback values when no texture
     vec3 albedoColor = vec3(0.8f);
@@ -80,6 +81,16 @@ struct Material {
 
     // Texture tiling
     vec2 uvScale = vec2(1.0f);
+
+    // Per-material adjustments (post-processing)
+    f32 brightness = 0.0f;       // -1 to 1, added to albedo
+    f32 contrast = 1.0f;         // 0 to 2, multiplied
+    f32 saturation = 1.0f;       // 0 to 2, color saturation
+    f32 normalStrength = 1.0f;   // 0 to 2, normal map intensity
+    f32 roughnessOffset = 0.0f;  // -0.5 to 0.5, added to roughness
+    f32 metallicOffset = 0.0f;   // -0.5 to 0.5, added to metallic
+    f32 aoStrength = 1.0f;       // 0 to 2, AO multiplier
+    vec3 tint = vec3(1.0f);      // Color tint multiplier
 };
 
 // Material library - manages loaded materials
@@ -113,6 +124,11 @@ public:
 
     // Create built-in architectural materials
     void createBuiltinMaterials();
+
+    // Load/save per-material settings from/to JSON
+    void loadMaterialSettings(const std::string& settingsPath);
+    void saveMaterialSettings(const std::string& settingsPath);
+    void saveMaterialSettings(Material* material, const std::string& settingsPath);
 
 private:
     VulkanContext& m_context;

@@ -42,6 +42,36 @@ public:
         bool tileable = true;
     };
 
+    struct MaterialUpscaleRequest {
+        std::string materialName;
+        std::string serverUrl;
+        std::string pythonExe;
+        std::string scriptPath;
+        std::string materialRoot;
+        int scale = 4;      // 2 or 4
+        int method = 0;     // 0=realesrgan, 1=lanczos
+    };
+
+    struct HeightGenRequest {
+        std::string materialName;
+        std::string materialPath;
+        std::string serverUrl;
+        int method = 0;     // 0=hybrid, 1=normal, 2=diffuse
+        float blur = 1.0f;
+        float contrast = 1.0f;
+        bool invert = false;
+    };
+
+    struct HighResRenderRequest {
+        std::string outputPath;
+        int resolution = 0;     // 0=4K, 1=6K, 2=8K
+        int samples = 1;        // 1, 16, 64, 256
+        int format = 0;         // 0=PNG, 1=EXR
+        bool upscale = false;   // If true, render at 4K and upscale to target
+        int upscaleMethod = 0;  // 0=realesrgan, 1=lanczos
+        float brightness = 1.3f; // Brightness multiplier to compensate for no bloom
+    };
+
     ImGuiLayer(VulkanContext& context, GLFWwindow* window, VkRenderPass renderPass);
     ~ImGuiLayer();
 
@@ -154,6 +184,22 @@ public:
     void clearStopRenderServerRequest() { m_stopRenderServerRequested = false; }
     int getRenderServerPort() const { return m_renderServerPort; }
 
+    // Material upscaling
+    bool wasMaterialUpscaleRequested() const { return m_materialUpscaleRequested; }
+    MaterialUpscaleRequest takeMaterialUpscaleRequest();
+    void setMaterialUpscaleState(bool inFlight, const std::string& status);
+
+    // Height map generation
+    bool wasHeightGenRequested() const { return m_heightGenRequested; }
+    HeightGenRequest takeHeightGenRequest();
+    void setHeightGenState(bool inFlight, const std::string& status);
+
+    // High-res rendering
+    bool wasHighResRenderRequested() const { return m_highResRenderRequested; }
+    HighResRenderRequest takeHighResRenderRequest();
+    void setHighResRenderState(bool inFlight, const std::string& status, float progress = 0.0f);
+    float getHighResRenderProgress() const { return m_highResRenderProgress; }
+
 private:
     void createDescriptorPool();
     void uploadFonts();
@@ -195,7 +241,7 @@ private:
     char m_materialPrompt[512] = "";
     char m_materialNegative[256] = "blurry, low quality, distorted, watermark";
     char m_materialServerUrl[256] = "http://localhost:5000";
-    char m_materialPythonExe[260] = ".venv-sd/Scripts/python.exe";
+    char m_materialPythonExe[260] = "C:\\RevitMCP\\.venv-sd\\Scripts\\python.exe";
     char m_materialScriptPath[260] = "scripts/material_generate.py";
     int m_materialSize = 1024;
     int m_materialSteps = 30;
@@ -214,6 +260,41 @@ private:
     std::string m_materialGenerateStatus;
     bool m_startRenderServerRequested = false;
     bool m_stopRenderServerRequested = false;
+
+    // Material upscale state
+    bool m_materialUpscaleRequested = false;
+    MaterialUpscaleRequest m_materialUpscaleRequest;
+    bool m_materialUpscaleInFlight = false;
+    std::string m_materialUpscaleStatus;
+    int m_upscaleScale = 4;
+    int m_upscaleMethod = 0;
+
+    // Height map generation state
+    bool m_heightGenRequested = false;
+    HeightGenRequest m_heightGenRequest;
+    bool m_heightGenInFlight = false;
+    std::string m_heightGenStatus;
+    int m_heightGenMethod = 0;      // 0=hybrid, 1=normal, 2=diffuse
+    float m_heightGenBlur = 1.0f;
+    float m_heightGenContrast = 1.0f;
+    bool m_heightGenInvert = false;
+
+    // High-res render state
+    bool m_highResRenderRequested = false;
+    HighResRenderRequest m_highResRenderRequest;
+    bool m_highResRenderInFlight = false;
+    std::string m_highResRenderStatus;
+    float m_highResRenderProgress = 0.0f;
+    int m_renderResolution = 0;     // 0=4K, 1=6K, 2=8K
+    int m_renderSamples = 0;        // 0=1, 1=16, 2=64, 3=256
+    int m_renderFormat = 0;         // 0=PNG, 1=EXR
+    bool m_renderUpscale = false;
+    int m_renderUpscaleMethod = 0;
+    float m_renderBrightness = 1.3f; // Brightness multiplier to compensate for missing bloom
+    char m_renderOutputPath[260] = "renders/render.png";
+
+public:
+    float getRenderBrightness() const { return m_renderBrightness; }
 };
 
 } // namespace arch

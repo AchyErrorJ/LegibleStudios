@@ -105,6 +105,7 @@ private:
 
     void cleanupHDR();
     void cleanupSSAO();
+    void cleanupSSAOSizeDependent();
     void cleanupBloom();
     void cleanupComposite();
 

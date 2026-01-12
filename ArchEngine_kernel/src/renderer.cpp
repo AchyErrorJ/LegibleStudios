@@ -5,6 +5,10 @@
 #include <iostream>
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 
 namespace arch {
 
@@ -35,6 +39,36 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
     createDescriptorSets();
     createMaterialDescriptorSetLayout();
     createDefaultMaterialDescriptorSet();
+
+    // Create shadow height map descriptor set for tessellated shadows
+    if (m_shadowMap && m_shadowMap->getHeightMapDescriptorSetLayout() != VK_NULL_HANDLE) {
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_descriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        VkDescriptorSetLayout shadowHeightLayout = m_shadowMap->getHeightMapDescriptorSetLayout();
+        allocInfo.pSetLayouts = &shadowHeightLayout;
+
+        if (vkAllocateDescriptorSets(m_context.getDevice(), &allocInfo, &m_shadowHeightMapDescriptorSet) == VK_SUCCESS) {
+            // Bind default black texture (no displacement)
+            VkDescriptorImageInfo heightMapInfo{};
+            heightMapInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            heightMapInfo.imageView = Texture::getBlack()->getImageView();
+            heightMapInfo.sampler = Texture::getBlack()->getSampler();
+
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = m_shadowHeightMapDescriptorSet;
+            write.dstBinding = 0;
+            write.dstArrayElement = 0;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &heightMapInfo;
+
+            vkUpdateDescriptorSets(m_context.getDevice(), 1, &write, 0, nullptr);
+        }
+    }
+
     createPipeline();
 
     // Create grid mesh
@@ -44,6 +78,9 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
 
 Renderer::~Renderer() {
     m_context.waitIdle();
+
+    // Cleanup high-resolution resources (for high-res rendering/screenshots)
+    cleanupHighResResources();
 
 #if 0  // Ray tracing disabled - incomplete implementation
     // Cleanup ray tracing resources
@@ -61,6 +98,14 @@ Renderer::~Renderer() {
     m_meshCache.clear();
     m_pipeline.reset();
     m_wireframePipeline.reset();
+    m_transparentPipeline.reset();
+    m_hdrPipeline.reset();
+    m_hdrWireframePipeline.reset();
+    m_hdrTransparentPipeline.reset();
+    m_tessPipeline.reset();
+    m_tessWireframePipeline.reset();
+    m_hdrTessPipeline.reset();
+    m_hdrTessWireframePipeline.reset();
 
     for (size_t i = 0; i < m_context.getSwapchainImageCount(); ++i) {
         vkDestroyBuffer(m_context.getDevice(), m_uniformBuffers[i], nullptr);
@@ -295,18 +340,19 @@ void Renderer::createDescriptorPool() {
     uboPoolSize.descriptorCount = imageCount * 2;  // main + sky
     poolSizes.push_back(uboPoolSize);
 
-    // Sampler pool size (shadow map + environment cubemap + material textures)
-    // Material set needs 7 samplers: albedo, normal, roughness, metallic, ao, emissive, opacity
+    // Sampler pool size (shadow map + environment cubemap + material textures + shadow height map)
+    // Material set needs 8 samplers: albedo, normal, roughness, metallic, ao, emissive, opacity, height
     VkDescriptorPoolSize samplerPoolSize{};
     samplerPoolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerPoolSize.descriptorCount = imageCount * 2 + (7 * kMaxMaterialSets);
+    samplerPoolSize.descriptorCount = imageCount * 2 + (8 * kMaxMaterialSets) + 1;  // +1 for shadow height map
     poolSizes.push_back(samplerPoolSize);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<u32>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = imageCount * 2 + 1 + kMaxMaterialSets;  // main + sky + material sets
+    poolInfo.maxSets = imageCount * 2 + 1 + kMaxMaterialSets + 1;  // main + sky + material + shadow height map
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;  // Allow individual set freeing
 
     if (vkCreateDescriptorPool(m_context.getDevice(), &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor pool");
@@ -319,7 +365,7 @@ void Renderer::createDescriptorPool() {
     uboBinding.binding = 0;
     uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboBinding.descriptorCount = 1;
-    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
     bindings.push_back(uboBinding);
 
     // Binding 1: Shadow map sampler (if shadows enabled)
@@ -415,8 +461,8 @@ void Renderer::createDescriptorSets() {
 }
 
 void Renderer::createMaterialDescriptorSetLayout() {
-    // Material descriptor set layout (set 1) - 7 texture samplers
-    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
+    // Material descriptor set layout (set 1) - 8 texture samplers
+    std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
 
     // Binding 0: Albedo texture
     bindings[0].binding = 0;
@@ -460,6 +506,12 @@ void Renderer::createMaterialDescriptorSetLayout() {
     bindings[6].descriptorCount = 1;
     bindings[6].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // Binding 7: Height/displacement map (used by tessellation evaluation shader)
+    bindings[7].binding = 7;
+    bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[7].descriptorCount = 1;
+    bindings[7].stageFlags = VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<u32>(bindings.size());
@@ -495,9 +547,10 @@ void Renderer::createDefaultMaterialDescriptorSet() {
     Texture* ao = Texture::getWhite();
     Texture* emissive = Texture::getBlack();
     Texture* opacity = Texture::getWhite();
+    Texture* height = Texture::getBlack();  // No displacement by default
 
     // Write descriptor set
-    std::array<VkDescriptorImageInfo, 7> imageInfos{};
+    std::array<VkDescriptorImageInfo, 8> imageInfos{};
     imageInfos[0] = {albedo->getSampler(), albedo->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[1] = {normal->getSampler(), normal->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[2] = {roughness->getSampler(), roughness->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -505,8 +558,9 @@ void Renderer::createDefaultMaterialDescriptorSet() {
     imageInfos[4] = {ao->getSampler(), ao->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[5] = {emissive->getSampler(), emissive->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[6] = {opacity->getSampler(), opacity->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[7] = {height->getSampler(), height->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
-    std::array<VkWriteDescriptorSet, 7> writes{};
+    std::array<VkWriteDescriptorSet, 8> writes{};
     for (size_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = m_defaultMaterialDescriptorSet;
@@ -527,6 +581,9 @@ bool Renderer::reloadMaterialLibrary(const std::string& root) {
     if (!m_materialLibrary) {
         return false;
     }
+
+    // Wait for GPU to finish using current textures before reloading
+    vkDeviceWaitIdle(m_context.getDevice());
 
     m_materialRoot = root.empty() ? "materials" : root;
     m_materialLibrary->loadMaterialsFromDirectory(m_materialRoot);
@@ -553,7 +610,7 @@ void Renderer::createPipeline() {
     m_pipelineLayout = PipelineLayoutBuilder(m_context)
         .addDescriptorSetLayout(m_descriptorSetLayout)           // Set 0: UBO + shadow map
         .addDescriptorSetLayout(m_materialDescriptorSetLayout)   // Set 1: Material textures
-        .addPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants))
+        .addPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, 0, sizeof(PushConstants))
         .build();
 
     VkSampleCountFlagBits msaaSamples = m_context.getMsaaSamples();
@@ -621,6 +678,84 @@ void Renderer::createPipeline() {
 
         m_hdrWireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                                             "shaders/structural.frag.spv", hdrWireframeConfig);
+
+        // HDR transparent pipeline for glass/windows
+        PipelineConfig hdrTransparentConfig = PipelineConfig::transparentConfig();
+        hdrTransparentConfig.renderPass = m_postProcess->getHDRRenderPass();
+        hdrTransparentConfig.pipelineLayout = m_pipelineLayout;
+        hdrTransparentConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        m_hdrTransparentPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                               "shaders/structural.frag.spv", hdrTransparentConfig);
+    }
+
+    // Create tessellation pipelines for displacement mapping
+    {
+        PipelineConfig tessConfig = PipelineConfig::tessellationConfig();
+        tessConfig.renderPass = m_renderPass;
+        tessConfig.pipelineLayout = m_pipelineLayout;
+        tessConfig.multisample.rasterizationSamples = msaaSamples;
+        if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+            tessConfig.multisample.sampleShadingEnable = VK_TRUE;
+            tessConfig.multisample.minSampleShading = 0.2f;
+        }
+
+        m_tessPipeline = std::make_unique<Pipeline>(m_context,
+            "shaders/structural.vert.spv",
+            "shaders/structural.tesc.spv",
+            "shaders/structural.tese.spv",
+            "shaders/structural.frag.spv",
+            tessConfig);
+
+        // Tessellation wireframe
+        PipelineConfig tessWireConfig = PipelineConfig::tessellationConfig();
+        tessWireConfig.renderPass = m_renderPass;
+        tessWireConfig.pipelineLayout = m_pipelineLayout;
+        tessWireConfig.multisample.rasterizationSamples = msaaSamples;
+        if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+            tessWireConfig.multisample.sampleShadingEnable = VK_TRUE;
+            tessWireConfig.multisample.minSampleShading = 0.2f;
+        }
+        tessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+        tessWireConfig.rasterization.lineWidth = 1.5f;
+        tessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+
+        m_tessWireframePipeline = std::make_unique<Pipeline>(m_context,
+            "shaders/structural.vert.spv",
+            "shaders/structural.tesc.spv",
+            "shaders/structural.tese.spv",
+            "shaders/structural.frag.spv",
+            tessWireConfig);
+
+        // HDR tessellation pipelines
+        if (m_postProcess) {
+            PipelineConfig hdrTessConfig = PipelineConfig::tessellationConfig();
+            hdrTessConfig.renderPass = m_postProcess->getHDRRenderPass();
+            hdrTessConfig.pipelineLayout = m_pipelineLayout;
+            hdrTessConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+            m_hdrTessPipeline = std::make_unique<Pipeline>(m_context,
+                "shaders/structural.vert.spv",
+                "shaders/structural.tesc.spv",
+                "shaders/structural.tese.spv",
+                "shaders/structural.frag.spv",
+                hdrTessConfig);
+
+            PipelineConfig hdrTessWireConfig = PipelineConfig::tessellationConfig();
+            hdrTessWireConfig.renderPass = m_postProcess->getHDRRenderPass();
+            hdrTessWireConfig.pipelineLayout = m_pipelineLayout;
+            hdrTessWireConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            hdrTessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+            hdrTessWireConfig.rasterization.lineWidth = 1.5f;
+            hdrTessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+
+            m_hdrTessWireframePipeline = std::make_unique<Pipeline>(m_context,
+                "shaders/structural.vert.spv",
+                "shaders/structural.tesc.spv",
+                "shaders/structural.tese.spv",
+                "shaders/structural.frag.spv",
+                hdrTessWireConfig);
+        }
     }
 
     // Sky pipeline - renders fullscreen triangle behind everything
@@ -635,7 +770,7 @@ void Renderer::createSkyPipeline() {
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
 
     // Binding 1: Environment cubemap
     bindings[1].binding = 1;
@@ -697,7 +832,7 @@ void Renderer::createSkyPipeline() {
 
     // Sky push constants: sun direction (xyz) + useHdr flag (w)
     VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
     pushRange.offset = 0;
     pushRange.size = sizeof(vec4);
 
@@ -849,16 +984,24 @@ void Renderer::drawSky() {
     // Pass sun direction (xyz) and useHdr flag (w) to shader
     vec4 sunDir = vec4(m_lightDirection, m_useHdrEnvMap ? 1.0f : 0.0f);
     vkCmdPushConstants(m_currentCommandBuffer, m_skyPipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(vec4), &sunDir);
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, 0, sizeof(vec4), &sunDir);
 
     // Draw fullscreen triangle (3 vertices, no vertex buffer)
     vkCmdDraw(m_currentCommandBuffer, 3, 1, 0, 0);
 
     // Rebind the structural pipeline and descriptor sets for subsequent draws
-    if (m_vizMode == VisualizationMode::Wireframe && m_wireframePipeline) {
-        m_wireframePipeline->bind(m_currentCommandBuffer);
-    } else if (m_pipeline) {
-        m_pipeline->bind(m_currentCommandBuffer);
+    if (m_vizMode == VisualizationMode::Wireframe) {
+        if (m_tessellationEnabled && m_tessWireframePipeline) {
+            m_tessWireframePipeline->bind(m_currentCommandBuffer);
+        } else if (m_wireframePipeline) {
+            m_wireframePipeline->bind(m_currentCommandBuffer);
+        }
+    } else {
+        if (m_tessellationEnabled && m_tessPipeline) {
+            m_tessPipeline->bind(m_currentCommandBuffer);
+        } else if (m_pipeline) {
+            m_pipeline->bind(m_currentCommandBuffer);
+        }
     }
 
     // Rebind both descriptor sets
@@ -1047,11 +1190,19 @@ void Renderer::beginRenderPass(vec4 clearColor) {
     scissor.extent = extent;
     vkCmdSetScissor(m_currentCommandBuffer, 0, 1, &scissor);
 
-    // Bind appropriate pipeline based on visualization mode
-    if (m_vizMode == VisualizationMode::Wireframe && m_wireframePipeline) {
-        m_wireframePipeline->bind(m_currentCommandBuffer);
-    } else if (m_pipeline) {
-        m_pipeline->bind(m_currentCommandBuffer);
+    // Bind appropriate pipeline based on visualization mode and tessellation
+    if (m_vizMode == VisualizationMode::Wireframe) {
+        if (m_tessellationEnabled && m_tessWireframePipeline) {
+            m_tessWireframePipeline->bind(m_currentCommandBuffer);
+        } else if (m_wireframePipeline) {
+            m_wireframePipeline->bind(m_currentCommandBuffer);
+        }
+    } else {
+        if (m_tessellationEnabled && m_tessPipeline) {
+            m_tessPipeline->bind(m_currentCommandBuffer);
+        } else if (m_pipeline) {
+            m_pipeline->bind(m_currentCommandBuffer);
+        }
     }
 
     // Bind both descriptor sets: set 0 (UBO + shadow) and set 1 (material textures)
@@ -1106,11 +1257,19 @@ void Renderer::beginHDRRenderPass(vec4 clearColor) {
     scissor.extent = extent;
     vkCmdSetScissor(m_currentCommandBuffer, 0, 1, &scissor);
 
-    // Bind HDR-compatible pipeline based on visualization mode
-    if (m_vizMode == VisualizationMode::Wireframe && m_hdrWireframePipeline) {
-        m_hdrWireframePipeline->bind(m_currentCommandBuffer);
-    } else if (m_hdrPipeline) {
-        m_hdrPipeline->bind(m_currentCommandBuffer);
+    // Bind HDR-compatible pipeline based on visualization mode and tessellation
+    if (m_vizMode == VisualizationMode::Wireframe) {
+        if (m_tessellationEnabled && m_hdrTessWireframePipeline) {
+            m_hdrTessWireframePipeline->bind(m_currentCommandBuffer);
+        } else if (m_hdrWireframePipeline) {
+            m_hdrWireframePipeline->bind(m_currentCommandBuffer);
+        }
+    } else {
+        if (m_tessellationEnabled && m_hdrTessPipeline) {
+            m_hdrTessPipeline->bind(m_currentCommandBuffer);
+        } else if (m_hdrPipeline) {
+            m_hdrPipeline->bind(m_currentCommandBuffer);
+        }
     }
 
     // Bind both descriptor sets: set 0 (UBO + shadow) and set 1 (material textures)
@@ -1192,10 +1351,24 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
     // Update light matrices
     m_shadowMap->updateLightMatrix(m_lightDirection, sceneCenter, sceneRadius);
 
-    // Begin shadow pass
+    // Begin shadow pass - beginShadowPass binds the non-tessellated pipeline by default
     m_shadowMap->beginShadowPass(m_currentCommandBuffer);
 
-    // Shadow push constants structure
+    // Check if we should use tessellated shadow pipeline
+    bool useTessShadows = m_tessellationEnabled && m_shadowMap->getTessPipeline() != VK_NULL_HANDLE
+                          && m_shadowHeightMapDescriptorSet != VK_NULL_HANDLE;
+
+    if (useTessShadows) {
+        // Bind tessellated shadow pipeline
+        vkCmdBindPipeline(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowMap->getTessPipeline());
+
+        // Bind height map descriptor set
+        vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_shadowMap->getTessPipelineLayout(), 0, 1,
+                                &m_shadowHeightMapDescriptorSet, 0, nullptr);
+    }
+
+    // Shadow push constants structure (non-tessellated)
     struct ShadowPushConstants {
         mat4 lightViewProj;
         mat4 model;
@@ -1286,16 +1459,23 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
                     f32 xExtent = elem.end.x - elem.start.x;
                     f32 zExtent = elem.end.z - elem.start.z;
                     f32 doorHeight = elem.end.y - elem.start.y;
-                    f32 doorWidth = std::max(std::abs(xExtent), std::abs(zExtent));
-                    f32 doorDepth = std::min(std::abs(xExtent), std::abs(zExtent));
-                    if (doorDepth < 0.1f) doorDepth = elem.depth;
-                    key = "door_" + std::to_string(doorWidth) + "_" + std::to_string(doorHeight) + "_" + std::to_string(doorDepth);
+                    f32 doorDepth = elem.depth > 0.1f ? elem.depth : 0.5f;
+
+                    // Calculate actual door width from wall direction vector
+                    f32 doorWidth = glm::length(vec2(xExtent, zExtent));
+                    if (doorWidth < 0.01f || doorHeight < 0.01f) continue;
+
+                    // Use consistent key with main rendering pass
+                    key = "door_proper_" + std::to_string(static_cast<int>(doorWidth * 100)) + "_" +
+                          std::to_string(static_cast<int>(doorHeight * 100)) + "_" +
+                          std::to_string(static_cast<int>(doorDepth * 100));
+
                     vec3 center = (elem.start + elem.end) * 0.5f;
                     center.y = elem.start.y;
-                    f32 rotation = 0.0f;
-                    if (std::abs(zExtent) > std::abs(xExtent)) {
-                        rotation = glm::radians(90.0f);
-                    }
+
+                    // Calculate rotation from extents (negate for proper alignment)
+                    f32 rotation = -std::atan2(zExtent, xExtent);
+
                     transform = glm::translate(mat4(1.0f), center);
                     transform = glm::rotate(transform, rotation, vec3(0.0f, 1.0f, 0.0f));
                 }
@@ -1336,12 +1516,28 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
             continue;  // Skip if mesh not cached
         }
 
-        ShadowPushConstants shadowPush;
-        shadowPush.lightViewProj = m_shadowMap->getLightViewProj();
-        shadowPush.model = transform;
+        if (useTessShadows) {
+            // Use tessellated push constants
+            ShadowTessPushConstants tessPush;
+            tessPush.lightViewProj = m_shadowMap->getLightViewProj();
+            tessPush.model = transform;
+            tessPush.tessLevel = m_tessellationLevel;
+            tessPush.dispScale = m_displacementScale;
+            tessPush.uvScale = m_materialUVScale;
+            tessPush.padding = 0.0f;
 
-        vkCmdPushConstants(m_currentCommandBuffer, m_shadowMap->getPipelineLayout(),
-                           VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ShadowPushConstants), &shadowPush);
+            vkCmdPushConstants(m_currentCommandBuffer, m_shadowMap->getTessPipelineLayout(),
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
+                               0, sizeof(ShadowTessPushConstants), &tessPush);
+        } else {
+            // Use non-tessellated push constants
+            ShadowPushConstants shadowPush;
+            shadowPush.lightViewProj = m_shadowMap->getLightViewProj();
+            shadowPush.model = transform;
+
+            vkCmdPushConstants(m_currentCommandBuffer, m_shadowMap->getPipelineLayout(),
+                               VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ShadowPushConstants), &shadowPush);
+        }
 
         it->second->bind(m_currentCommandBuffer);
         it->second->draw(m_currentCommandBuffer);
@@ -1384,10 +1580,18 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
 
     // HDR output mode (skip tonemapping in shader when rendering to HDR buffer)
     ubo.outputLinearHDR = m_outputLinearHDR ? 1 : 0;
-    ubo._padding0 = 0;
-    ubo._padding1 = 0;
-    ubo._padding2 = 0;
-    ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, 0.0f, 0.0f);
+    ubo.exposure = getExposure();
+
+    // Tessellation parameters for displacement mapping
+    ubo.tessellationLevel = m_tessellationEnabled ? m_tessellationLevel : 1.0f;
+    ubo.displacementScale = m_tessellationEnabled ? m_displacementScale : 0.0f;
+
+    // Material params: uvScale, normalStrength, brightness, contrast
+    ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, m_materialBrightness, m_materialContrast);
+    // Material params2: saturation, roughnessOffset, metallicOffset, aoStrength
+    ubo.materialParams2 = vec4(m_materialSaturation, m_materialRoughnessOffset, m_materialMetallicOffset, m_materialAOStrength);
+    // Material tint
+    ubo.materialTint = vec4(m_materialTint, 1.0f);
 
     std::memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
 }
@@ -1610,7 +1814,7 @@ void Renderer::drawMeshWithMaterial(Mesh& mesh, const mat4& transform, vec3 colo
     push.material = material;
 
     vkCmdPushConstants(m_currentCommandBuffer, m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
                        0, sizeof(PushConstants), &push);
 
     mesh.bind(m_currentCommandBuffer);
@@ -1882,8 +2086,9 @@ VkDescriptorSet Renderer::createMaterialDescriptorSetForMaterial(const Material&
     Texture* ao = material.aoMap ? material.aoMap : Texture::getWhite();
     Texture* emissive = material.emissiveMap ? material.emissiveMap : Texture::getBlack();
     Texture* opacity = material.opacityMap ? material.opacityMap : Texture::getWhite();
+    Texture* height = material.heightMap ? material.heightMap : Texture::getBlack();
 
-    std::array<VkDescriptorImageInfo, 7> imageInfos{};
+    std::array<VkDescriptorImageInfo, 8> imageInfos{};
     imageInfos[0] = {albedo->getSampler(), albedo->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[1] = {normal->getSampler(), normal->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[2] = {roughness->getSampler(), roughness->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -1891,8 +2096,9 @@ VkDescriptorSet Renderer::createMaterialDescriptorSetForMaterial(const Material&
     imageInfos[4] = {ao->getSampler(), ao->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[5] = {emissive->getSampler(), emissive->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[6] = {opacity->getSampler(), opacity->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[7] = {height->getSampler(), height->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
-    std::array<VkWriteDescriptorSet, 7> writes{};
+    std::array<VkWriteDescriptorSet, 8> writes{};
     for (size_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = descSet;
@@ -2072,7 +2278,7 @@ void Renderer::drawGrid(f32 size, f32 spacing) {
     push.color = vec4(0.3f, 0.3f, 0.3f, 1.0f);
 
     vkCmdPushConstants(m_currentCommandBuffer, m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
                        0, sizeof(PushConstants), &push);
 
     m_gridMesh->bind(m_currentCommandBuffer);
@@ -2213,49 +2419,55 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             }
 
             case ElementType::Door: {
+                // If door has custom mesh, render it directly
+                if (element.mesh.hasData()) {
+                    vec4 doorMat = vec4(0.0f, 0.75f, 1.0f, 0.0f);
+                    drawCustomMeshWithMaterial(element.mesh, color, stressForShader, doorMat);
+                    break;
+                }
+
                 // Generate door geometry
                 float xExtent = element.end.x - element.start.x;
                 float zExtent = element.end.z - element.start.z;
                 float doorHeight = element.end.y - element.start.y;
-                float doorDepth = element.depth > 0.1f ? element.depth : 50.0f;
-
-                // Debug: print door info on first few frames
-                static int doorDebugCount = 0;
-                if (doorDebugCount < 5) {
-                    std::cout << "[Door] height=" << doorHeight << " width=" << glm::length(vec2(xExtent, zExtent))
-                              << " start=(" << element.start.x << "," << element.start.y << "," << element.start.z << ")"
-                              << " end=(" << element.end.x << "," << element.end.y << "," << element.end.z << ")" << std::endl;
-                    doorDebugCount++;
-                }
+                float doorDepth = element.depth > 0.1f ? element.depth : 0.5f;
 
                 if (doorHeight <= 0.01f) break;
 
                 float doorWidth = glm::length(vec2(xExtent, zExtent));
-                if (doorWidth <= 0.01f) break;
+                if (doorWidth <= 0.01f) {
+                    // Fallback: use element.width if extents are zero
+                    doorWidth = element.width > 0.01f ? element.width : 3.0f;
+                }
 
-                // Calculate door center and rotation
-                vec3 doorCenter = (element.start + element.end) * 0.5f;
-                doorCenter.y = element.start.y + doorHeight * 0.5f;
+                // Calculate door position at bottom center of wall segment
+                vec3 doorPos = vec3(
+                    (element.start.x + element.end.x) * 0.5f,
+                    element.start.y,  // Bottom of door
+                    (element.start.z + element.end.z) * 0.5f
+                );
 
-                // Calculate rotation angle from wall direction
-                float angle = std::atan2(zExtent, xExtent);
+                // Calculate rotation from extents (which are set from host wall direction)
+                // The door mesh has width along X and depth (walkthrough) along Z
+                // For the door width to align with wall direction, we use negative angle
+                float angle = -std::atan2(zExtent, xExtent);
 
                 // Create transform: translate to position, rotate to align with wall
-                mat4 transform = glm::translate(mat4(1.0f), doorCenter);
+                mat4 transform = glm::translate(mat4(1.0f), doorPos);
                 transform = glm::rotate(transform, angle, vec3(0, 1, 0));
 
                 // Wood door material
                 vec4 doorMat = vec4(0.0f, 0.75f, 1.0f, 0.0f);
 
-                // Create door mesh centered at origin
-                std::string key = "door_" + std::to_string(static_cast<int>(doorWidth)) + "_" +
-                                 std::to_string(static_cast<int>(doorHeight)) + "_" +
-                                 std::to_string(static_cast<int>(doorDepth));
+                // Create proper door mesh with frame, panel, and handle
+                std::string key = "door_proper_" + std::to_string(static_cast<int>(doorWidth * 100)) + "_" +
+                                 std::to_string(static_cast<int>(doorHeight * 100)) + "_" +
+                                 std::to_string(static_cast<int>(doorDepth * 100));
 
                 if (m_meshCache.find(key) == m_meshCache.end()) {
-                    // createColumn extends from y=0 to y=height, so offset by -height/2 to center
-                    auto [verts, indices] = Geometry::createColumn(
-                        vec3(0, -doorHeight * 0.5f, 0), doorWidth, doorDepth, doorHeight, vec3(0.55f, 0.35f, 0.2f));
+                    // createDoor expects position at bottom center, creates door from y=0 to y=height
+                    auto [verts, indices] = Geometry::createDoor(
+                        vec3(0), doorWidth, doorHeight, doorDepth, vec3(0.55f, 0.35f, 0.2f));
                     m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
                 }
 
@@ -2303,10 +2515,10 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
     }
 
     // Second pass: Render transparent windows with alpha blending
-    // Skip in HDR path (transparent HDR pipeline not implemented yet).
-    if (m_transparentPipeline && !m_outputLinearHDR) {
+    Pipeline* transparentPipeline = m_outputLinearHDR ? m_hdrTransparentPipeline.get() : m_transparentPipeline.get();
+    if (transparentPipeline) {
         m_context.beginDebugLabel(m_currentCommandBuffer, "Transparent Windows", {0.4f, 0.7f, 0.9f, 1.0f});
-        m_transparentPipeline->bind(m_currentCommandBuffer);
+        transparentPipeline->bind(m_currentCommandBuffer);
 
         index = 0;
         for (const auto& element : elements) {
@@ -2328,7 +2540,7 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             float xExtent = element.end.x - element.start.x;
             float zExtent = element.end.z - element.start.z;
             float windowHeight = element.end.y - element.start.y;
-            float windowDepth = element.depth > 0.01f ? element.depth : 0.2f;  // Thin glass pane
+            float windowDepth = element.depth > 0.01f ? element.depth : 0.3f;
 
             if (windowHeight <= 0.01f) {
                 index++;
@@ -2341,25 +2553,31 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                 continue;
             }
 
-            // Calculate window center and rotation
-            vec3 windowCenter = (element.start + element.end) * 0.5f;
-            windowCenter.y = element.start.y + windowHeight * 0.5f;
+            // Calculate window position at bottom center of wall segment
+            vec3 windowPos = vec3(
+                (element.start.x + element.end.x) * 0.5f,
+                element.start.y,  // Bottom of window
+                (element.start.z + element.end.z) * 0.5f
+            );
 
-            float angle = std::atan2(zExtent, xExtent);
+            // Calculate rotation from extents (negate for proper alignment)
+            float angle = -std::atan2(zExtent, xExtent);
 
-            mat4 transform = glm::translate(mat4(1.0f), windowCenter);
+            mat4 transform = glm::translate(mat4(1.0f), windowPos);
             transform = glm::rotate(transform, angle, vec3(0, 1, 0));
 
             // Glass material: very low roughness for transparency
             vec4 glassMat = vec4(0.0f, 0.1f, 1.0f, 0.0f);
 
-            std::string key = "window_" + std::to_string(static_cast<int>(windowWidth)) + "_" +
-                             std::to_string(static_cast<int>(windowHeight));
+            // Create proper window mesh with frame, glass, and mullions
+            std::string key = "window_proper_" + std::to_string(static_cast<int>(windowWidth * 100)) + "_" +
+                             std::to_string(static_cast<int>(windowHeight * 100)) + "_" +
+                             std::to_string(static_cast<int>(windowDepth * 100));
 
             if (m_meshCache.find(key) == m_meshCache.end()) {
-                // createColumn extends from y=0 to y=height, so offset by -height/2 to center
-                auto [verts, indices] = Geometry::createColumn(
-                    vec3(0, -windowHeight * 0.5f, 0), windowWidth, windowDepth, windowHeight, vec3(0.8f, 0.9f, 0.95f));
+                // createWindow expects position at bottom center, creates window from y=0 to y=height
+                auto [verts, indices] = Geometry::createWindow(
+                    vec3(0), windowWidth, windowHeight, windowDepth, vec3(0.8f, 0.9f, 0.95f));
                 m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
             }
 
@@ -2368,10 +2586,18 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
         }
 
         // Rebind opaque pipeline for subsequent draws
-        if (m_vizMode == VisualizationMode::Wireframe && m_wireframePipeline) {
-            m_wireframePipeline->bind(m_currentCommandBuffer);
-        } else if (m_pipeline) {
-            m_pipeline->bind(m_currentCommandBuffer);
+        if (m_vizMode == VisualizationMode::Wireframe) {
+            if (m_tessellationEnabled && m_tessWireframePipeline) {
+                m_tessWireframePipeline->bind(m_currentCommandBuffer);
+            } else if (m_wireframePipeline) {
+                m_wireframePipeline->bind(m_currentCommandBuffer);
+            }
+        } else {
+            if (m_tessellationEnabled && m_tessPipeline) {
+                m_tessPipeline->bind(m_currentCommandBuffer);
+            } else if (m_pipeline) {
+                m_pipeline->bind(m_currentCommandBuffer);
+            }
         }
 
         m_context.endDebugLabel(m_currentCommandBuffer);
@@ -2794,5 +3020,740 @@ void Renderer::setRTDenoiseStrength(f32 strength) {
     }
 }
 #endif  // Ray tracing disabled
+
+// =============================================================================
+// High-Resolution Rendering Implementation
+// =============================================================================
+
+void Renderer::createHighResResources(u32 width, u32 height) {
+    // Cleanup any existing resources
+    cleanupHighResResources();
+
+    m_highResWidth = width;
+    m_highResHeight = height;
+
+    VkDevice device = m_context.getDevice();
+
+    // Create color image (RGBA8 for LDR output)
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.extent = { width, height, 1 };
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(device, &imageInfo, nullptr, &m_highResImage) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res image");
+    }
+
+    // Allocate memory
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(device, m_highResImage, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &m_highResMemory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate high-res image memory");
+    }
+
+    vkBindImageMemory(device, m_highResImage, m_highResMemory, 0);
+
+    // Create image view
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_highResImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &m_highResView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res image view");
+    }
+
+    // Create depth image
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+    VkImageCreateInfo depthImageInfo = imageInfo;
+    depthImageInfo.format = depthFormat;
+    depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+    if (vkCreateImage(device, &depthImageInfo, nullptr, &m_highResDepthImage) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res depth image");
+    }
+
+    vkGetImageMemoryRequirements(device, m_highResDepthImage, &memReqs);
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &m_highResDepthMemory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate high-res depth memory");
+    }
+
+    vkBindImageMemory(device, m_highResDepthImage, m_highResDepthMemory, 0);
+
+    viewInfo.image = m_highResDepthImage;
+    viewInfo.format = depthFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &m_highResDepthView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res depth view");
+    }
+
+    // Create render pass for high-res rendering (simple, no MSAA)
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = depthFormat;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = 1;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    std::array<VkAttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = static_cast<u32>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &m_highResRenderPass) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res render pass");
+    }
+
+    // Create framebuffer
+    std::array<VkImageView, 2> fbAttachments = { m_highResView, m_highResDepthView };
+
+    VkFramebufferCreateInfo fbInfo{};
+    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbInfo.renderPass = m_highResRenderPass;
+    fbInfo.attachmentCount = static_cast<u32>(fbAttachments.size());
+    fbInfo.pAttachments = fbAttachments.data();
+    fbInfo.width = width;
+    fbInfo.height = height;
+    fbInfo.layers = 1;
+
+    if (vkCreateFramebuffer(device, &fbInfo, nullptr, &m_highResFramebuffer) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res framebuffer");
+    }
+
+    // Create single-sample pipeline for high-res rendering
+    PipelineConfig highResConfig = PipelineConfig::defaultConfig();
+    highResConfig.renderPass = m_highResRenderPass;
+    highResConfig.pipelineLayout = m_pipelineLayout;
+    highResConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    highResConfig.multisample.sampleShadingEnable = VK_FALSE;
+
+    m_highResPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                    "shaders/structural.frag.spv", highResConfig);
+
+    // Create high-res transparent pipeline for glass/windows
+    PipelineConfig highResTransparentConfig = PipelineConfig::transparentConfig();
+    highResTransparentConfig.renderPass = m_highResRenderPass;
+    highResTransparentConfig.pipelineLayout = m_pipelineLayout;
+    highResTransparentConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    m_highResTransparentPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                               "shaders/structural.frag.spv", highResTransparentConfig);
+
+    std::cout << "[Renderer] High-res resources created: " << width << "x" << height << std::endl;
+}
+
+void Renderer::cleanupHighResResources() {
+    VkDevice device = m_context.getDevice();
+
+    // Destroy pipelines first (uses render pass)
+    m_highResPipeline.reset();
+    m_highResTransparentPipeline.reset();
+
+    if (m_highResFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(device, m_highResFramebuffer, nullptr);
+        m_highResFramebuffer = VK_NULL_HANDLE;
+    }
+    if (m_highResRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_highResRenderPass, nullptr);
+        m_highResRenderPass = VK_NULL_HANDLE;
+    }
+    if (m_highResDepthView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_highResDepthView, nullptr);
+        m_highResDepthView = VK_NULL_HANDLE;
+    }
+    if (m_highResDepthImage != VK_NULL_HANDLE) {
+        vkDestroyImage(device, m_highResDepthImage, nullptr);
+        m_highResDepthImage = VK_NULL_HANDLE;
+    }
+    if (m_highResDepthMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_highResDepthMemory, nullptr);
+        m_highResDepthMemory = VK_NULL_HANDLE;
+    }
+    if (m_highResView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_highResView, nullptr);
+        m_highResView = VK_NULL_HANDLE;
+    }
+    if (m_highResImage != VK_NULL_HANDLE) {
+        vkDestroyImage(device, m_highResImage, nullptr);
+        m_highResImage = VK_NULL_HANDLE;
+    }
+    if (m_highResMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_highResMemory, nullptr);
+        m_highResMemory = VK_NULL_HANDLE;
+    }
+}
+
+void Renderer::copyHighResImageToBuffer() {
+    VkDevice device = m_context.getDevice();
+    size_t imageSize = m_highResWidth * m_highResHeight * 4;
+
+    // Create staging buffer
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingMemory;
+
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = imageSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    vkCreateBuffer(device, &bufferInfo, nullptr, &stagingBuffer);
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(device, stagingBuffer, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(
+        memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+
+    vkAllocateMemory(device, &allocInfo, nullptr, &stagingMemory);
+    vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
+
+    // Copy image to buffer
+    VkCommandBuffer cmd = m_context.beginSingleTimeCommands();
+
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = { 0, 0, 0 };
+    region.imageExtent = { m_highResWidth, m_highResHeight, 1 };
+
+    vkCmdCopyImageToBuffer(cmd, m_highResImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer, 1, &region);
+
+    m_context.endSingleTimeCommands(cmd);
+
+    // Map and copy to CPU memory
+    m_highResPixels.resize(imageSize);
+    void* data;
+    vkMapMemory(device, stagingMemory, 0, imageSize, 0, &data);
+    memcpy(m_highResPixels.data(), data, imageSize);
+    vkUnmapMemory(device, stagingMemory);
+
+    // Cleanup
+    vkDestroyBuffer(device, stagingBuffer, nullptr);
+    vkFreeMemory(device, stagingMemory, nullptr);
+}
+
+// Halton sequence for sub-pixel jitter (better than random for AA)
+static float halton(int index, int base) {
+    float result = 0.0f;
+    float f = 1.0f / static_cast<float>(base);
+    int i = index;
+    while (i > 0) {
+        result += f * static_cast<float>(i % base);
+        i /= base;
+        f /= static_cast<float>(base);
+    }
+    return result;
+}
+
+bool Renderer::renderHighRes(
+    const std::vector<StructuralElement>& elements,
+    const Building& building,
+    u32 width,
+    u32 height,
+    int samples,
+    float brightness,
+    std::function<void(float)> progressCallback
+) {
+    std::cout << "[Renderer] Starting high-res render: " << width << "x" << height << " with " << samples << " samples" << std::endl;
+
+    try {
+        // Create resources at target resolution
+        createHighResResources(width, height);
+
+        // Wait for any pending operations
+        m_context.waitIdle();
+
+        // Initialize HDR accumulation buffer for multi-sample AA
+        size_t pixelCount = static_cast<size_t>(width) * height;
+        std::vector<float> accumBuffer(pixelCount * 4, 0.0f);  // RGBA float accumulation
+
+        float aspect = static_cast<float>(width) / static_cast<float>(height);
+        mat4 baseProj = m_camera.getProjectionMatrix(aspect);
+        baseProj[1][1] *= -1; // Vulkan Y flip
+
+        // Create fence for synchronization
+        VkFence fence;
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        vkCreateFence(m_context.getDevice(), &fenceInfo, nullptr, &fence);
+
+        // Render each sample with sub-pixel jitter
+        for (int sampleIdx = 0; sampleIdx < samples; ++sampleIdx) {
+            // Report progress
+            if (progressCallback) {
+                float progress = static_cast<float>(sampleIdx) / static_cast<float>(samples) * 0.9f;
+                progressCallback(progress);
+            }
+
+            std::cout << "[Renderer] Rendering sample " << (sampleIdx + 1) << "/" << samples << std::endl;
+
+            // Compute sub-pixel jitter using Halton sequence
+            float jitterX = 0.0f;
+            float jitterY = 0.0f;
+            if (samples > 1) {
+                // Halton(2) and Halton(3) for X and Y jitter
+                jitterX = halton(sampleIdx + 1, 2) - 0.5f;
+                jitterY = halton(sampleIdx + 1, 3) - 0.5f;
+            }
+
+            // Apply jitter to projection matrix (sub-pixel offset)
+            mat4 jitteredProj = baseProj;
+            if (samples > 1) {
+                // Jitter in NDC space: offset by fraction of pixel
+                float pixelWidth = 2.0f / static_cast<float>(width);
+                float pixelHeight = 2.0f / static_cast<float>(height);
+                jitteredProj[2][0] += jitterX * pixelWidth;
+                jitteredProj[2][1] += jitterY * pixelHeight;
+            }
+
+            // Allocate command buffer
+            VkCommandBufferAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.commandPool = m_context.getCommandPool();
+            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandBufferCount = 1;
+
+            VkCommandBuffer cmd;
+            vkAllocateCommandBuffers(m_context.getDevice(), &allocInfo, &cmd);
+
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vkBeginCommandBuffer(cmd, &beginInfo);
+
+            // Begin render pass
+            VkRenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass = m_highResRenderPass;
+            renderPassInfo.framebuffer = m_highResFramebuffer;
+            renderPassInfo.renderArea.offset = { 0, 0 };
+            renderPassInfo.renderArea.extent = { width, height };
+
+            std::array<VkClearValue, 2> clearValues{};
+            clearValues[0].color = { { 0.529f, 0.808f, 0.922f, 1.0f } };  // Sky blue background
+            clearValues[1].depthStencil = { 1.0f, 0 };
+
+            renderPassInfo.clearValueCount = static_cast<u32>(clearValues.size());
+            renderPassInfo.pClearValues = clearValues.data();
+
+            vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            // Set viewport and scissor
+            VkViewport viewport{};
+            viewport.x = 0.0f;
+            viewport.y = 0.0f;
+            viewport.width = static_cast<float>(width);
+            viewport.height = static_cast<float>(height);
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+            VkRect2D scissor{};
+            scissor.offset = { 0, 0 };
+            scissor.extent = { width, height };
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            // Update uniform buffer with jittered projection
+            UniformBufferObject ubo{};
+            ubo.view = m_camera.getViewMatrix();
+            ubo.proj = jitteredProj;
+            ubo.lightViewProj = m_shadowMap ? m_shadowMap->getLightViewProj() : mat4(1.0f);
+            ubo.lightDirection = vec4(m_lightDirection, 0.0f);
+            ubo.clipPlane = m_clippingEnabled ? m_clipPlane : vec4(0.0f);
+            ubo.time = m_time;
+            ubo.shadowBias = m_shadowBias;
+            ubo.enableClipping = m_clippingEnabled ? 1 : 0;
+            ubo.enableShadows = m_shadowsEnabled ? 1 : 0;
+            ubo.outputLinearHDR = 0;
+            // Apply user-controlled brightness to compensate for missing bloom
+            ubo.exposure = getExposure() * brightness;
+            // Also boost material brightness slightly for similar effect
+            ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, m_materialBrightness + (brightness - 1.0f) * 0.1f, m_materialContrast);
+            ubo.materialParams2 = vec4(m_materialSaturation, m_materialRoughnessOffset, m_materialMetallicOffset, m_materialAOStrength);
+            ubo.materialTint = vec4(m_materialTint, 1.0f);
+
+            memcpy(m_uniformBuffersMapped[0], &ubo, sizeof(ubo));
+
+            // Set current command buffer so draw functions use the right one
+            VkCommandBuffer oldCmd = m_currentCommandBuffer;
+            m_currentCommandBuffer = cmd;
+
+            // Bind high-res pipeline (single-sample) and descriptor sets
+            m_highResPipeline->bind(cmd);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[0], 0, nullptr);
+
+            // Draw all elements
+            for (size_t i = 0; i < elements.size(); ++i) {
+                const auto& elem = elements[i];
+                vec3 color = getElementColor(elem, building, i);
+
+                // Bind material
+                std::string matName = resolveMaterialName(elem);
+                bindMaterialDescriptorSet(matName);
+
+                // Get material preset
+                auto preset = getMaterialForElement(elem.type);
+                vec4 material(preset.metallic, preset.roughness, preset.ao, preset.emission);
+
+                // Compute stress for shader
+                f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? elem.stress : 0.0f;
+
+                // Draw based on element type (matching main render loop logic)
+                switch (elem.type) {
+                    case ElementType::Beam:
+                        drawBeam(elem.start, elem.end, elem.width, elem.depth, color, stressForShader, elem.deflection);
+                        break;
+                    case ElementType::Column: {
+                        float colHeight = elem.end.y - elem.start.y;
+                        drawColumnWithMaterial(elem.start, elem.width, elem.depth, colHeight, color, stressForShader, material);
+                        break;
+                    }
+                    case ElementType::Floor:
+                        if (elem.mesh.hasData()) {
+                            drawCustomMesh(elem.mesh, color, stressForShader);
+                        } else {
+                            vec3 center = (elem.start + elem.end) * 0.5f;
+                            center.y = elem.start.y;
+                            float thickness = elem.end.y - elem.start.y;
+                            drawFloor(center, elem.end.x - elem.start.x, elem.end.z - elem.start.z, thickness, color, stressForShader);
+                        }
+                        break;
+                    case ElementType::Wall: {
+                        if (elem.mesh.hasData()) {
+                            drawCustomMesh(elem.mesh, color, stressForShader);
+                        } else {
+                            // Generate wall geometry - supports diagonal walls
+                            float xExtent = elem.end.x - elem.start.x;
+                            float zExtent = elem.end.z - elem.start.z;
+                            float wallHeight = elem.end.y - elem.start.y;
+                            bool isDiagonal = std::abs(xExtent) > 0.1f && std::abs(zExtent) > 0.1f;
+                            vec4 wallMat = vec4(m_wallMetallic, m_wallRoughness, m_wallAO, m_wallEmission);
+
+                            if (isDiagonal) {
+                                float midHeight = elem.start.y + wallHeight * 0.5f;
+                                vec3 wallStart = vec3(elem.start.x, midHeight, elem.start.z);
+                                vec3 wallEnd = vec3(elem.end.x, midHeight, elem.end.z);
+                                float thickness = elem.depth > 0.01f ? elem.depth : 0.5f;
+
+                                std::string key = "diagwall_" + std::to_string(xExtent) + "_" +
+                                                 std::to_string(zExtent) + "_" + std::to_string(wallHeight) + "_" +
+                                                 std::to_string(thickness);
+                                if (m_meshCache.find(key) == m_meshCache.end()) {
+                                    auto [verts, indices] = Geometry::createBeam(wallStart, wallEnd, thickness, wallHeight, vec3(1.0f));
+                                    m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                                }
+                                drawMeshWithMaterial(*m_meshCache[key], mat4(1.0f), color, stressForShader, wallMat);
+                            } else {
+                                vec3 center = (elem.start + elem.end) * 0.5f;
+                                center.y = elem.start.y;
+                                float wallThickness = elem.depth > 0.01f ? elem.depth : 0.5f;
+
+                                if (std::abs(xExtent) > std::abs(zExtent)) {
+                                    drawColumnWithMaterial(center, std::abs(xExtent), wallThickness, wallHeight, color, stressForShader, wallMat);
+                                } else {
+                                    drawColumnWithMaterial(center, wallThickness, std::abs(zExtent), wallHeight, color, stressForShader, wallMat);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    case ElementType::Door: {
+                        if (elem.mesh.hasData()) {
+                            drawCustomMeshWithMaterial(elem.mesh, color, stressForShader, material);
+                        } else {
+                            // Generate door geometry
+                            float xExtent = elem.end.x - elem.start.x;
+                            float zExtent = elem.end.z - elem.start.z;
+                            float doorHeight = elem.end.y - elem.start.y;
+                            float doorDepth = elem.depth > 0.1f ? elem.depth : 0.5f;
+
+                            if (doorHeight > 0.01f) {
+                                float doorWidth = glm::length(vec2(xExtent, zExtent));
+                                if (doorWidth <= 0.01f) doorWidth = elem.width > 0.01f ? elem.width : 3.0f;
+
+                                vec3 doorPos = vec3((elem.start.x + elem.end.x) * 0.5f, elem.start.y,
+                                                    (elem.start.z + elem.end.z) * 0.5f);
+                                float angle = -std::atan2(zExtent, xExtent);
+                                mat4 transform = glm::translate(mat4(1.0f), doorPos);
+                                transform = glm::rotate(transform, angle, vec3(0, 1, 0));
+
+                                vec4 doorMat = vec4(0.0f, 0.75f, 1.0f, 0.0f);
+                                std::string key = "door_proper_" + std::to_string(static_cast<int>(doorWidth * 100)) + "_" +
+                                                 std::to_string(static_cast<int>(doorHeight * 100)) + "_" +
+                                                 std::to_string(static_cast<int>(doorDepth * 100));
+                                if (m_meshCache.find(key) == m_meshCache.end()) {
+                                    auto [verts, indices] = Geometry::createDoor(vec3(0), doorWidth, doorHeight, doorDepth, vec3(0.55f, 0.35f, 0.2f));
+                                    m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                                }
+                                drawMeshWithMaterial(*m_meshCache[key], transform, color, stressForShader, doorMat);
+                            }
+                        }
+                        break;
+                    }
+                    case ElementType::Window:
+                        // Windows rendered in transparent pass below
+                        break;
+                    case ElementType::Roof: {
+                        vec4 roofMat = vec4(m_roofMetallic, m_roofRoughness, m_roofAO, m_roofEmission);
+                        if (elem.mesh.hasData()) {
+                            drawCustomMeshWithMaterial(elem.mesh, color, stressForShader, roofMat);
+                        } else {
+                            float roofWidth = std::abs(elem.end.x - elem.start.x);
+                            float roofDepthZ = std::abs(elem.end.z - elem.start.z);
+                            float roofThickness = elem.end.y - elem.start.y;
+                            if (roofThickness < 0.1f) roofThickness = 0.5f;
+
+                            vec3 center = (elem.start + elem.end) * 0.5f;
+                            center.y = elem.start.y;
+
+                            std::string key = "roof_" + std::to_string(roofWidth) + "_" + std::to_string(roofDepthZ) + "_" + std::to_string(roofThickness);
+                            if (m_meshCache.find(key) == m_meshCache.end()) {
+                                auto [verts, indices] = Geometry::createFloorSlab(vec3(0), roofWidth, roofDepthZ, roofThickness);
+                                m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                            }
+                            mat4 roofTransform = glm::translate(mat4(1.0f), center);
+                            drawMeshWithMaterial(*m_meshCache[key], roofTransform, color, stressForShader, roofMat);
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+
+            // Note: Sky is skipped in high-res render as the sky pipeline uses
+            // the swapchain render pass (MSAA) and different command buffer.
+            // A solid background color is used instead (set in clear values).
+
+            // Second pass: Render transparent windows with alpha blending
+            if (m_highResTransparentPipeline) {
+                m_highResTransparentPipeline->bind(cmd);
+
+                for (size_t i = 0; i < elements.size(); ++i) {
+                    const auto& elem = elements[i];
+                    if (elem.type != ElementType::Window) continue;
+
+                    vec3 color = getElementColor(elem, building, i);
+                    f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? elem.stress : 0.0f;
+
+                    // Bind material
+                    std::string matName = resolveMaterialName(elem);
+                    bindMaterialDescriptorSet(matName);
+
+                    // Generate window geometry
+                    float xExtent = elem.end.x - elem.start.x;
+                    float zExtent = elem.end.z - elem.start.z;
+                    float winHeight = elem.end.y - elem.start.y;
+                    float winDepth = elem.depth > 0.01f ? elem.depth : 0.15f;
+
+                    if (winHeight > 0.01f) {
+                        float winWidth = glm::length(vec2(xExtent, zExtent));
+                        if (winWidth <= 0.01f) winWidth = elem.width > 0.01f ? elem.width : 1.2f;
+
+                        vec3 winPos = vec3((elem.start.x + elem.end.x) * 0.5f, elem.start.y,
+                                           (elem.start.z + elem.end.z) * 0.5f);
+                        float angle = -std::atan2(zExtent, xExtent);
+                        mat4 transform = glm::translate(mat4(1.0f), winPos);
+                        transform = glm::rotate(transform, angle, vec3(0, 1, 0));
+
+                        vec4 glassMat = vec4(0.0f, 0.1f, 1.0f, 0.0f);  // Smooth glass
+                        std::string key = "window_proper_" + std::to_string(static_cast<int>(winWidth * 100)) + "_" +
+                                         std::to_string(static_cast<int>(winHeight * 100)) + "_" +
+                                         std::to_string(static_cast<int>(winDepth * 100));
+                        if (m_meshCache.find(key) == m_meshCache.end()) {
+                            auto [verts, indices] = Geometry::createWindow(vec3(0), winWidth, winHeight, winDepth, vec3(0.8f, 0.9f, 0.95f));
+                            m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                        }
+                        drawMeshWithMaterial(*m_meshCache[key], transform, color, stressForShader, glassMat);
+                    }
+                }
+            }
+
+            vkCmdEndRenderPass(cmd);
+            vkEndCommandBuffer(cmd);
+
+            // Restore the original command buffer
+            m_currentCommandBuffer = oldCmd;
+
+            // Submit and wait
+            VkSubmitInfo submitInfo{};
+            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &cmd;
+
+            vkResetFences(m_context.getDevice(), 1, &fence);
+            vkQueueSubmit(m_context.getGraphicsQueue(), 1, &submitInfo, fence);
+            vkWaitForFences(m_context.getDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
+
+            vkFreeCommandBuffers(m_context.getDevice(), m_context.getCommandPool(), 1, &cmd);
+
+            // Copy this sample's result to CPU
+            copyHighResImageToBuffer();
+
+            // Accumulate this sample into the float buffer
+            for (size_t p = 0; p < pixelCount; ++p) {
+                accumBuffer[p * 4 + 0] += static_cast<float>(m_highResPixels[p * 4 + 0]);
+                accumBuffer[p * 4 + 1] += static_cast<float>(m_highResPixels[p * 4 + 1]);
+                accumBuffer[p * 4 + 2] += static_cast<float>(m_highResPixels[p * 4 + 2]);
+                accumBuffer[p * 4 + 3] += static_cast<float>(m_highResPixels[p * 4 + 3]);
+            }
+        }
+
+        vkDestroyFence(m_context.getDevice(), fence, nullptr);
+
+        // Ensure all GPU work is complete before returning to normal rendering
+        m_context.waitIdle();
+
+        // Reset frame tracking to avoid stale fence references
+        m_currentFrame = 0;
+        m_imagesInFlight.assign(m_context.getSwapchainImageCount(), VK_NULL_HANDLE);
+
+        // Average the accumulated samples and convert back to 8-bit
+        float invSamples = 1.0f / static_cast<float>(samples);
+        for (size_t p = 0; p < pixelCount; ++p) {
+            m_highResPixels[p * 4 + 0] = static_cast<u8>(std::min(255.0f, accumBuffer[p * 4 + 0] * invSamples));
+            m_highResPixels[p * 4 + 1] = static_cast<u8>(std::min(255.0f, accumBuffer[p * 4 + 1] * invSamples));
+            m_highResPixels[p * 4 + 2] = static_cast<u8>(std::min(255.0f, accumBuffer[p * 4 + 2] * invSamples));
+            m_highResPixels[p * 4 + 3] = static_cast<u8>(std::min(255.0f, accumBuffer[p * 4 + 3] * invSamples));
+        }
+
+        // Store HDR data for potential EXR export
+        m_highResHDRPixels.resize(pixelCount * 4);
+        for (size_t p = 0; p < pixelCount; ++p) {
+            m_highResHDRPixels[p * 4 + 0] = accumBuffer[p * 4 + 0] * invSamples / 255.0f;
+            m_highResHDRPixels[p * 4 + 1] = accumBuffer[p * 4 + 1] * invSamples / 255.0f;
+            m_highResHDRPixels[p * 4 + 2] = accumBuffer[p * 4 + 2] * invSamples / 255.0f;
+            m_highResHDRPixels[p * 4 + 3] = accumBuffer[p * 4 + 3] * invSamples / 255.0f;
+        }
+
+        if (progressCallback) progressCallback(1.0f);
+
+        std::cout << "[Renderer] High-res render complete with " << samples << " samples" << std::endl;
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "[Renderer] High-res render failed: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+bool Renderer::saveHighResPNG(const std::string& filepath) {
+    if (m_highResPixels.empty() || m_highResWidth == 0 || m_highResHeight == 0) {
+        std::cerr << "[Renderer] No high-res image to save" << std::endl;
+        return false;
+    }
+
+    // Create directory if needed
+    std::filesystem::path path(filepath);
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+
+    // stb_image_write expects top-to-bottom, which is what we have
+    int result = stbi_write_png(
+        filepath.c_str(),
+        static_cast<int>(m_highResWidth),
+        static_cast<int>(m_highResHeight),
+        4,  // RGBA
+        m_highResPixels.data(),
+        static_cast<int>(m_highResWidth * 4)
+    );
+
+    if (result) {
+        std::cout << "[Renderer] Saved high-res image to: " << filepath << std::endl;
+        return true;
+    } else {
+        std::cerr << "[Renderer] Failed to save PNG: " << filepath << std::endl;
+        return false;
+    }
+}
+
+bool Renderer::saveHighResEXR(const std::string& filepath) {
+    // EXR export requires additional library (tinyexr or OpenEXR)
+    // For now, fall back to PNG with a warning
+    std::cerr << "[Renderer] EXR export not yet implemented, saving as PNG instead" << std::endl;
+    std::string pngPath = filepath;
+    size_t extPos = pngPath.rfind(".exr");
+    if (extPos != std::string::npos) {
+        pngPath.replace(extPos, 4, ".png");
+    }
+    return saveHighResPNG(pngPath);
+}
 
 } // namespace arch

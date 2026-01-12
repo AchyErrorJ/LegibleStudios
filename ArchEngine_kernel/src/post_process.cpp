@@ -63,7 +63,7 @@ void PostProcess::resize(u32 width, u32 height) {
 
     m_context.waitIdle();
     cleanupHDRTargets();
-    cleanupSSAO();
+    cleanupSSAOSizeDependent();
     cleanupBloom();
 
     m_width = width;
@@ -71,7 +71,8 @@ void PostProcess::resize(u32 width, u32 height) {
 
     createHDRTargets();
     createSSAOResources();
-    // Pipelines don't need to be recreated
+    createBloomResources();
+    std::cout << "[PostProcess] Resized to " << width << "x" << height << std::endl;
 }
 
 void PostProcess::createSSAOKernel() {
@@ -297,6 +298,8 @@ void PostProcess::createSSAOResources() {
     poolInfo.poolSizeCount = static_cast<u32>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
     poolInfo.maxSets = frameCount * 6 + 6;  // SSAO + bloom + composite per frame + extra
+    // Allow descriptor sets to be updated while bound (for dynamic SSAO depth/normal binding)
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO descriptor pool");
@@ -329,10 +332,24 @@ void PostProcess::createSSAOResources() {
     bindings[3].descriptorCount = 1;
     bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // Enable UPDATE_AFTER_BIND for all bindings (SSAO updates depth/normal views each frame)
+    std::array<VkDescriptorBindingFlags, 4> bindingFlags{};
+    bindingFlags[0] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    bindingFlags[1] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    bindingFlags[2] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    bindingFlags[3] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+
+    VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
+    bindingFlagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    bindingFlagsInfo.bindingCount = static_cast<u32>(bindingFlags.size());
+    bindingFlagsInfo.pBindingFlags = bindingFlags.data();
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<u32>(bindings.size());
     layoutInfo.pBindings = bindings.data();
+    layoutInfo.pNext = &bindingFlagsInfo;
+    layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
 
     if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_ssaoDescriptorLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO descriptor set layout");
@@ -350,10 +367,13 @@ void PostProcess::createSSAOResources() {
     blurBindings[1].descriptorCount = 1;
     blurBindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    layoutInfo.bindingCount = static_cast<u32>(blurBindings.size());
-    layoutInfo.pBindings = blurBindings.data();
+    // Reset layoutInfo for blur layout (no UPDATE_AFTER_BIND needed - static binding)
+    VkDescriptorSetLayoutCreateInfo blurLayoutInfo{};
+    blurLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    blurLayoutInfo.bindingCount = static_cast<u32>(blurBindings.size());
+    blurLayoutInfo.pBindings = blurBindings.data();
 
-    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_ssaoBlurDescLayout) != VK_SUCCESS) {
+    if (vkCreateDescriptorSetLayout(device, &blurLayoutInfo, nullptr, &m_ssaoBlurDescLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO blur descriptor set layout");
     }
 
@@ -364,10 +384,21 @@ void PostProcess::createSSAOResources() {
     sampleBinding.descriptorCount = 1;
     sampleBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &sampleBinding;
+    // Enable UPDATE_AFTER_BIND for sample descriptor (updated during command recording)
+    VkDescriptorBindingFlags sampleBindingFlag = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    VkDescriptorSetLayoutBindingFlagsCreateInfo sampleBindingFlagsInfo{};
+    sampleBindingFlagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    sampleBindingFlagsInfo.bindingCount = 1;
+    sampleBindingFlagsInfo.pBindingFlags = &sampleBindingFlag;
 
-    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_ssaoSampleDescLayout) != VK_SUCCESS) {
+    VkDescriptorSetLayoutCreateInfo sampleLayoutInfo{};
+    sampleLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    sampleLayoutInfo.bindingCount = 1;
+    sampleLayoutInfo.pBindings = &sampleBinding;
+    sampleLayoutInfo.pNext = &sampleBindingFlagsInfo;
+    sampleLayoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+
+    if (vkCreateDescriptorSetLayout(device, &sampleLayoutInfo, nullptr, &m_ssaoSampleDescLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO sample descriptor set layout");
     }
 
@@ -1495,10 +1526,10 @@ void PostProcess::composite(VkCommandBuffer cmd, VkRenderPass renderPass, VkFram
     imageInfos[1].imageView = m_ssaoBlurredView ? m_ssaoBlurredView : m_ssaoView;
     imageInfos[1].sampler = m_ssaoSampler;
 
-    // Bloom
+    // Bloom (use HDR view as fallback if bloom not ready)
     imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfos[2].imageView = m_bloomResultView;
-    imageInfos[2].sampler = m_bloomSampler;
+    imageInfos[2].imageView = m_bloomResultView ? m_bloomResultView : m_hdrColorView;
+    imageInfos[2].sampler = m_bloomSampler ? m_bloomSampler : m_hdrSampler;
 
     std::array<VkWriteDescriptorSet, 3> writes{};
     for (u32 i = 0; i < 3; i++) {
@@ -1640,6 +1671,32 @@ void PostProcess::cleanupComposite() {
     m_compositePipelineLayout = VK_NULL_HANDLE;
     m_compositeDescLayout = VK_NULL_HANDLE;
     m_compositeDescSets.clear();  // Freed with pool
+}
+
+void PostProcess::cleanupSSAOSizeDependent() {
+    // Cleanup only size-dependent SSAO resources (for resize)
+    // Keeps noise texture, pipelines, and layouts intact
+    auto device = m_context.getDevice();
+
+    if (m_ssaoFramebuffer) vkDestroyFramebuffer(device, m_ssaoFramebuffer, nullptr);
+    if (m_ssaoBlurFramebuffer) vkDestroyFramebuffer(device, m_ssaoBlurFramebuffer, nullptr);
+
+    if (m_ssaoView) vkDestroyImageView(device, m_ssaoView, nullptr);
+    if (m_ssaoImage) vkDestroyImage(device, m_ssaoImage, nullptr);
+    if (m_ssaoMemory) vkFreeMemory(device, m_ssaoMemory, nullptr);
+
+    if (m_ssaoBlurredView) vkDestroyImageView(device, m_ssaoBlurredView, nullptr);
+    if (m_ssaoBlurredImage) vkDestroyImage(device, m_ssaoBlurredImage, nullptr);
+    if (m_ssaoBlurredMemory) vkFreeMemory(device, m_ssaoBlurredMemory, nullptr);
+
+    m_ssaoFramebuffer = VK_NULL_HANDLE;
+    m_ssaoBlurFramebuffer = VK_NULL_HANDLE;
+    m_ssaoView = VK_NULL_HANDLE;
+    m_ssaoImage = VK_NULL_HANDLE;
+    m_ssaoMemory = VK_NULL_HANDLE;
+    m_ssaoBlurredView = VK_NULL_HANDLE;
+    m_ssaoBlurredImage = VK_NULL_HANDLE;
+    m_ssaoBlurredMemory = VK_NULL_HANDLE;
 }
 
 void PostProcess::cleanupSSAO() {

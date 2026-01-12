@@ -23,6 +23,8 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     uint _padding1;
     uint _padding2;
     vec4 materialParams;
+    vec4 materialParams2;
+    vec4 materialTint;
 } ubo;
 
 // Push constants

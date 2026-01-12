@@ -760,6 +760,8 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
         elem.stress = 0.0f;
         elem.deflection = 0.0f;
         elem.failed = false;
+        // Store wall rotation angle so door aligns with host wall
+        elem.rotation = std::atan2(wallDir.z, wallDir.x);
 
         building.elements.push_back(elem);
     }
@@ -791,6 +793,8 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
         elem.stress = 0.0f;
         elem.deflection = 0.0f;
         elem.failed = false;
+        // Store wall rotation angle so window aligns with host wall
+        elem.rotation = std::atan2(wallDir.z, wallDir.x);
 
         building.elements.push_back(elem);
     }

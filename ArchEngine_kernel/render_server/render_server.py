@@ -1336,6 +1336,108 @@ def api_generate_material():
     })
 
 
+@app.route('/api/materials/generate_height', methods=['POST'])
+def api_generate_height():
+    """
+    Generate a height/displacement map for an existing material using hybrid approach.
+
+    Uses normal map integration if available, falls back to Depth Anything v2 on diffuse.
+
+    POST body (JSON):
+        material_path: Path to material directory containing textures
+        output_path: Optional output path (default: material_path/height.png)
+        method: "hybrid" (auto), "normal" (from normal map), "diffuse" (AI depth)
+        blur: Gaussian blur radius (default 1.0)
+        contrast: Height contrast multiplier (default 1.0)
+        invert: Flip height values (default false)
+
+    OR for direct image input:
+        diffuse_base64: Base64 encoded diffuse image
+        normal_base64: Optional base64 encoded normal map
+    """
+    from height_generator import generate_height_map, generate_height_map_from_image
+    import base64
+    import io
+
+    data = request.json or {}
+
+    # Check for direct image input
+    diffuse_b64 = data.get('diffuse_base64')
+    if diffuse_b64:
+        # Decode images
+        diffuse_data = base64.b64decode(diffuse_b64)
+        diffuse_img = Image.open(io.BytesIO(diffuse_data))
+
+        normal_img = None
+        normal_b64 = data.get('normal_base64')
+        if normal_b64:
+            normal_data = base64.b64decode(normal_b64)
+            normal_img = Image.open(io.BytesIO(normal_data))
+
+        method = data.get('method', 'hybrid')
+        blur = float(data.get('blur', 1.0))
+        contrast = float(data.get('contrast', 1.0))
+        invert = bool(data.get('invert', False))
+
+        try:
+            height_img = generate_height_map_from_image(
+                diffuse_img,
+                normal_image=normal_img,
+                method=method,
+                blur_radius=blur,
+                contrast=contrast,
+                invert=invert
+            )
+
+            # Convert to base64
+            buffer = io.BytesIO()
+            height_img.save(buffer, format='PNG')
+            height_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+            return jsonify({
+                "status": "ok",
+                "height_base64": height_b64,
+                "width": height_img.width,
+                "height": height_img.height
+            })
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({"error": str(e)}), 500
+
+    # File-based input
+    material_path = data.get('material_path')
+    if not material_path:
+        return jsonify({"error": "material_path or diffuse_base64 required"}), 400
+
+    output_path = data.get('output_path')
+    method = data.get('method', 'hybrid')
+    blur = float(data.get('blur', 1.0))
+    contrast = float(data.get('contrast', 1.0))
+    invert = bool(data.get('invert', False))
+
+    try:
+        result_path = generate_height_map(
+            material_path,
+            output_path=output_path,
+            method=method,
+            blur_radius=blur,
+            contrast=contrast,
+            invert=invert
+        )
+
+        return jsonify({
+            "status": "ok",
+            "height_path": result_path
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/upload_base', methods=['POST'])
 def api_upload_base():
     """Upload a base image for AI enhancement."""
@@ -1876,6 +1978,68 @@ def api_upscale():
         traceback.print_exc()
         progress.fail(str(e))
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/upscale_image', methods=['POST'])
+def api_upscale_image():
+    """
+    Upscale an image file directly using Real-ESRGAN.
+
+    Parameters:
+        input_path: Path to the input image file
+        output_path: Path where the upscaled image will be saved
+        scale: Upscale factor (2 or 4, default 2)
+        method: "realesrgan" (default) or "simple" (Lanczos)
+    """
+    from upscaler import get_upscaler
+
+    data = request.json or {}
+    input_path = data.get('input_path')
+    output_path = data.get('output_path')
+    scale = data.get('scale', 2)
+    method = data.get('method', 'realesrgan')
+
+    if not input_path or not output_path:
+        return jsonify({"error": "input_path and output_path are required"}), 400
+
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    if not input_path.exists():
+        return jsonify({"error": f"Input file not found: {input_path}"}), 404
+
+    # Ensure output directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"[Upscale] {input_path} -> {output_path} (scale={scale}, method={method})")
+
+    try:
+        t0 = time.time()
+
+        if method == 'simple' or method == 'lanczos':
+            # Use PIL for simple upscaling
+            img = Image.open(input_path)
+            new_size = (img.width * scale, img.height * scale)
+            upscaled = img.resize(new_size, Image.Resampling.LANCZOS)
+            upscaled.save(output_path)
+        else:
+            # Use Real-ESRGAN
+            upscaler = get_upscaler('realesrgan')
+            upscaler.upscale(str(input_path), str(output_path))
+
+        elapsed = time.time() - t0
+        print(f"[Upscale] Complete in {elapsed:.1f}s")
+
+        return jsonify({
+            "status": "ok",
+            "output_path": str(output_path),
+            "elapsed": elapsed
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/load', methods=['POST'])
 def api_load():
     try:
