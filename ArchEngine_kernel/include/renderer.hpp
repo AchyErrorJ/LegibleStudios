@@ -37,6 +37,7 @@ namespace arch {
 struct RenderStats {
     u32 drawCalls = 0;      ///< Number of draw calls this frame
     u32 triangles = 0;      ///< Total triangles rendered this frame
+    u32 culledElements = 0; ///< Elements culled by frustum this frame
     f32 frameTimeMs = 0.0f; ///< CPU frame time in milliseconds
     f32 gpuTimeMs = 0.0f;   ///< GPU frame time in milliseconds
 };
@@ -935,9 +936,11 @@ private:
     bool m_frameStarted = false;
     VkCommandBuffer m_currentCommandBuffer = VK_NULL_HANDLE;
 
-    // Camera and time
+    // Camera, frustum, and time
     Camera m_camera;
+    Frustum m_frustum;  // Cached frustum for culling
     f32 m_time = 0.0f;
+    u32 m_culledCount = 0;  // Debug: elements culled this frame
 
     // Visualization mode
     VisualizationMode m_vizMode = VisualizationMode::Material;

@@ -1116,7 +1116,7 @@ int main(int argc, char* argv[]) {
                 static bool wallMenuAdded = false;
                 imgui.drawWallEditor(buildings[currentBuilding], showGeometryEditor);
                 imgui.drawHelpPanel(showHelp);
-                imgui.drawPerformancePanel(currentFps, renderer.getStats().drawCalls, renderer.getStats().triangles);
+                imgui.drawPerformancePanel(currentFps, renderer.getStats().drawCalls, renderer.getStats().triangles, renderer.getStats().culledElements);
 
                 // Apply material to selection (button)
                 if (imgui.wasApplyMaterialRequested()) {

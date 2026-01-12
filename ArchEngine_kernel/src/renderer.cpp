@@ -1560,6 +1560,14 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
 
 void Renderer::setCamera(const Camera& camera) {
     m_camera = camera;
+
+    // Update frustum for culling
+    auto extent = m_context.getSwapchainExtent();
+    f32 aspectRatio = static_cast<f32>(extent.width) / static_cast<f32>(extent.height);
+    mat4 view = m_camera.getViewMatrix();
+    mat4 proj = m_camera.getProjectionMatrix(aspectRatio);
+    proj[1][1] *= -1;  // Vulkan Y-flip
+    m_frustum = Frustum::fromViewProjection(proj * view);
 }
 
 void Renderer::updateUniformBuffer(u32 frameIndex) {
@@ -2334,8 +2342,18 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
         std::cout << "[Renderer] Building: " << building.name << " - " << walls << " walls, " << doors << " doors, " << windows << " windows\n";
     }
 
+    m_culledCount = 0;  // Reset culled counter
     size_t index = 0;
     for (const auto& element : elements) {
+        // Frustum culling - skip elements outside view
+        vec3 aabbMin, aabbMax;
+        getElementAABB(element, aabbMin, aabbMax);
+        if (!m_frustum.testAABB(aabbMin, aabbMax)) {
+            m_culledCount++;
+            index++;
+            continue;  // Skip this element
+        }
+
         vec3 color = getElementColor(element, building, index);
 
         // Highlight selected elements with yellow/orange
@@ -2620,6 +2638,9 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
 
         m_context.endDebugLabel(m_currentCommandBuffer);
     }
+
+    // Update stats with culled count
+    m_stats.culledElements = m_culledCount;
 
     m_context.endDebugLabel(m_currentCommandBuffer);
 }

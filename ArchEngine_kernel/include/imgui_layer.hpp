@@ -89,7 +89,7 @@ public:
     void drawPhysicsPanel(const FrameAnalysis& analysis, bool physicsAvailable);
     void drawVisualizationPanel(VisualizationMode& mode, Renderer& renderer);
     void drawHelpPanel(bool& show);
-    void drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles);
+    void drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles, u32 culledElements = 0);
     void drawRenderSettingsPanel(Renderer& renderer, bool& show);
     void drawGeometryEditor(bool& show);
 

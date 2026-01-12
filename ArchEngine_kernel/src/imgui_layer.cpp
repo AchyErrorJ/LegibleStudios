@@ -313,14 +313,17 @@ void ImGuiLayer::drawHelpPanel(bool& show) {
     ImGui::End();
 }
 
-void ImGuiLayer::drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles) {
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 160, 30), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(150, 100), ImGuiCond_FirstUseEver);
+void ImGuiLayer::drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles, u32 culledElements) {
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 170, 30), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(160, 115), ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin("Performance", nullptr, ImGuiWindowFlags_NoResize)) {
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Text("Draw Calls: %u", drawCalls);
         ImGui::Text("Triangles: %u", triangles);
+        if (culledElements > 0) {
+            ImGui::Text("Culled: %u", culledElements);
+        }
     }
     ImGui::End();
 }

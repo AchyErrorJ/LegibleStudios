@@ -550,6 +550,119 @@ struct ParametricWall {
     }
 };
 
+// ============================================================================
+// FRUSTUM CULLING
+// ============================================================================
+
+// Frustum plane (ax + by + cz + d = 0)
+struct Plane {
+    vec3 normal;
+    f32 distance;
+
+    // Signed distance from point to plane (positive = in front)
+    f32 distanceToPoint(const vec3& point) const {
+        return glm::dot(normal, point) + distance;
+    }
+};
+
+// View frustum for culling (6 planes)
+struct Frustum {
+    enum { Left = 0, Right, Bottom, Top, Near, Far, Count };
+    Plane planes[Count];
+
+    // Extract frustum planes from view-projection matrix
+    static Frustum fromViewProjection(const mat4& vp) {
+        Frustum f;
+
+        // Left plane
+        f.planes[Left].normal.x = vp[0][3] + vp[0][0];
+        f.planes[Left].normal.y = vp[1][3] + vp[1][0];
+        f.planes[Left].normal.z = vp[2][3] + vp[2][0];
+        f.planes[Left].distance = vp[3][3] + vp[3][0];
+
+        // Right plane
+        f.planes[Right].normal.x = vp[0][3] - vp[0][0];
+        f.planes[Right].normal.y = vp[1][3] - vp[1][0];
+        f.planes[Right].normal.z = vp[2][3] - vp[2][0];
+        f.planes[Right].distance = vp[3][3] - vp[3][0];
+
+        // Bottom plane
+        f.planes[Bottom].normal.x = vp[0][3] + vp[0][1];
+        f.planes[Bottom].normal.y = vp[1][3] + vp[1][1];
+        f.planes[Bottom].normal.z = vp[2][3] + vp[2][1];
+        f.planes[Bottom].distance = vp[3][3] + vp[3][1];
+
+        // Top plane
+        f.planes[Top].normal.x = vp[0][3] - vp[0][1];
+        f.planes[Top].normal.y = vp[1][3] - vp[1][1];
+        f.planes[Top].normal.z = vp[2][3] - vp[2][1];
+        f.planes[Top].distance = vp[3][3] - vp[3][1];
+
+        // Near plane
+        f.planes[Near].normal.x = vp[0][3] + vp[0][2];
+        f.planes[Near].normal.y = vp[1][3] + vp[1][2];
+        f.planes[Near].normal.z = vp[2][3] + vp[2][2];
+        f.planes[Near].distance = vp[3][3] + vp[3][2];
+
+        // Far plane
+        f.planes[Far].normal.x = vp[0][3] - vp[0][2];
+        f.planes[Far].normal.y = vp[1][3] - vp[1][2];
+        f.planes[Far].normal.z = vp[2][3] - vp[2][2];
+        f.planes[Far].distance = vp[3][3] - vp[3][2];
+
+        // Normalize all planes
+        for (int i = 0; i < Count; i++) {
+            f32 len = glm::length(f.planes[i].normal);
+            if (len > 0.0001f) {
+                f.planes[i].normal /= len;
+                f.planes[i].distance /= len;
+            }
+        }
+
+        return f;
+    }
+
+    // Test if AABB is inside or intersects frustum
+    // Returns true if visible (fully or partially inside)
+    bool testAABB(const vec3& minPt, const vec3& maxPt) const {
+        for (int i = 0; i < Count; i++) {
+            // Find the positive vertex (furthest along plane normal)
+            vec3 pVertex;
+            pVertex.x = (planes[i].normal.x >= 0) ? maxPt.x : minPt.x;
+            pVertex.y = (planes[i].normal.y >= 0) ? maxPt.y : minPt.y;
+            pVertex.z = (planes[i].normal.z >= 0) ? maxPt.z : minPt.z;
+
+            // If positive vertex is outside, AABB is fully outside
+            if (planes[i].distanceToPoint(pVertex) < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Quick test for a point (useful for small objects)
+    bool testPoint(const vec3& point) const {
+        for (int i = 0; i < Count; i++) {
+            if (planes[i].distanceToPoint(point) < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
+// Helper to compute AABB from StructuralElement
+inline void getElementAABB(const StructuralElement& elem, vec3& outMin, vec3& outMax) {
+    // Use start/end as basis, expand by width/depth
+    vec3 halfExtent(elem.width * 0.5f, 0.0f, elem.depth * 0.5f);
+
+    outMin = glm::min(elem.start, elem.end) - halfExtent;
+    outMax = glm::max(elem.start, elem.end) + halfExtent;
+
+    // Ensure Y bounds are correct (height)
+    if (outMin.y > outMax.y) std::swap(outMin.y, outMax.y);
+}
+
 // Building/Scene structure for loading
 struct Building {
     std::string name;
