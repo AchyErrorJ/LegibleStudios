@@ -144,6 +144,23 @@ ARCH_API void arch_set_viz_mode(int mode);
 ARCH_API void arch_select_element(int element_index);
 
 /**
+ * Get the currently selected element index.
+ *
+ * @return Selected element index, or -1 if none selected
+ */
+ARCH_API int arch_get_selected_element(void);
+
+/**
+ * Pick an element at screen coordinates.
+ * Uses ray casting from the camera through the given screen position.
+ *
+ * @param screen_x X coordinate in screen pixels (0 = left)
+ * @param screen_y Y coordinate in screen pixels (0 = top)
+ * @return Element index at that position, or -1 if no hit
+ */
+ARCH_API int arch_pick_element(int screen_x, int screen_y);
+
+/**
  * Get the number of elements in the current building.
  *
  * @return Number of elements
@@ -251,6 +268,64 @@ ARCH_API void arch_set_material_style(int style);
  * @return Current style (0-3)
  */
 ARCH_API int arch_get_material_style(void);
+
+/**
+ * Set global UV/texture scale (tiling factor).
+ *
+ * @param scale_u Horizontal tiling (1.0 = original size, 2.0 = 2x tiling)
+ * @param scale_v Vertical tiling (1.0 = original size, 2.0 = 2x tiling)
+ */
+ARCH_API void arch_set_uv_scale(float scale_u, float scale_v);
+
+/**
+ * Get current UV scale.
+ *
+ * @param out_u Pointer to store U scale
+ * @param out_v Pointer to store V scale
+ */
+ARCH_API void arch_get_uv_scale(float* out_u, float* out_v);
+
+/**
+ * Set roughness multiplier (affects all materials).
+ *
+ * @param multiplier Roughness multiplier (1.0 = default, 0.5 = smoother, 2.0 = rougher)
+ */
+ARCH_API void arch_set_roughness_multiplier(float multiplier);
+
+/**
+ * Get roughness multiplier.
+ *
+ * @return Current roughness multiplier
+ */
+ARCH_API float arch_get_roughness_multiplier(void);
+
+/**
+ * Set metallic multiplier (affects all materials).
+ *
+ * @param multiplier Metallic multiplier (1.0 = default)
+ */
+ARCH_API void arch_set_metallic_multiplier(float multiplier);
+
+/**
+ * Get metallic multiplier.
+ *
+ * @return Current metallic multiplier
+ */
+ARCH_API float arch_get_metallic_multiplier(void);
+
+/**
+ * Set ambient occlusion strength.
+ *
+ * @param strength AO strength (1.0 = full, 0.0 = none)
+ */
+ARCH_API void arch_set_ao_strength(float strength);
+
+/**
+ * Get ambient occlusion strength.
+ *
+ * @return Current AO strength
+ */
+ARCH_API float arch_get_ao_strength(void);
 
 // =============================================================================
 // Shadows & Lighting API
@@ -411,6 +486,53 @@ ARCH_API void arch_set_tonemap_mode(int mode);
  * @return Current mode (0-2)
  */
 ARCH_API int arch_get_tonemap_mode(void);
+
+// =============================================================================
+// Room Data Export API
+// =============================================================================
+
+/**
+ * Room data structure for export to Python.
+ * All coordinates in mm.
+ */
+typedef struct {
+    char id[64];           // Room ID
+    char name[128];        // Room name
+    char room_type[64];    // Room type (bedroom, kitchen, etc.)
+    float bounds_x;        // Bounding box X
+    float bounds_y;        // Bounding box Y
+    float bounds_width;    // Bounding box width
+    float bounds_height;   // Bounding box height
+    float center_x;        // Center X
+    float center_y;        // Center Y (actually Z in 3D)
+    float area;            // Area in sq ft
+    int zone;              // Zone (0=Public, 1=Private, 2=Service, 3=Circulation)
+} ArchRoomData;
+
+/**
+ * Get the number of rooms in the current layout.
+ *
+ * @return Number of rooms
+ */
+ARCH_API int arch_get_room_count(void);
+
+/**
+ * Get room data by index.
+ *
+ * @param index Room index (0 to room_count-1)
+ * @param out_room Pointer to room data struct to fill
+ * @return 0 on success, non-zero if index out of bounds
+ */
+ARCH_API int arch_get_room_data(int index, ArchRoomData* out_room);
+
+/**
+ * Get all room data at once.
+ *
+ * @param out_rooms Array to fill (must have space for room_count rooms)
+ * @param max_rooms Maximum rooms to return
+ * @return Number of rooms filled
+ */
+ARCH_API int arch_get_all_rooms(ArchRoomData* out_rooms, int max_rooms);
 
 #ifdef __cplusplus
 }

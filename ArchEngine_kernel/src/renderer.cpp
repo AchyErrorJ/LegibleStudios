@@ -151,6 +151,17 @@ Renderer::~Renderer() {
     vkDestroyRenderPass(m_context.getDevice(), m_renderPass, nullptr);
 }
 
+void Renderer::clearMeshCache() {
+    // Wait for GPU to finish using resources
+    m_context.waitIdle();
+
+    // Clear the mesh cache (Mesh destructors will free Vulkan buffers)
+    m_meshCache.clear();
+
+    // Clear the custom mesh key cache (maps mesh pointers to cache keys)
+    m_customMeshKeyCache.clear();
+}
+
 void Renderer::createRenderPass() {
     VkSampleCountFlagBits msaaSamples = m_context.getMsaaSamples();
     bool useMsaa = msaaSamples != VK_SAMPLE_COUNT_1_BIT;

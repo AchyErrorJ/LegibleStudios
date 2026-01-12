@@ -116,6 +116,14 @@ public:
      * Must be called after all draw commands are complete.
      */
     void endFrame();
+
+    /**
+     * @brief Clear the mesh cache to free GPU resources
+     *
+     * Call this before loading a new scene to prevent memory leaks.
+     * Waits for GPU to finish using resources before clearing.
+     */
+    void clearMeshCache();
     /// @}
 
     /// @name Render Pass Management

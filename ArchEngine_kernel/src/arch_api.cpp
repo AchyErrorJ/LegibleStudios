@@ -13,6 +13,7 @@
 
 #include <memory>
 #include <string>
+#include <cstring>
 #include <mutex>
 #include <iostream>
 #include <set>
@@ -31,6 +32,7 @@ namespace {
     std::unique_ptr<VulkanContext> g_context;
     std::unique_ptr<Renderer> g_renderer;
     Building g_building;
+    qbd::QBDLayout g_layout;  // Store layout for room access
 
     // Camera state
     float g_cameraYaw = 0.5f;
@@ -206,6 +208,11 @@ ARCH_API int arch_load_json(const char* json_str) {
     }
 
     try {
+        // Clear mesh cache before loading new scene to prevent memory leaks
+        if (g_renderer) {
+            g_renderer->clearMeshCache();
+        }
+
         auto& qbd = qbd::getQBDInterface();
         auto layoutOpt = qbd.loadFromJSON(std::string(json_str));
 
@@ -214,7 +221,8 @@ ARCH_API int arch_load_json(const char* json_str) {
             return -2;
         }
 
-        g_building = qbd.toBuilding(*layoutOpt);
+        g_layout = *layoutOpt;  // Store layout for room access
+        g_building = qbd.toBuilding(g_layout);
         g_building.name = "Loaded Building";
 
         // Scale from mm to feet
@@ -251,6 +259,11 @@ ARCH_API int arch_load_file(const char* file_path) {
     }
 
     try {
+        // Clear mesh cache before loading new scene to prevent memory leaks
+        if (g_renderer) {
+            g_renderer->clearMeshCache();
+        }
+
         auto& qbd = qbd::getQBDInterface();
         auto layoutOpt = qbd.loadFromFile(std::string(file_path));
 
@@ -259,7 +272,8 @@ ARCH_API int arch_load_file(const char* file_path) {
             return -2;
         }
 
-        g_building = qbd.toBuilding(*layoutOpt);
+        g_layout = *layoutOpt;  // Store layout for room access
+        g_building = qbd.toBuilding(g_layout);
         g_building.name = file_path;
 
         // Scale from mm to feet
@@ -399,6 +413,89 @@ ARCH_API void arch_select_element(int element_index) {
     g_selectedElement = element_index;
 }
 
+ARCH_API int arch_get_selected_element(void) {
+    return g_selectedElement;
+}
+
+ARCH_API int arch_pick_element(int screen_x, int screen_y) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_initialized || g_building.elements.empty()) {
+        return -1;
+    }
+
+    // Convert screen coordinates to normalized device coordinates (-1 to 1)
+    float ndcX = (2.0f * screen_x / g_width) - 1.0f;
+    float ndcY = 1.0f - (2.0f * screen_y / g_height);  // Flip Y
+
+    // Get camera position
+    vec3 camPos;
+    camPos.x = g_cameraTarget.x + g_cameraDistance * cos(g_cameraPitch) * sin(g_cameraYaw);
+    camPos.y = g_cameraTarget.y + g_cameraDistance * sin(g_cameraPitch);
+    camPos.z = g_cameraTarget.z + g_cameraDistance * cos(g_cameraPitch) * cos(g_cameraYaw);
+
+    // Build view and projection matrices
+    mat4 view = glm::lookAt(camPos, g_cameraTarget, vec3(0, 1, 0));
+    mat4 proj;
+    float aspect = float(g_width) / float(g_height);
+
+    if (g_cameraOrthographic) {
+        float orthoSize = g_cameraDistance * 0.5f;
+        proj = glm::ortho(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, 0.1f, 500.0f);
+    } else {
+        proj = glm::perspective(glm::radians(g_cameraFOV), aspect, 0.1f, 500.0f);
+    }
+
+    // Inverse view-projection to get ray
+    mat4 invViewProj = glm::inverse(proj * view);
+
+    // Ray in world space
+    vec4 rayStart4 = invViewProj * vec4(ndcX, ndcY, -1.0f, 1.0f);
+    vec4 rayEnd4 = invViewProj * vec4(ndcX, ndcY, 1.0f, 1.0f);
+    vec3 rayStart = vec3(rayStart4) / rayStart4.w;
+    vec3 rayEnd = vec3(rayEnd4) / rayEnd4.w;
+    vec3 rayDir = glm::normalize(rayEnd - rayStart);
+
+    // Test ray against each element's AABB
+    int closestElement = -1;
+    float closestDist = 1e9f;
+
+    for (size_t i = 0; i < g_building.elements.size(); ++i) {
+        const auto& elem = g_building.elements[i];
+
+        // Compute element AABB
+        vec3 minB = glm::min(elem.start, elem.end);
+        vec3 maxB = glm::max(elem.start, elem.end);
+
+        // Expand by element width/depth (approximate)
+        float halfW = elem.width * 0.5f + 0.1f;
+        float halfD = elem.depth * 0.5f + 0.1f;
+        minB -= vec3(halfW, 0, halfD);
+        maxB += vec3(halfW, elem.depth, halfD);
+
+        // Ray-AABB intersection test (slab method)
+        vec3 invDir = 1.0f / rayDir;
+        vec3 t1 = (minB - rayStart) * invDir;
+        vec3 t2 = (maxB - rayStart) * invDir;
+
+        vec3 tMin = glm::min(t1, t2);
+        vec3 tMax = glm::max(t1, t2);
+
+        float tNear = glm::max(glm::max(tMin.x, tMin.y), tMin.z);
+        float tFar = glm::min(glm::min(tMax.x, tMax.y), tMax.z);
+
+        if (tNear <= tFar && tFar > 0) {
+            float dist = tNear > 0 ? tNear : tFar;
+            if (dist < closestDist) {
+                closestDist = dist;
+                closestElement = static_cast<int>(i);
+            }
+        }
+    }
+
+    return closestElement;
+}
+
 ARCH_API int arch_get_element_count(void) {
     return static_cast<int>(g_building.elements.size());
 }
@@ -493,6 +590,60 @@ ARCH_API void arch_set_material_style(int style) {
 ARCH_API int arch_get_material_style(void) {
     std::lock_guard<std::mutex> lock(g_mutex);
     return g_renderer ? static_cast<int>(g_renderer->getMaterialStyle()) : 1; // Default: Clean
+}
+
+ARCH_API void arch_set_uv_scale(float scale_u, float scale_v) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        // Use average of U and V for now (renderer uses single scale)
+        g_renderer->setMaterialUVScale((scale_u + scale_v) * 0.5f);
+    }
+}
+
+ARCH_API void arch_get_uv_scale(float* out_u, float* out_v) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer && out_u && out_v) {
+        float scale = g_renderer->getMaterialUVScale();
+        *out_u = scale;
+        *out_v = scale;
+    }
+}
+
+ARCH_API void arch_set_roughness_multiplier(float multiplier) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        // Use offset: multiplier 1.0 = offset 0, multiplier 0.5 = offset -0.5, etc.
+        g_renderer->setMaterialRoughnessOffset(multiplier - 1.0f);
+    }
+}
+
+ARCH_API float arch_get_roughness_multiplier(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? (g_renderer->getMaterialRoughnessOffset() + 1.0f) : 1.0f;
+}
+
+ARCH_API void arch_set_metallic_multiplier(float multiplier) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setMaterialMetallicOffset(multiplier - 1.0f);
+    }
+}
+
+ARCH_API float arch_get_metallic_multiplier(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? (g_renderer->getMaterialMetallicOffset() + 1.0f) : 1.0f;
+}
+
+ARCH_API void arch_set_ao_strength(float strength) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setMaterialAOStrength(strength);
+    }
+}
+
+ARCH_API float arch_get_ao_strength(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_renderer ? g_renderer->getMaterialAOStrength() : 1.0f;
 }
 
 // =============================================================================
@@ -634,6 +785,88 @@ ARCH_API void arch_set_tonemap_mode(int mode) {
 ARCH_API int arch_get_tonemap_mode(void) {
     std::lock_guard<std::mutex> lock(g_mutex);
     return g_renderer ? static_cast<int>(g_renderer->getTonemapMode()) : 1; // Default: ACES
+}
+
+// =============================================================================
+// Room Data Export API
+// =============================================================================
+
+ARCH_API int arch_get_room_count(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return static_cast<int>(g_layout.rooms.size());
+}
+
+ARCH_API int arch_get_room_data(int index, ArchRoomData* out_room) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!out_room) return -1;
+    if (index < 0 || index >= static_cast<int>(g_layout.rooms.size())) return -2;
+
+    // Get room by index (iterate the map)
+    auto it = g_layout.rooms.begin();
+    std::advance(it, index);
+
+    const auto& room = it->second;
+
+    // Copy strings safely
+    strncpy(out_room->id, room.id.c_str(), sizeof(out_room->id) - 1);
+    out_room->id[sizeof(out_room->id) - 1] = '\0';
+
+    strncpy(out_room->name, room.name.c_str(), sizeof(out_room->name) - 1);
+    out_room->name[sizeof(out_room->name) - 1] = '\0';
+
+    strncpy(out_room->room_type, room.roomType.c_str(), sizeof(out_room->room_type) - 1);
+    out_room->room_type[sizeof(out_room->room_type) - 1] = '\0';
+
+    // Copy bounds (in mm)
+    out_room->bounds_x = room.bounds.x;
+    out_room->bounds_y = room.bounds.y;
+    out_room->bounds_width = room.bounds.width;
+    out_room->bounds_height = room.bounds.height;
+
+    // Copy center (in mm)
+    out_room->center_x = room.center.x;
+    out_room->center_y = room.center.y;
+
+    out_room->area = room.area;
+    out_room->zone = static_cast<int>(room.zone);
+
+    return 0;
+}
+
+ARCH_API int arch_get_all_rooms(ArchRoomData* out_rooms, int max_rooms) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!out_rooms || max_rooms <= 0) return 0;
+
+    int count = 0;
+    for (const auto& [id, room] : g_layout.rooms) {
+        if (count >= max_rooms) break;
+
+        ArchRoomData& out = out_rooms[count];
+
+        strncpy(out.id, room.id.c_str(), sizeof(out.id) - 1);
+        out.id[sizeof(out.id) - 1] = '\0';
+
+        strncpy(out.name, room.name.c_str(), sizeof(out.name) - 1);
+        out.name[sizeof(out.name) - 1] = '\0';
+
+        strncpy(out.room_type, room.roomType.c_str(), sizeof(out.room_type) - 1);
+        out.room_type[sizeof(out.room_type) - 1] = '\0';
+
+        out.bounds_x = room.bounds.x;
+        out.bounds_y = room.bounds.y;
+        out.bounds_width = room.bounds.width;
+        out.bounds_height = room.bounds.height;
+        out.center_x = room.center.x;
+        out.center_y = room.center.y;
+        out.area = room.area;
+        out.zone = static_cast<int>(room.zone);
+
+        count++;
+    }
+
+    return count;
 }
 
 } // extern "C"
