@@ -39,6 +39,36 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
     createDescriptorSets();
     createMaterialDescriptorSetLayout();
     createDefaultMaterialDescriptorSet();
+
+    // Create shadow height map descriptor set for tessellated shadows
+    if (m_shadowMap && m_shadowMap->getHeightMapDescriptorSetLayout() != VK_NULL_HANDLE) {
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_descriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        VkDescriptorSetLayout shadowHeightLayout = m_shadowMap->getHeightMapDescriptorSetLayout();
+        allocInfo.pSetLayouts = &shadowHeightLayout;
+
+        if (vkAllocateDescriptorSets(m_context.getDevice(), &allocInfo, &m_shadowHeightMapDescriptorSet) == VK_SUCCESS) {
+            // Bind default black texture (no displacement)
+            VkDescriptorImageInfo heightMapInfo{};
+            heightMapInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            heightMapInfo.imageView = Texture::getBlack()->getImageView();
+            heightMapInfo.sampler = Texture::getBlack()->getSampler();
+
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = m_shadowHeightMapDescriptorSet;
+            write.dstBinding = 0;
+            write.dstArrayElement = 0;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &heightMapInfo;
+
+            vkUpdateDescriptorSets(m_context.getDevice(), 1, &write, 0, nullptr);
+        }
+    }
+
     createPipeline();
 
     // Create grid mesh
@@ -48,6 +78,9 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
 
 Renderer::~Renderer() {
     m_context.waitIdle();
+
+    // Cleanup high-resolution resources (for high-res rendering/screenshots)
+    cleanupHighResResources();
 
 #if 0  // Ray tracing disabled - incomplete implementation
     // Cleanup ray tracing resources
@@ -65,6 +98,14 @@ Renderer::~Renderer() {
     m_meshCache.clear();
     m_pipeline.reset();
     m_wireframePipeline.reset();
+    m_transparentPipeline.reset();
+    m_hdrPipeline.reset();
+    m_hdrWireframePipeline.reset();
+    m_hdrTransparentPipeline.reset();
+    m_tessPipeline.reset();
+    m_tessWireframePipeline.reset();
+    m_hdrTessPipeline.reset();
+    m_hdrTessWireframePipeline.reset();
 
     for (size_t i = 0; i < m_context.getSwapchainImageCount(); ++i) {
         vkDestroyBuffer(m_context.getDevice(), m_uniformBuffers[i], nullptr);
@@ -299,18 +340,19 @@ void Renderer::createDescriptorPool() {
     uboPoolSize.descriptorCount = imageCount * 2;  // main + sky
     poolSizes.push_back(uboPoolSize);
 
-    // Sampler pool size (shadow map + environment cubemap + material textures)
-    // Material set needs 7 samplers: albedo, normal, roughness, metallic, ao, emissive, opacity
+    // Sampler pool size (shadow map + environment cubemap + material textures + shadow height map)
+    // Material set needs 8 samplers: albedo, normal, roughness, metallic, ao, emissive, opacity, height
     VkDescriptorPoolSize samplerPoolSize{};
     samplerPoolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerPoolSize.descriptorCount = imageCount * 2 + (7 * kMaxMaterialSets);
+    samplerPoolSize.descriptorCount = imageCount * 2 + (8 * kMaxMaterialSets) + 1;  // +1 for shadow height map
     poolSizes.push_back(samplerPoolSize);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<u32>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = imageCount * 2 + 1 + kMaxMaterialSets;  // main + sky + material sets
+    poolInfo.maxSets = imageCount * 2 + 1 + kMaxMaterialSets + 1;  // main + sky + material + shadow height map
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;  // Allow individual set freeing
 
     if (vkCreateDescriptorPool(m_context.getDevice(), &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor pool");
@@ -323,7 +365,7 @@ void Renderer::createDescriptorPool() {
     uboBinding.binding = 0;
     uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboBinding.descriptorCount = 1;
-    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
     bindings.push_back(uboBinding);
 
     // Binding 1: Shadow map sampler (if shadows enabled)
@@ -419,8 +461,8 @@ void Renderer::createDescriptorSets() {
 }
 
 void Renderer::createMaterialDescriptorSetLayout() {
-    // Material descriptor set layout (set 1) - 7 texture samplers
-    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
+    // Material descriptor set layout (set 1) - 8 texture samplers
+    std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
 
     // Binding 0: Albedo texture
     bindings[0].binding = 0;
@@ -464,6 +506,12 @@ void Renderer::createMaterialDescriptorSetLayout() {
     bindings[6].descriptorCount = 1;
     bindings[6].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // Binding 7: Height/displacement map (used by tessellation evaluation shader)
+    bindings[7].binding = 7;
+    bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[7].descriptorCount = 1;
+    bindings[7].stageFlags = VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<u32>(bindings.size());
@@ -499,9 +547,10 @@ void Renderer::createDefaultMaterialDescriptorSet() {
     Texture* ao = Texture::getWhite();
     Texture* emissive = Texture::getBlack();
     Texture* opacity = Texture::getWhite();
+    Texture* height = Texture::getBlack();  // No displacement by default
 
     // Write descriptor set
-    std::array<VkDescriptorImageInfo, 7> imageInfos{};
+    std::array<VkDescriptorImageInfo, 8> imageInfos{};
     imageInfos[0] = {albedo->getSampler(), albedo->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[1] = {normal->getSampler(), normal->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[2] = {roughness->getSampler(), roughness->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -509,8 +558,9 @@ void Renderer::createDefaultMaterialDescriptorSet() {
     imageInfos[4] = {ao->getSampler(), ao->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[5] = {emissive->getSampler(), emissive->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[6] = {opacity->getSampler(), opacity->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[7] = {height->getSampler(), height->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
-    std::array<VkWriteDescriptorSet, 7> writes{};
+    std::array<VkWriteDescriptorSet, 8> writes{};
     for (size_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = m_defaultMaterialDescriptorSet;
@@ -531,6 +581,9 @@ bool Renderer::reloadMaterialLibrary(const std::string& root) {
     if (!m_materialLibrary) {
         return false;
     }
+
+    // Wait for GPU to finish using current textures before reloading
+    vkDeviceWaitIdle(m_context.getDevice());
 
     m_materialRoot = root.empty() ? "materials" : root;
     m_materialLibrary->loadMaterialsFromDirectory(m_materialRoot);
@@ -557,7 +610,7 @@ void Renderer::createPipeline() {
     m_pipelineLayout = PipelineLayoutBuilder(m_context)
         .addDescriptorSetLayout(m_descriptorSetLayout)           // Set 0: UBO + shadow map
         .addDescriptorSetLayout(m_materialDescriptorSetLayout)   // Set 1: Material textures
-        .addPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants))
+        .addPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, 0, sizeof(PushConstants))
         .build();
 
     VkSampleCountFlagBits msaaSamples = m_context.getMsaaSamples();
@@ -636,6 +689,75 @@ void Renderer::createPipeline() {
                                                                "shaders/structural.frag.spv", hdrTransparentConfig);
     }
 
+    // Create tessellation pipelines for displacement mapping
+    {
+        PipelineConfig tessConfig = PipelineConfig::tessellationConfig();
+        tessConfig.renderPass = m_renderPass;
+        tessConfig.pipelineLayout = m_pipelineLayout;
+        tessConfig.multisample.rasterizationSamples = msaaSamples;
+        if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+            tessConfig.multisample.sampleShadingEnable = VK_TRUE;
+            tessConfig.multisample.minSampleShading = 0.2f;
+        }
+
+        m_tessPipeline = std::make_unique<Pipeline>(m_context,
+            "shaders/structural.vert.spv",
+            "shaders/structural.tesc.spv",
+            "shaders/structural.tese.spv",
+            "shaders/structural.frag.spv",
+            tessConfig);
+
+        // Tessellation wireframe
+        PipelineConfig tessWireConfig = PipelineConfig::tessellationConfig();
+        tessWireConfig.renderPass = m_renderPass;
+        tessWireConfig.pipelineLayout = m_pipelineLayout;
+        tessWireConfig.multisample.rasterizationSamples = msaaSamples;
+        if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+            tessWireConfig.multisample.sampleShadingEnable = VK_TRUE;
+            tessWireConfig.multisample.minSampleShading = 0.2f;
+        }
+        tessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+        tessWireConfig.rasterization.lineWidth = 1.5f;
+        tessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+
+        m_tessWireframePipeline = std::make_unique<Pipeline>(m_context,
+            "shaders/structural.vert.spv",
+            "shaders/structural.tesc.spv",
+            "shaders/structural.tese.spv",
+            "shaders/structural.frag.spv",
+            tessWireConfig);
+
+        // HDR tessellation pipelines
+        if (m_postProcess) {
+            PipelineConfig hdrTessConfig = PipelineConfig::tessellationConfig();
+            hdrTessConfig.renderPass = m_postProcess->getHDRRenderPass();
+            hdrTessConfig.pipelineLayout = m_pipelineLayout;
+            hdrTessConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+            m_hdrTessPipeline = std::make_unique<Pipeline>(m_context,
+                "shaders/structural.vert.spv",
+                "shaders/structural.tesc.spv",
+                "shaders/structural.tese.spv",
+                "shaders/structural.frag.spv",
+                hdrTessConfig);
+
+            PipelineConfig hdrTessWireConfig = PipelineConfig::tessellationConfig();
+            hdrTessWireConfig.renderPass = m_postProcess->getHDRRenderPass();
+            hdrTessWireConfig.pipelineLayout = m_pipelineLayout;
+            hdrTessWireConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            hdrTessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+            hdrTessWireConfig.rasterization.lineWidth = 1.5f;
+            hdrTessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+
+            m_hdrTessWireframePipeline = std::make_unique<Pipeline>(m_context,
+                "shaders/structural.vert.spv",
+                "shaders/structural.tesc.spv",
+                "shaders/structural.tese.spv",
+                "shaders/structural.frag.spv",
+                hdrTessWireConfig);
+        }
+    }
+
     // Sky pipeline - renders fullscreen triangle behind everything
     createSkyPipeline();
 }
@@ -648,7 +770,7 @@ void Renderer::createSkyPipeline() {
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
 
     // Binding 1: Environment cubemap
     bindings[1].binding = 1;
@@ -710,7 +832,7 @@ void Renderer::createSkyPipeline() {
 
     // Sky push constants: sun direction (xyz) + useHdr flag (w)
     VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
     pushRange.offset = 0;
     pushRange.size = sizeof(vec4);
 
@@ -862,16 +984,24 @@ void Renderer::drawSky() {
     // Pass sun direction (xyz) and useHdr flag (w) to shader
     vec4 sunDir = vec4(m_lightDirection, m_useHdrEnvMap ? 1.0f : 0.0f);
     vkCmdPushConstants(m_currentCommandBuffer, m_skyPipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(vec4), &sunDir);
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, 0, sizeof(vec4), &sunDir);
 
     // Draw fullscreen triangle (3 vertices, no vertex buffer)
     vkCmdDraw(m_currentCommandBuffer, 3, 1, 0, 0);
 
     // Rebind the structural pipeline and descriptor sets for subsequent draws
-    if (m_vizMode == VisualizationMode::Wireframe && m_wireframePipeline) {
-        m_wireframePipeline->bind(m_currentCommandBuffer);
-    } else if (m_pipeline) {
-        m_pipeline->bind(m_currentCommandBuffer);
+    if (m_vizMode == VisualizationMode::Wireframe) {
+        if (m_tessellationEnabled && m_tessWireframePipeline) {
+            m_tessWireframePipeline->bind(m_currentCommandBuffer);
+        } else if (m_wireframePipeline) {
+            m_wireframePipeline->bind(m_currentCommandBuffer);
+        }
+    } else {
+        if (m_tessellationEnabled && m_tessPipeline) {
+            m_tessPipeline->bind(m_currentCommandBuffer);
+        } else if (m_pipeline) {
+            m_pipeline->bind(m_currentCommandBuffer);
+        }
     }
 
     // Rebind both descriptor sets
@@ -1060,11 +1190,19 @@ void Renderer::beginRenderPass(vec4 clearColor) {
     scissor.extent = extent;
     vkCmdSetScissor(m_currentCommandBuffer, 0, 1, &scissor);
 
-    // Bind appropriate pipeline based on visualization mode
-    if (m_vizMode == VisualizationMode::Wireframe && m_wireframePipeline) {
-        m_wireframePipeline->bind(m_currentCommandBuffer);
-    } else if (m_pipeline) {
-        m_pipeline->bind(m_currentCommandBuffer);
+    // Bind appropriate pipeline based on visualization mode and tessellation
+    if (m_vizMode == VisualizationMode::Wireframe) {
+        if (m_tessellationEnabled && m_tessWireframePipeline) {
+            m_tessWireframePipeline->bind(m_currentCommandBuffer);
+        } else if (m_wireframePipeline) {
+            m_wireframePipeline->bind(m_currentCommandBuffer);
+        }
+    } else {
+        if (m_tessellationEnabled && m_tessPipeline) {
+            m_tessPipeline->bind(m_currentCommandBuffer);
+        } else if (m_pipeline) {
+            m_pipeline->bind(m_currentCommandBuffer);
+        }
     }
 
     // Bind both descriptor sets: set 0 (UBO + shadow) and set 1 (material textures)
@@ -1119,11 +1257,19 @@ void Renderer::beginHDRRenderPass(vec4 clearColor) {
     scissor.extent = extent;
     vkCmdSetScissor(m_currentCommandBuffer, 0, 1, &scissor);
 
-    // Bind HDR-compatible pipeline based on visualization mode
-    if (m_vizMode == VisualizationMode::Wireframe && m_hdrWireframePipeline) {
-        m_hdrWireframePipeline->bind(m_currentCommandBuffer);
-    } else if (m_hdrPipeline) {
-        m_hdrPipeline->bind(m_currentCommandBuffer);
+    // Bind HDR-compatible pipeline based on visualization mode and tessellation
+    if (m_vizMode == VisualizationMode::Wireframe) {
+        if (m_tessellationEnabled && m_hdrTessWireframePipeline) {
+            m_hdrTessWireframePipeline->bind(m_currentCommandBuffer);
+        } else if (m_hdrWireframePipeline) {
+            m_hdrWireframePipeline->bind(m_currentCommandBuffer);
+        }
+    } else {
+        if (m_tessellationEnabled && m_hdrTessPipeline) {
+            m_hdrTessPipeline->bind(m_currentCommandBuffer);
+        } else if (m_hdrPipeline) {
+            m_hdrPipeline->bind(m_currentCommandBuffer);
+        }
     }
 
     // Bind both descriptor sets: set 0 (UBO + shadow) and set 1 (material textures)
@@ -1205,10 +1351,24 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
     // Update light matrices
     m_shadowMap->updateLightMatrix(m_lightDirection, sceneCenter, sceneRadius);
 
-    // Begin shadow pass
+    // Begin shadow pass - beginShadowPass binds the non-tessellated pipeline by default
     m_shadowMap->beginShadowPass(m_currentCommandBuffer);
 
-    // Shadow push constants structure
+    // Check if we should use tessellated shadow pipeline
+    bool useTessShadows = m_tessellationEnabled && m_shadowMap->getTessPipeline() != VK_NULL_HANDLE
+                          && m_shadowHeightMapDescriptorSet != VK_NULL_HANDLE;
+
+    if (useTessShadows) {
+        // Bind tessellated shadow pipeline
+        vkCmdBindPipeline(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowMap->getTessPipeline());
+
+        // Bind height map descriptor set
+        vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_shadowMap->getTessPipelineLayout(), 0, 1,
+                                &m_shadowHeightMapDescriptorSet, 0, nullptr);
+    }
+
+    // Shadow push constants structure (non-tessellated)
     struct ShadowPushConstants {
         mat4 lightViewProj;
         mat4 model;
@@ -1356,12 +1516,28 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
             continue;  // Skip if mesh not cached
         }
 
-        ShadowPushConstants shadowPush;
-        shadowPush.lightViewProj = m_shadowMap->getLightViewProj();
-        shadowPush.model = transform;
+        if (useTessShadows) {
+            // Use tessellated push constants
+            ShadowTessPushConstants tessPush;
+            tessPush.lightViewProj = m_shadowMap->getLightViewProj();
+            tessPush.model = transform;
+            tessPush.tessLevel = m_tessellationLevel;
+            tessPush.dispScale = m_displacementScale;
+            tessPush.uvScale = m_materialUVScale;
+            tessPush.padding = 0.0f;
 
-        vkCmdPushConstants(m_currentCommandBuffer, m_shadowMap->getPipelineLayout(),
-                           VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ShadowPushConstants), &shadowPush);
+            vkCmdPushConstants(m_currentCommandBuffer, m_shadowMap->getTessPipelineLayout(),
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
+                               0, sizeof(ShadowTessPushConstants), &tessPush);
+        } else {
+            // Use non-tessellated push constants
+            ShadowPushConstants shadowPush;
+            shadowPush.lightViewProj = m_shadowMap->getLightViewProj();
+            shadowPush.model = transform;
+
+            vkCmdPushConstants(m_currentCommandBuffer, m_shadowMap->getPipelineLayout(),
+                               VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ShadowPushConstants), &shadowPush);
+        }
 
         it->second->bind(m_currentCommandBuffer);
         it->second->draw(m_currentCommandBuffer);
@@ -1405,8 +1581,11 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
     // HDR output mode (skip tonemapping in shader when rendering to HDR buffer)
     ubo.outputLinearHDR = m_outputLinearHDR ? 1 : 0;
     ubo.exposure = getExposure();
-    ubo._padding1 = 0;
-    ubo._padding2 = 0;
+
+    // Tessellation parameters for displacement mapping
+    ubo.tessellationLevel = m_tessellationEnabled ? m_tessellationLevel : 1.0f;
+    ubo.displacementScale = m_tessellationEnabled ? m_displacementScale : 0.0f;
+
     // Material params: uvScale, normalStrength, brightness, contrast
     ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, m_materialBrightness, m_materialContrast);
     // Material params2: saturation, roughnessOffset, metallicOffset, aoStrength
@@ -1635,7 +1814,7 @@ void Renderer::drawMeshWithMaterial(Mesh& mesh, const mat4& transform, vec3 colo
     push.material = material;
 
     vkCmdPushConstants(m_currentCommandBuffer, m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
                        0, sizeof(PushConstants), &push);
 
     mesh.bind(m_currentCommandBuffer);
@@ -1907,8 +2086,9 @@ VkDescriptorSet Renderer::createMaterialDescriptorSetForMaterial(const Material&
     Texture* ao = material.aoMap ? material.aoMap : Texture::getWhite();
     Texture* emissive = material.emissiveMap ? material.emissiveMap : Texture::getBlack();
     Texture* opacity = material.opacityMap ? material.opacityMap : Texture::getWhite();
+    Texture* height = material.heightMap ? material.heightMap : Texture::getBlack();
 
-    std::array<VkDescriptorImageInfo, 7> imageInfos{};
+    std::array<VkDescriptorImageInfo, 8> imageInfos{};
     imageInfos[0] = {albedo->getSampler(), albedo->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[1] = {normal->getSampler(), normal->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[2] = {roughness->getSampler(), roughness->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -1916,8 +2096,9 @@ VkDescriptorSet Renderer::createMaterialDescriptorSetForMaterial(const Material&
     imageInfos[4] = {ao->getSampler(), ao->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[5] = {emissive->getSampler(), emissive->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     imageInfos[6] = {opacity->getSampler(), opacity->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    imageInfos[7] = {height->getSampler(), height->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
-    std::array<VkWriteDescriptorSet, 7> writes{};
+    std::array<VkWriteDescriptorSet, 8> writes{};
     for (size_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = descSet;
@@ -2097,7 +2278,7 @@ void Renderer::drawGrid(f32 size, f32 spacing) {
     push.color = vec4(0.3f, 0.3f, 0.3f, 1.0f);
 
     vkCmdPushConstants(m_currentCommandBuffer, m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
                        0, sizeof(PushConstants), &push);
 
     m_gridMesh->bind(m_currentCommandBuffer);
@@ -2405,10 +2586,18 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
         }
 
         // Rebind opaque pipeline for subsequent draws
-        if (m_vizMode == VisualizationMode::Wireframe && m_wireframePipeline) {
-            m_wireframePipeline->bind(m_currentCommandBuffer);
-        } else if (m_pipeline) {
-            m_pipeline->bind(m_currentCommandBuffer);
+        if (m_vizMode == VisualizationMode::Wireframe) {
+            if (m_tessellationEnabled && m_tessWireframePipeline) {
+                m_tessWireframePipeline->bind(m_currentCommandBuffer);
+            } else if (m_wireframePipeline) {
+                m_wireframePipeline->bind(m_currentCommandBuffer);
+            }
+        } else {
+            if (m_tessellationEnabled && m_tessPipeline) {
+                m_tessPipeline->bind(m_currentCommandBuffer);
+            } else if (m_pipeline) {
+                m_pipeline->bind(m_currentCommandBuffer);
+            }
         }
 
         m_context.endDebugLabel(m_currentCommandBuffer);
@@ -3487,6 +3676,13 @@ bool Renderer::renderHighRes(
         }
 
         vkDestroyFence(m_context.getDevice(), fence, nullptr);
+
+        // Ensure all GPU work is complete before returning to normal rendering
+        m_context.waitIdle();
+
+        // Reset frame tracking to avoid stale fence references
+        m_currentFrame = 0;
+        m_imagesInFlight.assign(m_context.getSwapchainImageCount(), VK_NULL_HANDLE);
 
         // Average the accumulated samples and convert back to 8-bit
         float invSamples = 1.0f / static_cast<float>(samples);

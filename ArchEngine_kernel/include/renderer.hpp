@@ -685,6 +685,28 @@ public:
     vec3 getMaterialTint() const { return m_materialTint; }
     /// @}
 
+    /// @name Tessellation Settings
+    /// @{
+
+    /** @brief Enable or disable tessellation-based displacement mapping */
+    void setTessellationEnabled(bool enabled) { m_tessellationEnabled = enabled; }
+    bool getTessellationEnabled() const { return m_tessellationEnabled; }
+
+    /**
+     * @brief Set tessellation subdivision level
+     * @param level Subdivision level (1-64, higher = more detail)
+     */
+    void setTessellationLevel(f32 level) { m_tessellationLevel = glm::clamp(level, 1.0f, 128.0f); }
+    f32 getTessellationLevel() const { return m_tessellationLevel; }
+
+    /**
+     * @brief Set displacement scale for height map
+     * @param scale Displacement amount (0 = flat, higher = more displacement)
+     */
+    void setDisplacementScale(f32 scale) { m_displacementScale = scale; }
+    f32 getDisplacementScale() const { return m_displacementScale; }
+    /// @}
+
     /// @name Material Style
     /// @{
 
@@ -883,6 +905,12 @@ private:
     std::unique_ptr<Pipeline> m_hdrWireframePipeline;
     std::unique_ptr<Pipeline> m_hdrTransparentPipeline;  // For glass/transparent in HDR mode
 
+    // Tessellation pipelines (with displacement mapping)
+    std::unique_ptr<Pipeline> m_tessPipeline;
+    std::unique_ptr<Pipeline> m_tessWireframePipeline;
+    std::unique_ptr<Pipeline> m_hdrTessPipeline;
+    std::unique_ptr<Pipeline> m_hdrTessWireframePipeline;
+
     // Sky pipeline
     VkPipelineLayout m_skyPipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_skyPipeline = VK_NULL_HANDLE;
@@ -914,6 +942,7 @@ private:
     vec3 m_lightDirection = glm::normalize(vec3(-0.5f, -1.0f, -0.3f));
     f32 m_shadowBias = 0.02f;  // Adjustable shadow bias
     bool m_outputLinearHDR = false;  // True when rendering to HDR buffer (skip in-shader tonemapping)
+    VkDescriptorSet m_shadowHeightMapDescriptorSet = VK_NULL_HANDLE;  // For tessellated shadows
 
     // Environment mapping
     std::unique_ptr<EnvironmentMap> m_envMap;
@@ -962,6 +991,11 @@ private:
     f32 m_materialMetallicOffset = 0.0f;
     f32 m_materialAOStrength = 1.0f;
     vec3 m_materialTint = vec3(1.0f);
+
+    // Tessellation settings
+    bool m_tessellationEnabled = false;
+    f32 m_tessellationLevel = 8.0f;
+    f32 m_displacementScale = 0.1f;
 
     // Stats
     RenderStats m_stats;

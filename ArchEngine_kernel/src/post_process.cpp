@@ -298,6 +298,8 @@ void PostProcess::createSSAOResources() {
     poolInfo.poolSizeCount = static_cast<u32>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
     poolInfo.maxSets = frameCount * 6 + 6;  // SSAO + bloom + composite per frame + extra
+    // Allow descriptor sets to be updated while bound (for dynamic SSAO depth/normal binding)
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO descriptor pool");
@@ -330,10 +332,24 @@ void PostProcess::createSSAOResources() {
     bindings[3].descriptorCount = 1;
     bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // Enable UPDATE_AFTER_BIND for all bindings (SSAO updates depth/normal views each frame)
+    std::array<VkDescriptorBindingFlags, 4> bindingFlags{};
+    bindingFlags[0] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    bindingFlags[1] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    bindingFlags[2] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    bindingFlags[3] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+
+    VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
+    bindingFlagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    bindingFlagsInfo.bindingCount = static_cast<u32>(bindingFlags.size());
+    bindingFlagsInfo.pBindingFlags = bindingFlags.data();
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<u32>(bindings.size());
     layoutInfo.pBindings = bindings.data();
+    layoutInfo.pNext = &bindingFlagsInfo;
+    layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
 
     if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_ssaoDescriptorLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO descriptor set layout");
@@ -351,10 +367,13 @@ void PostProcess::createSSAOResources() {
     blurBindings[1].descriptorCount = 1;
     blurBindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    layoutInfo.bindingCount = static_cast<u32>(blurBindings.size());
-    layoutInfo.pBindings = blurBindings.data();
+    // Reset layoutInfo for blur layout (no UPDATE_AFTER_BIND needed - static binding)
+    VkDescriptorSetLayoutCreateInfo blurLayoutInfo{};
+    blurLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    blurLayoutInfo.bindingCount = static_cast<u32>(blurBindings.size());
+    blurLayoutInfo.pBindings = blurBindings.data();
 
-    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_ssaoBlurDescLayout) != VK_SUCCESS) {
+    if (vkCreateDescriptorSetLayout(device, &blurLayoutInfo, nullptr, &m_ssaoBlurDescLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO blur descriptor set layout");
     }
 
@@ -365,10 +384,21 @@ void PostProcess::createSSAOResources() {
     sampleBinding.descriptorCount = 1;
     sampleBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &sampleBinding;
+    // Enable UPDATE_AFTER_BIND for sample descriptor (updated during command recording)
+    VkDescriptorBindingFlags sampleBindingFlag = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    VkDescriptorSetLayoutBindingFlagsCreateInfo sampleBindingFlagsInfo{};
+    sampleBindingFlagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    sampleBindingFlagsInfo.bindingCount = 1;
+    sampleBindingFlagsInfo.pBindingFlags = &sampleBindingFlag;
 
-    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_ssaoSampleDescLayout) != VK_SUCCESS) {
+    VkDescriptorSetLayoutCreateInfo sampleLayoutInfo{};
+    sampleLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    sampleLayoutInfo.bindingCount = 1;
+    sampleLayoutInfo.pBindings = &sampleBinding;
+    sampleLayoutInfo.pNext = &sampleBindingFlagsInfo;
+    sampleLayoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+
+    if (vkCreateDescriptorSetLayout(device, &sampleLayoutInfo, nullptr, &m_ssaoSampleDescLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO sample descriptor set layout");
     }
 

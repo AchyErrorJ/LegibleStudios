@@ -2,6 +2,8 @@
 #include <stdexcept>
 #include <array>
 #include <cmath>
+#include <fstream>
+#include <iostream>
 
 namespace arch {
 
@@ -14,11 +16,24 @@ ShadowMap::ShadowMap(VulkanContext& context, u32 resolution)
     createSampler();
     createDescriptorSetLayout();
     createPipeline();
+    createTessPipeline();
 }
 
 ShadowMap::~ShadowMap() {
     VkDevice device = m_context.getDevice();
 
+    // Cleanup tessellated pipeline resources
+    if (m_tessPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, m_tessPipeline, nullptr);
+    }
+    if (m_tessPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, m_tessPipelineLayout, nullptr);
+    }
+    if (m_heightMapDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_heightMapDescriptorSetLayout, nullptr);
+    }
+
+    // Cleanup standard pipeline resources
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, m_pipeline, nullptr);
     }
@@ -395,6 +410,201 @@ void ShadowMap::updateLightMatrix(const vec3& lightDir, const vec3& sceneCenter,
 
     // Build the shadow matrix
     m_lightViewProj = m_lightProj * m_lightView;
+}
+
+void ShadowMap::createTessPipeline() {
+    // Create descriptor set layout for height map
+    VkDescriptorSetLayoutBinding heightMapBinding{};
+    heightMapBinding.binding = 0;
+    heightMapBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    heightMapBinding.descriptorCount = 1;
+    heightMapBinding.stageFlags = VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+    heightMapBinding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &heightMapBinding;
+
+    if (vkCreateDescriptorSetLayout(m_context.getDevice(), &layoutInfo, nullptr, &m_heightMapDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create shadow tess descriptor set layout");
+    }
+
+    // Push constant range for tessellation parameters
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(ShadowTessPushConstants);
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &m_heightMapDescriptorSetLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+
+    if (vkCreatePipelineLayout(m_context.getDevice(), &pipelineLayoutInfo, nullptr, &m_tessPipelineLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create shadow tess pipeline layout");
+    }
+
+    // Shader loading helper
+    auto readFile = [](const std::string& filepath) -> std::vector<char> {
+        std::ifstream file(filepath, std::ios::ate | std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("Failed to open shader file: " + filepath);
+        }
+        size_t fileSize = static_cast<size_t>(file.tellg());
+        std::vector<char> buffer(fileSize);
+        file.seekg(0);
+        file.read(buffer.data(), fileSize);
+        file.close();
+        return buffer;
+    };
+
+    // Load shader modules
+    auto vertCode = readFile("shaders/shadow_tess.vert.spv");
+    auto tescCode = readFile("shaders/shadow.tesc.spv");
+    auto teseCode = readFile("shaders/shadow.tese.spv");
+
+    auto createShaderModule = [&](const std::vector<char>& code) -> VkShaderModule {
+        VkShaderModuleCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        createInfo.codeSize = code.size();
+        createInfo.pCode = reinterpret_cast<const u32*>(code.data());
+        VkShaderModule module;
+        if (vkCreateShaderModule(m_context.getDevice(), &createInfo, nullptr, &module) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create shader module");
+        }
+        return module;
+    };
+
+    VkShaderModule vertModule = createShaderModule(vertCode);
+    VkShaderModule tescModule = createShaderModule(tescCode);
+    VkShaderModule teseModule = createShaderModule(teseCode);
+
+    // Shader stages
+    std::array<VkPipelineShaderStageCreateInfo, 3> shaderStages{};
+
+    shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    shaderStages[0].module = vertModule;
+    shaderStages[0].pName = "main";
+
+    shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[1].stage = VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+    shaderStages[1].module = tescModule;
+    shaderStages[1].pName = "main";
+
+    shaderStages[2].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[2].stage = VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+    shaderStages[2].module = teseModule;
+    shaderStages[2].pName = "main";
+
+    // Vertex input
+    auto bindingDesc = Vertex::getBindingDescriptions()[0];
+    auto attributeDescs = Vertex::getAttributeDescriptions();
+
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDesc;
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<u32>(attributeDescs.size());
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescs.data();
+
+    // Input assembly - use patch list for tessellation
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+    inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+    // Tessellation state
+    VkPipelineTessellationStateCreateInfo tessellationState{};
+    tessellationState.sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
+    tessellationState.patchControlPoints = 3;
+
+    // Viewport
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<f32>(m_resolution);
+    viewport.height = static_cast<f32>(m_resolution);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = {m_resolution, m_resolution};
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+
+    // Rasterizer
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.depthClampEnable = VK_FALSE;
+    rasterizer.rasterizerDiscardEnable = VK_FALSE;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.depthBiasEnable = VK_TRUE;
+    rasterizer.depthBiasConstantFactor = 1.25f;
+    rasterizer.depthBiasSlopeFactor = 1.75f;
+    rasterizer.depthBiasClamp = 0.0f;
+
+    // Multisampling
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Depth stencil
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable = VK_FALSE;
+
+    // No color attachments
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 0;
+
+    // Create pipeline
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = static_cast<u32>(shaderStages.size());
+    pipelineInfo.pStages = shaderStages.data();
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pTessellationState = &tessellationState;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = nullptr;
+    pipelineInfo.layout = m_tessPipelineLayout;
+    pipelineInfo.renderPass = m_renderPass;
+    pipelineInfo.subpass = 0;
+
+    if (vkCreateGraphicsPipelines(m_context.getDevice(), m_context.getPipelineCache(), 1,
+                                   &pipelineInfo, nullptr, &m_tessPipeline) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create shadow tessellation pipeline");
+    }
+
+    // Cleanup shader modules
+    vkDestroyShaderModule(m_context.getDevice(), vertModule, nullptr);
+    vkDestroyShaderModule(m_context.getDevice(), tescModule, nullptr);
+    vkDestroyShaderModule(m_context.getDevice(), teseModule, nullptr);
+
+    std::cout << "[ShadowMap] Created tessellated shadow pipeline" << std::endl;
 }
 
 } // namespace arch
