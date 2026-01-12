@@ -885,6 +885,7 @@ private:
     // Material descriptor set (set 1)
     VkDescriptorSetLayout m_materialDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet m_defaultMaterialDescriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSet m_lastBoundMaterialSet = VK_NULL_HANDLE;  // Track for redundant bind skipping
     std::unordered_map<std::string, VkDescriptorSet> m_materialDescriptorSets;
     std::unique_ptr<MaterialLibrary> m_materialLibrary;
     std::string m_materialRoot = "materials";

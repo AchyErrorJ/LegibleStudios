@@ -25,8 +25,8 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     uint enableShadows;
     uint outputLinearHDR;  // If true, output linear HDR (tonemapping done in composite pass)
     float exposure;        // Exposure multiplier for tonemapping
-    uint _padding1;
-    uint _padding2;
+    float tessellationLevel;  // Tessellation subdivision level
+    float displacementScale;  // Height map displacement scale
     vec4 materialParams;    // x = UV scale, y = normal strength, z = brightness, w = contrast
     vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
     vec4 materialTint;      // RGB tint, w = unused
@@ -43,6 +43,7 @@ layout(set = 1, binding = 3) uniform sampler2D metallicMap;
 layout(set = 1, binding = 4) uniform sampler2D aoMap;
 layout(set = 1, binding = 5) uniform sampler2D emissiveMap;
 layout(set = 1, binding = 6) uniform sampler2D opacityMap;
+layout(set = 1, binding = 7) uniform sampler2D heightMap;  // For tessellation displacement
 
 // Stress color constants (matching types.hpp)
 const vec3 STRESS_SAFE     = vec3(0.133, 0.773, 0.369);  // Green
@@ -184,16 +185,16 @@ float calculateShadow(vec4 lightSpacePos, vec3 normal, vec3 lightDir) {
     float shadow = 0.0;
 
     // Spread factor for shadow edges (lower = sharper, less bleeding)
-    float spread = 1.0;
+    float spread = 1.5;  // Slightly larger spread to compensate for fewer samples
 
-    // 5x5 PCF for smooth shadow edges
-    for (int x = -2; x <= 2; x++) {
-        for (int y = -2; y <= 2; y++) {
+    // 3x3 PCF for smooth shadow edges (9 samples vs 25)
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
             vec2 offset = vec2(float(x), float(y)) * texelSize * spread;
             shadow += texture(shadowMap, vec3(projCoords.xy + offset, projCoords.z - totalBias));
         }
     }
-    shadow /= 25.0;
+    shadow /= 9.0;
 
     // Clean up near-lit areas to avoid subtle artifacts
     if (shadow > 0.95) shadow = 1.0;
