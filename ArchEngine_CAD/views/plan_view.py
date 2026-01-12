@@ -957,6 +957,8 @@ class WallItem(QGraphicsItem):
         self._color_interior = QColor("#a0a0a0")
         self._color_wet = QColor("#8080ff")
         self._color_selection = QColor("#ffff00")
+        self._color_hover = QColor("#80c0ff")  # Light blue hover highlight
+        self._is_hovered = False
 
         # Grips
         self._grips: List[GripItem] = []
@@ -1114,13 +1116,21 @@ class WallItem(QGraphicsItem):
         self.update()
 
     def hoverEnterEvent(self, event):
-        """Show grips when hovering over wall."""
+        """Show grips and highlight when hovering over wall."""
+        self._is_hovered = True
         if not self._grips:  # Only create if not already showing
             self._create_grips()
+        # Force immediate repaint
+        if self.scene():
+            self.scene().update(self.boundingRect())
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event):
-        """Hide grips when leaving wall (unless selected, dragging, or hovering layer)."""
+        """Hide grips and highlight when leaving wall (unless selected, dragging, or hovering layer)."""
+        self._is_hovered = False
+        # Force immediate repaint
+        if self.scene():
+            self.scene().update(self.boundingRect())
         # Don't remove grips if any grip is being dragged
         dragging = any(grip._dragging for grip in self._grips) if self._grips else False
         # Check if any layer is currently being hovered
@@ -1431,6 +1441,30 @@ class WallItem(QGraphicsItem):
             painter.setPen(pen)
             painter.drawPath(path)
 
+        # Draw hover highlight (clean cyan outline)
+        if self._is_hovered and not self.isSelected():
+            total_thick = wall_type.total_thickness if wall_type else self.thickness
+            half = total_thick / 2 + 60  # Slight margin around wall
+            p1 = QPointF(x1 + px * half, z1 + pz * half)
+            p2 = QPointF(x1 - px * half, z1 - pz * half)
+            p3 = QPointF(x2 - px * half, z2 - pz * half)
+            p4 = QPointF(x2 + px * half, z2 + pz * half)
+
+            hover_path = QPainterPath()
+            hover_path.moveTo(p1)
+            hover_path.lineTo(p2)
+            hover_path.lineTo(p3)
+            hover_path.lineTo(p4)
+            hover_path.closeSubpath()
+
+            # Clean cyan outline, no fill
+            pen = QPen(QColor(0, 200, 255))  # Cyan
+            pen.setWidth(4)
+            pen.setStyle(Qt.PenStyle.SolidLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(hover_path)
+
         # Draw selection highlight
         if self.isSelected():
             # Draw outer boundary highlight
@@ -1484,11 +1518,26 @@ class DoorItem(QGraphicsItem):
         self.document = document
         self._wall: Optional[Wall] = None
         self._grips: List[GripItem] = []
+        self._is_hovered = False
+        self._color_hover = QColor("#80c0ff")
 
         if 0 <= door.wall_index < len(walls):
             self._wall = walls[door.wall_index]
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setAcceptHoverEvents(True)
+
+    def hoverEnterEvent(self, event):
+        self._is_hovered = True
+        if self.scene():
+            self.scene().update(self.boundingRect())
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self._is_hovered = False
+        if self.scene():
+            self.scene().update(self.boundingRect())
+        super().hoverLeaveEvent(event)
 
     def _create_grips(self):
         """Create center grip for moving door along wall."""
@@ -1699,6 +1748,14 @@ class DoorItem(QGraphicsItem):
 
         painter.drawPath(path)
 
+        # Draw hover highlight (clean cyan circle)
+        if self._is_hovered and not self.isSelected():
+            pen = QPen(QColor(0, 200, 255))  # Cyan
+            pen.setWidth(4)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(pos, half_width + 80, half_width + 80)
+
         # Draw pin indicator if pinned
         if self.door.is_pinned:
             painter.save()
@@ -1720,11 +1777,26 @@ class WindowItem(QGraphicsItem):
         self.document = document
         self._wall: Optional[Wall] = None
         self._grips: List[GripItem] = []
+        self._is_hovered = False
+        self._color_hover = QColor("#80c0ff")
 
         if 0 <= window.wall_index < len(walls):
             self._wall = walls[window.wall_index]
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setAcceptHoverEvents(True)
+
+    def hoverEnterEvent(self, event):
+        self._is_hovered = True
+        if self.scene():
+            self.scene().update(self.boundingRect())
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self._is_hovered = False
+        if self.scene():
+            self.scene().update(self.boundingRect())
+        super().hoverLeaveEvent(event)
 
     def _create_grips(self):
         """Create center grip for moving window along wall."""
@@ -1839,6 +1911,30 @@ class WindowItem(QGraphicsItem):
             )
             painter.drawLine(p1, p2)
 
+        # Draw hover highlight (clean cyan box around window)
+        if self._is_hovered and not self.isSelected():
+            pen = QPen(QColor(0, 200, 255))  # Cyan
+            pen.setWidth(4)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            # Draw highlight box around window
+            margin = 80
+            hp1 = QPointF(pos.x() - ux * (half_width + margin) + px * margin,
+                          pos.y() - uz * (half_width + margin) + pz * margin)
+            hp2 = QPointF(pos.x() - ux * (half_width + margin) - px * margin,
+                          pos.y() - uz * (half_width + margin) - pz * margin)
+            hp3 = QPointF(pos.x() + ux * (half_width + margin) - px * margin,
+                          pos.y() + uz * (half_width + margin) - pz * margin)
+            hp4 = QPointF(pos.x() + ux * (half_width + margin) + px * margin,
+                          pos.y() + uz * (half_width + margin) + pz * margin)
+            hover_path = QPainterPath()
+            hover_path.moveTo(hp1)
+            hover_path.lineTo(hp2)
+            hover_path.lineTo(hp3)
+            hover_path.lineTo(hp4)
+            hover_path.closeSubpath()
+            painter.drawPath(hover_path)
+
         # Draw pin indicator if pinned
         if self.window.is_pinned:
             painter.save()
@@ -1848,6 +1944,105 @@ class WindowItem(QGraphicsItem):
             painter.setPen(QPen(Qt.GlobalColor.white, 40))
             painter.drawPoint(pos)
             painter.restore()
+
+
+class ReferencePlaneItem(QGraphicsItem):
+    """Graphics item representing a reference plane (grid line)."""
+
+    def __init__(self, plane, view=None, parent=None):
+        super().__init__(parent)
+        self.plane = plane
+        self._view = view
+        self.setZValue(5)  # Behind most elements but visible
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+
+    def boundingRect(self) -> QRectF:
+        """Return bounding rectangle - extends across entire view."""
+        # Use a large extent for the infinite line
+        extent = 100000  # 100 meters
+        margin = 200
+
+        if self.plane.is_vertical:
+            return QRectF(self.plane.position - margin, -extent, margin * 2, extent * 2)
+        else:  # Horizontal
+            return QRectF(-extent, self.plane.position - margin, extent * 2, margin * 2)
+
+    def paint(self, painter: QPainter, option, widget):
+        """Paint the reference plane line."""
+        # Only show at LOD 1 or 2
+        if self._view and self._view.lod_level > 2:
+            return
+
+        extent = 100000  # Large extent for "infinite" line
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Reference plane style - cyan dashed line
+        color = QColor("#00AAAA")
+        pen = QPen(color, 30)  # 30mm line
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+
+        if self.plane.is_vertical:
+            # Vertical line at X = position
+            painter.drawLine(
+                QPointF(self.plane.position, -extent),
+                QPointF(self.plane.position, extent)
+            )
+        else:
+            # Horizontal line at Z = position
+            painter.drawLine(
+                QPointF(-extent, self.plane.position),
+                QPointF(extent, self.plane.position)
+            )
+
+        # Draw label
+        label_size = 300
+        label_offset = 100
+
+        painter.setBrush(QBrush(color))
+        painter.setPen(QPen(Qt.GlobalColor.white, 10))
+
+        if self.plane.is_vertical:
+            # Label at top of visible area
+            label_y = -extent + 1000 if self._view else 0
+            painter.drawEllipse(
+                QPointF(self.plane.position, label_y),
+                label_size, label_size
+            )
+            # Draw label text
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            font = painter.font()
+            font.setPixelSize(250)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(
+                QRectF(self.plane.position - label_size,
+                       label_y - label_size,
+                       label_size * 2, label_size * 2),
+                Qt.AlignmentFlag.AlignCenter,
+                self.plane.label
+            )
+        else:
+            # Label at left of visible area
+            label_x = -extent + 1000 if self._view else 0
+            painter.drawEllipse(
+                QPointF(label_x, self.plane.position),
+                label_size, label_size
+            )
+            # Draw label text
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            font = painter.font()
+            font.setPixelSize(250)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(
+                QRectF(label_x - label_size,
+                       self.plane.position - label_size,
+                       label_size * 2, label_size * 2),
+                Qt.AlignmentFlag.AlignCenter,
+                self.plane.label
+            )
 
 
 class ConnectionItem(QGraphicsItem):
@@ -1873,7 +2068,7 @@ class ConnectionItem(QGraphicsItem):
         self._view = view
         self.setZValue(50)  # Between rooms and UI elements
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)  # Allow selection
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def boundingRect(self) -> QRectF:
@@ -1909,9 +2104,19 @@ class ConnectionItem(QGraphicsItem):
 
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+        is_selected = self.isSelected()
+
+        # Draw selection highlight glow behind the line
+        if is_selected:
+            glow_pen = QPen(QColor(0, 150, 255, 100), 160)  # Wide blue glow
+            glow_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(glow_pen)
+            painter.drawLine(QPointF(p1[0], p1[1]), QPointF(p2[0], p2[1]))
+
         # Draw the shared edge line
         color = QColor(color_hex)
-        pen = QPen(color, 80)  # Thick line (80mm)
+        line_width = 100 if is_selected else 80  # Thicker when selected
+        pen = QPen(color, line_width)
         pen.setStyle(pen_style)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
@@ -1920,6 +2125,12 @@ class ConnectionItem(QGraphicsItem):
         # Draw connection type indicator at midpoint
         mid_x = (p1[0] + p2[0]) / 2
         mid_y = (p1[1] + p2[1]) / 2
+
+        # Draw selection ring behind circle
+        if is_selected:
+            painter.setPen(QPen(QColor(0, 150, 255), 30))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(mid_x, mid_y), 130, 130)
 
         # Draw a small circle at midpoint
         painter.setBrush(QBrush(color))
@@ -1944,10 +2155,15 @@ class ConnectionItem(QGraphicsItem):
         """Handle mouse clicks to change connection type."""
         if event.button() == Qt.MouseButton.LeftButton:
             # Left click cycles through types
+            self.setSelected(True)  # Select on click
             self._cycle_connection_type()
             event.accept()
         elif event.button() == Qt.MouseButton.RightButton:
-            # Right click shows context menu
+            # Right click selects and shows context menu
+            # Clear other selections first
+            if self.scene():
+                self.scene().clearSelection()
+            self.setSelected(True)  # Select this connection
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -2669,6 +2885,7 @@ class PlanView(BaseView):
         self._room_items: List[RoomItem] = []
         self._room_labels: List[RoomLabelItem] = []
         self._connection_items: List[ConnectionItem] = []
+        self._reference_plane_items: List[ReferencePlaneItem] = []
 
         # Snap system
         self._snap_manager = SnapManager(document, config)
@@ -2677,6 +2894,11 @@ class PlanView(BaseView):
 
         # Tool manager (created after view is ready)
         self._tool_manager = None
+
+        # Tab cycling state for overlapping elements
+        self._click_items: List = []  # Items at last click position
+        self._cycle_index: int = 0
+        self._last_click_pos = None
 
         # Connect to document changes
         self.document.document_changed.connect(self.refresh)
@@ -2908,6 +3130,16 @@ class PlanView(BaseView):
             self.scene.addItem(item)
             self._connection_items.append(item)
 
+        # Add reference planes (grid lines)
+        for item in self._reference_plane_items:
+            self.scene.removeItem(item)
+        self._reference_plane_items.clear()
+
+        for plane in self.document.reference_planes:
+            item = ReferencePlaneItem(plane, view=self)
+            self.scene.addItem(item)
+            self._reference_plane_items.append(item)
+
         self.viewport().update()
 
     def _on_element_modified(self, element_type: str, element_id: str, changes: dict):
@@ -2993,6 +3225,10 @@ class PlanView(BaseView):
             super().mousePressEvent(event)
             return
 
+        # Collect all selectable items at click position for Tab cycling
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._collect_items_at(scene_pos)
+
         # For non-grip items, let QGraphicsView handle selection first
         super().mousePressEvent(event)
 
@@ -3064,7 +3300,14 @@ class PlanView(BaseView):
             super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event):
-        """Forward key press to active tool."""
+        """Forward key press to active tool, handle Tab cycling."""
+        # Tab = cycle through overlapping elements
+        if event.key() == Qt.Key.Key_Tab:
+            forward = not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            if self._cycle_selection(forward):
+                event.accept()
+                return
+
         if self._tool_manager and self._tool_manager.active_tool:
             self._tool_manager.active_tool.key_press(event)
 
@@ -3073,6 +3316,81 @@ class PlanView(BaseView):
                 return
 
         super().keyPressEvent(event)
+
+    def _collect_items_at(self, scene_pos):
+        """Collect all selectable items at the given scene position for Tab cycling."""
+        # Get all items at this position
+        items_at_pos = self.scene.items(scene_pos)
+
+        # Filter to only selectable items (walls, rooms, doors, windows, connections)
+        # and sort by priority (smaller/more precise elements first)
+        selectable_items = []
+        for item in items_at_pos:
+            if isinstance(item, (WallItem, RoomItem, DoorItem, WindowItem, ConnectionItem)):
+                if item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsSelectable:
+                    # Calculate priority and size for sorting
+                    if isinstance(item, DoorItem):
+                        priority = 100  # Highest - small openings
+                        size = item.boundingRect().width() * item.boundingRect().height()
+                    elif isinstance(item, WindowItem):
+                        priority = 100  # Highest - small openings
+                        size = item.boundingRect().width() * item.boundingRect().height()
+                    elif isinstance(item, ConnectionItem):
+                        priority = 90   # High - connection indicators between rooms
+                        size = item.boundingRect().width() * item.boundingRect().height()
+                    elif isinstance(item, WallItem):
+                        priority = 80   # High - linear elements
+                        size = item.boundingRect().width() * item.boundingRect().height()
+                    elif isinstance(item, RoomItem):
+                        priority = 20   # Low - large floor areas
+                        size = item.boundingRect().width() * item.boundingRect().height()
+                    else:
+                        priority = 10
+                        size = 1e9
+                    selectable_items.append((item, priority, size))
+
+        # Sort by priority (descending), then size (ascending - smaller first)
+        selectable_items.sort(key=lambda x: (-x[1], x[2]))
+
+        # Extract just the items
+        self._click_items = [item for item, _, _ in selectable_items]
+        self._cycle_index = 0
+        self._last_click_pos = scene_pos
+
+        # Show hint if multiple items
+        if len(self._click_items) > 1:
+            first_type = type(self._click_items[0]).__name__.replace('Item', '')
+            event_bus.status_message.emit(
+                f"1/{len(self._click_items)} elements ({first_type}) - press Tab to cycle",
+                3000
+            )
+
+    def _cycle_selection(self, forward: bool = True) -> bool:
+        """Cycle through overlapping items at the last click position."""
+        if not self._click_items or len(self._click_items) < 2:
+            return False
+
+        # Clear current selection
+        self.scene.clearSelection()
+
+        # Cycle index
+        if forward:
+            self._cycle_index = (self._cycle_index + 1) % len(self._click_items)
+        else:
+            self._cycle_index = (self._cycle_index - 1) % len(self._click_items)
+
+        # Select the new item
+        item = self._click_items[self._cycle_index]
+        item.setSelected(True)
+
+        # Show status
+        item_type = type(item).__name__.replace('Item', '')
+        event_bus.status_message.emit(
+            f"{self._cycle_index + 1}/{len(self._click_items)} - {item_type}",
+            2000
+        )
+
+        return True
 
     def keyReleaseEvent(self, event):
         """Forward key release to active tool."""

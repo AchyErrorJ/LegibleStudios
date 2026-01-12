@@ -54,6 +54,7 @@ class Wall:
     height: float = 2700
     category: str = "interior"  # exterior, interior, wet_wall
     wall_type: str = ""
+    material_override: str = ""  # Material ID override (empty = use wall_type default)
     # Structural binding - walls bound to room boundaries at LOD 1-2
     is_structural: bool = True  # Structural walls define room boundaries
     bound_room_id: str = ""  # Room this wall belongs to (empty = unbound partition)
@@ -166,6 +167,31 @@ class RoomConnection:
         return None
 
 
+@dataclass
+class ReferencePlane:
+    """
+    Reference plane (grid line) for aligning building elements.
+
+    Reference planes define the building grid - typically labeled
+    A, B, C... for one direction and 1, 2, 3... for the other.
+    Exterior walls align to these planes.
+    """
+    id: str
+    label: str  # Display label (A, B, 1, 2, etc.)
+    direction: str  # 'horizontal' or 'vertical'
+    position: float  # Offset from origin (X for vertical, Z for horizontal)
+    is_exterior: bool = True  # True if this defines building boundary
+    bound_walls: List[str] = field(default_factory=list)  # Wall indices bound to this plane
+
+    @property
+    def is_horizontal(self) -> bool:
+        return self.direction == 'horizontal'
+
+    @property
+    def is_vertical(self) -> bool:
+        return self.direction == 'vertical'
+
+
 class ArchDocument(QObject):
     """
     Central document model - single source of truth.
@@ -202,6 +228,7 @@ class ArchDocument(QObject):
         self._wall_types: Dict[str, WallType] = {}
         self._room_connections: List[RoomConnection] = []  # Room adjacencies
         self._furniture: List[Any] = []  # FurniturePlacement objects
+        self._reference_planes: List[ReferencePlane] = []  # Building grid lines
 
         # Furniture catalog reference
         self._furniture_catalog = get_default_catalog() if _FURNITURE_AVAILABLE else None
@@ -271,6 +298,169 @@ class ArchDocument(QObject):
                 return conn
         return None
 
+    @property
+    def reference_planes(self) -> List[ReferencePlane]:
+        """Get building reference planes (grid lines)."""
+        return self._reference_planes
+
+    def get_reference_plane(self, plane_id: str) -> Optional[ReferencePlane]:
+        """Get reference plane by ID."""
+        for plane in self._reference_planes:
+            if plane.id == plane_id:
+                return plane
+        return None
+
+    def add_reference_plane(self, plane: ReferencePlane):
+        """Add a reference plane."""
+        self._reference_planes.append(plane)
+        self._modified = True
+
+    def remove_reference_plane(self, plane_id: str):
+        """Remove a reference plane by ID."""
+        self._reference_planes = [p for p in self._reference_planes if p.id != plane_id]
+        self._modified = True
+
+    def generate_reference_planes_from_extents(self):
+        """
+        Auto-generate reference planes from building extents.
+        Creates planes at the min/max X and Z coordinates of all rooms.
+        """
+        if not self._rooms:
+            return
+
+        # Find building extents from room vertices
+        min_x = float('inf')
+        max_x = float('-inf')
+        min_z = float('inf')
+        max_z = float('-inf')
+
+        for room in self._rooms.values():
+            if not room.vertices:
+                continue
+            for v in room.vertices:
+                min_x = min(min_x, v[0])
+                max_x = max(max_x, v[0])
+                min_z = min(min_z, v[1])
+                max_z = max(max_z, v[1])
+
+        if min_x == float('inf'):
+            return
+
+        # Clear existing exterior reference planes
+        self._reference_planes = [p for p in self._reference_planes if not p.is_exterior]
+
+        # Create vertical planes (at X positions) - labeled A, B, C...
+        # Left edge
+        self._reference_planes.append(ReferencePlane(
+            id='ref_v_a',
+            label='A',
+            direction='vertical',
+            position=min_x,
+            is_exterior=True
+        ))
+        # Right edge
+        self._reference_planes.append(ReferencePlane(
+            id='ref_v_b',
+            label='B',
+            direction='vertical',
+            position=max_x,
+            is_exterior=True
+        ))
+
+        # Create horizontal planes (at Z positions) - labeled 1, 2...
+        # Bottom edge
+        self._reference_planes.append(ReferencePlane(
+            id='ref_h_1',
+            label='1',
+            direction='horizontal',
+            position=min_z,
+            is_exterior=True
+        ))
+        # Top edge
+        self._reference_planes.append(ReferencePlane(
+            id='ref_h_2',
+            label='2',
+            direction='horizontal',
+            position=max_z,
+            is_exterior=True
+        ))
+
+        print(f"[RefPlanes] Generated 4 reference planes from building extents")
+        print(f"[RefPlanes] X: {min_x:.0f} to {max_x:.0f}, Z: {min_z:.0f} to {max_z:.0f}")
+        self._modified = True
+
+    def snap_exterior_walls_to_planes(self, tolerance: float = 500.0):
+        """
+        Snap exterior wall endpoints to nearest reference planes.
+        """
+        if not self._reference_planes:
+            print("[RefPlanes] No reference planes defined")
+            return 0
+
+        snapped_count = 0
+
+        for wall in self._walls:
+            if wall.category != 'exterior':
+                continue
+
+            # Get wall endpoints (X, Z coordinates)
+            start_x, start_z = wall.start[0], wall.start[2]
+            end_x, end_z = wall.end[0], wall.end[2]
+
+            # Check vertical planes (snap X coordinates)
+            for plane in self._reference_planes:
+                if plane.is_vertical:
+                    # Snap start X
+                    if abs(start_x - plane.position) < tolerance:
+                        wall.start = (plane.position, wall.start[1], wall.start[2])
+                        snapped_count += 1
+                    # Snap end X
+                    if abs(end_x - plane.position) < tolerance:
+                        wall.end = (plane.position, wall.end[1], wall.end[2])
+                        snapped_count += 1
+                else:  # Horizontal plane
+                    # Snap start Z
+                    if abs(start_z - plane.position) < tolerance:
+                        wall.start = (wall.start[0], wall.start[1], plane.position)
+                        snapped_count += 1
+                    # Snap end Z
+                    if abs(end_z - plane.position) < tolerance:
+                        wall.end = (wall.end[0], wall.end[1], plane.position)
+                        snapped_count += 1
+
+        if snapped_count > 0:
+            self._modified = True
+            print(f"[RefPlanes] Snapped {snapped_count} wall endpoints to reference planes")
+
+        return snapped_count
+
+    def recalculate_room_areas(self):
+        """
+        Recalculate all room areas from their vertices using the shoelace formula.
+        Call this after syncing rooms from the renderer or modifying room geometry.
+        """
+        updated = 0
+        for room in self._rooms.values():
+            if not room.vertices or len(room.vertices) < 3:
+                continue
+
+            # Shoelace formula for polygon area
+            area = 0.0
+            n = len(room.vertices)
+            for i in range(n):
+                j = (i + 1) % n
+                area += room.vertices[i][0] * room.vertices[j][1]
+                area -= room.vertices[j][0] * room.vertices[i][1]
+
+            # Area is in mm², convert to m²
+            room.area = abs(area) / 2.0 / 1_000_000.0  # mm² to m²
+            updated += 1
+
+        if updated > 0:
+            print(f"[Document] Recalculated areas for {updated} rooms")
+
+        return updated
+
     def detect_room_adjacencies(self, threshold: float = 500.0):
         """
         Detect which rooms are adjacent by checking for overlapping/touching edges.
@@ -278,6 +468,14 @@ class ArchDocument(QObject):
         Args:
             threshold: Maximum distance (mm) between edges to consider adjacent
         """
+        # Preserve existing connection types before clearing
+        existing_types = {}
+        for conn in self._room_connections:
+            # Use sorted tuple as key to handle both orderings
+            key = tuple(sorted([conn.room_a_id, conn.room_b_id]))
+            if conn.connection_type and conn.connection_type != 'undefined':
+                existing_types[key] = conn.connection_type
+
         self._room_connections.clear()
         room_ids = list(self._rooms.keys())
         print(f"[Adjacency] Checking {len(room_ids)} rooms for adjacencies (threshold={threshold}mm)")
@@ -296,10 +494,14 @@ class ArchDocument(QObject):
                 # Check for shared/overlapping edges
                 shared_edge = self._find_shared_edge(room_a, room_b, threshold)
                 if shared_edge:
+                    # Restore previous connection type if it existed
+                    key = tuple(sorted([room_a_id, room_b_id]))
+                    conn_type = existing_types.get(key, 'undefined')
+
                     conn = RoomConnection(
                         room_a_id=room_a_id,
                         room_b_id=room_b_id,
-                        connection_type='undefined',  # Default, can be set later
+                        connection_type=conn_type,
                         shared_edge=shared_edge
                     )
                     self._room_connections.append(conn)
@@ -605,6 +807,7 @@ class ArchDocument(QObject):
                 height=w.get('height', 2700),
                 category=w.get('category', 'interior'),
                 wall_type=w.get('wall_type', ''),
+                material_override=w.get('material_override', ''),
                 is_structural=w.get('is_structural', True),
                 bound_room_id=w.get('bound_room_id', ''),
                 edge_index=w.get('edge_index', -1),
@@ -1117,6 +1320,13 @@ class ArchDocument(QObject):
 
         print(f"[WallGen] Generated: {exterior_count} exterior, "
               f"{interior_count} interior, {open_count} open (no wall)")
+
+        # Merge collinear exterior walls
+        merged = self._merge_exterior_walls()
+        if merged > 0:
+            print(f"[WallGen] Merged {merged} exterior wall segments")
+            exterior_count = sum(1 for w in self._walls if w.category == 'exterior')
+
         print(f"[WallGen] Total walls: {len(self._walls)}")
 
         self.document_changed.emit()
@@ -1129,6 +1339,109 @@ class ArchDocument(QObject):
             for f in self._data.get('furniture', []):
                 placement = FurniturePlacement.from_dict(f)
                 self._furniture.append(placement)
+
+    def _merge_exterior_walls(self, tolerance: float = 100.0) -> int:
+        """
+        Merge collinear adjacent exterior walls into longer walls.
+
+        Finds exterior walls that:
+        1. Share an endpoint (within tolerance)
+        2. Are collinear (on the same line)
+
+        Merges them into single longer walls.
+        Returns number of walls removed by merging.
+        """
+        exterior_walls = [w for w in self._walls if w.category == 'exterior']
+        if len(exterior_walls) < 2:
+            return 0
+
+        def are_collinear(w1, w2, tol=tolerance):
+            """Check if two walls are collinear (same line direction)."""
+            # Get wall directions in XZ plane
+            dx1 = w1.end[0] - w1.start[0]
+            dz1 = w1.end[2] - w1.start[2]
+            dx2 = w2.end[0] - w2.start[0]
+            dz2 = w2.end[2] - w2.start[2]
+
+            # Check if both are vertical (along Z)
+            if abs(dx1) < tol and abs(dx2) < tol:
+                # Both vertical - check X position
+                return abs(w1.start[0] - w2.start[0]) < tol
+
+            # Check if both are horizontal (along X)
+            if abs(dz1) < tol and abs(dz2) < tol:
+                # Both horizontal - check Z position
+                return abs(w1.start[2] - w2.start[2]) < tol
+
+            return False
+
+        def share_endpoint(w1, w2, tol=tolerance):
+            """Check if walls share an endpoint. Returns (w1_end, w2_end) or None."""
+            pts1 = [(w1.start[0], w1.start[2]), (w1.end[0], w1.end[2])]
+            pts2 = [(w2.start[0], w2.start[2]), (w2.end[0], w2.end[2])]
+
+            for i, p1 in enumerate(pts1):
+                for j, p2 in enumerate(pts2):
+                    if abs(p1[0] - p2[0]) < tol and abs(p1[1] - p2[1]) < tol:
+                        return (i, j)  # (w1 endpoint index, w2 endpoint index)
+            return None
+
+        merged_count = 0
+        walls_to_remove = set()
+
+        # Build adjacency and try to merge
+        for i, w1 in enumerate(exterior_walls):
+            if i in walls_to_remove:
+                continue
+
+            for j, w2 in enumerate(exterior_walls):
+                if j <= i or j in walls_to_remove:
+                    continue
+
+                if not are_collinear(w1, w2):
+                    continue
+
+                shared = share_endpoint(w1, w2)
+                if not shared:
+                    continue
+
+                # Merge w2 into w1
+                w1_end_idx, w2_end_idx = shared
+
+                # Determine new start/end based on which endpoints are shared
+                if w1_end_idx == 0:  # w1.start is shared
+                    if w2_end_idx == 0:  # w2.start is shared
+                        # w1: [shared] -> end1, w2: [shared] -> end2
+                        # Result: end2 -> end1
+                        w1.start = w2.end
+                    else:  # w2.end is shared
+                        # w1: [shared] -> end1, w2: start2 -> [shared]
+                        # Result: start2 -> end1
+                        w1.start = w2.start
+                else:  # w1.end is shared
+                    if w2_end_idx == 0:  # w2.start is shared
+                        # w1: start1 -> [shared], w2: [shared] -> end2
+                        # Result: start1 -> end2
+                        w1.end = w2.end
+                    else:  # w2.end is shared
+                        # w1: start1 -> [shared], w2: start2 -> [shared]
+                        # Result: start1 -> start2
+                        w1.end = w2.start
+
+                walls_to_remove.add(j)
+                merged_count += 1
+
+        # Remove merged walls
+        if walls_to_remove:
+            exterior_indices = [self._walls.index(w) for w in exterior_walls]
+            indices_to_remove = {exterior_indices[i] for i in walls_to_remove}
+            self._walls = [w for i, w in enumerate(self._walls) if i not in indices_to_remove]
+
+            # Re-index walls
+            for i, wall in enumerate(self._walls):
+                wall.index = i
+
+        return merged_count
 
     def _update_data(self):
         """Update JSON data from parsed objects, preserving original fields."""
@@ -1147,6 +1460,7 @@ class ArchDocument(QObject):
             wall_data['height'] = wall.height
             wall_data['category'] = wall.category
             wall_data['wall_type'] = wall.wall_type
+            wall_data['material_override'] = wall.material_override
             # Structural binding fields
             wall_data['is_structural'] = wall.is_structural
             wall_data['bound_room_id'] = wall.bound_room_id
@@ -1282,13 +1596,13 @@ class ArchDocument(QObject):
         zs = [v[1] for v in room.vertices]
         room.center = {'x': sum(xs) / len(xs), 'z': sum(zs) / len(zs)}
 
-        # Update room area (shoelace formula)
-        area = 0
+        # Update room area (shoelace formula) - convert mm² to m²
+        area = 0.0
         for i in range(num_verts):
             j = (i + 1) % num_verts
             area += room.vertices[i][0] * room.vertices[j][1]
             area -= room.vertices[j][0] * room.vertices[i][1]
-        room.area = abs(area) / 2
+        room.area = abs(area) / 2.0 / 1_000_000.0  # mm² to m²
 
     def move_room_walls(self, room_id: str, dx: float, dy: float,
                         from_drag_start: bool = False,
@@ -1848,6 +2162,37 @@ class ArchDocument(QObject):
         if element:
             return element.is_pinned or property_name in element.locked_properties
         return False
+
+    # =========================================================================
+    # Material Assignment
+    # =========================================================================
+
+    def set_wall_material(self, wall_index: int, material_id: str):
+        """
+        Set material override for a specific wall.
+
+        Args:
+            wall_index: Index of the wall
+            material_id: Material ID to apply (or empty string to clear)
+        """
+        if 0 <= wall_index < len(self._walls):
+            self._walls[wall_index].material_override = material_id
+            self.element_modified.emit('wall', str(wall_index))
+            self._modified = True
+
+    def set_walls_material_by_category(self, category: str, material_id: str):
+        """
+        Set material override for all walls of a category.
+
+        Args:
+            category: Wall category ('exterior', 'interior', 'wet_wall')
+            material_id: Material ID to apply
+        """
+        for wall in self._walls:
+            if wall.category == category:
+                wall.material_override = material_id
+                self.element_modified.emit('wall', str(wall.index))
+        self._modified = True
 
     # =========================================================================
     # ArchGeometry Integration

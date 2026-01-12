@@ -564,6 +564,19 @@ class ViewportPanel(QWidget):
         self.clip_controls.setEnabled(False)
         self.clipping_changed.emit()
 
+    def update_from_section(self, enabled: bool, axis: int, height: float, flipped: bool):
+        """Update panel UI from viewport section changes (interactive drag)."""
+        self._updating = True
+
+        self.clip_enabled.setChecked(enabled)
+        self.clip_controls.setEnabled(enabled)
+        self.axis_combo.setCurrentIndex(axis)
+        self.pos_spin.setValue(height)
+        self.pos_slider.setValue(int(height * 10))
+        self.flip_check.setChecked(flipped)
+
+        self._updating = False
+
     def get_material_style(self) -> int:
         """Get current material style index."""
         return self.style_combo.currentIndex()
