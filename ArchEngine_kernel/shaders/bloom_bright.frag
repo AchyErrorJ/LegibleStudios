@@ -10,15 +10,15 @@ layout(set = 0, binding = 0) uniform sampler2D hdrTexture;
 layout(push_constant) uniform BloomParams {
     float threshold;
     float softThreshold;
-    float intensity;
+    float exposure;
     float _padding;
 } params;
 
 void main() {
     vec3 color = texture(hdrTexture, fragTexCoord).rgb;
 
-    // Calculate luminance
-    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    // Calculate luminance in exposure space so threshold responds to scene brightness
+    float luminance = dot(color * params.exposure, vec3(0.2126, 0.7152, 0.0722));
 
     // Soft threshold with knee
     float soft = luminance - params.threshold + params.softThreshold;

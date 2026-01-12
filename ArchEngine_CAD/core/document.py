@@ -20,6 +20,18 @@ from PyQt6.QtGui import QUndoStack
 from core.events import event_bus
 from core.version_control import VersionControl
 
+# Try to import furniture module
+_FURNITURE_AVAILABLE = False
+try:
+    from furniture.models import FurnitureItem, FurniturePlacement, FurnitureCategory
+    from furniture.catalog import get_default_catalog
+    _FURNITURE_AVAILABLE = True
+except ImportError:
+    FurnitureItem = None
+    FurniturePlacement = None
+    FurnitureCategory = None
+    get_default_catalog = None
+
 # Try to import shared geometry library
 _ARCHGEOMETRY_AVAILABLE = False
 try:
@@ -189,6 +201,10 @@ class ArchDocument(QObject):
         self._rooms: Dict[str, Room] = {}
         self._wall_types: Dict[str, WallType] = {}
         self._room_connections: List[RoomConnection] = []  # Room adjacencies
+        self._furniture: List[Any] = []  # FurniturePlacement objects
+
+        # Furniture catalog reference
+        self._furniture_catalog = get_default_catalog() if _FURNITURE_AVAILABLE else None
 
         # Version control (git-based)
         self._version_control: Optional[VersionControl] = None
@@ -397,6 +413,16 @@ class ArchDocument(QObject):
         return self._wall_types.get(type_id)
 
     @property
+    def furniture(self) -> List[Any]:
+        """Get placed furniture items."""
+        return self._furniture
+
+    @property
+    def furniture_catalog(self):
+        """Get the furniture catalog."""
+        return self._furniture_catalog
+
+    @property
     def building_width(self) -> float:
         """Get building width."""
         return self._data.get('width', 10000)
@@ -422,7 +448,8 @@ class ArchDocument(QObject):
             'windows': [],
             'rooms': {},
             'roofs': [],
-            'wall_types': []
+            'wall_types': [],
+            'furniture': []
         }
         self._file_path = None
         self._modified = False
@@ -546,6 +573,7 @@ class ArchDocument(QObject):
         self._rooms.clear()
         self._wall_types.clear()
         self._room_connections.clear()
+        self._furniture.clear()
 
         # Parse wall types first (needed for wall thickness)
         for wt in self._data.get('wall_types', []):
@@ -1094,6 +1122,14 @@ class ArchDocument(QObject):
         self.document_changed.emit()
         return exterior_count, interior_count, open_count
 
+    def _parse_furniture(self):
+        """Parse furniture placements from data."""
+        # Parse furniture
+        if _FURNITURE_AVAILABLE:
+            for f in self._data.get('furniture', []):
+                placement = FurniturePlacement.from_dict(f)
+                self._furniture.append(placement)
+
     def _update_data(self):
         """Update JSON data from parsed objects, preserving original fields."""
         # Update walls - preserve original data, only update modified fields
@@ -1187,6 +1223,13 @@ class ArchDocument(QObject):
                 'wall_id': conn.wall_id
             })
         self._data['room_connections'] = connections
+
+        # Update furniture
+        if _FURNITURE_AVAILABLE:
+            furniture = []
+            for placement in self._furniture:
+                furniture.append(placement.to_dict())
+            self._data['furniture'] = furniture
 
     def get_data(self) -> dict:
         """Get current document data as JSON-serializable dict.
@@ -1512,6 +1555,98 @@ class ArchDocument(QObject):
 
             cmd = ModifyWindowCommand(self, index, old_values, changes)
             self._undo_stack.push(cmd)
+
+    # =========================================================================
+    # Furniture Methods
+    # =========================================================================
+
+    def add_furniture(self, furniture_id: str, x: float, z: float,
+                      rotation: float = 0, room_id: Optional[str] = None) -> Optional[str]:
+        """
+        Add a furniture placement.
+
+        Args:
+            furniture_id: ID of furniture item from catalog
+            x: X position in mm
+            z: Z position in mm
+            rotation: Rotation in degrees
+            room_id: Optional room ID
+
+        Returns:
+            Placement ID or None if furniture not found in catalog
+        """
+        if not _FURNITURE_AVAILABLE or self._furniture_catalog is None:
+            return None
+
+        item = self._furniture_catalog.get(furniture_id)
+        if item is None:
+            return None
+
+        placement = FurniturePlacement.create(furniture_id, x, z, rotation, room_id)
+        self._furniture.append(placement)
+
+        self.set_modified(True)
+        self.element_added.emit('furniture', placement.id)
+        self.document_changed.emit()
+
+        return placement.id
+
+    def remove_furniture(self, placement_id: str) -> bool:
+        """
+        Remove a furniture placement by ID.
+
+        Args:
+            placement_id: Placement instance ID
+
+        Returns:
+            True if removed, False if not found
+        """
+        for i, placement in enumerate(self._furniture):
+            if placement.id == placement_id:
+                self._furniture.pop(i)
+                self.set_modified(True)
+                self.element_removed.emit('furniture', placement_id)
+                self.document_changed.emit()
+                return True
+        return False
+
+    def modify_furniture(self, placement_id: str, **changes) -> bool:
+        """
+        Modify a furniture placement.
+
+        Args:
+            placement_id: Placement instance ID
+            **changes: Properties to change (position_x, position_z, rotation, room_id)
+
+        Returns:
+            True if modified, False if not found
+        """
+        for placement in self._furniture:
+            if placement.id == placement_id:
+                for key, value in changes.items():
+                    if hasattr(placement, key):
+                        setattr(placement, key, value)
+                self.set_modified(True)
+                self.element_modified.emit('furniture', placement_id)
+                return True
+        return False
+
+    def get_furniture_in_room(self, room_id: str) -> List[Any]:
+        """Get all furniture placements in a room."""
+        return [p for p in self._furniture if p.room_id == room_id]
+
+    def get_furniture_by_id(self, placement_id: str) -> Optional[Any]:
+        """Get a furniture placement by ID."""
+        for placement in self._furniture:
+            if placement.id == placement_id:
+                return placement
+        return None
+
+    def get_furniture_item(self, furniture_id: str) -> Optional[Any]:
+        """Get a furniture item from the catalog."""
+        if self._furniture_catalog:
+            return self._furniture_catalog.get(furniture_id)
+        return None
 
     def get_wall_types(self) -> List[Dict]:
         """Get available wall types."""

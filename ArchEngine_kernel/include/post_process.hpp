@@ -42,6 +42,7 @@ public:
     void initialize(u32 width, u32 height);
     void cleanup();
     void resize(u32 width, u32 height);
+    void createCompositePipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples);
 
     // SSAO
     void setSSAOConfig(const SSAOConfig& config) { m_ssaoConfig = config; }
@@ -52,7 +53,8 @@ public:
                       VkImageView depthView,
                       VkImageView normalView,
                       const mat4& projection,
-                      const mat4& view);
+                      const mat4& view,
+                      u32 frameIndex);
 
     // Get SSAO result for sampling in main shader
     VkImageView getSSAOImageView() const { return m_ssaoBlurredView; }
@@ -72,14 +74,14 @@ public:
     VkImageView getHDRDepthView() const { return m_hdrDepthView; }
 
     // Generate bloom from HDR scene
-    void generateBloom(VkCommandBuffer cmd);
+    void generateBloom(VkCommandBuffer cmd, u32 frameIndex);
     VkImageView getBloomImageView() const { return m_bloomResultView; }
 
     // Final composite pass - outputs to provided framebuffer (swapchain)
     // beginRenderPass: if true, starts the render pass; if false, assumes already started
     // endRenderPass: if true, ends the render pass; if false, leaves it open (for ImGui)
     void composite(VkCommandBuffer cmd, VkRenderPass renderPass, VkFramebuffer framebuffer,
-                   VkExtent2D extent, bool beginRenderPass = true, bool endRenderPass = true);
+                   VkExtent2D extent, u32 frameIndex, bool beginRenderPass = true, bool endRenderPass = true);
 
     // Full-screen quad rendering helper
     void drawFullscreenQuad(VkCommandBuffer cmd);
@@ -90,6 +92,8 @@ public:
 
 private:
     void createHDRResources();
+    void createHDRTargets();
+    void cleanupHDRTargets();
     void createSSAOResources();
     void createSSAOPipeline();
     void createSSAOKernel();
@@ -97,11 +101,11 @@ private:
     void createBlurPipeline();
     void createBloomResources();
     void createBloomPipelines();
-    void createCompositePipeline();
     void createFullscreenQuad();
 
     void cleanupHDR();
     void cleanupSSAO();
+    void cleanupSSAOSizeDependent();
     void cleanupBloom();
     void cleanupComposite();
 
@@ -160,7 +164,7 @@ private:
     // SSAO descriptor sets
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_ssaoDescriptorLayout = VK_NULL_HANDLE;
-    VkDescriptorSet m_ssaoDescriptorSet = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_ssaoDescriptorSets;
     VkDescriptorSetLayout m_ssaoBlurDescLayout = VK_NULL_HANDLE;
     VkDescriptorSet m_ssaoBlurDescSet = VK_NULL_HANDLE;
 
@@ -186,13 +190,13 @@ private:
     VkPipeline m_bloomBrightPipeline = VK_NULL_HANDLE;
     VkPipeline m_bloomBlurPipeline = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_bloomDescLayout = VK_NULL_HANDLE;
-    VkDescriptorSet m_bloomDescSets[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::vector<std::array<VkDescriptorSet, 2>> m_bloomDescSets;
 
     // Composite resources
     VkPipelineLayout m_compositePipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_compositePipeline = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_compositeDescLayout = VK_NULL_HANDLE;
-    VkDescriptorSet m_compositeDescSet = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_compositeDescSets;
 
     // Fullscreen quad
     VkBuffer m_quadVertexBuffer = VK_NULL_HANDLE;

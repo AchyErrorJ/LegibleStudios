@@ -7,6 +7,7 @@ layout(location = 2) in vec3 fragPosition;
 layout(location = 3) in float fragStress;
 layout(location = 4) in vec4 fragLightSpacePos;
 layout(location = 5) in vec4 fragMaterial;  // x=metallic, y=roughness, z=ao, w=emission
+layout(location = 6) in vec2 fragTexCoord;
 
 // Output
 layout(location = 0) out vec4 outColor;
@@ -22,10 +23,26 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     float shadowBias;
     uint enableClipping;
     uint enableShadows;
+    uint outputLinearHDR;  // If true, output linear HDR (tonemapping done in composite pass)
+    float exposure;        // Exposure multiplier for tonemapping
+    uint _padding1;
+    uint _padding2;
+    vec4 materialParams;    // x = UV scale, y = normal strength, z = brightness, w = contrast
+    vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
+    vec4 materialTint;      // RGB tint, w = unused
 } ubo;
 
 // Shadow map sampler with depth comparison
 layout(set = 0, binding = 1) uniform sampler2DShadow shadowMap;
+
+// Material textures (set 1 = per-material)
+layout(set = 1, binding = 0) uniform sampler2D albedoMap;
+layout(set = 1, binding = 1) uniform sampler2D normalMap;
+layout(set = 1, binding = 2) uniform sampler2D roughnessMap;
+layout(set = 1, binding = 3) uniform sampler2D metallicMap;
+layout(set = 1, binding = 4) uniform sampler2D aoMap;
+layout(set = 1, binding = 5) uniform sampler2D emissiveMap;
+layout(set = 1, binding = 6) uniform sampler2D opacityMap;
 
 // Stress color constants (matching types.hpp)
 const vec3 STRESS_SAFE     = vec3(0.133, 0.773, 0.369);  // Green
@@ -86,6 +103,25 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
 // Fresnel-Schlick with roughness for ambient lighting
 vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Perturb normal using tangent space normal map
+vec3 perturbNormal(vec3 N, vec3 V, vec2 texCoord, float normalStrength) {
+    // Sample normal map (stored as RGB = XYZ in [0,1] range)
+    vec3 tangentNormal = texture(normalMap, texCoord).rgb * 2.0 - 1.0;
+    tangentNormal = normalize(vec3(tangentNormal.xy * normalStrength, tangentNormal.z));
+
+    // Compute TBN matrix using derivatives (no pre-computed tangents needed)
+    vec3 Q1 = dFdx(fragPosition);
+    vec3 Q2 = dFdy(fragPosition);
+    vec2 st1 = dFdx(texCoord);
+    vec2 st2 = dFdy(texCoord);
+
+    vec3 T = normalize(Q1 * st2.t - Q2 * st1.t);
+    vec3 B = normalize(cross(N, T));
+    mat3 TBN = mat3(T, B, N);
+
+    return normalize(TBN * tangentNormal);
 }
 
 // Calculate stress color based on utilization ratio
@@ -186,14 +222,58 @@ void main() {
     vec3 L = normalize(-ubo.lightDirection.xyz);
     vec3 H = normalize(V + L);
 
-    // Extract material properties
-    float metallic = fragMaterial.x;
-    float roughness = max(fragMaterial.y, 0.04);  // Clamp to avoid artifacts
-    float materialAO = fragMaterial.z;
+    // Sample material textures
+    vec2 uv = fragTexCoord * ubo.materialParams.x;
+    vec3 texAlbedo = texture(albedoMap, uv).rgb;
+    vec3 texNormal = texture(normalMap, uv).rgb;
+    float texRoughness = texture(roughnessMap, uv).r;
+    float texMetallic = texture(metallicMap, uv).r;
+    float texAO = texture(aoMap, uv).r;
+    vec3 texEmissive = texture(emissiveMap, uv).rgb;
+    float texOpacity = texture(opacityMap, uv).r;
+
+    // Perturb normal using normal map (only if not flat normal)
+    if (length(texNormal - vec3(0.5, 0.5, 1.0)) > 0.01) {
+        N = perturbNormal(N, V, uv, ubo.materialParams.y);
+    }
+
+    // Extract push constant material properties (used as multipliers/overrides)
+    float metallic = fragMaterial.x * texMetallic;
+    float roughness = max(fragMaterial.y * texRoughness, 0.04);  // Clamp to avoid artifacts
+    float materialAO = fragMaterial.z * texAO;
     float emission = fragMaterial.w;
 
-    // Use stress coloring if stress is significant, otherwise use vertex color
-    vec3 albedo = fragColor;
+    // Apply material adjustments from UBO
+    float brightness = ubo.materialParams.z;
+    float contrast = ubo.materialParams.w;
+    float saturation = ubo.materialParams2.x;
+    float roughnessOffset = ubo.materialParams2.y;
+    float metallicOffset = ubo.materialParams2.z;
+    float aoStrength = ubo.materialParams2.w;
+    vec3 tint = ubo.materialTint.rgb;
+
+    // Apply roughness/metallic/AO offsets
+    roughness = clamp(roughness + roughnessOffset, 0.04, 1.0);
+    metallic = clamp(metallic + metallicOffset, 0.0, 1.0);
+    materialAO = clamp(materialAO * aoStrength, 0.0, 1.0);
+
+    // Albedo: multiply texture by vertex color for tinting capability
+    vec3 albedo = texAlbedo * fragColor;
+
+    // Apply brightness, contrast, saturation, and tint adjustments
+    // Brightness: add to color
+    albedo += vec3(brightness);
+    // Contrast: scale around 0.5
+    albedo = (albedo - 0.5) * contrast + 0.5;
+    // Saturation: lerp toward grayscale
+    float gray = dot(albedo, vec3(0.299, 0.587, 0.114));
+    albedo = mix(vec3(gray), albedo, saturation);
+    // Tint: multiply
+    albedo *= tint;
+    // Clamp to valid range
+    albedo = clamp(albedo, 0.0, 1.0);
+
+    // Use stress coloring if stress is significant (override textures)
     if (fragStress > 0.01) {
         albedo = getStressColor(fragStress);
     }
@@ -254,8 +334,9 @@ void main() {
     // Combine direct and ambient lighting
     vec3 result = ambient + Lo;
 
-    // Add emission
-    result += albedo * emission;
+    // Add emission (use emissive texture when present, fall back to albedo)
+    vec3 emissiveColor = (length(texEmissive) > 0.001) ? texEmissive : albedo;
+    result += emissiveColor * emission;
 
     // DEBUG: Uncomment one to visualize components
     // outColor = vec4(N * 0.5 + 0.5, 1.0); return;  // Normals
@@ -272,11 +353,40 @@ void main() {
     // outColor = vec4(lsPos * 0.5 + 0.5, 1.0); return;  // Light space position (RGB=XYZ)
     // outColor = vec4(vec3(lsPos.z), 1.0); return;      // Light space depth (closer=darker)
 
-    // Tone mapping (ACES-ish)
-    result = result / (result + vec3(1.0));
+    // Calculate alpha for transparency (glass has low roughness)
+    // Glass materials: roughness < 0.35 = transparent
+    float alpha = 1.0;
+    if (roughness < 0.35 && metallic < 0.1) {
+        // Glass: semi-transparent with fresnel effect (more opaque at grazing angles)
+        float fresnel = pow(1.0 - NdotV, 3.0);
+        alpha = mix(0.3, 0.7, fresnel);  // 30% to 70% opacity based on view angle
+    }
+    // Clamp opacity so glass doesn't vanish when opacity maps are too dark
+    alpha *= clamp(texOpacity, 0.05, 1.0);
+
+    // When rendering to HDR buffer, output linear values (tonemapping done in composite pass)
+    if (ubo.outputLinearHDR != 0u) {
+        outColor = vec4(result, alpha);
+        return;
+    }
+
+    // Direct rendering path: apply exposure, tonemapping and gamma correction here
+    // Apply exposure
+    result = result * ubo.exposure;
+
+    // ACES Filmic Tonemapping (matches composite pass for consistent look)
+    // https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
+    {
+        float a = 2.51;
+        float b = 0.03;
+        float c = 2.43;
+        float d = 0.59;
+        float e = 0.14;
+        result = clamp((result * (a * result + b)) / (result * (c * result + d) + e), 0.0, 1.0);
+    }
 
     // Gamma correction
     result = pow(result, vec3(1.0 / 2.2));
 
-    outColor = vec4(result, 1.0);
+    outColor = vec4(result, alpha);
 }

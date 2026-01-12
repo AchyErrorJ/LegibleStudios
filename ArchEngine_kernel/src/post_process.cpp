@@ -30,7 +30,6 @@ void PostProcess::initialize(u32 width, u32 height) {
     createBlurPipeline();
     createBloomResources();
     createBloomPipelines();
-    createCompositePipeline();
     createFullscreenQuad();
 
     m_initialized = true;
@@ -63,14 +62,17 @@ void PostProcess::resize(u32 width, u32 height) {
     if (width == m_width && height == m_height) return;
 
     m_context.waitIdle();
-    cleanupSSAO();
+    cleanupHDRTargets();
+    cleanupSSAOSizeDependent();
     cleanupBloom();
 
     m_width = width;
     m_height = height;
 
+    createHDRTargets();
     createSSAOResources();
-    // Pipelines don't need to be recreated
+    createBloomResources();
+    std::cout << "[PostProcess] Resized to " << width << "x" << height << std::endl;
 }
 
 void PostProcess::createSSAOKernel() {
@@ -283,18 +285,21 @@ void PostProcess::createSSAOResources() {
 
     vkMapMemory(device, m_ssaoUniformMemory, 0, uniformSize, 0, &m_ssaoUniformMapped);
 
-    // Create descriptor pool - enough for SSAO, bloom, and composite
+    // Create descriptor pool - enough for SSAO, bloom, and composite across frames
+    u32 frameCount = m_context.getMaxFramesInFlight();
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 20;  // Increased for bloom + composite
+    poolSizes[0].descriptorCount = frameCount * 12 + 3;  // SSAO (3), bloom (2), composite (3) per frame + blur/sample
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[1].descriptorCount = 5;
+    poolSizes[1].descriptorCount = frameCount + 2;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<u32>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = 15;  // Increased for bloom + composite
+    poolInfo.maxSets = frameCount * 6 + 6;  // SSAO + bloom + composite per frame + extra
+    // Allow descriptor sets to be updated while bound (for dynamic SSAO depth/normal binding)
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO descriptor pool");
@@ -327,10 +332,24 @@ void PostProcess::createSSAOResources() {
     bindings[3].descriptorCount = 1;
     bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // Enable UPDATE_AFTER_BIND for all bindings (SSAO updates depth/normal views each frame)
+    std::array<VkDescriptorBindingFlags, 4> bindingFlags{};
+    bindingFlags[0] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    bindingFlags[1] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    bindingFlags[2] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    bindingFlags[3] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+
+    VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
+    bindingFlagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    bindingFlagsInfo.bindingCount = static_cast<u32>(bindingFlags.size());
+    bindingFlagsInfo.pBindingFlags = bindingFlags.data();
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<u32>(bindings.size());
     layoutInfo.pBindings = bindings.data();
+    layoutInfo.pNext = &bindingFlagsInfo;
+    layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
 
     if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_ssaoDescriptorLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO descriptor set layout");
@@ -348,10 +367,13 @@ void PostProcess::createSSAOResources() {
     blurBindings[1].descriptorCount = 1;
     blurBindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    layoutInfo.bindingCount = static_cast<u32>(blurBindings.size());
-    layoutInfo.pBindings = blurBindings.data();
+    // Reset layoutInfo for blur layout (no UPDATE_AFTER_BIND needed - static binding)
+    VkDescriptorSetLayoutCreateInfo blurLayoutInfo{};
+    blurLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    blurLayoutInfo.bindingCount = static_cast<u32>(blurBindings.size());
+    blurLayoutInfo.pBindings = blurBindings.data();
 
-    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_ssaoBlurDescLayout) != VK_SUCCESS) {
+    if (vkCreateDescriptorSetLayout(device, &blurLayoutInfo, nullptr, &m_ssaoBlurDescLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO blur descriptor set layout");
     }
 
@@ -362,10 +384,21 @@ void PostProcess::createSSAOResources() {
     sampleBinding.descriptorCount = 1;
     sampleBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &sampleBinding;
+    // Enable UPDATE_AFTER_BIND for sample descriptor (updated during command recording)
+    VkDescriptorBindingFlags sampleBindingFlag = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    VkDescriptorSetLayoutBindingFlagsCreateInfo sampleBindingFlagsInfo{};
+    sampleBindingFlagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    sampleBindingFlagsInfo.bindingCount = 1;
+    sampleBindingFlagsInfo.pBindingFlags = &sampleBindingFlag;
 
-    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_ssaoSampleDescLayout) != VK_SUCCESS) {
+    VkDescriptorSetLayoutCreateInfo sampleLayoutInfo{};
+    sampleLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    sampleLayoutInfo.bindingCount = 1;
+    sampleLayoutInfo.pBindings = &sampleBinding;
+    sampleLayoutInfo.pNext = &sampleBindingFlagsInfo;
+    sampleLayoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+
+    if (vkCreateDescriptorSetLayout(device, &sampleLayoutInfo, nullptr, &m_ssaoSampleDescLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create SSAO sample descriptor set layout");
     }
 
@@ -373,13 +406,17 @@ void PostProcess::createSSAOResources() {
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_ssaoDescriptorLayout;
 
-    if (vkAllocateDescriptorSets(device, &allocInfo, &m_ssaoDescriptorSet) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to allocate SSAO descriptor set");
+    std::vector<VkDescriptorSetLayout> ssaoLayouts(frameCount, m_ssaoDescriptorLayout);
+    allocInfo.descriptorSetCount = frameCount;
+    allocInfo.pSetLayouts = ssaoLayouts.data();
+    m_ssaoDescriptorSets.resize(frameCount, VK_NULL_HANDLE);
+
+    if (vkAllocateDescriptorSets(device, &allocInfo, m_ssaoDescriptorSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate SSAO descriptor sets");
     }
 
+    allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &m_ssaoBlurDescLayout;
     if (vkAllocateDescriptorSets(device, &allocInfo, &m_ssaoBlurDescSet) != VK_SUCCESS) {
         throw std::runtime_error("Failed to allocate SSAO blur descriptor set");
@@ -661,8 +698,9 @@ void PostProcess::createFullscreenQuad() {
 }
 
 void PostProcess::generateSSAO(VkCommandBuffer cmd, VkImageView depthView, VkImageView normalView,
-                                const mat4& projection, const mat4& view) {
+                                const mat4& projection, const mat4& view, u32 frameIndex) {
     if (!m_ssaoConfig.enabled) return;
+    if (frameIndex >= m_ssaoDescriptorSets.size()) return;
 
     // Update uniform buffer
     struct SSAOUniforms {
@@ -709,28 +747,28 @@ void PostProcess::generateSSAO(VkCommandBuffer cmd, VkImageView depthView, VkIma
     std::array<VkWriteDescriptorSet, 4> writes{};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = m_ssaoDescriptorSet;
+    writes[0].dstSet = m_ssaoDescriptorSets[frameIndex];
     writes[0].dstBinding = 0;
     writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[0].descriptorCount = 1;
     writes[0].pImageInfo = &depthInfo;
 
     writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m_ssaoDescriptorSet;
+    writes[1].dstSet = m_ssaoDescriptorSets[frameIndex];
     writes[1].dstBinding = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[1].descriptorCount = 1;
     writes[1].pImageInfo = &normalInfo;
 
     writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = m_ssaoDescriptorSet;
+    writes[2].dstSet = m_ssaoDescriptorSets[frameIndex];
     writes[2].dstBinding = 2;
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[2].descriptorCount = 1;
     writes[2].pImageInfo = &noiseInfo;
 
     writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = m_ssaoDescriptorSet;
+    writes[3].dstSet = m_ssaoDescriptorSets[frameIndex];
     writes[3].dstBinding = 3;
     writes[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[3].descriptorCount = 1;
@@ -756,7 +794,7 @@ void PostProcess::generateSSAO(VkCommandBuffer cmd, VkImageView depthView, VkIma
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ssaoPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ssaoPipelineLayout,
-                           0, 1, &m_ssaoDescriptorSet, 0, nullptr);
+                           0, 1, &m_ssaoDescriptorSets[frameIndex], 0, nullptr);
 
     // Set dynamic viewport/scissor
     VkViewport viewport{};
@@ -797,24 +835,6 @@ void PostProcess::generateSSAO(VkCommandBuffer cmd, VkImageView depthView, VkIma
 
 void PostProcess::createHDRResources() {
     auto device = m_context.getDevice();
-
-    // Create HDR color buffer (RGBA16F for high dynamic range)
-    m_context.createImage(m_width, m_height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
-                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                         m_hdrColorImage, m_hdrColorMemory);
-
-    m_hdrColorView = m_context.createImageView(m_hdrColorImage, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                               VK_IMAGE_ASPECT_COLOR_BIT);
-
-    // Create HDR depth buffer
-    m_context.createImage(m_width, m_height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
-                         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                         m_hdrDepthImage, m_hdrDepthMemory);
-
-    m_hdrDepthView = m_context.createImageView(m_hdrDepthImage, VK_FORMAT_D32_SFLOAT,
-                                               VK_IMAGE_ASPECT_DEPTH_BIT);
 
     // Create sampler
     VkSamplerCreateInfo samplerInfo{};
@@ -878,6 +898,32 @@ void PostProcess::createHDRResources() {
         throw std::runtime_error("Failed to create HDR render pass");
     }
 
+    createHDRTargets();
+
+    std::cout << "[PostProcess] HDR resources created" << std::endl;
+}
+
+void PostProcess::createHDRTargets() {
+    auto device = m_context.getDevice();
+
+    // Create HDR color buffer (RGBA16F for high dynamic range)
+    m_context.createImage(m_width, m_height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
+                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                         m_hdrColorImage, m_hdrColorMemory);
+
+    m_hdrColorView = m_context.createImageView(m_hdrColorImage, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                               VK_IMAGE_ASPECT_COLOR_BIT);
+
+    // Create HDR depth buffer
+    m_context.createImage(m_width, m_height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
+                         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                         m_hdrDepthImage, m_hdrDepthMemory);
+
+    m_hdrDepthView = m_context.createImageView(m_hdrDepthImage, VK_FORMAT_D32_SFLOAT,
+                                               VK_IMAGE_ASPECT_DEPTH_BIT);
+
     // Create framebuffer
     std::array<VkImageView, 2> fbAttachments = {m_hdrColorView, m_hdrDepthView};
 
@@ -893,8 +939,6 @@ void PostProcess::createHDRResources() {
     if (vkCreateFramebuffer(device, &fbInfo, nullptr, &m_hdrFramebuffer) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create HDR framebuffer");
     }
-
-    std::cout << "[PostProcess] HDR resources created" << std::endl;
 }
 
 void PostProcess::createBloomResources() {
@@ -934,7 +978,7 @@ void PostProcess::createBloomResources() {
     attachment.samples = VK_SAMPLE_COUNT_1_BIT;
     attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachment.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference colorRef{};
@@ -971,6 +1015,13 @@ void PostProcess::createBloomResources() {
         if (vkCreateFramebuffer(device, &fbInfo, nullptr, &m_bloomFramebuffers[i]) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create bloom framebuffer");
         }
+    }
+
+    // Ensure bloom images start in shader-read layout (for disabled bloom path).
+    for (int i = 0; i < 2; i++) {
+        m_context.transitionImageLayout(m_bloomImages[i], VK_FORMAT_R16G16B16A16_SFLOAT,
+                                        VK_IMAGE_LAYOUT_UNDEFINED,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
     std::cout << "[PostProcess] Bloom resources created" << std::endl;
@@ -1023,7 +1074,7 @@ void PostProcess::createBloomPipelines() {
     VkPushConstantRange pushConstant{};
     pushConstant.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstant.offset = 0;
-    pushConstant.size = sizeof(vec4);  // threshold, softThreshold, intensity, padding OR direction, texelSize
+    pushConstant.size = sizeof(vec4);  // threshold, softThreshold, exposure, padding OR direction, texelSize
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -1036,16 +1087,21 @@ void PostProcess::createBloomPipelines() {
         throw std::runtime_error("Failed to create bloom pipeline layout");
     }
 
-    // Allocate descriptor sets for ping-pong blur
+    // Allocate descriptor sets for ping-pong blur (per frame)
+    u32 frameCount = m_context.getMaxFramesInFlight();
+    m_bloomDescSets.resize(frameCount);
+
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_descriptorPool;
     allocInfo.descriptorSetCount = 1;
 
-    for (int i = 0; i < 2; i++) {
-        allocInfo.pSetLayouts = &m_bloomDescLayout;
-        if (vkAllocateDescriptorSets(device, &allocInfo, &m_bloomDescSets[i]) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to allocate bloom descriptor set");
+    for (u32 frame = 0; frame < frameCount; ++frame) {
+        for (int i = 0; i < 2; i++) {
+            allocInfo.pSetLayouts = &m_bloomDescLayout;
+            if (vkAllocateDescriptorSets(device, &allocInfo, &m_bloomDescSets[frame][i]) != VK_SUCCESS) {
+                throw std::runtime_error("Failed to allocate bloom descriptor set");
+            }
         }
     }
 
@@ -1148,8 +1204,12 @@ void PostProcess::createBloomPipelines() {
     std::cout << "[PostProcess] Bloom pipelines created" << std::endl;
 }
 
-void PostProcess::createCompositePipeline() {
+void PostProcess::createCompositePipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples) {
     auto device = m_context.getDevice();
+
+    if (m_compositePipeline || m_compositePipelineLayout || m_compositeDescLayout) {
+        cleanupComposite();
+    }
 
     // Load shader helper
     auto loadShader = [&](const std::string& filename) -> VkShaderModule {
@@ -1219,15 +1279,19 @@ void PostProcess::createCompositePipeline() {
         throw std::runtime_error("Failed to create composite pipeline layout");
     }
 
-    // Allocate descriptor set
+    // Allocate descriptor sets (one per frame in flight)
+    u32 frameCount = m_context.getMaxFramesInFlight();
+    std::vector<VkDescriptorSetLayout> layouts(frameCount, m_compositeDescLayout);
+
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_compositeDescLayout;
+    allocInfo.descriptorSetCount = frameCount;
+    allocInfo.pSetLayouts = layouts.data();
 
-    if (vkAllocateDescriptorSets(device, &allocInfo, &m_compositeDescSet) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to allocate composite descriptor set");
+    m_compositeDescSets.resize(frameCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(device, &allocInfo, m_compositeDescSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate composite descriptor sets");
     }
 
     // Load shaders
@@ -1268,7 +1332,7 @@ void PostProcess::createCompositePipeline() {
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = samples;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -1279,42 +1343,18 @@ void PostProcess::createCompositePipeline() {
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    depthStencil.stencilTestEnable = VK_FALSE;
+
     std::array<VkDynamicState, 2> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
     dynamicState.dynamicStateCount = static_cast<u32>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
-
-    // Note: Composite uses the swapchain render pass, which is passed at runtime
-    // We'll create a compatible render pass for pipeline creation
-    VkAttachmentDescription attachment{};
-    attachment.format = VK_FORMAT_B8G8R8A8_SRGB;  // Typical swapchain format
-    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
-    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
-
-    VkRenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &attachment;
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
-
-    VkRenderPass compositeRenderPass;
-    if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &compositeRenderPass) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create composite render pass");
-    }
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -1325,10 +1365,11 @@ void PostProcess::createCompositePipeline() {
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = m_compositePipelineLayout;
-    pipelineInfo.renderPass = compositeRenderPass;
+    pipelineInfo.renderPass = renderPass;
     pipelineInfo.subpass = 0;
 
     if (vkCreateGraphicsPipelines(device, m_context.getPipelineCache(), 1, &pipelineInfo,
@@ -1336,19 +1377,20 @@ void PostProcess::createCompositePipeline() {
         throw std::runtime_error("Failed to create composite pipeline");
     }
 
-    // Cleanup temporary render pass - pipeline is compatible with similar render passes
-    vkDestroyRenderPass(device, compositeRenderPass, nullptr);
     vkDestroyShaderModule(device, vertModule, nullptr);
     vkDestroyShaderModule(device, fragModule, nullptr);
 
     std::cout << "[PostProcess] Composite pipeline created" << std::endl;
 }
 
-void PostProcess::generateBloom(VkCommandBuffer cmd) {
+void PostProcess::generateBloom(VkCommandBuffer cmd, u32 frameIndex) {
     if (!m_bloomConfig.enabled) return;
+    if (frameIndex >= m_bloomDescSets.size()) return;
 
     u32 bloomWidth = m_width / 2;
     u32 bloomHeight = m_height / 2;
+
+    auto& bloomSets = m_bloomDescSets[frameIndex];
 
     // Update descriptor set 0 to read from HDR scene
     VkDescriptorImageInfo hdrInfo{};
@@ -1358,7 +1400,7 @@ void PostProcess::generateBloom(VkCommandBuffer cmd) {
 
     VkWriteDescriptorSet write{};
     write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = m_bloomDescSets[0];
+    write.dstSet = bloomSets[0];
     write.dstBinding = 0;
     write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     write.descriptorCount = 1;
@@ -1383,10 +1425,10 @@ void PostProcess::generateBloom(VkCommandBuffer cmd) {
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomBrightPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomPipelineLayout,
-                           0, 1, &m_bloomDescSets[0], 0, nullptr);
+                           0, 1, &bloomSets[0], 0, nullptr);
 
     // Push bloom bright params: threshold, softThreshold, intensity, padding
-    vec4 brightParams(m_bloomConfig.threshold, m_bloomConfig.softThreshold, m_bloomConfig.intensity, 0.0f);
+    vec4 brightParams(m_bloomConfig.threshold, m_bloomConfig.softThreshold, m_compositeConfig.exposure, 0.0f);
     vkCmdPushConstants(cmd, m_bloomPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(vec4), &brightParams);
 
     VkViewport viewport{};
@@ -1416,7 +1458,7 @@ void PostProcess::generateBloom(VkCommandBuffer cmd) {
         inputInfo.imageView = m_bloomViews[0];
         inputInfo.sampler = m_bloomSampler;
 
-        write.dstSet = m_bloomDescSets[1];
+        write.dstSet = bloomSets[1];
         write.pImageInfo = &inputInfo;
         vkUpdateDescriptorSets(m_context.getDevice(), 1, &write, 0, nullptr);
 
@@ -1425,7 +1467,7 @@ void PostProcess::generateBloom(VkCommandBuffer cmd) {
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomBlurPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomPipelineLayout,
-                               0, 1, &m_bloomDescSets[1], 0, nullptr);
+                               0, 1, &bloomSets[1], 0, nullptr);
 
         // Horizontal blur: direction = (1, 0)
         vec4 blurParams(1.0f, 0.0f, texelSize.x, texelSize.y);
@@ -1438,7 +1480,7 @@ void PostProcess::generateBloom(VkCommandBuffer cmd) {
 
         // Vertical blur: buffer 1 -> buffer 0
         inputInfo.imageView = m_bloomViews[1];
-        write.dstSet = m_bloomDescSets[0];
+        write.dstSet = bloomSets[0];
         write.pImageInfo = &inputInfo;
         vkUpdateDescriptorSets(m_context.getDevice(), 1, &write, 0, nullptr);
 
@@ -1447,7 +1489,7 @@ void PostProcess::generateBloom(VkCommandBuffer cmd) {
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomBlurPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomPipelineLayout,
-                               0, 1, &m_bloomDescSets[0], 0, nullptr);
+                               0, 1, &bloomSets[0], 0, nullptr);
 
         // Vertical blur: direction = (0, 1)
         blurParams = vec4(0.0f, 1.0f, texelSize.x, texelSize.y);
@@ -1464,8 +1506,14 @@ void PostProcess::generateBloom(VkCommandBuffer cmd) {
 }
 
 void PostProcess::composite(VkCommandBuffer cmd, VkRenderPass renderPass, VkFramebuffer framebuffer,
-                            VkExtent2D extent, bool beginRenderPass, bool endRenderPass) {
+                            VkExtent2D extent, u32 frameIndex, bool beginRenderPass, bool endRenderPass) {
     // Update composite descriptor set
+    if (frameIndex >= m_compositeDescSets.size()) {
+        return;
+    }
+
+    VkDescriptorSet compositeSet = m_compositeDescSets[frameIndex];
+
     std::array<VkDescriptorImageInfo, 3> imageInfos{};
 
     // HDR scene
@@ -1478,15 +1526,15 @@ void PostProcess::composite(VkCommandBuffer cmd, VkRenderPass renderPass, VkFram
     imageInfos[1].imageView = m_ssaoBlurredView ? m_ssaoBlurredView : m_ssaoView;
     imageInfos[1].sampler = m_ssaoSampler;
 
-    // Bloom
+    // Bloom (use HDR view as fallback if bloom not ready)
     imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfos[2].imageView = m_bloomResultView;
-    imageInfos[2].sampler = m_bloomSampler;
+    imageInfos[2].imageView = m_bloomResultView ? m_bloomResultView : m_hdrColorView;
+    imageInfos[2].sampler = m_bloomSampler ? m_bloomSampler : m_hdrSampler;
 
     std::array<VkWriteDescriptorSet, 3> writes{};
     for (u32 i = 0; i < 3; i++) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = m_compositeDescSet;
+        writes[i].dstSet = compositeSet;
         writes[i].dstBinding = i;
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[i].descriptorCount = 1;
@@ -1504,17 +1552,27 @@ void PostProcess::composite(VkCommandBuffer cmd, VkRenderPass renderPass, VkFram
         renderPassInfo.renderArea.offset = {0, 0};
         renderPassInfo.renderArea.extent = extent;
 
-        VkClearValue clearValue{};
-        clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-        renderPassInfo.clearValueCount = 1;
-        renderPassInfo.pClearValues = &clearValue;
+        bool useMsaa = m_context.getMsaaSamples() != VK_SAMPLE_COUNT_1_BIT;
+        std::array<VkClearValue, 3> clearValues{};
+        clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+
+        if (useMsaa) {
+            clearValues[1].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            clearValues[2].depthStencil = {1.0f, 0};
+            renderPassInfo.clearValueCount = 3u;
+        } else {
+            clearValues[1].depthStencil = {1.0f, 0};
+            renderPassInfo.clearValueCount = 2u;
+        }
+
+        renderPassInfo.pClearValues = clearValues.data();
 
         vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipelineLayout,
-                           0, 1, &m_compositeDescSet, 0, nullptr);
+                           0, 1, &compositeSet, 0, nullptr);
 
     // Push composite params
     struct CompositeParams {
@@ -1567,14 +1625,8 @@ void PostProcess::drawFullscreenQuad(VkCommandBuffer cmd) {
 void PostProcess::cleanupHDR() {
     auto device = m_context.getDevice();
 
-    if (m_hdrFramebuffer) vkDestroyFramebuffer(device, m_hdrFramebuffer, nullptr);
+    cleanupHDRTargets();
     if (m_hdrRenderPass) vkDestroyRenderPass(device, m_hdrRenderPass, nullptr);
-    if (m_hdrColorView) vkDestroyImageView(device, m_hdrColorView, nullptr);
-    if (m_hdrColorImage) vkDestroyImage(device, m_hdrColorImage, nullptr);
-    if (m_hdrColorMemory) vkFreeMemory(device, m_hdrColorMemory, nullptr);
-    if (m_hdrDepthView) vkDestroyImageView(device, m_hdrDepthView, nullptr);
-    if (m_hdrDepthImage) vkDestroyImage(device, m_hdrDepthImage, nullptr);
-    if (m_hdrDepthMemory) vkFreeMemory(device, m_hdrDepthMemory, nullptr);
     if (m_hdrSampler) vkDestroySampler(device, m_hdrSampler, nullptr);
 
     m_hdrFramebuffer = VK_NULL_HANDLE;
@@ -1588,6 +1640,26 @@ void PostProcess::cleanupHDR() {
     m_hdrSampler = VK_NULL_HANDLE;
 }
 
+void PostProcess::cleanupHDRTargets() {
+    auto device = m_context.getDevice();
+
+    if (m_hdrFramebuffer) vkDestroyFramebuffer(device, m_hdrFramebuffer, nullptr);
+    if (m_hdrColorView) vkDestroyImageView(device, m_hdrColorView, nullptr);
+    if (m_hdrColorImage) vkDestroyImage(device, m_hdrColorImage, nullptr);
+    if (m_hdrColorMemory) vkFreeMemory(device, m_hdrColorMemory, nullptr);
+    if (m_hdrDepthView) vkDestroyImageView(device, m_hdrDepthView, nullptr);
+    if (m_hdrDepthImage) vkDestroyImage(device, m_hdrDepthImage, nullptr);
+    if (m_hdrDepthMemory) vkFreeMemory(device, m_hdrDepthMemory, nullptr);
+
+    m_hdrFramebuffer = VK_NULL_HANDLE;
+    m_hdrColorView = VK_NULL_HANDLE;
+    m_hdrColorImage = VK_NULL_HANDLE;
+    m_hdrColorMemory = VK_NULL_HANDLE;
+    m_hdrDepthView = VK_NULL_HANDLE;
+    m_hdrDepthImage = VK_NULL_HANDLE;
+    m_hdrDepthMemory = VK_NULL_HANDLE;
+}
+
 void PostProcess::cleanupComposite() {
     auto device = m_context.getDevice();
 
@@ -1598,7 +1670,33 @@ void PostProcess::cleanupComposite() {
     m_compositePipeline = VK_NULL_HANDLE;
     m_compositePipelineLayout = VK_NULL_HANDLE;
     m_compositeDescLayout = VK_NULL_HANDLE;
-    m_compositeDescSet = VK_NULL_HANDLE;  // Freed with pool
+    m_compositeDescSets.clear();  // Freed with pool
+}
+
+void PostProcess::cleanupSSAOSizeDependent() {
+    // Cleanup only size-dependent SSAO resources (for resize)
+    // Keeps noise texture, pipelines, and layouts intact
+    auto device = m_context.getDevice();
+
+    if (m_ssaoFramebuffer) vkDestroyFramebuffer(device, m_ssaoFramebuffer, nullptr);
+    if (m_ssaoBlurFramebuffer) vkDestroyFramebuffer(device, m_ssaoBlurFramebuffer, nullptr);
+
+    if (m_ssaoView) vkDestroyImageView(device, m_ssaoView, nullptr);
+    if (m_ssaoImage) vkDestroyImage(device, m_ssaoImage, nullptr);
+    if (m_ssaoMemory) vkFreeMemory(device, m_ssaoMemory, nullptr);
+
+    if (m_ssaoBlurredView) vkDestroyImageView(device, m_ssaoBlurredView, nullptr);
+    if (m_ssaoBlurredImage) vkDestroyImage(device, m_ssaoBlurredImage, nullptr);
+    if (m_ssaoBlurredMemory) vkFreeMemory(device, m_ssaoBlurredMemory, nullptr);
+
+    m_ssaoFramebuffer = VK_NULL_HANDLE;
+    m_ssaoBlurFramebuffer = VK_NULL_HANDLE;
+    m_ssaoView = VK_NULL_HANDLE;
+    m_ssaoImage = VK_NULL_HANDLE;
+    m_ssaoMemory = VK_NULL_HANDLE;
+    m_ssaoBlurredView = VK_NULL_HANDLE;
+    m_ssaoBlurredImage = VK_NULL_HANDLE;
+    m_ssaoBlurredMemory = VK_NULL_HANDLE;
 }
 
 void PostProcess::cleanupSSAO() {
@@ -1658,6 +1756,7 @@ void PostProcess::cleanupSSAO() {
     m_ssaoDescriptorLayout = VK_NULL_HANDLE;
     m_ssaoBlurDescLayout = VK_NULL_HANDLE;
     m_ssaoSampleDescLayout = VK_NULL_HANDLE;
+    m_ssaoDescriptorSets.clear();
 }
 
 void PostProcess::cleanupBloom() {
@@ -1672,8 +1771,8 @@ void PostProcess::cleanupBloom() {
         m_bloomImages[i] = VK_NULL_HANDLE;
         m_bloomMemory[i] = VK_NULL_HANDLE;
         m_bloomFramebuffers[i] = VK_NULL_HANDLE;
-        m_bloomDescSets[i] = VK_NULL_HANDLE;  // Freed with pool
     }
+    m_bloomDescSets.clear();
 
     if (m_bloomSampler) vkDestroySampler(device, m_bloomSampler, nullptr);
     if (m_bloomRenderPass) vkDestroyRenderPass(device, m_bloomRenderPass, nullptr);

@@ -18,6 +18,13 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     float shadowBias;
     uint enableClipping;
     uint enableShadows;
+    uint outputLinearHDR;
+    uint _padding0;
+    uint _padding1;
+    uint _padding2;
+    vec4 materialParams;
+    vec4 materialParams2;
+    vec4 materialTint;
 } ubo;
 
 // Push constants
@@ -34,6 +41,7 @@ layout(location = 2) out vec3 fragPosition;
 layout(location = 3) out float fragStress;
 layout(location = 4) out vec4 fragLightSpacePos;
 layout(location = 5) out vec4 fragMaterial;
+layout(location = 6) out vec2 fragTexCoord;
 
 void main() {
     mat4 modelMatrix = push.model;
@@ -64,6 +72,9 @@ void main() {
 
     // Pass material properties to fragment shader
     fragMaterial = push.material;
+
+    // Pass texture coordinates (for material textures)
+    fragTexCoord = inTexCoord;
 
     // Clip distance for section clipping
     // Always write a value to avoid undefined behavior

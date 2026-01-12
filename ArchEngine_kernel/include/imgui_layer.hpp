@@ -28,6 +28,50 @@ enum class DrawMode {
 
 class ImGuiLayer {
 public:
+    struct MaterialGenerateRequest {
+        std::string name;
+        std::string prompt;
+        std::string negativePrompt;
+        std::string serverUrl;
+        std::string pythonExe;
+        std::string scriptPath;
+        std::string outputRoot;
+        int size = 1024;
+        int steps = 30;
+        float guidance = 7.5f;
+        bool tileable = true;
+    };
+
+    struct MaterialUpscaleRequest {
+        std::string materialName;
+        std::string serverUrl;
+        std::string pythonExe;
+        std::string scriptPath;
+        std::string materialRoot;
+        int scale = 4;      // 2 or 4
+        int method = 0;     // 0=realesrgan, 1=lanczos
+    };
+
+    struct HeightGenRequest {
+        std::string materialName;
+        std::string materialPath;
+        std::string serverUrl;
+        int method = 0;     // 0=hybrid, 1=normal, 2=diffuse
+        float blur = 1.0f;
+        float contrast = 1.0f;
+        bool invert = false;
+    };
+
+    struct HighResRenderRequest {
+        std::string outputPath;
+        int resolution = 0;     // 0=4K, 1=6K, 2=8K
+        int samples = 1;        // 1, 16, 64, 256
+        int format = 0;         // 0=PNG, 1=EXR
+        bool upscale = false;   // If true, render at 4K and upscale to target
+        int upscaleMethod = 0;  // 0=realesrgan, 1=lanczos
+        float brightness = 1.3f; // Brightness multiplier to compensate for no bloom
+    };
+
     ImGuiLayer(VulkanContext& context, GLFWwindow* window, VkRenderPass renderPass);
     ~ImGuiLayer();
 
@@ -125,6 +169,37 @@ public:
     void clearCameraViewRequest() { m_cameraViewRequested = false; }
     CameraView getRequestedCameraView() const { return m_requestedCameraView; }
 
+    // Material UI actions
+    bool wasApplyMaterialRequested() const { return m_applyMaterialRequested; }
+    const std::string& getApplyMaterialName() const { return m_applyMaterialName; }
+    void clearApplyMaterialRequest() { m_applyMaterialRequested = false; }
+    bool takeMaterialDrop(std::string& outName);
+
+    bool wasMaterialGenerateRequested() const { return m_materialGenerateRequested; }
+    MaterialGenerateRequest takeMaterialGenerateRequest();
+    void setMaterialGenerationState(bool inFlight, const std::string& status);
+    bool wasStartRenderServerRequested() const { return m_startRenderServerRequested; }
+    void clearStartRenderServerRequest() { m_startRenderServerRequested = false; }
+    bool wasStopRenderServerRequested() const { return m_stopRenderServerRequested; }
+    void clearStopRenderServerRequest() { m_stopRenderServerRequested = false; }
+    int getRenderServerPort() const { return m_renderServerPort; }
+
+    // Material upscaling
+    bool wasMaterialUpscaleRequested() const { return m_materialUpscaleRequested; }
+    MaterialUpscaleRequest takeMaterialUpscaleRequest();
+    void setMaterialUpscaleState(bool inFlight, const std::string& status);
+
+    // Height map generation
+    bool wasHeightGenRequested() const { return m_heightGenRequested; }
+    HeightGenRequest takeHeightGenRequest();
+    void setHeightGenState(bool inFlight, const std::string& status);
+
+    // High-res rendering
+    bool wasHighResRenderRequested() const { return m_highResRenderRequested; }
+    HighResRenderRequest takeHighResRenderRequest();
+    void setHighResRenderState(bool inFlight, const std::string& status, float progress = 0.0f);
+    float getHighResRenderProgress() const { return m_highResRenderProgress; }
+
 private:
     void createDescriptorPool();
     void uploadFonts();
@@ -155,6 +230,71 @@ private:
     DrawMode m_drawMode = DrawMode::None;
     std::vector<vec3> m_drawPoints;
     bool m_parametricWallRequested = false;
+
+    // Material UI state
+    bool m_materialUiInitialized = false;
+    int m_materialListIndex = -1;
+    char m_materialFilter[96] = "";
+    char m_materialRoot[260] = "materials";
+    char m_materialOutputRoot[260] = "materials";
+    char m_materialName[128] = "";
+    char m_materialPrompt[512] = "";
+    char m_materialNegative[256] = "blurry, low quality, distorted, watermark";
+    char m_materialServerUrl[256] = "http://localhost:5000";
+    char m_materialPythonExe[260] = "C:\\RevitMCP\\.venv-sd\\Scripts\\python.exe";
+    char m_materialScriptPath[260] = "scripts/material_generate.py";
+    int m_materialSize = 1024;
+    int m_materialSteps = 30;
+    float m_materialGuidance = 7.5f;
+    bool m_materialTileable = true;
+    int m_renderServerPort = 5000;
+    bool m_applyMaterialRequested = false;
+    std::string m_applyMaterialName;
+    bool m_materialDropRequested = false;
+    std::string m_materialDropName;
+    bool m_materialDragActive = false;
+    std::string m_materialDragName;
+    bool m_materialGenerateRequested = false;
+    MaterialGenerateRequest m_materialGenerateRequest;
+    bool m_materialGenerateInFlight = false;
+    std::string m_materialGenerateStatus;
+    bool m_startRenderServerRequested = false;
+    bool m_stopRenderServerRequested = false;
+
+    // Material upscale state
+    bool m_materialUpscaleRequested = false;
+    MaterialUpscaleRequest m_materialUpscaleRequest;
+    bool m_materialUpscaleInFlight = false;
+    std::string m_materialUpscaleStatus;
+    int m_upscaleScale = 4;
+    int m_upscaleMethod = 0;
+
+    // Height map generation state
+    bool m_heightGenRequested = false;
+    HeightGenRequest m_heightGenRequest;
+    bool m_heightGenInFlight = false;
+    std::string m_heightGenStatus;
+    int m_heightGenMethod = 0;      // 0=hybrid, 1=normal, 2=diffuse
+    float m_heightGenBlur = 1.0f;
+    float m_heightGenContrast = 1.0f;
+    bool m_heightGenInvert = false;
+
+    // High-res render state
+    bool m_highResRenderRequested = false;
+    HighResRenderRequest m_highResRenderRequest;
+    bool m_highResRenderInFlight = false;
+    std::string m_highResRenderStatus;
+    float m_highResRenderProgress = 0.0f;
+    int m_renderResolution = 0;     // 0=4K, 1=6K, 2=8K
+    int m_renderSamples = 0;        // 0=1, 1=16, 2=64, 3=256
+    int m_renderFormat = 0;         // 0=PNG, 1=EXR
+    bool m_renderUpscale = false;
+    int m_renderUpscaleMethod = 0;
+    float m_renderBrightness = 1.3f; // Brightness multiplier to compensate for missing bloom
+    char m_renderOutputPath[260] = "renders/render.png";
+
+public:
+    float getRenderBrightness() const { return m_renderBrightness; }
 };
 
 } // namespace arch

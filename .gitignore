@@ -7,3 +7,20 @@ cmake-build-*/
 *.lib
 *.ilk
 imgui.ini
+
+# Cache and generated files
+pipeline_cache.bin
+nul
+.claude/
+
+# Temporary scripts
+*.ps1
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/

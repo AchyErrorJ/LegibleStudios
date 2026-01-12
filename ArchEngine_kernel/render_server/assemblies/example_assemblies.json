@@ -1,0 +1,99 @@
+{
+  "_comment": "METRIC UNITS: thickness in mm, spacing in mm. Set units='imperial' for inches.",
+  "assemblies": [
+    {
+      "key": "ext_brick_2x6",
+      "name": "Exterior Wall - Brick Veneer",
+      "type": "wall",
+      "units": "metric",
+      "is_exterior": true,
+      "is_load_bearing": true,
+      "r_value": 21,
+      "fire_rating": "1-hour",
+      "layers": [
+        {"name": "Brick Veneer", "thickness": 100, "type": "cladding", "material": "masonry", "color": [180, 80, 60]},
+        {"name": "Air Cavity", "thickness": 25, "type": "air_gap", "material": "air"},
+        {"name": "Weather Resistive Barrier", "thickness": 0.25, "type": "membrane", "material": "wrb", "wraps": true},
+        {"name": "Exterior Sheathing", "thickness": 12, "type": "sheathing", "material": "plywood", "structural": true},
+        {"name": "140mm Stud Cavity", "thickness": 140, "type": "structure", "material": "lumber", "spacing": 400, "cavity_fill": "R-21 Batt"},
+        {"name": "Vapor Retarder", "thickness": 0.15, "type": "membrane", "material": "poly"},
+        {"name": "Gypsum Board", "thickness": 16, "type": "finish", "material": "gypsum"}
+      ]
+    },
+    {
+      "key": "ext_stucco_2x4",
+      "name": "Exterior Wall - Stucco",
+      "type": "wall",
+      "units": "metric",
+      "is_exterior": true,
+      "is_load_bearing": true,
+      "r_value": 13,
+      "layers": [
+        {"name": "Stucco", "thickness": 22, "type": "cladding", "material": "cement", "color": [220, 210, 190]},
+        {"name": "Wire Lath", "thickness": 3, "type": "substrate", "material": "metal"},
+        {"name": "Building Paper", "thickness": 0.25, "type": "membrane", "material": "membrane"},
+        {"name": "Exterior Sheathing", "thickness": 12, "type": "sheathing", "material": "plywood"},
+        {"name": "89mm Stud Cavity", "thickness": 89, "type": "structure", "material": "lumber", "spacing": 400, "cavity_fill": "R-13 Batt"},
+        {"name": "Gypsum Board", "thickness": 12.5, "type": "finish", "material": "gypsum"}
+      ]
+    },
+    {
+      "key": "int_plumbing",
+      "name": "Interior Wall - Plumbing",
+      "type": "wall",
+      "units": "metric",
+      "is_exterior": false,
+      "is_load_bearing": false,
+      "r_value": 0,
+      "layers": [
+        {"name": "Cement Board", "thickness": 12, "type": "substrate", "material": "cement"},
+        {"name": "140mm Stud Cavity", "thickness": 140, "type": "structure", "material": "lumber", "spacing": 400},
+        {"name": "Gypsum Board", "thickness": 16, "type": "finish", "material": "gypsum"}
+      ]
+    },
+    {
+      "key": "floor_concrete",
+      "name": "Concrete Slab on Grade",
+      "type": "floor",
+      "units": "metric",
+      "r_value": 10,
+      "layers": [
+        {"name": "Floor Finish", "thickness": 10, "type": "finish", "material": "wood", "color": [180, 140, 100]},
+        {"name": "Concrete Slab", "thickness": 100, "type": "structure", "material": "concrete", "structural": true, "color": [180, 180, 180]},
+        {"name": "Vapor Barrier", "thickness": 0.25, "type": "membrane", "material": "poly"},
+        {"name": "Rigid Insulation", "thickness": 50, "type": "insulation", "material": "foam", "color": [200, 200, 255]},
+        {"name": "Gravel Base", "thickness": 100, "type": "substrate", "material": "gravel", "color": [160, 160, 160]}
+      ]
+    },
+    {
+      "key": "roof_flat",
+      "name": "Flat Roof - TPO",
+      "type": "roof",
+      "units": "metric",
+      "r_value": 30,
+      "layers": [
+        {"name": "TPO Membrane", "thickness": 1.5, "type": "membrane", "material": "plastic", "color": [240, 240, 240]},
+        {"name": "Cover Board", "thickness": 12, "type": "sheathing", "material": "gypsum"},
+        {"name": "Rigid Insulation", "thickness": 115, "type": "insulation", "material": "foam", "color": [255, 230, 200]},
+        {"name": "Vapor Retarder", "thickness": 0.25, "type": "membrane", "material": "poly"},
+        {"name": "Metal Deck", "thickness": 38, "type": "structure", "material": "steel", "structural": true, "color": [200, 200, 200]}
+      ]
+    },
+    {
+      "_comment": "Imperial example for legacy/transition",
+      "key": "ext_siding_imperial",
+      "name": "Exterior Wall - Siding (Imperial)",
+      "type": "wall",
+      "units": "imperial",
+      "is_exterior": true,
+      "r_value": 13,
+      "layers": [
+        {"name": "Fiber Cement Siding", "thickness": 0.375, "type": "cladding", "material": "fiber_cement"},
+        {"name": "WRB", "thickness": 0.01, "type": "membrane", "material": "wrb"},
+        {"name": "Sheathing", "thickness": 0.5, "type": "sheathing", "material": "plywood"},
+        {"name": "2x4 Stud Cavity", "thickness": 3.5, "type": "structure", "material": "lumber", "spacing": 16},
+        {"name": "Drywall", "thickness": 0.5, "type": "finish", "material": "gypsum"}
+      ]
+    }
+  ]
+}

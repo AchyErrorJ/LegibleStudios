@@ -186,13 +186,44 @@ createBeam(vec3 start, vec3 end, f32 width, f32 height, vec3 color) {
         end - right * hw + localUp * hh,    // 7: front-top-left
     };
 
-    // Generate 6 faces with proper normals
+    // UV scale factor (1 unit = 1 meter, texture tiles every meter)
+    const f32 uvScale = 0.001f;  // 1mm to UV units (textures tile per meter)
+
+    // Generate 6 faces with proper normals and UVs
+    // UVs are based on world position for seamless tiling across surfaces
     auto addFace = [&](u32 i0, u32 i1, u32 i2, u32 i3, vec3 normal) {
         u32 baseIndex = static_cast<u32>(vertices.size());
-        vertices.push_back({corners[i0], normal, color});
-        vertices.push_back({corners[i1], normal, color});
-        vertices.push_back({corners[i2], normal, color});
-        vertices.push_back({corners[i3], normal, color});
+
+        // Calculate UV based on world position projected onto face plane
+        // Use the two axes perpendicular to the normal
+        vec3 uAxis, vAxis;
+        if (std::abs(normal.y) > 0.9f) {
+            // Horizontal face (floor/ceiling) - use XZ
+            uAxis = vec3(1, 0, 0);
+            vAxis = vec3(0, 0, 1);
+        } else if (std::abs(normal.x) > std::abs(normal.z)) {
+            // Facing X - use ZY
+            uAxis = vec3(0, 0, 1);
+            vAxis = vec3(0, 1, 0);
+        } else {
+            // Facing Z - use XY
+            uAxis = vec3(1, 0, 0);
+            vAxis = vec3(0, 1, 0);
+        }
+
+        auto calcUV = [&](vec3 pos) -> vec2 {
+            return vec2(glm::dot(pos, uAxis) * uvScale, glm::dot(pos, vAxis) * uvScale);
+        };
+
+        Vertex v0 = {corners[i0], normal, color, calcUV(corners[i0])};
+        Vertex v1 = {corners[i1], normal, color, calcUV(corners[i1])};
+        Vertex v2 = {corners[i2], normal, color, calcUV(corners[i2])};
+        Vertex v3 = {corners[i3], normal, color, calcUV(corners[i3])};
+
+        vertices.push_back(v0);
+        vertices.push_back(v1);
+        vertices.push_back(v2);
+        vertices.push_back(v3);
 
         indices.push_back(baseIndex + 0);
         indices.push_back(baseIndex + 1);
@@ -210,6 +241,25 @@ createBeam(vec3 start, vec3 end, f32 width, f32 height, vec3 color) {
     addFace(4, 5, 1, 0, -localUp);   // Bottom face
 
     return {vertices, indices};
+}
+
+// Helper function to calculate UV from world position
+static vec2 calcWorldUV(vec3 pos, vec3 normal, f32 uvScale = 0.001f) {
+    vec3 uAxis, vAxis;
+    if (std::abs(normal.y) > 0.9f) {
+        // Horizontal face (floor/ceiling) - use XZ
+        uAxis = vec3(1, 0, 0);
+        vAxis = vec3(0, 0, 1);
+    } else if (std::abs(normal.x) > std::abs(normal.z)) {
+        // Facing X - use ZY
+        uAxis = vec3(0, 0, 1);
+        vAxis = vec3(0, 1, 0);
+    } else {
+        // Facing Z - use XY
+        uAxis = vec3(1, 0, 0);
+        vAxis = vec3(0, 1, 0);
+    }
+    return vec2(glm::dot(pos, uAxis) * uvScale, glm::dot(pos, vAxis) * uvScale);
 }
 
 std::pair<std::vector<Vertex>, std::vector<u32>>
@@ -234,10 +284,10 @@ createColumn(vec3 position, f32 width, f32 depth, f32 height, vec3 color) {
 
     auto addFace = [&](u32 i0, u32 i1, u32 i2, u32 i3, vec3 normal) {
         u32 baseIndex = static_cast<u32>(vertices.size());
-        vertices.push_back({corners[i0], normal, color});
-        vertices.push_back({corners[i1], normal, color});
-        vertices.push_back({corners[i2], normal, color});
-        vertices.push_back({corners[i3], normal, color});
+        vertices.push_back({corners[i0], normal, color, calcWorldUV(corners[i0], normal)});
+        vertices.push_back({corners[i1], normal, color, calcWorldUV(corners[i1], normal)});
+        vertices.push_back({corners[i2], normal, color, calcWorldUV(corners[i2], normal)});
+        vertices.push_back({corners[i3], normal, color, calcWorldUV(corners[i3], normal)});
 
         indices.push_back(baseIndex + 0);
         indices.push_back(baseIndex + 1);

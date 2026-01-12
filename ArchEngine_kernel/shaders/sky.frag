@@ -3,6 +3,26 @@
 layout(location = 0) in vec3 viewDir;
 layout(location = 0) out vec4 outColor;
 
+// Uniform buffer (same as structural shader)
+layout(set = 0, binding = 0) uniform UniformBufferObject {
+    mat4 view;
+    mat4 proj;
+    mat4 lightViewProj;
+    vec4 lightDirection;
+    vec4 clipPlane;
+    float time;
+    float shadowBias;
+    uint enableClipping;
+    uint enableShadows;
+    uint outputLinearHDR;
+    uint _padding0;
+    uint _padding1;
+    uint _padding2;
+    vec4 materialParams;
+    vec4 materialParams2;
+    vec4 materialTint;
+} ubo;
+
 // Push constants for sky
 layout(push_constant) uniform SkyPushConstants {
     vec4 sunDirection;  // xyz = direction, w = useHdr flag
@@ -36,7 +56,10 @@ void main() {
     if (useHdr) {
         // Sample from HDR environment cubemap
         finalColor = texture(envMap, dir).rgb;
-        finalColor = finalColor / (finalColor + vec3(1.0));  // Reinhard tonemap
+        // Only tonemap here if NOT using HDR output (composite pass will do it)
+        if (ubo.outputLinearHDR == 0u) {
+            finalColor = finalColor / (finalColor + vec3(1.0));  // Reinhard tonemap
+        }
     } else {
         // Procedural sky - use dir.y directly for horizon detection
         vec3 zenithColor, horizonColor, groundColor, groundFarColor;
@@ -86,7 +109,13 @@ void main() {
         }
     }
 
-    // Gamma correction
+    // When rendering to HDR buffer, output linear values
+    if (ubo.outputLinearHDR != 0u) {
+        outColor = vec4(finalColor, 1.0);
+        return;
+    }
+
+    // Direct rendering: apply gamma correction
     finalColor = pow(finalColor, vec3(1.0 / 2.2));
 
     outColor = vec4(finalColor, 1.0);

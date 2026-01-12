@@ -356,6 +356,7 @@ struct QBDLayout {
     std::vector<QBDRoof> roofs;
     std::unordered_map<std::string, QBDRoom> rooms;
     std::vector<std::string> unplacedRooms;
+    std::vector<WallType> wallTypes;
 
     QBDSummary summary;
     QBDAnswers answers;

@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <nlohmann/json.hpp>
 #include "mesh.hpp"
+#include "geometry_loader.hpp"
 
 // ArchGeometry - shared geometry library for unified schema interpretation
 // Provides QueryAPI for geometry queries, can optionally replace local parsing
@@ -190,6 +191,17 @@ std::optional<QBDLayout> QBDInterface::loadFromJSON(const std::string& jsonStrin
                 }
 
                 layout.walls.push_back(wall);
+            }
+        }
+
+        // Parse wall types (layered assemblies)
+        if (j.contains("wall_types") && j["wall_types"].is_array()) {
+            for (const auto& wtj : j["wall_types"]) {
+                WallType wt;
+                from_json(wtj, wt);
+                if (!wt.id.empty()) {
+                    layout.wallTypes.push_back(wt);
+                }
             }
         }
 
@@ -517,29 +529,40 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
     Building building;
     building.name = "QBD Generated Building";
 
-    // Convert walls to structural elements (with door/window cutouts)
+    auto findWallType = [&](const std::string& id) -> const WallType* {
+        for (const auto& wt : building.wallTypes) {
+            if (wt.id == id || wt.name == id) {
+                return &wt;
+            }
+        }
+        return nullptr;
+    };
+
+    auto defaultWallTypeForCategory = [&](WallCategory category) -> const WallType& {
+        switch (category) {
+            case WallCategory::Exterior: return m_exteriorWallType;
+            case WallCategory::WetWall: return m_wetWallType;
+            default: return m_interiorWallType;
+        }
+    };
+
+    // Prefer wall types from the QBD payload when present
+    if (!layout.wallTypes.empty()) {
+        building.wallTypes = layout.wallTypes;
+    } else {
+        building.wallTypes = {m_exteriorWallType, m_interiorWallType, m_wetWallType};
+    }
+
+    // Convert walls to structural elements (layered + door/window cutouts)
     for (size_t wallIdx = 0; wallIdx < layout.walls.size(); ++wallIdx) {
         const auto& wall = layout.walls[wallIdx];
-        StructuralElement elem;
-        elem.type = ElementType::Wall;
-        elem.start = wall.start;
-        elem.end = vec3(wall.end.x, wall.start.y + wall.height, wall.end.z);
-        elem.width = 0.5f;
-        elem.depth = 0.5f;
 
-        switch (wall.category) {
-            case WallCategory::Exterior:
-                elem.depth = m_exteriorWallType.getTotalThickness();
-                elem.material = "exterior_wall";
-                break;
-            case WallCategory::WetWall:
-                elem.depth = m_wetWallType.getTotalThickness();
-                elem.material = "wet_wall";
-                break;
-            default:
-                elem.depth = m_interiorWallType.getTotalThickness();
-                elem.material = "interior_wall";
-                break;
+        const WallType* wallType = nullptr;
+        if (!wall.wallType.empty()) {
+            wallType = findWallType(wall.wallType);
+        }
+        if (!wallType) {
+            wallType = &defaultWallTypeForCategory(wall.category);
         }
 
         // Collect all openings (doors and windows) for this wall
@@ -556,13 +579,87 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
             }
         }
 
-        // Generate wall mesh with all cutouts
-        if (!openings.empty()) {
+        // Build layered walls by offsetting each layer from the centerline
+        f32 totalThickness = wallType->getTotalThickness();
+        f32 currentOffset = -totalThickness * 0.5f;
+
+        bool createdLayer = false;
+        for (const auto& layer : wallType->layers) {
+            // Insulation shares the structure volume; skip geometry to avoid double-thickness
+            if (layer.function == LayerFunction::Insulation) {
+                continue;
+            }
+
+            f32 layerThickness = layer.thickness;
+            if (layerThickness <= 0.0f) {
+                continue;
+            }
+
+            f32 layerCenterOffset = currentOffset + layerThickness * 0.5f;
+            currentOffset += layerThickness;
+
+            vec3 wallDir = wall.end - wall.start;
+            vec3 wallDirNorm = glm::normalize(vec3(wallDir.x, 0.0f, wallDir.z));
+            vec3 wallPerp = vec3(-wallDirNorm.z, 0.0f, wallDirNorm.x);
+
+            vec3 layerStart = wall.start + wallPerp * layerCenterOffset;
+            vec3 layerEnd = wall.end + wallPerp * layerCenterOffset;
+
+            vec3 layerColor(layer.color.r, layer.color.g, layer.color.b);
             auto [verts, indices] = Geometry::CSG::wallWithMultipleOpenings(
-                wall.start, wall.end, wall.height, elem.depth,
+                layerStart, layerEnd, wall.height, layerThickness,
+                openings, layerColor
+            );
+
+            if (verts.empty() || indices.empty()) {
+                continue;
+            }
+
+            StructuralElement elem;
+            elem.type = ElementType::Wall;
+            elem.start = wall.start;
+            elem.end = vec3(wall.end.x, wall.start.y + wall.height, wall.end.z);
+            elem.width = layerThickness;
+            elem.depth = layerThickness;
+            elem.material = !layer.material.empty() ? layer.material : layer.name;
+            elem.stress = 0.0f;
+            elem.deflection = 0.0f;
+            elem.failed = false;
+
+            elem.mesh.vertices.clear();
+            elem.mesh.faces.clear();
+            for (const auto& v : verts) {
+                elem.mesh.vertices.push_back(v.position);
+            }
+            for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+                elem.mesh.faces.push_back({indices[i], indices[i+1], indices[i+2]});
+            }
+
+            building.elements.push_back(elem);
+            createdLayer = true;
+        }
+
+        if (!createdLayer) {
+            // Fallback: single wall mesh if no valid layers were generated
+            f32 thickness = wallType->getTotalThickness();
+            if (thickness <= 0.0f) thickness = 100.0f;
+            auto [verts, indices] = Geometry::CSG::wallWithMultipleOpenings(
+                wall.start, wall.end, wall.height, thickness,
                 openings, vec3(0.9f, 0.88f, 0.85f)
             );
+
             if (!verts.empty() && !indices.empty()) {
+                StructuralElement elem;
+                elem.type = ElementType::Wall;
+                elem.start = wall.start;
+                elem.end = vec3(wall.end.x, wall.start.y + wall.height, wall.end.z);
+                elem.width = thickness;
+                elem.depth = thickness;
+                elem.material = "wall";
+                elem.stress = 0.0f;
+                elem.deflection = 0.0f;
+                elem.failed = false;
+
                 elem.mesh.vertices.clear();
                 elem.mesh.faces.clear();
                 for (const auto& v : verts) {
@@ -571,10 +668,10 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
                 for (size_t i = 0; i + 2 < indices.size(); i += 3) {
                     elem.mesh.faces.push_back({indices[i], indices[i+1], indices[i+2]});
                 }
+
+                building.elements.push_back(elem);
             }
         }
-
-        building.elements.push_back(elem);
     }
 
     // Convert floors to structural elements
@@ -663,6 +760,8 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
         elem.stress = 0.0f;
         elem.deflection = 0.0f;
         elem.failed = false;
+        // Store wall rotation angle so door aligns with host wall
+        elem.rotation = std::atan2(wallDir.z, wallDir.x);
 
         building.elements.push_back(elem);
     }
@@ -689,17 +788,16 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
         elem.end = windowCenter + wallDir * (window.width * 0.5f);
         elem.end.y = wall.start.y + window.sillHeight + window.height;
         elem.width = window.width;
-        elem.depth = 100.0f;  // Window thickness ~100mm
+        elem.depth = 50.0f;  // Window thickness ~50mm (2 in)
         elem.material = "window";
         elem.stress = 0.0f;
         elem.deflection = 0.0f;
         elem.failed = false;
+        // Store wall rotation angle so window aligns with host wall
+        elem.rotation = std::atan2(wallDir.z, wallDir.x);
 
         building.elements.push_back(elem);
     }
-
-    // Add wall types
-    building.wallTypes = {m_exteriorWallType, m_interiorWallType, m_wetWallType};
 
     // Convert to parametric walls
     building.parametricWalls = toParametricWalls(layout);
@@ -709,6 +807,15 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
 
 std::vector<ParametricWall> QBDInterface::toParametricWalls(const QBDLayout& layout) {
     std::vector<ParametricWall> walls;
+    auto findWallTypeIndex = [&](const std::string& id) -> std::optional<u32> {
+        if (id.empty()) return std::nullopt;
+        for (u32 i = 0; i < layout.wallTypes.size(); i++) {
+            if (layout.wallTypes[i].id == id || layout.wallTypes[i].name == id) {
+                return i;
+            }
+        }
+        return std::nullopt;
+    };
 
     for (size_t i = 0; i < layout.walls.size(); i++) {
         const auto& qw = layout.walls[i];
@@ -720,11 +827,16 @@ std::vector<ParametricWall> QBDInterface::toParametricWalls(const QBDLayout& lay
         pw.baseHeight = qw.start.y;
         pw.topHeight = qw.start.y + qw.height;
 
-        // Assign wall type index based on category
-        switch (qw.category) {
-            case WallCategory::Exterior: pw.wallTypeIndex = 0; break;
-            case WallCategory::WetWall: pw.wallTypeIndex = 2; break;
-            default: pw.wallTypeIndex = 1; break;
+        auto typeIndex = findWallTypeIndex(qw.wallType);
+        if (typeIndex.has_value()) {
+            pw.wallTypeIndex = *typeIndex;
+        } else {
+            // Assign wall type index based on category
+            switch (qw.category) {
+                case WallCategory::Exterior: pw.wallTypeIndex = 0; break;
+                case WallCategory::WetWall: pw.wallTypeIndex = 2; break;
+                default: pw.wallTypeIndex = 1; break;
+            }
         }
 
         walls.push_back(pw);
