@@ -215,6 +215,7 @@ void VulkanContext::createLogicalDevice() {
     deviceFeatures.sampleRateShading = VK_TRUE;  // For MSAA sample shading
     deviceFeatures.shaderClipDistance = VK_TRUE; // For section clipping
     deviceFeatures.samplerAnisotropy = supportedFeatures.samplerAnisotropy;
+    deviceFeatures.tessellationShader = VK_TRUE; // For displacement mapping
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

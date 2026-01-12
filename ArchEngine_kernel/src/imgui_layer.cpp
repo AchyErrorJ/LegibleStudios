@@ -874,6 +874,63 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
 
         ImGui::Separator();
 
+        // Tessellation (displacement mapping)
+        if (ImGui::CollapsingHeader("Tessellation")) {
+            bool tessEnabled = renderer.getTessellationEnabled();
+            if (ImGui::Checkbox("Enable Tessellation", &tessEnabled)) {
+                renderer.setTessellationEnabled(tessEnabled);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Enable hardware tessellation for displacement mapping using height maps");
+            }
+
+            ImGui::BeginDisabled(!tessEnabled);
+
+            float tessLevel = renderer.getTessellationLevel();
+            if (ImGui::SliderFloat("Tessellation Level", &tessLevel, 1.0f, 128.0f, "%.1f")) {
+                renderer.setTessellationLevel(tessLevel);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Higher values create more detailed displacement but may impact performance");
+            }
+
+            float dispScale = renderer.getDisplacementScale();
+            if (ImGui::SliderFloat("Displacement Scale", &dispScale, 0.0f, 2.0f, "%.4f", ImGuiSliderFlags_Logarithmic)) {
+                renderer.setDisplacementScale(dispScale);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Controls the strength of height map displacement");
+            }
+
+            ImGui::EndDisabled();
+
+            // Tessellation presets (always enabled - they also enable tessellation)
+            ImGui::Text("Presets:");
+            if (ImGui::Button("Subtle")) {
+                renderer.setTessellationEnabled(true);
+                renderer.setTessellationLevel(16.0f);
+                renderer.setDisplacementScale(0.05f);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Medium")) {
+                renderer.setTessellationEnabled(true);
+                renderer.setTessellationLevel(32.0f);
+                renderer.setDisplacementScale(0.15f);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Strong")) {
+                renderer.setTessellationEnabled(true);
+                renderer.setTessellationLevel(64.0f);
+                renderer.setDisplacementScale(0.3f);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Off")) {
+                renderer.setTessellationEnabled(false);
+            }
+        }
+
+        ImGui::Separator();
+
         // Material Library
         if (ImGui::CollapsingHeader("Material Library", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (!m_materialUiInitialized) {

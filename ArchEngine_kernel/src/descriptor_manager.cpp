@@ -315,7 +315,7 @@ void DescriptorManager::createStandardLayouts() {
     // - Binding 1: Shadow map sampler (fragment stage) - for Phase 4
     m_globalLayout = createLayout("global", [](DescriptorSetLayoutBuilder& builder) {
         builder
-            .addUniformBuffer(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+            .addUniformBuffer(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)
             .addCombinedImageSampler(1, VK_SHADER_STAGE_FRAGMENT_BIT);
     });
 
