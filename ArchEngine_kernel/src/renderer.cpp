@@ -151,6 +151,17 @@ Renderer::~Renderer() {
     vkDestroyRenderPass(m_context.getDevice(), m_renderPass, nullptr);
 }
 
+void Renderer::clearMeshCache() {
+    // Wait for GPU to finish using resources
+    m_context.waitIdle();
+
+    // Clear the mesh cache (Mesh destructors will free Vulkan buffers)
+    m_meshCache.clear();
+
+    // Clear the custom mesh key cache (maps mesh pointers to cache keys)
+    m_customMeshKeyCache.clear();
+}
+
 void Renderer::createRenderPass() {
     VkSampleCountFlagBits msaaSamples = m_context.getMsaaSamples();
     bool useMsaa = msaaSamples != VK_SAMPLE_COUNT_1_BIT;
@@ -1077,6 +1088,7 @@ bool Renderer::beginFrame() {
     m_currentCommandBuffer = m_commandBuffers[m_currentFrame];
     m_frameStarted = true;
     m_stats = {};
+    m_lastBoundMaterialSet = VK_NULL_HANDLE;  // Reset for new frame
 
     updateUniformBuffer(m_currentFrame);
 
@@ -2154,6 +2166,12 @@ void Renderer::bindMaterialDescriptorSet(const std::string& materialName) {
             set = m_materialDescriptorSets["brick"];
         }
     }
+
+    // Skip redundant descriptor set binds (reduces GPU state changes)
+    if (set == m_lastBoundMaterialSet) {
+        return;
+    }
+    m_lastBoundMaterialSet = set;
 
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             m_pipelineLayout, 1, 1, &set, 0, nullptr);

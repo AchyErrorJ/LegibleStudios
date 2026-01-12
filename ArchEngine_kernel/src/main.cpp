@@ -852,6 +852,9 @@ int main(int argc, char* argv[]) {
                     ipcBuildingDirty = false;
                     std::cout << "[IPC] Reloading building from CAD...\n";
 
+                    // Clear mesh cache before loading new scene to prevent memory leaks
+                    renderer.clearMeshCache();
+
                     auto& qbd = qbd::getQBDInterface();
                     auto layoutOpt = qbd.loadFromJSON(ipcBuildingJson);
 

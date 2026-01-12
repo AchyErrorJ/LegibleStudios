@@ -12,19 +12,30 @@ struct PipelineConfig {
     VkPipelineMultisampleStateCreateInfo multisample{};
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    VkPipelineTessellationStateCreateInfo tessellation{};
     std::vector<VkDynamicState> dynamicStates;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkRenderPass renderPass = VK_NULL_HANDLE;
     u32 subpass = 0;
+    bool enableTessellation = false;
+    u32 patchControlPoints = 3;  // Triangles
 
     static PipelineConfig defaultConfig();
     static PipelineConfig transparentConfig();  // Alpha blending enabled
+    static PipelineConfig tessellationConfig(); // Tessellation enabled
 };
 
 class Pipeline {
 public:
+    // Standard pipeline (vertex + fragment)
     Pipeline(VulkanContext& context, const std::string& vertPath,
              const std::string& fragPath, const PipelineConfig& config);
+
+    // Tessellation pipeline (vertex + tesc + tese + fragment)
+    Pipeline(VulkanContext& context, const std::string& vertPath,
+             const std::string& tescPath, const std::string& tesePath,
+             const std::string& fragPath, const PipelineConfig& config);
+
     ~Pipeline();
 
     // Non-copyable
@@ -45,6 +56,8 @@ private:
     VkPipeline m_pipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkShaderModule m_vertShaderModule = VK_NULL_HANDLE;
+    VkShaderModule m_tescShaderModule = VK_NULL_HANDLE;
+    VkShaderModule m_teseShaderModule = VK_NULL_HANDLE;
     VkShaderModule m_fragShaderModule = VK_NULL_HANDLE;
     bool m_ownsLayout = false;
 };

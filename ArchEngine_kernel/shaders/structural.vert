@@ -19,9 +19,9 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     uint enableClipping;
     uint enableShadows;
     uint outputLinearHDR;
-    uint _padding0;
-    uint _padding1;
-    uint _padding2;
+    float exposure;
+    float tessellationLevel;
+    float displacementScale;
     vec4 materialParams;
     vec4 materialParams2;
     vec4 materialTint;
@@ -52,8 +52,9 @@ void main() {
     gl_Position = ubo.proj * ubo.view * worldPos;
 
     // Transform normal to world space
-    mat3 normalMatrix = transpose(inverse(mat3(modelMatrix)));
-    fragNormal = normalize(normalMatrix * inNormal);
+    // For orthonormal transforms (rotation + translation) or uniform scaling,
+    // we can use the model matrix directly - normalize() handles uniform scaling
+    fragNormal = normalize(mat3(modelMatrix) * inNormal);
 
     // Pass through data
     fragPosition = worldPos.xyz;

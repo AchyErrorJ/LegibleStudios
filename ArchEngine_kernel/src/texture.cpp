@@ -188,6 +188,7 @@ MaterialLibrary::MaterialLibrary(VulkanContext& context)
     m_defaultMaterial.aoMap = Texture::getWhite();         // White = no occlusion
     m_defaultMaterial.emissiveMap = Texture::getBlack();
     m_defaultMaterial.opacityMap = Texture::getWhite();
+    m_defaultMaterial.heightMap = Texture::getBlack();
     m_defaultMaterial.albedoColor = vec3(0.8f);
     m_defaultMaterial.roughness = 0.5f;
     m_defaultMaterial.metallic = 0.0f;
@@ -248,6 +249,12 @@ Material* MaterialLibrary::loadMaterial(const std::string& name, const std::stri
     if (!mat->opacityMap) mat->opacityMap = tryLoad("alpha", false);
     if (!mat->opacityMap) mat->opacityMap = Texture::getWhite();
 
+    // Height/displacement map (linear grayscale)
+    mat->heightMap = tryLoad("height", false);
+    if (!mat->heightMap) mat->heightMap = tryLoad("displacement", false);
+    if (!mat->heightMap) mat->heightMap = tryLoad("bump", false);
+    if (!mat->heightMap) mat->heightMap = Texture::getBlack();  // Black = no displacement
+
     auto* ptr = mat.get();
     m_materials[name] = std::move(mat);
 
@@ -303,6 +310,7 @@ Material* MaterialLibrary::createSolidMaterial(const std::string& name, vec3 alb
     mat->aoMap = Texture::getWhite();
     mat->emissiveMap = Texture::getBlack();
     mat->opacityMap = Texture::getWhite();
+    mat->heightMap = Texture::getBlack();
 
     auto* ptr = mat.get();
     m_materials[name] = std::move(mat);
