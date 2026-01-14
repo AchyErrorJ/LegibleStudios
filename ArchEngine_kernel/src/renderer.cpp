@@ -3249,6 +3249,12 @@ void Renderer::createHighResResources(u32 width, u32 height) {
 void Renderer::cleanupHighResResources() {
     VkDevice device = m_context.getDevice();
 
+    // Free CPU-side pixel buffer to reclaim memory
+    m_highResPixels.clear();
+    m_highResPixels.shrink_to_fit();
+    m_highResWidth = 0;
+    m_highResHeight = 0;
+
     // Destroy pipelines first (uses render pass)
     m_highResPipeline.reset();
     m_highResTransparentPipeline.reset();
@@ -3789,6 +3795,18 @@ bool Renderer::saveHighResEXR(const std::string& filepath) {
         pngPath.replace(extPos, 4, ".png");
     }
     return saveHighResPNG(pngPath);
+}
+
+bool Renderer::renderPreview(const std::vector<StructuralElement>& elements,
+                            const Building& building,
+                            const std::string& filepath,
+                            float brightness) {
+    // Quick preview render at 1080p with 1 sample (fast!)
+    if (renderHighRes(elements, building, 1920, 1080, 1, brightness, nullptr)) {
+        // Save the rendered preview to the specified path
+        return saveHighResPNG(filepath);
+    }
+    return false;
 }
 
 } // namespace arch
