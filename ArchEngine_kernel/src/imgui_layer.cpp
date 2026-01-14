@@ -48,6 +48,12 @@ ImGuiLayer::ImGuiLayer(VulkanContext& context, GLFWwindow* window, VkRenderPass 
     // Upload fonts
     uploadFonts();
 
+    // Initialize render output path to absolute path
+    namespace fs = std::filesystem;
+    fs::path renderDir = fs::current_path() / "renders";
+    fs::path defaultRenderPath = renderDir / "render.png";
+    snprintf(m_renderOutputPath, sizeof(m_renderOutputPath), "%s", defaultRenderPath.string().c_str());
+
     m_initialized = true;
 }
 
@@ -1423,9 +1429,49 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
             const char* formatItems[] = { "PNG (8-bit)", "EXR (HDR 32-bit)" };
             ImGui::Combo("Format", &m_renderFormat, formatItems, 2);
 
-            // Brightness compensation (for matching HDR viewport with bloom)
-            ImGui::SliderFloat("Brightness", &m_renderBrightness, 0.5f, 3.0f, "%.1fx");
-            ImGui::SetItemTooltip("Increase to match HDR viewport with bloom enabled (default 1.3x)");
+            // Brightness adjustment (no bloom/SSAO in high-res - use <1.0 to avoid washing out)
+            ImGui::SliderFloat("Brightness", &m_renderBrightness, 0.5f, 2.0f, "%.2fx");
+            ImGui::SetItemTooltip("1.0 = use viewport exposure. Try 0.7-0.8 to match viewport with bloom.");
+
+            // Post-processing preset
+            const char* postProcessItems[] = { "None", "Subtle", "Vivid", "Warm", "Architectural", "Golden Hour", "Print Ready" };
+            ImGui::Combo("Post-Process", &m_renderPostProcess, postProcessItems, 7);
+            ImGui::SetItemTooltip("Apply color grading. Use 'Print Ready' for boosted saturation that survives printing.");
+
+            // Advanced post-process controls
+            ImGui::Checkbox("Advanced Post-Process", &m_showPostProcessAdvanced);
+            ImGui::SetItemTooltip("Fine-tune post-processing parameters. Leave at default to use preset values.");
+
+            if (m_showPostProcessAdvanced) {
+                ImGui::Indent();
+                ImGui::TextDisabled("Adjust post-processing parameters (default uses preset):");
+
+                // Saturation
+                ImGui::SliderFloat("Saturation", &m_postSaturation, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Higher = more color vibrancy.");
+
+                // Vibrance
+                ImGui::SliderFloat("Vibrance", &m_postVibrance, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Boosts less-saturated colors more.");
+
+                // Contrast
+                ImGui::SliderFloat("Contrast", &m_postContrast, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Higher = more contrast.");
+
+                // Sharpness
+                ImGui::SliderFloat("Sharpness", &m_postSharpness, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Higher = sharper edges.");
+
+                // Exposure
+                ImGui::SliderFloat("Post Exposure", &m_postExposure, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Positive = brighter, negative = darker.");
+
+                // Vignette
+                ImGui::SliderFloat("Vignette", &m_postVignette, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Higher = darker edges.");
+
+                ImGui::Unindent();
+            }
 
             ImGui::Separator();
 
@@ -1499,12 +1545,14 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
 
             if (ImGui::Button("Render Image", ImVec2(-1, 30))) {
                 // Auto-generate unique filename if using default or file exists
-                std::string currentPath(m_renderOutputPath);
-                bool isDefault = (currentPath == "renders/render.png" || currentPath == "renders/render.exr");
-                bool fileExists = std::filesystem::exists(currentPath);
+                namespace fs = std::filesystem;
+                fs::path currentPath(m_renderOutputPath);
+                std::string filename = currentPath.filename().string();
+                bool isDefault = (filename == "render.png" || filename == "render.exr");
+                bool fileExists = fs::exists(currentPath);
 
                 if (isDefault || fileExists) {
-                    // Generate timestamped filename
+                    // Generate timestamped filename in the same directory
                     auto now = std::chrono::system_clock::now();
                     auto time = std::chrono::system_clock::to_time_t(now);
                     std::tm tm = *std::localtime(&time);
@@ -1516,10 +1564,14 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                     std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm);
 
                     const char* ext = (m_renderFormat == 0) ? "png" : "exr";
-                    snprintf(m_renderOutputPath, sizeof(m_renderOutputPath),
-                        "renders/render_%s_%s_%dspp.%s",
+                    char newFilename[128];
+                    snprintf(newFilename, sizeof(newFilename),
+                        "render_%s_%s_%dspp.%s",
                         timestamp, resNamesAuto[m_renderResolution],
                         sampleCountsAuto[m_renderSamples], ext);
+
+                    fs::path newPath = currentPath.parent_path() / newFilename;
+                    snprintf(m_renderOutputPath, sizeof(m_renderOutputPath), "%s", newPath.string().c_str());
                 }
 
                 // Build the request
@@ -1534,6 +1586,13 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                 m_highResRenderRequest.upscale = m_renderUpscale && m_renderResolution > 0;
                 m_highResRenderRequest.upscaleMethod = m_renderUpscaleMethod;
                 m_highResRenderRequest.brightness = m_renderBrightness;
+                m_highResRenderRequest.postProcessPreset = m_renderPostProcess;
+                m_highResRenderRequest.postExposure = m_postExposure;
+                m_highResRenderRequest.postContrast = m_postContrast;
+                m_highResRenderRequest.postSaturation = m_postSaturation;
+                m_highResRenderRequest.postVibrance = m_postVibrance;
+                m_highResRenderRequest.postSharpness = m_postSharpness;
+                m_highResRenderRequest.postVignette = m_postVignette;
 
                 m_highResRenderRequested = true;
             }

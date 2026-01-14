@@ -1408,11 +1408,69 @@ int main(int argc, char* argv[]) {
                             int upscaleResult = std::system(upscaleCmd.c_str());
                             std::filesystem::remove(savePath);
 
-                            highResRenderStatus = (upscaleResult == 0) ?
-                                "Saved: " + outputPath : "Upscale failed";
-                        } else if (saved) {
+                            if (upscaleResult != 0) {
+                                highResRenderStatus = "Upscale failed";
+                            } else {
+                                saved = true; // Continue to post-processing
+                            }
+                        }
+
+                        // Apply post-processing or just fix color profile
+                        if (saved) {
+                            if (request.postProcessPreset > 0) {
+                                // Full post-processing (includes ICC profile embedding)
+                                highResRenderStatus = "Post-processing...";
+                                imgui.setHighResRenderState(true, highResRenderStatus, 0.95f);
+
+                                const char* presetNames[] = { "none", "subtle", "vivid", "warm", "architectural", "golden_hour", "print_ready" };
+                                std::string preset = presetNames[request.postProcessPreset];
+
+                                // Build post-process command with manual overrides
+                                std::string postCmd = "python ../../render_server/postprocess_cli.py "
+                                            "--input \"" + outputPath + "\" "
+                                            "--output \"" + outputPath + "\" "
+                                            "--preset " + preset;
+
+                                // Add manual parameter overrides (if set, i.e., >= 0)
+                                if (request.postExposure >= 0.0f) {
+                                    postCmd += " --exposure " + std::to_string(request.postExposure);
+                                }
+                                if (request.postContrast >= 0.0f) {
+                                    postCmd += " --contrast " + std::to_string(request.postContrast);
+                                }
+                                if (request.postSaturation >= 0.0f) {
+                                    postCmd += " --saturation " + std::to_string(request.postSaturation);
+                                }
+                                if (request.postVibrance >= 0.0f) {
+                                    postCmd += " --vibrance " + std::to_string(request.postVibrance);
+                                }
+                                if (request.postSharpness >= 0.0f) {
+                                    postCmd += " --sharpness " + std::to_string(request.postSharpness);
+                                }
+                                if (request.postVignette >= 0.0f) {
+                                    postCmd += " --vignette " + std::to_string(request.postVignette);
+                                }
+
+                                int postResult = std::system(postCmd.c_str());
+                                if (postResult != 0) {
+                                    std::cout << "[Renderer] Post-processing failed, keeping original" << std::endl;
+                                }
+                            } else {
+                                // Just embed sRGB ICC profile for correct print colors
+                                highResRenderStatus = "Fixing color profile...";
+                                imgui.setHighResRenderState(true, highResRenderStatus, 0.95f);
+
+                                std::string fixCmd = "python ../../render_server/fix_color_profile.py \"" + outputPath + "\"";
+                                int fixResult = std::system(fixCmd.c_str());
+                                if (fixResult != 0) {
+                                    std::cout << "[Renderer] Color profile fix failed (colors may print incorrectly)" << std::endl;
+                                }
+                            }
+                        }
+
+                        if (saved) {
                             highResRenderStatus = "Saved: " + outputPath;
-                        } else {
+                        } else if (highResRenderStatus.find("failed") == std::string::npos) {
                             highResRenderStatus = "Save failed";
                         }
                     } else {

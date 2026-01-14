@@ -3719,10 +3719,6 @@ bool Renderer::renderHighRes(
         // Ensure all GPU work is complete before returning to normal rendering
         m_context.waitIdle();
 
-        // Reset frame tracking to avoid stale fence references
-        m_currentFrame = 0;
-        m_imagesInFlight.assign(m_context.getSwapchainImageCount(), VK_NULL_HANDLE);
-
         // Average the accumulated samples and convert back to 8-bit
         float invSamples = 1.0f / static_cast<float>(samples);
         for (size_t p = 0; p < pixelCount; ++p) {
