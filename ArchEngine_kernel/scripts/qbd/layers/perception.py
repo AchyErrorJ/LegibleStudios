@@ -664,8 +664,13 @@ class DelightAnalysis:
             score += 0.1
 
         # Plants / greenery
-        if room.get("features", {}).get("plants"):
-            score += 0.2
+        features = room.get("features", {})
+        if isinstance(features, dict):
+            if features.get("plants"):
+                score += 0.2
+        elif isinstance(features, list):
+            if "plants" in features:
+                score += 0.2
 
         return min(1.0, score)
 
@@ -729,15 +734,16 @@ class DelightAnalysis:
         # Views
         views = room.get("views", [])
         for view in views:
-            if view.get("type") == "dramatic":
+            if isinstance(view, dict) and view.get("type") == "dramatic":
                 surprises.append("dramatic_view")
 
         # Features
         features = room.get("features", {})
-        if features.get("fireplace"):
-            surprises.append("fireplace")
-        if features.get("built_in_seating"):
-            surprises.append("built_in_nook")
+        if isinstance(features, dict):
+            if features.get("fireplace"):
+                surprises.append("fireplace")
+            if features.get("built_in_seating"):
+                surprises.append("built_in_nook")
 
         return surprises
 
@@ -750,7 +756,8 @@ class DelightAnalysis:
             score += 0.1
 
         # Storage/clutter (people accumulate stuff)
-        if room.get("storage", 0) > 0:
+        storage = room.get("storage", 0)
+        if storage and storage > 0:
             score += 0.05
 
         return min(1.0, score)

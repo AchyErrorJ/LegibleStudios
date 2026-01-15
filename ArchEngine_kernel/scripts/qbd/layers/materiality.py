@@ -542,7 +542,7 @@ class ConstructionComplexity:
     risk_factors: List[str]  # Potential issues
 
 
-class ConstructionSystem:
+class ConstructionSystemAnalysis:
     """Analyzes construction system compatibility and complexity."""
 
     # System compatibility matrix
@@ -682,6 +682,10 @@ class MaterialityLayer:
     The economics is what it is.
     """
 
+    # Export the enum for convenience
+    System = ConstructionSystem
+    Quality = QualityLevel
+
     def __init__(self, region: str = "midwest"):
         """Initialize with regional context.
 
@@ -690,7 +694,7 @@ class MaterialityLayer:
         """
         self.region = region
         self.cost_analysis = CostAnalysis(region)
-        self.system_analysis = ConstructionSystem()
+        self.system_analysis = ConstructionSystemAnalysis()
         self.material_library = MaterialLibrary()
 
     def analyze(

@@ -150,7 +150,7 @@ class SolarAnalysis:
         if not windows:
             # Infer from room type defaults
             window_prefs = room.get("window_preferences", {})
-            orientation_str = window_prefs.get("orientation", "south")
+            orientation_str = window_prefs.get("orientation") or "S"
             orientation = CardinalDirection[orientation_str.upper()]
             windows = [{"orientation": orientation, "area": window_area}]
 

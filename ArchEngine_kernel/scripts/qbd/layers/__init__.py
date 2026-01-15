@@ -15,7 +15,7 @@ Total Reality = Logic + Physics + Economics + Psychology
 """
 
 from .environment import EnvironmentLayer, SolarAnalysis, ThermalAnalysis, AcousticAnalysis
-from .materiality import MaterialityLayer, CostAnalysis, ConstructionSystem, MaterialLibrary
+from .materiality import MaterialityLayer, CostAnalysis, ConstructionSystemAnalysis, MaterialLibrary
 from .perception import PerceptionLayer, WayfindingAnalysis, ComfortAnalysis, DelightAnalysis
 
 __all__ = [
@@ -28,7 +28,7 @@ __all__ = [
     # Materiality
     "MaterialityLayer",
     "CostAnalysis",
-    "ConstructionSystem",
+    "ConstructionSystemAnalysis",
     "MaterialLibrary",
 
     # Perception
