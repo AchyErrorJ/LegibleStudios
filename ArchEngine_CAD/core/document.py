@@ -20,6 +20,18 @@ from PyQt6.QtGui import QUndoStack
 from core.events import event_bus
 from core.version_control import VersionControl
 
+# Try to import furniture module
+_FURNITURE_AVAILABLE = False
+try:
+    from furniture.models import FurnitureItem, FurniturePlacement, FurnitureCategory
+    from furniture.catalog import get_default_catalog
+    _FURNITURE_AVAILABLE = True
+except ImportError:
+    FurnitureItem = None
+    FurniturePlacement = None
+    FurnitureCategory = None
+    get_default_catalog = None
+
 # Try to import shared geometry library
 _ARCHGEOMETRY_AVAILABLE = False
 try:
@@ -306,6 +318,31 @@ class ArchDocument(QObject):
     def remove_reference_plane(self, plane_id: str):
         """Remove a reference plane by ID."""
         self._reference_planes = [p for p in self._reference_planes if p.id != plane_id]
+        self._modified = True
+
+    @property
+    def onboarding_completed(self) -> bool:
+        """Check if this document has completed the onboarding flow."""
+        return self._data.get('onboarding_completed', False)
+
+    def complete_onboarding(self):
+        """
+        Mark onboarding as completed for this document.
+
+        This flag is saved with the document, so each file remembers
+        its own onboarding state. New files start with onboarding not completed.
+        """
+        self._data['onboarding_completed'] = True
+        self._modified = True
+
+    def reset_onboarding(self):
+        """
+        Reset onboarding for this document.
+
+        Use this to re-run the onboarding flow for an existing document.
+        The change must be saved to persist.
+        """
+        self._data['onboarding_completed'] = False
         self._modified = True
 
     def generate_reference_planes_from_extents(self):
@@ -628,7 +665,8 @@ class ArchDocument(QObject):
             'windows': [],
             'rooms': {},
             'roofs': [],
-            'wall_types': []
+            'wall_types': [],
+            'onboarding_completed': False  # Track if this file has completed onboarding
         }
         self._file_path = None
         self._modified = False

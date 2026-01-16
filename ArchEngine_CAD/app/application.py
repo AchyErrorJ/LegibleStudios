@@ -42,6 +42,7 @@ from sheets.sheet_registry import SheetRegistry
 from panels.sheet_manager import SheetManagerPanel
 from panels.chat_panel import ChatPanel
 from panels.materials_panel import MaterialsPanel
+from panels.onboarding_overlay import OnboardingOverlay
 from generators.generator_service import GeneratorService
 
 # Optional viewport imports
@@ -151,12 +152,97 @@ class ArchEngineApplication(QMainWindow):
         self._create_central_widget()
         self._connect_signals()
         self._restore_state()
+        # Don't show onboarding on startup - will show after new/load document
 
     def _setup_window(self):
         """Configure main window properties."""
         self.setWindowTitle("ArchEngine CAD")
         self.setMinimumSize(1200, 800)
         self.setDockNestingEnabled(True)
+
+    def _show_onboarding_if_needed(self):
+        """
+        Show onboarding overlay if the current document hasn't completed it.
+
+        Called after creating a new document or loading an existing one.
+        """
+        # Check if this document has completed onboarding
+        if self.document.onboarding_completed:
+            # Already completed onboarding for this document
+            return
+
+        # Create onboarding overlay with the chat panel
+        if hasattr(self, 'onboarding_overlay') and self.onboarding_overlay:
+            # Clean up any existing overlay
+            self.onboarding_overlay.deleteLater()
+
+        self.onboarding_overlay = OnboardingOverlay(self.chat_panel, self)
+
+        # Connect signals
+        # Disconnect any existing connections to avoid duplicates
+        try:
+            self.chat_panel.message_sent.disconnect(self.onboarding_overlay.increment_question)
+        except TypeError:
+            pass  # No existing connection
+
+        self.chat_panel.message_sent.connect(self.onboarding_overlay.increment_question)
+        self.onboarding_overlay.onboarding_complete.connect(self._on_onboarding_complete)
+
+        # Hide the chat dock during onboarding
+        self.chat_dock.hide()
+
+        # Show the overlay after a short delay to ensure window is ready
+        QTimer.singleShot(500, self.onboarding_overlay.show_overlay)
+
+    def _on_onboarding_complete(self):
+        """Handle onboarding completion."""
+        # Mark onboarding as completed for this document
+        self.document.complete_onboarding()
+
+        # Show the chat dock in its normal position
+        self.chat_dock.show()
+        self.chat_dock.raise_()  # Bring to front in tabbed dock
+
+        # Update status bar
+        self.status_bar.showMessage("Onboarding complete! Design workspace ready.", 3000)
+
+        # Clean up overlay
+        if hasattr(self, 'onboarding_overlay') and self.onboarding_overlay:
+            self.onboarding_overlay.deleteLater()
+            self.onboarding_overlay = None
+
+        # Note: Document will need to be saved to persist the onboarding completion flag
+        if not self.document.file_path:
+            # New document - prompt user to save to keep onboarding progress
+            self.status_bar.showMessage(
+                "Onboarding complete! Save your file to keep your progress.", 5000
+            )
+
+    def _on_reset_onboarding(self):
+        """Reset onboarding for the current document."""
+        if self.document.onboarding_completed:
+            reply = QMessageBox.question(
+                self,
+                "Reset Onboarding",
+                "This will reset the onboarding experience for this document. "
+                "The welcome screen with 3 questions will show again.\n\nContinue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply == QMessageBox.StandardButton.Yes:
+                self.document.reset_onboarding()
+                self._show_onboarding_if_needed()
+                self.status_bar.showMessage(
+                    "Onboarding reset for this document.",
+                    3000
+                )
+        else:
+            # Already in onboarding mode
+            self.status_bar.showMessage(
+                "Onboarding is already active for this document.",
+                3000
+            )
 
     def _create_actions(self):
         """Create all actions."""
@@ -203,6 +289,9 @@ class ArchEngineApplication(QMainWindow):
 
         self.action_zoom_fit = QAction("&Home (Zoom to Fit)", self)
         self.action_zoom_fit.setShortcut(QKeySequence("H"))
+
+        self.action_reset_onboarding = QAction("Reset Onboarding...", self)
+        self.action_reset_onboarding.triggered.connect(self._on_reset_onboarding)
 
         # Tool actions
         self.action_select = QAction("&Select", self)
@@ -367,6 +456,8 @@ class ArchEngineApplication(QMainWindow):
         view_menu.addAction(self.action_grid)
         view_menu.addSeparator()
         view_menu.addAction(self.action_regenerate_sheets)
+        view_menu.addSeparator()
+        view_menu.addAction(self.action_reset_onboarding)
 
         # Draw menu
         draw_menu = menubar.addMenu("&Draw")
@@ -628,12 +719,12 @@ class ArchEngineApplication(QMainWindow):
             self.window_menu.addAction(self.materials_dock.toggleViewAction())
 
         # =================================================================
-        # Chat Dock - Design conversation (always visible)
+        # Version History Dock
         # ==================================================================
-        self.chat_dock = QDockWidget("Chat", self)
-        self.chat_dock.setObjectName("chat_dock")
-        self.chat_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.chat_dock.setFeatures(
+        self.history_dock = QDockWidget("Version History", self)
+        self.history_dock.setObjectName("history_dock")
+        self.history_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.history_dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable |
             QDockWidget.DockWidgetFeature.DockWidgetFloatable
         )
@@ -645,6 +736,9 @@ class ArchEngineApplication(QMainWindow):
         self.tabifyDockWidget(self.properties_dock, self.history_dock)
         self.window_menu.addAction(self.history_dock.toggleViewAction())
 
+        # =================================================================
+        # Chat Dock - Design conversation (always visible)
+        # ==================================================================
         # Chat panel dock (right side, tabbed with properties)
         self.chat_dock = QDockWidget("Design Chat", self)
         self.chat_dock.setObjectName("chat_dock")
@@ -1021,6 +1115,8 @@ class ArchEngineApplication(QMainWindow):
         if not self._check_save():
             return
         self.document.new()
+        # Show onboarding for new documents
+        QTimer.singleShot(100, self._show_onboarding_if_needed)
 
     def _on_open(self):
         """Open existing document."""
@@ -1042,6 +1138,8 @@ class ArchEngineApplication(QMainWindow):
         if self.document.load(file_path):
             self.config.add_recent_file(file_path)
             self.status_bar.showMessage(f"Loaded: {file_path.name}", 5000)
+            # Show onboarding if this document hasn't completed it yet
+            QTimer.singleShot(100, self._show_onboarding_if_needed)
         else:
             QMessageBox.warning(
                 self,
