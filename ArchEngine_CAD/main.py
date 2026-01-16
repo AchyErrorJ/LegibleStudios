@@ -47,11 +47,15 @@ def main():
     arch_app = ArchEngineApplication(config)
     arch_app.show()
 
-    # Load project from command line or last opened
+    # Load project from command line or last opened, otherwise create new document
     if len(sys.argv) > 1:
         arch_app.open_project(Path(sys.argv[1]))
     elif config.last_project and Path(config.last_project).exists():
         arch_app.open_project(Path(config.last_project))
+    else:
+        # No file to open, create new document (triggers onboarding)
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(100, arch_app._on_new)
 
     # Run event loop
     sys.exit(app.exec())
