@@ -41,7 +41,37 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec4 materialParams;
     vec4 materialParams2;
     vec4 materialTint;
+    // Per-element material overrides
+    uint overrideMask;       // Bitfield for which element overrides are active
+    float _pad1, _pad2, _pad3; // Padding for alignment
+    vec4 elementOverride1;
+    vec4 elementOverride2;
+    vec4 elementOverride3;
 } ubo;
+
+// Push constants (per-draw data including element overrides)
+layout(push_constant) uniform PushConstants {
+    mat4 model;
+    vec4 color;
+    vec4 material;       // x = metallic, y = roughness, z = ao, w = emission
+    uint overrideMask;   // Which overrides are active
+    float _pad1, _pad2, _pad3;  // Padding for vec4 alignment
+    vec4 overrides1;     // x=uvScale, y=normalStrength, z=brightness, w=contrast
+    vec4 overrides2;     // x=saturation, y=roughness, z=metallic, w=aoStrength
+    vec4 overrides3;     // rgb=tint, w=uvRotation (radians)
+} push;
+
+// Override mask bits (must match C++ MaterialOverrideBits)
+const uint OVERRIDE_UV_SCALE        = (1u << 0);
+const uint OVERRIDE_UV_ROTATION     = (1u << 1);
+const uint OVERRIDE_NORMAL_STRENGTH = (1u << 2);
+const uint OVERRIDE_BRIGHTNESS      = (1u << 3);
+const uint OVERRIDE_CONTRAST        = (1u << 4);
+const uint OVERRIDE_SATURATION      = (1u << 5);
+const uint OVERRIDE_ROUGHNESS       = (1u << 6);
+const uint OVERRIDE_METALLIC        = (1u << 7);
+const uint OVERRIDE_AO_STRENGTH     = (1u << 8);
+const uint OVERRIDE_TINT            = (1u << 9);
 
 // Height map sampler (set 1, binding 7 - after other material textures)
 layout(set = 1, binding = 7) uniform sampler2D heightMap;
@@ -73,9 +103,28 @@ void main() {
     vec4 lightSpacePos = interpolate4(inFragLightSpacePos[0], inFragLightSpacePos[1], inFragLightSpacePos[2]);
     vec4 material = interpolate4(inFragMaterial[0], inFragMaterial[1], inFragMaterial[2]);
 
-    // Apply UV scale from material params
+    // Apply UV scale with override support (replacement, not additive)
     float uvScale = ubo.materialParams.x;
+    float uvRotation = 0.0;
+    if ((push.overrideMask & OVERRIDE_UV_SCALE) != 0u) {
+        uvScale = push.overrides1.x;  // Use push constant override
+    }
+    if ((push.overrideMask & OVERRIDE_UV_ROTATION) != 0u) {
+        uvRotation = push.overrides3.w;  // Rotation in radians
+    }
     vec2 scaledTexCoord = texCoord * uvScale;
+
+    // Apply rotation around center if rotation is set
+    if (uvRotation != 0.0) {
+        vec2 center = vec2(0.5) * uvScale;
+        float cosR = cos(uvRotation);
+        float sinR = sin(uvRotation);
+        vec2 offset = scaledTexCoord - center;
+        scaledTexCoord = vec2(
+            offset.x * cosR - offset.y * sinR,
+            offset.x * sinR + offset.y * cosR
+        ) + center;
+    }
 
     // Sample height map (only if displacement is enabled)
     if (ubo.displacementScale > 0.0) {

@@ -41,6 +41,12 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec4 materialParams;
     vec4 materialParams2;
     vec4 materialTint;
+    // Per-element material overrides
+    uint overrideMask;       // Bitfield for which element overrides are active
+    float _pad1, _pad2, _pad3; // Padding for alignment
+    vec4 elementOverride1;
+    vec4 elementOverride2;
+    vec4 elementOverride3;
 } ubo;
 
 // Compute camera position from inverse view matrix

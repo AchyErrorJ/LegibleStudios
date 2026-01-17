@@ -177,11 +177,18 @@ struct Camera {
     }
 };
 
-// Push constants for shaders
+// Push constants for shaders (per-draw data including element overrides)
 struct PushConstants {
-    mat4 model;
-    vec4 color;      // RGB = albedo, A = stress (for visualization)
-    vec4 material;   // x = metallic, y = roughness, z = ao, w = emission
+    mat4 model;              // 64 bytes
+    vec4 color;              // 16 bytes - RGB = albedo, A = stress
+    vec4 material;           // 16 bytes - x = metallic, y = roughness, z = ao, w = emission
+    // Per-element overrides (set per draw call for proper GPU sync)
+    u32 overrideMask;        // 4 bytes - which overrides are active
+    f32 _pad1, _pad2, _pad3; // 12 bytes padding for vec4 alignment
+    vec4 overrides1;         // 16 bytes - x=uvScale, y=normalStrength, z=brightness, w=contrast
+    vec4 overrides2;         // 16 bytes - x=saturation, y=roughness, z=metallic, w=aoStrength
+    vec4 overrides3;         // 16 bytes - rgb=tint, w=unused
+    // Total: 160 bytes (most GPUs support 256+)
 };
 
 // Uniform buffer object
@@ -202,7 +209,27 @@ struct UniformBufferObject {
     vec4 materialParams;    // x = UV scale, y = normal strength, z = brightness, w = contrast
     vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
     vec4 materialTint;      // RGB tint multiplier, w = unused
+    // Per-element material overrides (added to global values when override mask bit is set)
+    u32 overrideMask;       // Bitfield for which element overrides are active
+    f32 _pad1, _pad2, _pad3; // Padding to maintain 16-byte alignment for next vec4
+    vec4 elementOverride1;  // x = uvScale, y = normalStrength, z = brightness, w = contrast
+    vec4 elementOverride2;  // x = saturation, y = roughness, z = metallic, w = aoStrength
+    vec4 elementOverride3;  // RGB = tint, w = unused
 };
+
+// Material override mask bits (for PushConstants::overrideMask)
+namespace MaterialOverrideBits {
+    constexpr u32 UVScale       = (1u << 0);  // Bit 0: UV scale override
+    constexpr u32 UVRotation    = (1u << 1);  // Bit 1: UV rotation override
+    constexpr u32 NormalStrength = (1u << 2);  // Bit 2: Normal strength override
+    constexpr u32 Brightness    = (1u << 3);  // Bit 3: Brightness override
+    constexpr u32 Contrast      = (1u << 4);  // Bit 4: Contrast override
+    constexpr u32 Saturation    = (1u << 5);  // Bit 5: Saturation override
+    constexpr u32 Roughness     = (1u << 6);  // Bit 6: Roughness override
+    constexpr u32 Metallic      = (1u << 7);  // Bit 7: Metallic override
+    constexpr u32 AOStrength    = (1u << 8);  // Bit 8: AO strength override
+    constexpr u32 Tint          = (1u << 9);  // Bit 9: Tint override
+}
 
 // Visualization modes
 enum class VisualizationMode : u32 {

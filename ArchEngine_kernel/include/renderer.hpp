@@ -17,6 +17,8 @@
 #include "types.hpp"
 #include <set>
 #include <functional>
+#include <cstddef>
+#include <iostream>
 #include "vulkan_context.hpp"
 #include "pipeline.hpp"
 #include "mesh.hpp"
@@ -40,6 +42,41 @@ struct RenderStats {
     u32 culledElements = 0; ///< Elements culled by frustum this frame
     f32 frameTimeMs = 0.0f; ///< CPU frame time in milliseconds
     f32 gpuTimeMs = 0.0f;   ///< GPU frame time in milliseconds
+};
+
+/**
+ * @brief Per-element material override
+ *
+ * Stores material property adjustments for a specific element.
+ * Values are additive: final_value = global_value + adjustment.
+ * Set all values to 0.0 (and tint to 1.0) to use global defaults.
+ */
+struct ElementMaterialOverride {
+    bool active = false;        ///< True if any override has been set
+
+    // Per-parameter override flags
+    bool hasUVScale = false;
+    bool hasUVRotation = false;
+    bool hasNormalStrength = false;
+    bool hasBrightness = false;
+    bool hasContrast = false;
+    bool hasSaturation = false;
+    bool hasRoughness = false;
+    bool hasMetallic = false;
+    bool hasAOStrength = false;
+    bool hasTint = false;
+
+    // Direct replacement values (not additive)
+    float uvScale = 1.0f;           ///< Direct UV scale value (0.1 to 200)
+    float uvRotation = 0.0f;        ///< UV rotation in degrees (0 to 360)
+    float normalStrength = 1.0f;    ///< Direct normal strength value (0 to 5)
+    float brightness = 0.0f;        ///< Direct brightness value (-1 to 1)
+    float contrast = 1.0f;          ///< Direct contrast value (0 to 2)
+    float saturation = 1.0f;        ///< Direct saturation value (0 to 2)
+    float roughness = 0.5f;         ///< Direct roughness value (0 to 1)
+    float metallic = 0.0f;          ///< Direct metallic value (0 to 1)
+    float aoStrength = 1.0f;        ///< Direct AO strength value (0 to 2)
+    float tint[3] = {0, 0, 0};      ///< Tint offset values (-1 to 1, additive color)
 };
 
 /**
@@ -325,6 +362,12 @@ public:
      * @param material Vec4 with (metallic, roughness, ao, emission)
      */
     void drawMeshWithMaterial(Mesh& mesh, const mat4& transform, vec3 color, f32 stress, vec4 material);
+
+    /**
+     * @brief Draw mesh with material and per-element override support
+     * @param elementId Element index to look up overrides (-1 = no override)
+     */
+    void drawMeshWithMaterialAndOverride(Mesh& mesh, const mat4& transform, vec3 color, f32 stress, vec4 material, int elementId);
 
     /**
      * @brief Draw a reference grid on the ground plane
@@ -667,8 +710,22 @@ public:
      * @brief Set UV scale for material texture tiling
      * @param scale UV multiplier (higher = more repetition)
      */
-    void setMaterialUVScale(f32 scale) { m_materialUVScale = scale; }
-    f32 getMaterialUVScale() const { return m_materialUVScale; }
+    void setMaterialUVScale(f32 scale) {
+        static int callCount = 0;
+        if (callCount < 10 || scale != m_materialUVScale) {
+            std::cout << "[setMaterialUVScale] " << m_materialUVScale << " -> " << scale << " (call #" << callCount << ")" << std::endl;
+            callCount++;
+        }
+        m_materialUVScale = scale;
+    }
+    f32 getMaterialUVScale() const {
+        static int callCount = 0;
+        if (callCount < 10) {
+            std::cout << "[getMaterialUVScale] returning " << m_materialUVScale << " (call #" << callCount << ")" << std::endl;
+            callCount++;
+        }
+        return m_materialUVScale;
+    }
 
     /**
      * @brief Set normal map strength
@@ -758,6 +815,80 @@ public:
     MaterialPreset getMaterialForElement(ElementType type) const;
     /// @}
 
+    /// @name Per-Element Material Overrides
+    /// @{
+
+    /**
+     * @brief Set material override for a specific element
+     * @param elementId Unique ID of the element (typically the index in elements vector)
+     * @param override Material override parameters to apply
+     *
+     * Override values are added to global material values.
+     * This allows per-element material customization (e.g., make one wall darker).
+     */
+    void setElementOverride(int elementId, const ElementMaterialOverride& override);
+
+    /**
+     * @brief Set material override for an element (individual parameters)
+     * @param elementId Unique ID of the element
+     * @param mask Override mask bitfield
+     * @param uvScale UV scale value
+     * @param normalStrength Normal strength value
+     * @param brightness Brightness value
+     * @param contrast Contrast value
+     */
+    void setElementOverride(int elementId, u32 mask, float uvScale, float normalStrength, float brightness, float contrast);
+
+    /**
+     * @brief Check if element has a material override
+     * @param elementId Unique ID of the element
+     * @return True if element has override, false otherwise
+     */
+    bool hasElementOverride(int elementId) const;
+
+    /**
+     * @brief Get material override for an element
+     * @param elementId Unique ID of the element
+     * @return Pointer to override if exists, nullptr otherwise
+     */
+    const ElementMaterialOverride* getElementOverride(int elementId) const;
+
+    /**
+     * @brief Remove override for a specific element
+     * @param elementId Unique ID of the element
+     */
+    void clearElementOverride(int elementId);
+
+    /**
+     * @brief Remove all element material overrides
+     */
+    void clearAllElementOverrides();
+
+    /**
+     * @brief Get count of elements with active overrides
+     * @return Number of elements with overrides
+     */
+    size_t getOverrideCount() const { return m_elementMaterialOverrides.size(); }
+
+    /**
+     * @brief Get indices of all elements with overrides
+     * @param outIndices Output array to fill with indices
+     * @param maxIndices Maximum number of indices to retrieve
+     * @return Number of indices actually retrieved
+     */
+    size_t getElementOverrideIndices(int* outIndices, size_t maxIndices) const;
+
+    /**
+     * @brief Apply element override to UBO (internal use by drawStructuralFrame)
+     * @param elementId ID of the element to apply overrides for
+     * @return Override mask bitfield (0 if no override)
+     *
+     * This updates the UBO element override fields for the current element
+     * and returns a mask indicating which override parameters are active.
+     */
+    u32 applyElementOverrideToUBO(int elementId);
+    /// @}
+
     /// @name Vulkan Access
     /// @{
 
@@ -838,6 +969,20 @@ public:
      * @return true if save succeeded
      */
     bool saveHighResEXR(const std::string& filepath);
+
+    /**
+     * @brief Quick preview render (1080p, 1 sample) for fast print preview
+     * Much faster than full high-res render, allows iterating on post-processing settings
+     * @param elements Scene elements to render
+     * @param building Building data
+     * @param filepath Output file path
+     * @param brightness Brightness multiplier
+     * @return true if render succeeded
+     */
+    bool renderPreview(const std::vector<StructuralElement>& elements,
+                      const Building& building,
+                      const std::string& filepath,
+                      float brightness = 1.0f);
     /// @}
 
 private:
@@ -935,6 +1080,7 @@ private:
     u32 m_imageIndex = 0;
     bool m_frameStarted = false;
     VkCommandBuffer m_currentCommandBuffer = VK_NULL_HANDLE;
+    int m_currentDrawElementId = -1;  // Element ID for per-element overrides (-1 = none)
 
     // Camera, frustum, and time
     Camera m_camera;
@@ -1008,6 +1154,13 @@ private:
     bool m_tessellationEnabled = false;
     f32 m_tessellationLevel = 8.0f;
     f32 m_displacementScale = 0.1f;
+
+    // Per-element material overrides (sparse map for memory efficiency)
+    std::unordered_map<int, ElementMaterialOverride> m_elementMaterialOverrides;
+
+    // Note: Element overrides are now stored entirely in UBO, no push constant cache needed
+
+
 
     // Stats
     RenderStats m_stats;

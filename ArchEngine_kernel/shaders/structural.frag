@@ -30,7 +30,37 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec4 materialParams;    // x = UV scale, y = normal strength, z = brightness, w = contrast
     vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
     vec4 materialTint;      // RGB tint, w = unused
+    // Per-element material overrides
+    uint overrideMask;       // Bitfield for which element overrides are active
+    float _pad1, _pad2, _pad3; // Padding for alignment
+    vec4 elementOverride1;  // x = uvScale, y = normalStrength, z = brightness, w = contrast
+    vec4 elementOverride2;  // x = saturation, y = roughness, z = metallic, w = aoStrength
+    vec4 elementOverride3;  // RGB = tint, w = unused
 } ubo;
+
+// Push constants (per-draw data including element overrides)
+layout(push_constant) uniform PushConstants {
+    mat4 model;
+    vec4 color;
+    vec4 material;       // x = metallic, y = roughness, z = ao, w = emission
+    uint overrideMask;   // Which overrides are active
+    float _pad1, _pad2, _pad3;  // Padding for vec4 alignment
+    vec4 overrides1;     // x=uvScale, y=normalStrength, z=brightness, w=contrast
+    vec4 overrides2;     // x=saturation, y=roughness, z=metallic, w=aoStrength
+    vec4 overrides3;     // rgb=tint, w=uvRotation (radians)
+} push;
+
+// Material override mask bits
+const uint OVERRIDE_UV_SCALE        = (1u << 0);
+const uint OVERRIDE_UV_ROTATION     = (1u << 1);
+const uint OVERRIDE_NORMAL_STRENGTH = (1u << 2);
+const uint OVERRIDE_BRIGHTNESS      = (1u << 3);
+const uint OVERRIDE_CONTRAST        = (1u << 4);
+const uint OVERRIDE_SATURATION      = (1u << 5);
+const uint OVERRIDE_ROUGHNESS       = (1u << 6);
+const uint OVERRIDE_METALLIC        = (1u << 7);
+const uint OVERRIDE_AO_STRENGTH     = (1u << 8);
+const uint OVERRIDE_TINT            = (1u << 9);
 
 // Shadow map sampler with depth comparison
 layout(set = 0, binding = 1) uniform sampler2DShadow shadowMap;
@@ -223,8 +253,41 @@ void main() {
     vec3 L = normalize(-ubo.lightDirection.xyz);
     vec3 H = normalize(V + L);
 
+    // Calculate UV coordinates with override support (replacement, not additive)
+    float uvScale = ubo.materialParams.x;
+    float uvRotation = 0.0;  // Default: no rotation
+
+    // Use push constant override for UV scale (only if UV scale bit is set)
+    if ((push.overrideMask & OVERRIDE_UV_SCALE) != 0u) {
+        uvScale = push.overrides1.x;  // Use push constant override value
+    }
+    // Use push constant override for UV rotation
+    if ((push.overrideMask & OVERRIDE_UV_ROTATION) != 0u) {
+        uvRotation = push.overrides3.w;  // Rotation in radians
+    }
+
+    // Apply scale first
+    vec2 uv = fragTexCoord * uvScale;
+
+    // Apply rotation around center (0.5, 0.5) if rotation is set
+    if (uvRotation != 0.0) {
+        vec2 center = vec2(0.5) * uvScale;  // Center point scales with UV
+        float cosR = cos(uvRotation);
+        float sinR = sin(uvRotation);
+        vec2 offset = uv - center;
+        uv = vec2(
+            offset.x * cosR - offset.y * sinR,
+            offset.x * sinR + offset.y * cosR
+        ) + center;
+    }
+
+    // Normal strength with override support (use push constants)
+    float normalStrength = ubo.materialParams.y;
+    if ((push.overrideMask & OVERRIDE_NORMAL_STRENGTH) != 0u) {
+        normalStrength = push.overrides1.y;
+    }
+
     // Sample material textures
-    vec2 uv = fragTexCoord * ubo.materialParams.x;
     vec3 texAlbedo = texture(albedoMap, uv).rgb;
     vec3 texNormal = texture(normalMap, uv).rgb;
     float texRoughness = texture(roughnessMap, uv).r;
@@ -235,7 +298,7 @@ void main() {
 
     // Perturb normal using normal map (only if not flat normal)
     if (length(texNormal - vec3(0.5, 0.5, 1.0)) > 0.01) {
-        N = perturbNormal(N, V, uv, ubo.materialParams.y);
+        N = perturbNormal(N, V, uv, normalStrength);
     }
 
     // Extract push constant material properties (used as multipliers/overrides)
@@ -244,16 +307,39 @@ void main() {
     float materialAO = fragMaterial.z * texAO;
     float emission = fragMaterial.w;
 
-    // Apply material adjustments from UBO
+    // Apply material adjustments from UBO with override support (replacement for most, additive for roughness/metallic)
     float brightness = ubo.materialParams.z;
     float contrast = ubo.materialParams.w;
     float saturation = ubo.materialParams2.x;
-    float roughnessOffset = ubo.materialParams2.y;
-    float metallicOffset = ubo.materialParams2.z;
+    float roughnessOffset = ubo.materialParams2.y;  // Additive offset
+    float metallicOffset = ubo.materialParams2.z;    // Additive offset
     float aoStrength = ubo.materialParams2.w;
     vec3 tint = ubo.materialTint.rgb;
 
-    // Apply roughness/metallic/AO offsets
+    // Apply element overrides from push constants (all per-element overrides)
+    if ((push.overrideMask & OVERRIDE_BRIGHTNESS) != 0u) {
+        brightness = push.overrides1.z;
+    }
+    if ((push.overrideMask & OVERRIDE_CONTRAST) != 0u) {
+        contrast = push.overrides1.w;
+    }
+    if ((push.overrideMask & OVERRIDE_SATURATION) != 0u) {
+        saturation = push.overrides2.x;
+    }
+    if ((push.overrideMask & OVERRIDE_ROUGHNESS) != 0u) {
+        roughnessOffset = push.overrides2.y;
+    }
+    if ((push.overrideMask & OVERRIDE_METALLIC) != 0u) {
+        metallicOffset = push.overrides2.z;
+    }
+    if ((push.overrideMask & OVERRIDE_AO_STRENGTH) != 0u) {
+        aoStrength = push.overrides2.w;
+    }
+    if ((push.overrideMask & OVERRIDE_TINT) != 0u) {
+        tint = push.overrides3.rgb;
+    }
+
+    // Apply roughness/metallic with offset (additive), AO and others as direct values
     roughness = clamp(roughness + roughnessOffset, 0.04, 1.0);
     metallic = clamp(metallic + metallicOffset, 0.0, 1.0);
     materialAO = clamp(materialAO * aoStrength, 0.0, 1.0);
@@ -271,6 +357,7 @@ void main() {
     albedo = mix(vec3(gray), albedo, saturation);
     // Tint: multiply
     albedo *= tint;
+
     // Clamp to valid range
     albedo = clamp(albedo, 0.0, 1.0);
 

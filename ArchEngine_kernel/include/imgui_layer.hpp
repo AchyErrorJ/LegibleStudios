@@ -80,6 +80,37 @@ public:
         float postVignette = -1.0f;
     };
 
+    struct MaterialOverrideRequest {
+        std::vector<int> elementIndices;  // Elements to apply override to
+
+        // Per-parameter flags (which parameters should be overridden)
+        bool hasUVScale = false;
+        bool hasUVRotation = false;
+        bool hasNormalStrength = false;
+        bool hasBrightness = false;
+        bool hasContrast = false;
+        bool hasSaturation = false;
+        bool hasRoughness = false;
+        bool hasMetallic = false;
+        bool hasAOStrength = false;
+        bool hasTint = false;
+
+        // Direct replacement values (except roughness/metallic which are additive offsets)
+        float uvScale = 1.0f;
+        float uvRotation = 0.0f;      // Rotation in degrees
+        float normalStrength = 1.0f;
+        float brightness = 0.0f;
+        float contrast = 1.0f;
+        float saturation = 1.0f;
+        float roughness = 0.0f;       // Additive offset
+        float metallic = 0.0f;        // Additive offset
+        float aoStrength = 1.0f;
+        float tint[3] = {0, 0, 0};
+
+        bool resetSelected = false;  // If true, clear overrides for selected elements
+        bool resetAll = false;      // If true, clear all overrides
+    };
+
     ImGuiLayer(VulkanContext& context, GLFWwindow* window, VkRenderPass renderPass);
     ~ImGuiLayer();
 
@@ -99,7 +130,9 @@ public:
     void drawHelpPanel(bool& show);
     void drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles, u32 culledElements = 0);
     void drawRenderSettingsPanel(Renderer& renderer, bool& show);
+    void drawPreviewWindow();
     void drawGeometryEditor(bool& show);
+    void drawMaterialInspector(const Renderer& renderer);
 
     // Geometry editor state
     struct NewElement {
@@ -208,6 +241,12 @@ public:
     void setHighResRenderState(bool inFlight, const std::string& status, float progress = 0.0f);
     float getHighResRenderProgress() const { return m_highResRenderProgress; }
 
+    // Material Inspector (per-element material overrides)
+    bool wasMaterialOverrideRequested() const { return m_materialOverrideRequested; }
+    MaterialOverrideRequest takeMaterialOverrideRequest();
+    void setMaterialInspectorVisibility(bool show) { m_showMaterialInspector = show; }
+    bool getMaterialInspectorVisibility() const { return m_showMaterialInspector; }
+
 private:
     void createDescriptorPool();
     void uploadFonts();
@@ -311,8 +350,46 @@ private:
     float m_postVignette = -1.0f;
     bool m_showPostProcessAdvanced = false;
 
+    // Print preview state
+    bool m_previewRequested = false;
+    bool m_showPreviewWindow = false;
+    std::string m_previewImagePath;
+    std::string mPreviewPostProcessedImage;
+
+    // Material Inspector state
+    bool m_showMaterialInspector = false;
+    bool m_materialOverrideRequested = false;
+    MaterialOverrideRequest m_materialOverrideRequest;
+    // Override parameter values (defaults matching global values)
+    float m_inspectorUVScale = 1.0f;
+    float m_inspectorUVRotation = 0.0f;    // Rotation in degrees
+    float m_inspectorNormalStrength = 1.0f;
+    float m_inspectorBrightness = 0.0f;
+    float m_inspectorContrast = 1.0f;
+    float m_inspectorSaturation = 1.0f;
+    float m_inspectorRoughness = 0.0f;     // Offset, not direct value
+    float m_inspectorMetallic = 0.0f;      // Offset, not direct value
+    float m_inspectorAOStrength = 1.0f;
+    float m_inspectorTint[3] = {0, 0, 0};
+    // Track which parameters have been modified by user (only override changed params)
+    bool m_modifiedUVScale = false;
+    bool m_modifiedUVRotation = false;
+    bool m_modifiedNormalStrength = false;
+    bool m_modifiedBrightness = false;
+    bool m_modifiedContrast = false;
+    bool m_modifiedSaturation = false;
+    bool m_modifiedRoughness = false;
+    bool m_modifiedMetallic = false;
+    bool m_modifiedAOStrength = false;
+    bool m_modifiedTint = false;
+
 public:
     float getRenderBrightness() const { return m_renderBrightness; }
+    bool wasPreviewRequested() const { return m_previewRequested; }
+    void clearPreviewRequest() { m_previewRequested = false; }
+    const std::string& getPreviewImagePath() const { return m_previewImagePath; }
+    void setPreviewImagePath(const std::string& path) { m_previewImagePath = path; }
+    void showPreviewWindow(bool show) { m_showPreviewWindow = show; }
 };
 
 } // namespace arch

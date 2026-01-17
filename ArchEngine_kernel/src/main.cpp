@@ -996,6 +996,9 @@ int main(int argc, char* argv[]) {
                 }
                 imgui.drawRenderSettingsPanel(renderer, showRenderSettings);
 
+                // Material Inspector (per-element material overrides)
+                imgui.drawMaterialInspector(renderer);
+
                 // Parametric Wall Test Panel
                 static bool showWallSystem = false;
                 if (ImGui::Begin("Wall System", &showWallSystem)) {
@@ -1117,6 +1120,7 @@ int main(int argc, char* argv[]) {
                 imgui.drawWallEditor(buildings[currentBuilding], showGeometryEditor);
                 imgui.drawHelpPanel(showHelp);
                 imgui.drawPerformancePanel(currentFps, renderer.getStats().drawCalls, renderer.getStats().triangles, renderer.getStats().culledElements);
+                imgui.drawPreviewWindow();
 
                 // Apply material to selection (button)
                 if (imgui.wasApplyMaterialRequested()) {
@@ -1332,6 +1336,84 @@ int main(int argc, char* argv[]) {
                     }
                 }
 
+                // Handle preview requests (quick 1080p render for post-process tuning)
+                if (imgui.wasPreviewRequested()) {
+                    auto previewPath = imgui.getPreviewImagePath();
+                    auto& previewElements = buildings[currentBuilding].elements;
+                    auto& previewBuilding = buildings[currentBuilding];
+
+                    // Render preview
+                    highResRenderStatus = "Rendering preview...";
+                    imgui.setHighResRenderState(true, highResRenderStatus, 0.5f);
+
+                    context.waitIdle();
+
+                    bool previewSuccess = renderer.renderPreview(
+                        previewElements, previewBuilding, previewPath, imgui.getRenderBrightness());
+
+                    if (previewSuccess) {
+                        highResRenderStatus = "Preview ready";
+                        imgui.showPreviewWindow(true);
+                    } else {
+                        highResRenderStatus = "Preview failed";
+                    }
+
+                    imgui.setHighResRenderState(false, highResRenderStatus, 1.0f);
+                    imgui.clearPreviewRequest();
+                }
+
+                // Handle material override requests (apply per-element material adjustments)
+                if (imgui.wasMaterialOverrideRequested()) {
+                    auto request = imgui.takeMaterialOverrideRequest();
+
+                    if (request.resetAll) {
+                        // Clear all overrides - iterate through all elements
+                        auto& building = buildings[currentBuilding];
+                        for (size_t i = 0; i < building.elements.size(); i++) {
+                            renderer.clearElementOverride(static_cast<int>(i));
+                        }
+                    } else if (request.resetSelected && !request.elementIndices.empty()) {
+                        // Clear overrides for selected elements
+                        for (int idx : request.elementIndices) {
+                            renderer.clearElementOverride(idx);
+                        }
+                    } else if (!request.elementIndices.empty()) {
+                        // Apply override to selected elements
+                        ElementMaterialOverride override;
+                        override.active = true;
+
+                        // Set per-parameter flags and values
+                        override.hasUVScale = request.hasUVScale;
+                        override.hasUVRotation = request.hasUVRotation;
+                        override.hasNormalStrength = request.hasNormalStrength;
+                        override.hasBrightness = request.hasBrightness;
+                        override.hasContrast = request.hasContrast;
+                        override.hasSaturation = request.hasSaturation;
+                        override.hasRoughness = request.hasRoughness;
+                        override.hasMetallic = request.hasMetallic;
+                        override.hasAOStrength = request.hasAOStrength;
+                        override.hasTint = request.hasTint;
+
+                        // Set direct replacement values
+                        override.uvScale = request.uvScale;
+                        override.uvRotation = request.uvRotation;
+                        override.normalStrength = request.normalStrength;
+                        override.brightness = request.brightness;
+                        override.contrast = request.contrast;
+                        override.saturation = request.saturation;
+                        override.roughness = request.roughness;
+                        override.metallic = request.metallic;
+                        override.aoStrength = request.aoStrength;
+                        override.tint[0] = request.tint[0];
+                        override.tint[1] = request.tint[1];
+                        override.tint[2] = request.tint[2];
+
+                        for (int idx : request.elementIndices) {
+                            renderer.setElementOverride(idx, override);
+                        }
+                    }
+                }
+
                 // Handle high-res render requests (runs synchronously to avoid Vulkan threading issues)
                 if (imgui.wasHighResRenderRequested()) {
                     auto request = imgui.takeHighResRenderRequest();
@@ -1500,6 +1582,9 @@ int main(int argc, char* argv[]) {
                             currentBuilding = buildings.size() - 1;
                             resetCamera();
                             std::cout << "Loaded building: " << newBuilding.name << "\n";
+
+                            // Load material overrides if present
+                            GeometryLoader::loadMaterialOverrides(path, renderer);
                         }
                     }
                 }
@@ -1547,7 +1632,7 @@ int main(int argc, char* argv[]) {
                     imgui.clearSaveRequest();
                     std::string path = imgui.getFilePath();
                     if (!path.empty()) {
-                        GeometryLoader::saveToJSON(path, buildings[currentBuilding]);
+                        GeometryLoader::saveToJSON(path, buildings[currentBuilding], renderer);
                         std::cout << "Saved to: " << path << "\n";
                     }
                 }

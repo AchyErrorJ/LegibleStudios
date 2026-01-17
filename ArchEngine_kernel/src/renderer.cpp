@@ -3,6 +3,7 @@
 #include <cstring>
 #include <array>
 #include <iostream>
+#include <fstream>
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -402,12 +403,26 @@ void Renderer::createDescriptorPool() {
 void Renderer::createUniformBuffers() {
     VkDeviceSize bufferSize = sizeof(UniformBufferObject);
 
+    // Debug: Write UBO layout to a log file to verify std140 alignment
+    {
+        std::ofstream logFile("ubo_debug.log");
+        if (logFile.is_open()) {
+            logFile << "[UBO Debug] Size: " << bufferSize << " bytes" << std::endl;
+            logFile << "[UBO Debug] overrideMask offset: " << offsetof(UniformBufferObject, overrideMask) << " (expected: 304)" << std::endl;
+            logFile << "[UBO Debug] elementOverride1 offset: " << offsetof(UniformBufferObject, elementOverride1) << " (expected: 320)" << std::endl;
+            logFile << "[UBO Debug] elementOverride2 offset: " << offsetof(UniformBufferObject, elementOverride2) << " (expected: 336)" << std::endl;
+            logFile << "[UBO Debug] elementOverride3 offset: " << offsetof(UniformBufferObject, elementOverride3) << " (expected: 352)" << std::endl;
+            logFile.close();
+        }
+    }
+
     m_uniformBuffers.resize(m_context.getSwapchainImageCount());
     m_uniformBuffersMemory.resize(m_context.getSwapchainImageCount());
     m_uniformBuffersMapped.resize(m_context.getSwapchainImageCount());
 
     for (size_t i = 0; i < m_context.getSwapchainImageCount(); ++i) {
-        m_context.createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        // Include TRANSFER_DST for vkCmdUpdateBuffer support (mid-frame UBO updates)
+        m_context.createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                m_uniformBuffers[i], m_uniformBuffersMemory[i]);
 
@@ -639,21 +654,23 @@ void Renderer::createPipeline() {
     m_pipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                              "shaders/structural.frag.spv", config);
 
-    // Wireframe pipeline
-    PipelineConfig wireframeConfig = PipelineConfig::defaultConfig();
-    wireframeConfig.renderPass = m_renderPass;
-    wireframeConfig.pipelineLayout = m_pipelineLayout;
-    wireframeConfig.multisample.rasterizationSamples = msaaSamples;
-    if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
-        wireframeConfig.multisample.sampleShadingEnable = VK_TRUE;
-        wireframeConfig.multisample.minSampleShading = 0.2f;
-    }
-    wireframeConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
-    wireframeConfig.rasterization.lineWidth = 1.5f;
-    wireframeConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+    // Wireframe pipeline (only if GPU supports fillModeNonSolid)
+    if (m_context.supportsFillModeNonSolid()) {
+        PipelineConfig wireframeConfig = PipelineConfig::defaultConfig();
+        wireframeConfig.renderPass = m_renderPass;
+        wireframeConfig.pipelineLayout = m_pipelineLayout;
+        wireframeConfig.multisample.rasterizationSamples = msaaSamples;
+        if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+            wireframeConfig.multisample.sampleShadingEnable = VK_TRUE;
+            wireframeConfig.multisample.minSampleShading = 0.2f;
+        }
+        wireframeConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+        wireframeConfig.rasterization.lineWidth = 1.5f;
+        wireframeConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
 
-    m_wireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
-                                                      "shaders/structural.frag.spv", wireframeConfig);
+        m_wireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                          "shaders/structural.frag.spv", wireframeConfig);
+    }
 
     // Transparent pipeline for glass/windows (alpha blending enabled)
     PipelineConfig transparentConfig = PipelineConfig::transparentConfig();
@@ -678,17 +695,19 @@ void Renderer::createPipeline() {
         m_hdrPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                                    "shaders/structural.frag.spv", hdrConfig);
 
-        // HDR wireframe pipeline
-        PipelineConfig hdrWireframeConfig = PipelineConfig::defaultConfig();
-        hdrWireframeConfig.renderPass = m_postProcess->getHDRRenderPass();
-        hdrWireframeConfig.pipelineLayout = m_pipelineLayout;
-        hdrWireframeConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-        hdrWireframeConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
-        hdrWireframeConfig.rasterization.lineWidth = 1.5f;
-        hdrWireframeConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+        // HDR wireframe pipeline (only if GPU supports fillModeNonSolid)
+        if (m_context.supportsFillModeNonSolid()) {
+            PipelineConfig hdrWireframeConfig = PipelineConfig::defaultConfig();
+            hdrWireframeConfig.renderPass = m_postProcess->getHDRRenderPass();
+            hdrWireframeConfig.pipelineLayout = m_pipelineLayout;
+            hdrWireframeConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            hdrWireframeConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+            hdrWireframeConfig.rasterization.lineWidth = 1.5f;
+            hdrWireframeConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
 
-        m_hdrWireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
-                                                            "shaders/structural.frag.spv", hdrWireframeConfig);
+            m_hdrWireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                                "shaders/structural.frag.spv", hdrWireframeConfig);
+        }
 
         // HDR transparent pipeline for glass/windows
         PipelineConfig hdrTransparentConfig = PipelineConfig::transparentConfig();
@@ -700,8 +719,8 @@ void Renderer::createPipeline() {
                                                                "shaders/structural.frag.spv", hdrTransparentConfig);
     }
 
-    // Create tessellation pipelines for displacement mapping
-    {
+    // Create tessellation pipelines for displacement mapping (only if GPU supports tessellation)
+    if (m_context.supportsTessellation()) {
         PipelineConfig tessConfig = PipelineConfig::tessellationConfig();
         tessConfig.renderPass = m_renderPass;
         tessConfig.pipelineLayout = m_pipelineLayout;
@@ -718,25 +737,27 @@ void Renderer::createPipeline() {
             "shaders/structural.frag.spv",
             tessConfig);
 
-        // Tessellation wireframe
-        PipelineConfig tessWireConfig = PipelineConfig::tessellationConfig();
-        tessWireConfig.renderPass = m_renderPass;
-        tessWireConfig.pipelineLayout = m_pipelineLayout;
-        tessWireConfig.multisample.rasterizationSamples = msaaSamples;
-        if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
-            tessWireConfig.multisample.sampleShadingEnable = VK_TRUE;
-            tessWireConfig.multisample.minSampleShading = 0.2f;
-        }
-        tessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
-        tessWireConfig.rasterization.lineWidth = 1.5f;
-        tessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+        // Tessellation wireframe (only if GPU supports fillModeNonSolid)
+        if (m_context.supportsFillModeNonSolid()) {
+            PipelineConfig tessWireConfig = PipelineConfig::tessellationConfig();
+            tessWireConfig.renderPass = m_renderPass;
+            tessWireConfig.pipelineLayout = m_pipelineLayout;
+            tessWireConfig.multisample.rasterizationSamples = msaaSamples;
+            if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+                tessWireConfig.multisample.sampleShadingEnable = VK_TRUE;
+                tessWireConfig.multisample.minSampleShading = 0.2f;
+            }
+            tessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+            tessWireConfig.rasterization.lineWidth = 1.5f;
+            tessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
 
-        m_tessWireframePipeline = std::make_unique<Pipeline>(m_context,
-            "shaders/structural.vert.spv",
-            "shaders/structural.tesc.spv",
-            "shaders/structural.tese.spv",
-            "shaders/structural.frag.spv",
-            tessWireConfig);
+            m_tessWireframePipeline = std::make_unique<Pipeline>(m_context,
+                "shaders/structural.vert.spv",
+                "shaders/structural.tesc.spv",
+                "shaders/structural.tese.spv",
+                "shaders/structural.frag.spv",
+                tessWireConfig);
+        }
 
         // HDR tessellation pipelines
         if (m_postProcess) {
@@ -752,20 +773,22 @@ void Renderer::createPipeline() {
                 "shaders/structural.frag.spv",
                 hdrTessConfig);
 
-            PipelineConfig hdrTessWireConfig = PipelineConfig::tessellationConfig();
-            hdrTessWireConfig.renderPass = m_postProcess->getHDRRenderPass();
-            hdrTessWireConfig.pipelineLayout = m_pipelineLayout;
-            hdrTessWireConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-            hdrTessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
-            hdrTessWireConfig.rasterization.lineWidth = 1.5f;
-            hdrTessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+            if (m_context.supportsFillModeNonSolid()) {
+                PipelineConfig hdrTessWireConfig = PipelineConfig::tessellationConfig();
+                hdrTessWireConfig.renderPass = m_postProcess->getHDRRenderPass();
+                hdrTessWireConfig.pipelineLayout = m_pipelineLayout;
+                hdrTessWireConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+                hdrTessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+                hdrTessWireConfig.rasterization.lineWidth = 1.5f;
+                hdrTessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
 
-            m_hdrTessWireframePipeline = std::make_unique<Pipeline>(m_context,
-                "shaders/structural.vert.spv",
-                "shaders/structural.tesc.spv",
-                "shaders/structural.tese.spv",
-                "shaders/structural.frag.spv",
-                hdrTessWireConfig);
+                m_hdrTessWireframePipeline = std::make_unique<Pipeline>(m_context,
+                    "shaders/structural.vert.spv",
+                    "shaders/structural.tesc.spv",
+                    "shaders/structural.tese.spv",
+                    "shaders/structural.frag.spv",
+                    hdrTessWireConfig);
+            }
         }
     }
 
@@ -1147,7 +1170,8 @@ void Renderer::endFrame() {
 void Renderer::beginRenderPass(vec4 clearColor) {
     // Direct rendering - apply tonemapping in shader
     m_outputLinearHDR = false;
-    updateUniformBuffer(m_currentFrame);
+    // NOTE: updateUniformBuffer() already called in beginFrame(), don't call again here
+    // or it will reset elementOverride fields to identity values!
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1236,7 +1260,8 @@ void Renderer::beginHDRRenderPass(vec4 clearColor) {
 
     // Enable linear HDR output (composite pass will do tonemapping)
     m_outputLinearHDR = true;
-    updateUniformBuffer(m_currentFrame);
+    // NOTE: updateUniformBuffer() already called in beginFrame(), don't call again here
+    // or it will reset elementOverride fields to identity values!
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1608,10 +1633,22 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
 
     // Material params: uvScale, normalStrength, brightness, contrast
     ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, m_materialBrightness, m_materialContrast);
+
     // Material params2: saturation, roughnessOffset, metallicOffset, aoStrength
     ubo.materialParams2 = vec4(m_materialSaturation, m_materialRoughnessOffset, m_materialMetallicOffset, m_materialAOStrength);
     // Material tint
     ubo.materialTint = vec4(m_materialTint, 1.0f);
+
+    // Element overrides - initialize with safe defaults (identity values that don't change rendering)
+    // These values are used for elements without overrides, and as base values for elements with partial overrides
+    // DO NOT use zeros - that would make textures disappear!
+    ubo.overrideMask = 0;  // No overrides by default
+    ubo._pad1 = 0.0f;
+    ubo._pad2 = 0.0f;
+    ubo._pad3 = 0.0f;
+    ubo.elementOverride1 = vec4(1.0f, 1.0f, 0.0f, 1.0f);  // uvScale=1, normal=1, brightness=0, contrast=1
+    ubo.elementOverride2 = vec4(1.0f, 0.0f, 0.0f, 1.0f);  // saturation=1, roughness=0, metallic=0, ao=1
+    ubo.elementOverride3 = vec4(0.0f, 0.0f, 0.0f, 0.0f);  // tint=(0,0,0)
 
     std::memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
 }
@@ -1828,10 +1865,74 @@ void Renderer::drawMesh(Mesh& mesh, const mat4& transform, vec3 color, f32 stres
 }
 
 void Renderer::drawMeshWithMaterial(Mesh& mesh, const mat4& transform, vec3 color, f32 stress, vec4 material) {
+    // Use m_currentDrawElementId for per-element overrides (set before calling draw functions)
+    drawMeshWithMaterialAndOverride(mesh, transform, color, stress, material, m_currentDrawElementId);
+}
+
+void Renderer::drawMeshWithMaterialAndOverride(Mesh& mesh, const mat4& transform, vec3 color, f32 stress, vec4 material, int elementId) {
     PushConstants push{};
     push.model = transform;
     push.color = vec4(color, stress);  // stress in alpha controls shader behavior
-    push.material = material;
+    push.material = material;  // x = metallic, y = roughness, z = ao, w = emission
+
+    // Set override data from element if present
+    push.overrideMask = 0;
+    push._pad1 = push._pad2 = push._pad3 = 0.0f;
+    push.overrides1 = vec4(1.0f, 1.0f, 0.0f, 1.0f);  // Default: uvScale=1, normal=1, brightness=0, contrast=1
+    push.overrides2 = vec4(1.0f, 0.0f, 0.0f, 1.0f);  // Default: saturation=1, roughness=0, metallic=0, ao=1
+    push.overrides3 = vec4(1.0f, 1.0f, 1.0f, 0.0f);  // Default: tint=white, unused=0
+
+    if (elementId >= 0) {
+        const ElementMaterialOverride* override = getElementOverride(elementId);
+        if (override && override->active) {
+            // Build the mask and override values for overrides1
+            if (override->hasUVScale) {
+                push.overrideMask |= MaterialOverrideBits::UVScale;
+                push.overrides1.x = override->uvScale;
+            }
+            if (override->hasNormalStrength) {
+                push.overrideMask |= MaterialOverrideBits::NormalStrength;
+                push.overrides1.y = override->normalStrength;
+            }
+            if (override->hasBrightness) {
+                push.overrideMask |= MaterialOverrideBits::Brightness;
+                push.overrides1.z = override->brightness;
+            }
+            if (override->hasContrast) {
+                push.overrideMask |= MaterialOverrideBits::Contrast;
+                push.overrides1.w = override->contrast;
+            }
+            // Build the mask and override values for overrides2
+            if (override->hasSaturation) {
+                push.overrideMask |= MaterialOverrideBits::Saturation;
+                push.overrides2.x = override->saturation;
+            }
+            if (override->hasRoughness) {
+                push.overrideMask |= MaterialOverrideBits::Roughness;
+                push.overrides2.y = override->roughness;
+            }
+            if (override->hasMetallic) {
+                push.overrideMask |= MaterialOverrideBits::Metallic;
+                push.overrides2.z = override->metallic;
+            }
+            if (override->hasAOStrength) {
+                push.overrideMask |= MaterialOverrideBits::AOStrength;
+                push.overrides2.w = override->aoStrength;
+            }
+            // Build the mask and override values for overrides3
+            if (override->hasTint) {
+                push.overrideMask |= MaterialOverrideBits::Tint;
+                push.overrides3.x = override->tint[0];
+                push.overrides3.y = override->tint[1];
+                push.overrides3.z = override->tint[2];
+            }
+            // UV rotation (stored in overrides3.w, convert degrees to radians)
+            if (override->hasUVRotation) {
+                push.overrideMask |= MaterialOverrideBits::UVRotation;
+                push.overrides3.w = glm::radians(override->uvRotation);
+            }
+        }
+    }
 
     vkCmdPushConstants(m_currentCommandBuffer, m_pipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
@@ -2302,6 +2403,7 @@ void Renderer::drawGrid(f32 size, f32 spacing) {
     PushConstants push{};
     push.model = transform;
     push.color = vec4(0.3f, 0.3f, 0.3f, 1.0f);
+    push.material = vec4(0.0f, 0.5f, 1.0f, 0.0f);  // metallic=0, roughness=0.5, ao=1, emission=0
 
     vkCmdPushConstants(m_currentCommandBuffer, m_pipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
@@ -2356,10 +2458,14 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
 
         vec3 color = getElementColor(element, building, index);
 
-        // Highlight selected elements with yellow/orange
+        // Set current element for per-element material overrides (used by draw functions)
+        m_currentDrawElementId = static_cast<int>(index);
+
+        // Highlight selected elements - blend with base color for better material visibility
         bool isSelected = selectedIndices.count(static_cast<int>(index)) > 0;
         if (isSelected) {
-            color = vec3(1.0f, 0.8f, 0.2f);  // Yellow-orange highlight
+            vec3 highlightColor = vec3(1.0f, 0.8f, 0.2f);  // Yellow-orange
+            color = mix(color, highlightColor, 0.3f);  // 30% highlight, 70% material color
         }
         // Bind material textures for this element (set 1)
         bindMaterialDescriptorSet(resolveMaterialName(element));
@@ -2564,6 +2670,9 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             }
 
             bindMaterialDescriptorSet(resolveMaterialName(element));
+
+            // Set current element for per-element material overrides (used by draw functions)
+            m_currentDrawElementId = static_cast<int>(index);
 
             vec3 color = getElementColor(element, building, index);
             bool isSelected = selectedIndices.count(static_cast<int>(index)) > 0;
@@ -3807,6 +3916,77 @@ bool Renderer::renderPreview(const std::vector<StructuralElement>& elements,
         return saveHighResPNG(filepath);
     }
     return false;
+}
+
+// ============================================================================
+// Per-Element Material Override Methods
+// ============================================================================
+
+void Renderer::setElementOverride(int elementId, const ElementMaterialOverride& override) {
+    m_elementMaterialOverrides[elementId] = override;
+    m_elementMaterialOverrides[elementId].active = true;
+}
+
+const ElementMaterialOverride* Renderer::getElementOverride(int elementId) const {
+    auto it = m_elementMaterialOverrides.find(elementId);
+    if (it != m_elementMaterialOverrides.end() && it->second.active) {
+        return &(it->second);
+    }
+    return nullptr;
+}
+
+void Renderer::clearElementOverride(int elementId) {
+    m_elementMaterialOverrides.erase(elementId);
+}
+
+void Renderer::clearAllElementOverrides() {
+    m_elementMaterialOverrides.clear();
+}
+
+// Overload: Set element override with individual parameters
+void Renderer::setElementOverride(int elementId, u32 mask, float uvScale, float normalStrength, float brightness, float contrast) {
+    ElementMaterialOverride override;
+    override.active = true;
+
+    // Set flags based on mask
+    override.hasUVScale = (mask & (1u << 0)) != 0;
+    override.hasNormalStrength = (mask & (1u << 1)) != 0;
+    override.hasBrightness = (mask & (1u << 2)) != 0;
+    override.hasContrast = (mask & (1u << 3)) != 0;
+
+    // Set values
+    override.uvScale = uvScale;
+    override.normalStrength = normalStrength;
+    override.brightness = brightness;
+    override.contrast = contrast;
+
+    m_elementMaterialOverrides[elementId] = override;
+}
+
+bool Renderer::hasElementOverride(int elementId) const {
+    auto it = m_elementMaterialOverrides.find(elementId);
+    return it != m_elementMaterialOverrides.end() && it->second.active;
+}
+
+size_t Renderer::getElementOverrideIndices(int* outIndices, size_t maxIndices) const {
+    if (!outIndices || maxIndices == 0) return 0;
+
+    size_t count = 0;
+    for (const auto& [elementId, override] : m_elementMaterialOverrides) {
+        if (override.active && count < maxIndices) {
+            outIndices[count++] = elementId;
+        }
+    }
+    return count;
+}
+
+// Helper function - deprecated, overrides now handled via push constants
+// Kept for API compatibility, returns 0 (no overrides via UBO)
+u32 Renderer::applyElementOverrideToUBO(int elementId) {
+    // Overrides are now applied via push constants in drawMeshWithMaterialAndOverride()
+    // Use m_currentDrawElementId = elementId; before calling draw functions instead
+    (void)elementId;  // Suppress unused parameter warning
+    return 0;
 }
 
 } // namespace arch
