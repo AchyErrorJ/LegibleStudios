@@ -400,6 +400,7 @@ int main(int argc, char* argv[]) {
             auto& qbd = qbd::getQBDInterface();
             // Try multiple paths - works from build/, build/Release/, or build/Debug/
             std::vector<std::string> jsonPaths = {
+                "samples/QBD_Generated_House.json",                      // Installed location (next to exe)
                 "../../Shared/TestData/output/generated_building.json",  // From build/Release/ or build/Debug/
                 "../Shared/TestData/output/generated_building.json",     // From build/
                 "X:/ARCH/Software/ArchEngine_Suite/Shared/TestData/output/generated_building.json"  // Absolute path

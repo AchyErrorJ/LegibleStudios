@@ -410,8 +410,11 @@ void main() {
     vec3 kD_ambient = 1.0 - kS_ambient;
     kD_ambient *= 1.0 - metallic;
 
-    // Diffuse ambient
-    vec3 irradiance = ambientColor + vec3(0.15, 0.18, 0.22);  // Sky-ish ambient
+    // Diffuse ambient with sky/ground gradient
+    vec3 skyAmbient = vec3(0.18, 0.22, 0.28);    // Slightly blue sky
+    vec3 groundAmbient = vec3(0.12, 0.10, 0.08); // Warm ground bounce
+    float skyBlend = N.y * 0.5 + 0.5;            // 0 = facing down, 1 = facing up
+    vec3 irradiance = ambientColor + mix(groundAmbient, skyAmbient, skyBlend);
     vec3 diffuseAmbient = irradiance * albedo;
 
     // Simple specular ambient (approximate)
