@@ -133,6 +133,7 @@ void ImGuiLayer::drawMainMenuBar(VisualizationMode& mode, bool& showDemo, bool& 
             ImGui::MenuItem("Show Demo", nullptr, &showDemo);
             ImGui::MenuItem("Show Metrics", nullptr, &showMetrics);
             ImGui::MenuItem("Material Inspector", nullptr, &m_showMaterialInspector);
+            ImGui::MenuItem("Render Preview", nullptr, &m_showRenderPreviewPanel);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -1762,6 +1763,126 @@ void ImGuiLayer::drawPreviewWindow() {
         } else {
             ImGui::Text("No preview available.");
             ImGui::Text("Click 'Preview Post-Process' in Render Settings to generate one.");
+        }
+    }
+    ImGui::End();
+}
+
+// ============================================================================
+// Live Render Preview Panel (GPU-Direct Inline Preview)
+// ============================================================================
+
+void ImGuiLayer::drawRenderPreviewPanel(Renderer& renderer) {
+    if (!m_showRenderPreviewPanel) return;
+
+    ImGui::SetNextWindowSize(ImVec2(680, 440), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Render Preview", &m_showRenderPreviewPanel)) {
+        // Refresh button
+        if (ImGui::Button("Refresh Preview")) {
+            m_renderPreviewRefreshRequested = true;
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::Text("Renders the current view at 640x360 directly to GPU.");
+            ImGui::Text("Fast (~50ms) for quick iteration on materials and lighting.");
+            ImGui::Text("Material overrides will appear in the preview.");
+            ImGui::EndTooltip();
+        }
+
+        ImGui::Separator();
+
+        // Display preview info
+        ImGui::Text("Resolution: %u x %u", renderer.getPreviewWidth(), renderer.getPreviewHeight());
+        ImGui::SameLine();
+        ImGui::TextDisabled("| Single sample | GPU-direct");
+
+        ImGui::Spacing();
+
+        // Get the preview texture descriptor
+        VkDescriptorSet tex = renderer.getPreviewDescriptor();
+
+        if (tex != VK_NULL_HANDLE && renderer.hasPreviewResources()) {
+            // Calculate display size maintaining 16:9 aspect ratio
+            ImVec2 availSize = ImGui::GetContentRegionAvail();
+            float previewAspect = static_cast<float>(renderer.getPreviewWidth()) /
+                                  static_cast<float>(renderer.getPreviewHeight());
+
+            ImVec2 displaySize;
+            if (availSize.x / availSize.y > previewAspect) {
+                // Window is wider than preview - fit to height
+                displaySize.y = availSize.y - 10.0f;  // Small margin
+                displaySize.x = displaySize.y * previewAspect;
+            } else {
+                // Window is taller than preview - fit to width
+                displaySize.x = availSize.x - 10.0f;  // Small margin
+                displaySize.y = displaySize.x / previewAspect;
+            }
+
+            // Ensure minimum size
+            displaySize.x = std::max(displaySize.x, 320.0f);
+            displaySize.y = std::max(displaySize.y, 180.0f);
+
+            // Center the image
+            float offsetX = (availSize.x - displaySize.x) * 0.5f;
+            if (offsetX > 0) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
+            }
+
+            // Display the preview image
+            ImGui::Image((ImTextureID)tex, displaySize);
+
+            // Show status
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f), "Preview ready");
+        } else {
+            // No preview yet
+            ImVec2 placeholderSize(640.0f, 360.0f);
+            ImVec2 availSize = ImGui::GetContentRegionAvail();
+
+            // Scale down if needed
+            if (placeholderSize.x > availSize.x - 10.0f) {
+                float scale = (availSize.x - 10.0f) / placeholderSize.x;
+                placeholderSize.x *= scale;
+                placeholderSize.y *= scale;
+            }
+
+            // Draw placeholder box
+            ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+            float offsetX = (availSize.x - placeholderSize.x) * 0.5f;
+            if (offsetX > 0) {
+                cursorPos.x += offsetX;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
+            }
+
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            drawList->AddRectFilled(
+                cursorPos,
+                ImVec2(cursorPos.x + placeholderSize.x, cursorPos.y + placeholderSize.y),
+                IM_COL32(40, 40, 50, 255)
+            );
+            drawList->AddRect(
+                cursorPos,
+                ImVec2(cursorPos.x + placeholderSize.x, cursorPos.y + placeholderSize.y),
+                IM_COL32(80, 80, 100, 255)
+            );
+
+            // Center text in placeholder
+            const char* text = "Click 'Refresh Preview' to render";
+            ImVec2 textSize = ImGui::CalcTextSize(text);
+            ImVec2 textPos(
+                cursorPos.x + (placeholderSize.x - textSize.x) * 0.5f,
+                cursorPos.y + (placeholderSize.y - textSize.y) * 0.5f
+            );
+            drawList->AddText(textPos, IM_COL32(150, 150, 150, 255), text);
+
+            // Advance cursor past placeholder
+            ImGui::Dummy(placeholderSize);
+
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No preview rendered yet");
         }
     }
     ImGui::End();

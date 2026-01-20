@@ -11,6 +11,9 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+// ImGui Vulkan backend for preview texture registration
+#include <imgui_impl_vulkan.h>
+
 namespace arch {
 
 
@@ -3617,6 +3620,9 @@ bool Renderer::renderHighRes(
                 const auto& elem = elements[i];
                 vec3 color = getElementColor(elem, building, i);
 
+                // Set current element for per-element material overrides (used by draw functions)
+                m_currentDrawElementId = static_cast<int>(i);
+
                 // Bind material
                 std::string matName = resolveMaterialName(elem);
                 bindMaterialDescriptorSet(matName);
@@ -3765,6 +3771,9 @@ bool Renderer::renderHighRes(
 
                     vec3 color = getElementColor(elem, building, i);
                     f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? elem.stress : 0.0f;
+
+                    // Set current element for per-element material overrides (used by draw functions)
+                    m_currentDrawElementId = static_cast<int>(i);
 
                     // Bind material
                     std::string matName = resolveMaterialName(elem);
@@ -3916,6 +3925,599 @@ bool Renderer::renderPreview(const std::vector<StructuralElement>& elements,
         return saveHighResPNG(filepath);
     }
     return false;
+}
+
+// =============================================================================
+// Live Preview Rendering Implementation (GPU-Direct for ImGui)
+// =============================================================================
+
+void Renderer::createPreviewResources() {
+    if (m_previewResourcesCreated) return;
+
+    std::cout << "[Renderer] Creating live preview resources: " << kPreviewWidth << "x" << kPreviewHeight << std::endl;
+
+    VkDevice device = m_context.getDevice();
+
+    // Create color image with SAMPLED bit for ImGui texture display
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.extent = { kPreviewWidth, kPreviewHeight, 1 };
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(device, &imageInfo, nullptr, &m_previewImage) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview image");
+    }
+
+    // Allocate memory
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(device, m_previewImage, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &m_previewMemory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate preview image memory");
+    }
+
+    vkBindImageMemory(device, m_previewImage, m_previewMemory, 0);
+
+    // Create image view
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_previewImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &m_previewImageView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview image view");
+    }
+
+    // Create depth image
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+    VkImageCreateInfo depthImageInfo = imageInfo;
+    depthImageInfo.format = depthFormat;
+    depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+    if (vkCreateImage(device, &depthImageInfo, nullptr, &m_previewDepthImage) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview depth image");
+    }
+
+    vkGetImageMemoryRequirements(device, m_previewDepthImage, &memReqs);
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &m_previewDepthMemory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate preview depth memory");
+    }
+
+    vkBindImageMemory(device, m_previewDepthImage, m_previewDepthMemory, 0);
+
+    viewInfo.image = m_previewDepthImage;
+    viewInfo.format = depthFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &m_previewDepthView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview depth view");
+    }
+
+    // Create render pass with finalLayout = SHADER_READ_ONLY_OPTIMAL for ImGui sampling
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = depthFormat;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = 1;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    // Dependencies for proper layout transitions
+    std::array<VkSubpassDependency, 2> dependencies{};
+
+    // Transition from whatever to color attachment
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    // Transition from color attachment to shader read
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    std::array<VkAttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = static_cast<u32>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = static_cast<u32>(dependencies.size());
+    renderPassInfo.pDependencies = dependencies.data();
+
+    if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &m_previewRenderPass) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview render pass");
+    }
+
+    // Create framebuffer
+    std::array<VkImageView, 2> fbAttachments = { m_previewImageView, m_previewDepthView };
+
+    VkFramebufferCreateInfo fbInfo{};
+    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbInfo.renderPass = m_previewRenderPass;
+    fbInfo.attachmentCount = static_cast<u32>(fbAttachments.size());
+    fbInfo.pAttachments = fbAttachments.data();
+    fbInfo.width = kPreviewWidth;
+    fbInfo.height = kPreviewHeight;
+    fbInfo.layers = 1;
+
+    if (vkCreateFramebuffer(device, &fbInfo, nullptr, &m_previewFramebuffer) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview framebuffer");
+    }
+
+    // Create sampler for ImGui
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.mipLodBias = 0.0f;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 0.0f;
+
+    if (vkCreateSampler(device, &samplerInfo, nullptr, &m_previewSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview sampler");
+    }
+
+    // Create single-sample pipeline for preview rendering
+    PipelineConfig previewConfig = PipelineConfig::defaultConfig();
+    previewConfig.renderPass = m_previewRenderPass;
+    previewConfig.pipelineLayout = m_pipelineLayout;
+    previewConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    previewConfig.multisample.sampleShadingEnable = VK_FALSE;
+
+    m_previewPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                    "shaders/structural.frag.spv", previewConfig);
+
+    // Create transparent pipeline for windows
+    PipelineConfig previewTransparentConfig = PipelineConfig::transparentConfig();
+    previewTransparentConfig.renderPass = m_previewRenderPass;
+    previewTransparentConfig.pipelineLayout = m_pipelineLayout;
+    previewTransparentConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    m_previewTransparentPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                               "shaders/structural.frag.spv", previewTransparentConfig);
+
+    // Register texture with ImGui
+    m_previewImGuiDescriptor = ImGui_ImplVulkan_AddTexture(
+        m_previewSampler,
+        m_previewImageView,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    );
+
+    m_previewResourcesCreated = true;
+    std::cout << "[Renderer] Live preview resources created successfully" << std::endl;
+}
+
+void Renderer::cleanupPreviewResources() {
+    if (!m_previewResourcesCreated) return;
+
+    std::cout << "[Renderer] Cleaning up live preview resources" << std::endl;
+
+    VkDevice device = m_context.getDevice();
+
+    // Wait for GPU to be idle
+    m_context.waitIdle();
+
+    // Remove ImGui texture first
+    if (m_previewImGuiDescriptor != VK_NULL_HANDLE) {
+        ImGui_ImplVulkan_RemoveTexture(m_previewImGuiDescriptor);
+        m_previewImGuiDescriptor = VK_NULL_HANDLE;
+    }
+
+    // Destroy pipelines
+    m_previewPipeline.reset();
+    m_previewTransparentPipeline.reset();
+
+    // Destroy framebuffer
+    if (m_previewFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(device, m_previewFramebuffer, nullptr);
+        m_previewFramebuffer = VK_NULL_HANDLE;
+    }
+
+    // Destroy render pass
+    if (m_previewRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_previewRenderPass, nullptr);
+        m_previewRenderPass = VK_NULL_HANDLE;
+    }
+
+    // Destroy sampler
+    if (m_previewSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_previewSampler, nullptr);
+        m_previewSampler = VK_NULL_HANDLE;
+    }
+
+    // Destroy depth resources
+    if (m_previewDepthView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_previewDepthView, nullptr);
+        m_previewDepthView = VK_NULL_HANDLE;
+    }
+    if (m_previewDepthImage != VK_NULL_HANDLE) {
+        vkDestroyImage(device, m_previewDepthImage, nullptr);
+        m_previewDepthImage = VK_NULL_HANDLE;
+    }
+    if (m_previewDepthMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_previewDepthMemory, nullptr);
+        m_previewDepthMemory = VK_NULL_HANDLE;
+    }
+
+    // Destroy color resources
+    if (m_previewImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_previewImageView, nullptr);
+        m_previewImageView = VK_NULL_HANDLE;
+    }
+    if (m_previewImage != VK_NULL_HANDLE) {
+        vkDestroyImage(device, m_previewImage, nullptr);
+        m_previewImage = VK_NULL_HANDLE;
+    }
+    if (m_previewMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_previewMemory, nullptr);
+        m_previewMemory = VK_NULL_HANDLE;
+    }
+
+    m_previewResourcesCreated = false;
+    std::cout << "[Renderer] Live preview resources cleaned up" << std::endl;
+}
+
+bool Renderer::renderPreviewToTexture(const std::vector<StructuralElement>& elements,
+                                       const Building& building) {
+    // Create resources on first use (lazy initialization)
+    if (!m_previewResourcesCreated) {
+        createPreviewResources();
+    }
+
+    try {
+        // Wait for any pending operations
+        m_context.waitIdle();
+
+        float aspect = static_cast<float>(kPreviewWidth) / static_cast<float>(kPreviewHeight);
+        mat4 proj = m_camera.getProjectionMatrix(aspect);
+        proj[1][1] *= -1; // Vulkan Y flip
+
+        // Create fence for synchronization
+        VkFence fence;
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        vkCreateFence(m_context.getDevice(), &fenceInfo, nullptr, &fence);
+
+        // Allocate command buffer
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool = m_context.getCommandPool();
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer cmd;
+        vkAllocateCommandBuffers(m_context.getDevice(), &allocInfo, &cmd);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &beginInfo);
+
+        // Begin render pass
+        VkRenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassInfo.renderPass = m_previewRenderPass;
+        renderPassInfo.framebuffer = m_previewFramebuffer;
+        renderPassInfo.renderArea.offset = { 0, 0 };
+        renderPassInfo.renderArea.extent = { kPreviewWidth, kPreviewHeight };
+
+        std::array<VkClearValue, 2> clearValues{};
+        clearValues[0].color = { { 0.529f, 0.808f, 0.922f, 1.0f } };  // Sky blue background
+        clearValues[1].depthStencil = { 1.0f, 0 };
+
+        renderPassInfo.clearValueCount = static_cast<u32>(clearValues.size());
+        renderPassInfo.pClearValues = clearValues.data();
+
+        vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        // Set viewport and scissor
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = static_cast<float>(kPreviewWidth);
+        viewport.height = static_cast<float>(kPreviewHeight);
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = { 0, 0 };
+        scissor.extent = { kPreviewWidth, kPreviewHeight };
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        // Update uniform buffer
+        UniformBufferObject ubo{};
+        ubo.view = m_camera.getViewMatrix();
+        ubo.proj = proj;
+        ubo.lightViewProj = m_shadowMap ? m_shadowMap->getLightViewProj() : mat4(1.0f);
+        ubo.lightDirection = vec4(m_lightDirection, 0.0f);
+        ubo.clipPlane = m_clippingEnabled ? m_clipPlane : vec4(0.0f);
+        ubo.time = m_time;
+        ubo.shadowBias = m_shadowBias;
+        ubo.enableClipping = m_clippingEnabled ? 1 : 0;
+        ubo.enableShadows = m_shadowsEnabled ? 1 : 0;
+        ubo.outputLinearHDR = 0;
+        ubo.exposure = getExposure();
+        ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, m_materialBrightness, m_materialContrast);
+        ubo.materialParams2 = vec4(m_materialSaturation, m_materialRoughnessOffset, m_materialMetallicOffset, m_materialAOStrength);
+        ubo.materialTint = vec4(m_materialTint, 1.0f);
+
+        memcpy(m_uniformBuffersMapped[0], &ubo, sizeof(ubo));
+
+        // Save and set current command buffer
+        VkCommandBuffer oldCmd = m_currentCommandBuffer;
+        m_currentCommandBuffer = cmd;
+
+        // Bind preview pipeline and descriptor sets
+        m_previewPipeline->bind(cmd);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[0], 0, nullptr);
+
+        // Draw all opaque elements
+        for (size_t i = 0; i < elements.size(); ++i) {
+            const auto& elem = elements[i];
+            if (elem.type == ElementType::Window) continue;  // Windows rendered in transparent pass
+
+            vec3 color = getElementColor(elem, building, i);
+            m_currentDrawElementId = static_cast<int>(i);
+
+            std::string matName = resolveMaterialName(elem);
+            bindMaterialDescriptorSet(matName);
+
+            auto preset = getMaterialForElement(elem.type);
+            vec4 material(preset.metallic, preset.roughness, preset.ao, preset.emission);
+            f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? elem.stress : 0.0f;
+
+            switch (elem.type) {
+                case ElementType::Beam:
+                    drawBeam(elem.start, elem.end, elem.width, elem.depth, color, stressForShader, elem.deflection);
+                    break;
+                case ElementType::Column: {
+                    float colHeight = elem.end.y - elem.start.y;
+                    drawColumnWithMaterial(elem.start, elem.width, elem.depth, colHeight, color, stressForShader, material);
+                    break;
+                }
+                case ElementType::Floor:
+                    if (elem.mesh.hasData()) {
+                        drawCustomMesh(elem.mesh, color, stressForShader);
+                    } else {
+                        vec3 center = (elem.start + elem.end) * 0.5f;
+                        center.y = elem.start.y;
+                        float thickness = elem.end.y - elem.start.y;
+                        drawFloor(center, elem.end.x - elem.start.x, elem.end.z - elem.start.z, thickness, color, stressForShader);
+                    }
+                    break;
+                case ElementType::Wall: {
+                    if (elem.mesh.hasData()) {
+                        drawCustomMesh(elem.mesh, color, stressForShader);
+                    } else {
+                        float xExtent = elem.end.x - elem.start.x;
+                        float zExtent = elem.end.z - elem.start.z;
+                        float wallHeight = elem.end.y - elem.start.y;
+                        bool isDiagonal = std::abs(xExtent) > 0.1f && std::abs(zExtent) > 0.1f;
+                        vec4 wallMat = vec4(m_wallMetallic, m_wallRoughness, m_wallAO, m_wallEmission);
+
+                        if (isDiagonal) {
+                            float midHeight = elem.start.y + wallHeight * 0.5f;
+                            vec3 wallStart = vec3(elem.start.x, midHeight, elem.start.z);
+                            vec3 wallEnd = vec3(elem.end.x, midHeight, elem.end.z);
+                            float thickness = elem.depth > 0.01f ? elem.depth : 0.5f;
+
+                            std::string key = "diagwall_" + std::to_string(xExtent) + "_" +
+                                             std::to_string(zExtent) + "_" + std::to_string(wallHeight) + "_" +
+                                             std::to_string(thickness);
+                            if (m_meshCache.find(key) == m_meshCache.end()) {
+                                auto [verts, indices] = Geometry::createBeam(wallStart, wallEnd, thickness, wallHeight, vec3(1.0f));
+                                m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                            }
+                            drawMeshWithMaterial(*m_meshCache[key], mat4(1.0f), color, stressForShader, wallMat);
+                        } else {
+                            vec3 center = (elem.start + elem.end) * 0.5f;
+                            center.y = elem.start.y;
+                            float wallThickness = elem.depth > 0.01f ? elem.depth : 0.5f;
+
+                            if (std::abs(xExtent) > std::abs(zExtent)) {
+                                drawColumnWithMaterial(center, std::abs(xExtent), wallThickness, wallHeight, color, stressForShader, wallMat);
+                            } else {
+                                drawColumnWithMaterial(center, wallThickness, std::abs(zExtent), wallHeight, color, stressForShader, wallMat);
+                            }
+                        }
+                    }
+                    break;
+                }
+                case ElementType::Door: {
+                    if (elem.mesh.hasData()) {
+                        drawCustomMeshWithMaterial(elem.mesh, color, stressForShader, material);
+                    } else {
+                        float xExtent = elem.end.x - elem.start.x;
+                        float zExtent = elem.end.z - elem.start.z;
+                        float doorHeight = elem.end.y - elem.start.y;
+                        float doorDepth = elem.depth > 0.1f ? elem.depth : 0.5f;
+
+                        if (doorHeight > 0.01f) {
+                            float doorWidth = glm::length(vec2(xExtent, zExtent));
+                            if (doorWidth <= 0.01f) doorWidth = elem.width > 0.01f ? elem.width : 3.0f;
+
+                            vec3 doorPos = vec3((elem.start.x + elem.end.x) * 0.5f, elem.start.y,
+                                                (elem.start.z + elem.end.z) * 0.5f);
+                            float angle = -std::atan2(zExtent, xExtent);
+                            mat4 transform = glm::translate(mat4(1.0f), doorPos);
+                            transform = glm::rotate(transform, angle, vec3(0, 1, 0));
+
+                            vec4 doorMat = vec4(0.0f, 0.75f, 1.0f, 0.0f);
+                            std::string key = "door_proper_" + std::to_string(static_cast<int>(doorWidth * 100)) + "_" +
+                                             std::to_string(static_cast<int>(doorHeight * 100)) + "_" +
+                                             std::to_string(static_cast<int>(doorDepth * 100));
+                            if (m_meshCache.find(key) == m_meshCache.end()) {
+                                auto [verts, indices] = Geometry::createDoor(vec3(0), doorWidth, doorHeight, doorDepth, vec3(0.55f, 0.35f, 0.2f));
+                                m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                            }
+                            drawMeshWithMaterial(*m_meshCache[key], transform, color, stressForShader, doorMat);
+                        }
+                    }
+                    break;
+                }
+                case ElementType::Roof: {
+                    vec4 roofMat = vec4(m_roofMetallic, m_roofRoughness, m_roofAO, m_roofEmission);
+                    if (elem.mesh.hasData()) {
+                        drawCustomMeshWithMaterial(elem.mesh, color, stressForShader, roofMat);
+                    } else {
+                        float roofWidth = std::abs(elem.end.x - elem.start.x);
+                        float roofDepthZ = std::abs(elem.end.z - elem.start.z);
+                        float roofThickness = elem.end.y - elem.start.y;
+                        if (roofThickness < 0.1f) roofThickness = 0.5f;
+
+                        vec3 center = (elem.start + elem.end) * 0.5f;
+                        center.y = elem.start.y;
+
+                        std::string key = "roof_" + std::to_string(roofWidth) + "_" + std::to_string(roofDepthZ) + "_" + std::to_string(roofThickness);
+                        if (m_meshCache.find(key) == m_meshCache.end()) {
+                            auto [verts, indices] = Geometry::createFloorSlab(vec3(0), roofWidth, roofDepthZ, roofThickness);
+                            m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                        }
+                        mat4 roofTransform = glm::translate(mat4(1.0f), center);
+                        drawMeshWithMaterial(*m_meshCache[key], roofTransform, color, stressForShader, roofMat);
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        // Second pass: Render transparent windows
+        if (m_previewTransparentPipeline) {
+            m_previewTransparentPipeline->bind(cmd);
+
+            for (size_t i = 0; i < elements.size(); ++i) {
+                const auto& elem = elements[i];
+                if (elem.type != ElementType::Window) continue;
+
+                vec3 color = getElementColor(elem, building, i);
+                f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? elem.stress : 0.0f;
+                m_currentDrawElementId = static_cast<int>(i);
+
+                std::string matName = resolveMaterialName(elem);
+                bindMaterialDescriptorSet(matName);
+
+                float xExtent = elem.end.x - elem.start.x;
+                float zExtent = elem.end.z - elem.start.z;
+                float winHeight = elem.end.y - elem.start.y;
+                float winDepth = elem.depth > 0.01f ? elem.depth : 0.15f;
+
+                if (winHeight > 0.01f) {
+                    float winWidth = glm::length(vec2(xExtent, zExtent));
+                    if (winWidth <= 0.01f) winWidth = elem.width > 0.01f ? elem.width : 1.2f;
+
+                    vec3 winPos = vec3((elem.start.x + elem.end.x) * 0.5f, elem.start.y,
+                                       (elem.start.z + elem.end.z) * 0.5f);
+                    float angle = -std::atan2(zExtent, xExtent);
+                    mat4 transform = glm::translate(mat4(1.0f), winPos);
+                    transform = glm::rotate(transform, angle, vec3(0, 1, 0));
+
+                    vec4 glassMat = vec4(0.0f, 0.1f, 1.0f, 0.0f);
+                    std::string key = "window_proper_" + std::to_string(static_cast<int>(winWidth * 100)) + "_" +
+                                     std::to_string(static_cast<int>(winHeight * 100)) + "_" +
+                                     std::to_string(static_cast<int>(winDepth * 100));
+                    if (m_meshCache.find(key) == m_meshCache.end()) {
+                        auto [verts, indices] = Geometry::createWindow(vec3(0), winWidth, winHeight, winDepth, vec3(0.8f, 0.9f, 0.95f));
+                        m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                    }
+                    drawMeshWithMaterial(*m_meshCache[key], transform, color, stressForShader, glassMat);
+                }
+            }
+        }
+
+        vkCmdEndRenderPass(cmd);
+        vkEndCommandBuffer(cmd);
+
+        // Restore original command buffer
+        m_currentCommandBuffer = oldCmd;
+
+        // Submit and wait
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &cmd;
+
+        vkResetFences(m_context.getDevice(), 1, &fence);
+        vkQueueSubmit(m_context.getGraphicsQueue(), 1, &submitInfo, fence);
+        vkWaitForFences(m_context.getDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
+
+        vkFreeCommandBuffers(m_context.getDevice(), m_context.getCommandPool(), 1, &cmd);
+        vkDestroyFence(m_context.getDevice(), fence, nullptr);
+
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "[Renderer] Preview render failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 // ============================================================================

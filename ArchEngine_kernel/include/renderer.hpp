@@ -985,8 +985,59 @@ public:
                       float brightness = 1.0f);
     /// @}
 
+    /// @name Live Preview Rendering
+    /// @{
+
+    /**
+     * @brief Create persistent GPU resources for inline preview rendering
+     *
+     * Creates a fixed-resolution (640x360) render target that stays on GPU
+     * for fast ImGui display. Only call once; resources persist until cleanup.
+     */
+    void createPreviewResources();
+
+    /**
+     * @brief Clean up preview rendering resources
+     *
+     * Must be called before ImGui shutdown. Removes ImGui texture descriptor
+     * and destroys all Vulkan resources.
+     */
+    void cleanupPreviewResources();
+
+    /**
+     * @brief Render scene to preview texture for ImGui display
+     * @param elements Structural elements to render
+     * @param building Building data for visualization
+     * @return true if rendering succeeded
+     *
+     * Renders at 640x360, single sample, directly to GPU texture.
+     * Result is immediately available via getPreviewDescriptor().
+     */
+    bool renderPreviewToTexture(const std::vector<StructuralElement>& elements,
+                                const Building& building);
+
+    /**
+     * @brief Get ImGui-compatible descriptor for preview texture
+     * @return VkDescriptorSet suitable for ImGui::Image(), or VK_NULL_HANDLE if not created
+     */
+    VkDescriptorSet getPreviewDescriptor() const { return m_previewImGuiDescriptor; }
+
+    /** @brief Get preview width in pixels */
+    u32 getPreviewWidth() const { return kPreviewWidth; }
+
+    /** @brief Get preview height in pixels */
+    u32 getPreviewHeight() const { return kPreviewHeight; }
+
+    /** @brief Check if preview resources are ready */
+    bool hasPreviewResources() const { return m_previewResourcesCreated; }
+    /// @}
+
 private:
     static constexpr u32 kMaxMaterialSets = 128;
+
+    // Preview rendering constants (1080p for high-quality inline preview)
+    static constexpr u32 kPreviewWidth = 1920;
+    static constexpr u32 kPreviewHeight = 1080;
 
     void createRenderPass();
     void createFramebuffers();
@@ -1184,6 +1235,21 @@ private:
     void createHighResResources(u32 width, u32 height);
     void cleanupHighResResources();
     void copyHighResImageToBuffer();
+
+    // Live preview rendering resources (GPU-direct, stays on GPU for ImGui)
+    VkImage m_previewImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_previewMemory = VK_NULL_HANDLE;
+    VkImageView m_previewImageView = VK_NULL_HANDLE;
+    VkSampler m_previewSampler = VK_NULL_HANDLE;
+    VkImage m_previewDepthImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_previewDepthMemory = VK_NULL_HANDLE;
+    VkImageView m_previewDepthView = VK_NULL_HANDLE;
+    VkFramebuffer m_previewFramebuffer = VK_NULL_HANDLE;
+    VkRenderPass m_previewRenderPass = VK_NULL_HANDLE;
+    VkDescriptorSet m_previewImGuiDescriptor = VK_NULL_HANDLE;
+    std::unique_ptr<Pipeline> m_previewPipeline;
+    std::unique_ptr<Pipeline> m_previewTransparentPipeline;
+    bool m_previewResourcesCreated = false;
 };
 
 } // namespace arch

@@ -131,6 +131,7 @@ public:
     void drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles, u32 culledElements = 0);
     void drawRenderSettingsPanel(Renderer& renderer, bool& show);
     void drawPreviewWindow();
+    void drawRenderPreviewPanel(Renderer& renderer);
     void drawGeometryEditor(bool& show);
     void drawMaterialInspector(const Renderer& renderer);
 
@@ -246,6 +247,12 @@ public:
     MaterialOverrideRequest takeMaterialOverrideRequest();
     void setMaterialInspectorVisibility(bool show) { m_showMaterialInspector = show; }
     bool getMaterialInspectorVisibility() const { return m_showMaterialInspector; }
+
+    // Live Render Preview Panel (GPU-direct inline preview)
+    bool wasRenderPreviewRefreshRequested() const { return m_renderPreviewRefreshRequested; }
+    void clearRenderPreviewRefreshRequest() { m_renderPreviewRefreshRequested = false; }
+    void setRenderPreviewPanelVisibility(bool show) { m_showRenderPreviewPanel = show; }
+    bool getRenderPreviewPanelVisibility() const { return m_showRenderPreviewPanel; }
 
 private:
     void createDescriptorPool();
@@ -382,6 +389,10 @@ private:
     bool m_modifiedMetallic = false;
     bool m_modifiedAOStrength = false;
     bool m_modifiedTint = false;
+
+    // Live Render Preview Panel state (GPU-direct preview)
+    bool m_showRenderPreviewPanel = false;
+    bool m_renderPreviewRefreshRequested = false;
 
 public:
     float getRenderBrightness() const { return m_renderBrightness; }

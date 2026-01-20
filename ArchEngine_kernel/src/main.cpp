@@ -1122,6 +1122,7 @@ int main(int argc, char* argv[]) {
                 imgui.drawHelpPanel(showHelp);
                 imgui.drawPerformancePanel(currentFps, renderer.getStats().drawCalls, renderer.getStats().triangles, renderer.getStats().culledElements);
                 imgui.drawPreviewWindow();
+                imgui.drawRenderPreviewPanel(renderer);
 
                 // Apply material to selection (button)
                 if (imgui.wasApplyMaterialRequested()) {
@@ -1361,6 +1362,14 @@ int main(int argc, char* argv[]) {
 
                     imgui.setHighResRenderState(false, highResRenderStatus, 1.0f);
                     imgui.clearPreviewRequest();
+                }
+
+                // Handle live render preview refresh requests (GPU-direct inline preview)
+                if (imgui.wasRenderPreviewRefreshRequested()) {
+                    imgui.clearRenderPreviewRefreshRequest();
+                    auto& previewElements = buildings[currentBuilding].elements;
+                    auto& previewBuilding = buildings[currentBuilding];
+                    renderer.renderPreviewToTexture(previewElements, previewBuilding);
                 }
 
                 // Handle material override requests (apply per-element material adjustments)
@@ -1978,6 +1987,9 @@ int main(int argc, char* argv[]) {
                 renderer.endFrame();
             }
         }
+
+        // Clean up preview resources before ImGui shutdown
+        renderer.cleanupPreviewResources();
 
         context.waitIdle();
         std::cout << "ArchEngine shutdown complete\n";
