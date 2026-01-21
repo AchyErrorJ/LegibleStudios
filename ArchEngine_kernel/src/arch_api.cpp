@@ -47,6 +47,7 @@ namespace {
     int g_width = 800;
     int g_height = 600;
     int g_selectedElement = -1;
+    int g_hoveredElement = -1;
     VisualizationMode g_vizMode = VisualizationMode::Material;
 
     // Error handling
@@ -327,6 +328,11 @@ ARCH_API int arch_render_frame(void) {
             }
             g_renderer->drawStructuralFrame(g_building.elements, g_building, selected);
 
+            // Draw selected/hovered elements as wireframe overlays
+            if (!selected.empty() || g_hoveredElement >= 0) {
+                g_renderer->drawWireframeOutlines(g_building.elements, g_building, selected, g_hoveredElement);
+            }
+
             g_renderer->endRenderPass();
             g_renderer->endFrame();
         }
@@ -417,83 +423,115 @@ ARCH_API int arch_get_selected_element(void) {
     return g_selectedElement;
 }
 
-ARCH_API int arch_pick_element(int screen_x, int screen_y) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+ARCH_API void arch_set_hovered_element(int element_index) {
+    g_hoveredElement = element_index;
+}
 
+ARCH_API int arch_pick_element(int screen_x, int screen_y) {
+    // Early return without locking to avoid potential mutex issues
     if (!g_initialized || g_building.elements.empty()) {
         return -1;
     }
 
-    // Convert screen coordinates to normalized device coordinates (-1 to 1)
-    float ndcX = (2.0f * screen_x / g_width) - 1.0f;
-    float ndcY = 1.0f - (2.0f * screen_y / g_height);  // Flip Y
+    try {
+        std::lock_guard<std::mutex> lock(g_mutex);
 
-    // Get camera position
-    vec3 camPos;
-    camPos.x = g_cameraTarget.x + g_cameraDistance * cos(g_cameraPitch) * sin(g_cameraYaw);
-    camPos.y = g_cameraTarget.y + g_cameraDistance * sin(g_cameraPitch);
-    camPos.z = g_cameraTarget.z + g_cameraDistance * cos(g_cameraPitch) * cos(g_cameraYaw);
+        // Convert screen coordinates to normalized device coordinates (-1 to 1)
+        float ndcX = (2.0f * screen_x / g_width) - 1.0f;
+        float ndcY = 1.0f - (2.0f * screen_y / g_height);  // Flip Y
 
-    // Build view and projection matrices
-    mat4 view = glm::lookAt(camPos, g_cameraTarget, vec3(0, 1, 0));
-    mat4 proj;
-    float aspect = float(g_width) / float(g_height);
+        // Simple clamp without glm::clamp
+        if (ndcX < -1.0f) ndcX = -1.0f;
+        if (ndcX > 1.0f) ndcX = 1.0f;
+        if (ndcY < -1.0f) ndcY = -1.0f;
+        if (ndcY > 1.0f) ndcY = 1.0f;
 
-    if (g_cameraOrthographic) {
-        float orthoSize = g_cameraDistance * 0.5f;
-        proj = glm::ortho(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, 0.1f, 500.0f);
-    } else {
-        proj = glm::perspective(glm::radians(g_cameraFOV), aspect, 0.1f, 500.0f);
-    }
+        // Get camera position
+        vec3 camPos;
+        camPos.x = g_cameraTarget.x + g_cameraDistance * cos(g_cameraPitch) * sin(g_cameraYaw);
+        camPos.y = g_cameraTarget.y + g_cameraDistance * sin(g_cameraPitch);
+        camPos.z = g_cameraTarget.z + g_cameraDistance * cos(g_cameraPitch) * cos(g_cameraYaw);
 
-    // Inverse view-projection to get ray
-    mat4 invViewProj = glm::inverse(proj * view);
+        // Build view and projection matrices
+        mat4 view = glm::lookAt(camPos, g_cameraTarget, vec3(0, 1, 0));
+        mat4 proj;
+        float aspect = float(g_width) / float(g_height);
 
-    // Ray in world space
-    vec4 rayStart4 = invViewProj * vec4(ndcX, ndcY, -1.0f, 1.0f);
-    vec4 rayEnd4 = invViewProj * vec4(ndcX, ndcY, 1.0f, 1.0f);
-    vec3 rayStart = vec3(rayStart4) / rayStart4.w;
-    vec3 rayEnd = vec3(rayEnd4) / rayEnd4.w;
-    vec3 rayDir = glm::normalize(rayEnd - rayStart);
+        if (g_cameraOrthographic) {
+            float orthoSize = g_cameraDistance * 0.5f;
+            proj = glm::ortho(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, 0.1f, 500.0f);
+        } else {
+            proj = glm::perspective(glm::radians(g_cameraFOV), aspect, 0.1f, 500.0f);
+        }
 
-    // Test ray against each element's AABB
-    int closestElement = -1;
-    float closestDist = 1e9f;
+        // Inverse view-projection to get ray
+        mat4 invViewProj = glm::inverse(proj * view);
 
-    for (size_t i = 0; i < g_building.elements.size(); ++i) {
-        const auto& elem = g_building.elements[i];
+        // Ray in world space
+        vec4 rayStart4 = invViewProj * vec4(ndcX, ndcY, -1.0f, 1.0f);
+        vec4 rayEnd4 = invViewProj * vec4(ndcX, ndcY, 1.0f, 1.0f);
 
-        // Compute element AABB
-        vec3 minB = glm::min(elem.start, elem.end);
-        vec3 maxB = glm::max(elem.start, elem.end);
+        // Validate w component to avoid division by zero
+        if (std::abs(rayStart4.w) < 1e-6f || std::abs(rayEnd4.w) < 1e-6f) {
+            return -1;
+        }
 
-        // Expand by element width/depth (approximate)
-        float halfW = elem.width * 0.5f + 0.1f;
-        float halfD = elem.depth * 0.5f + 0.1f;
-        minB -= vec3(halfW, 0, halfD);
-        maxB += vec3(halfW, elem.depth, halfD);
+        vec3 rayStart = vec3(rayStart4) / rayStart4.w;
+        vec3 rayEnd = vec3(rayEnd4) / rayEnd4.w;
+        vec3 rayDir = glm::normalize(rayEnd - rayStart);
 
-        // Ray-AABB intersection test (slab method)
-        vec3 invDir = 1.0f / rayDir;
-        vec3 t1 = (minB - rayStart) * invDir;
-        vec3 t2 = (maxB - rayStart) * invDir;
+        // Test ray against each element's AABB
+        int closestElement = -1;
+        float closestDist = 1e9f;
 
-        vec3 tMin = glm::min(t1, t2);
-        vec3 tMax = glm::max(t1, t2);
+        for (size_t i = 0; i < g_building.elements.size(); ++i) {
+            const auto& elem = g_building.elements[i];
 
-        float tNear = glm::max(glm::max(tMin.x, tMin.y), tMin.z);
-        float tFar = glm::min(glm::min(tMax.x, tMax.y), tMax.z);
+            // Skip elements with invalid dimensions
+            if (elem.width <= 0.0f || elem.depth <= 0.0f) {
+                continue;
+            }
 
-        if (tNear <= tFar && tFar > 0) {
-            float dist = tNear > 0 ? tNear : tFar;
-            if (dist < closestDist) {
-                closestDist = dist;
-                closestElement = static_cast<int>(i);
+            // Compute element AABB
+            vec3 minB = glm::min(elem.start, elem.end);
+            vec3 maxB = glm::max(elem.start, elem.end);
+
+            // Expand by element width/depth (approximate)
+            float halfW = elem.width * 0.5f + 0.1f;
+            float halfD = elem.depth * 0.5f + 0.1f;
+            minB -= vec3(halfW, 0.0f, halfD);
+            maxB += vec3(halfW, halfD, halfD);
+
+            // Ray-AABB intersection test (slab method)
+            // Safe inverse direction calculation
+            vec3 invDir;
+            invDir.x = (std::abs(rayDir.x) > 1e-6f) ? (1.0f / rayDir.x) : 1e6f;
+            invDir.y = (std::abs(rayDir.y) > 1e-6f) ? (1.0f / rayDir.y) : 1e6f;
+            invDir.z = (std::abs(rayDir.z) > 1e-6f) ? (1.0f / rayDir.z) : 1e6f;
+
+            vec3 t1 = (minB - rayStart) * invDir;
+            vec3 t2 = (maxB - rayStart) * invDir;
+
+            vec3 tMin = glm::min(t1, t2);
+            vec3 tMax = glm::max(t1, t2);
+
+            float tNear = std::max(std::max(tMin.x, tMin.y), tMin.z);
+            float tFar = std::min(std::min(tMax.x, tMax.y), tMax.z);
+
+            if (tNear <= tFar && tFar > 0) {
+                float dist = tNear > 0 ? tNear : tFar;
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    closestElement = static_cast<int>(i);
+                }
             }
         }
-    }
 
-    return closestElement;
+        return closestElement;
+    } catch (...) {
+        // Catch any exception and return -1 instead of crashing
+        return -1;
+    }
 }
 
 ARCH_API int arch_get_element_count(void) {
@@ -590,6 +628,13 @@ ARCH_API void arch_set_material_style(int style) {
 ARCH_API int arch_get_material_style(void) {
     std::lock_guard<std::mutex> lock(g_mutex);
     return g_renderer ? static_cast<int>(g_renderer->getMaterialStyle()) : 1; // Default: Clean
+}
+
+ARCH_API void arch_set_material_root(const char* path) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer && path) {
+        g_renderer->setMaterialRoot(path);
+    }
 }
 
 ARCH_API void arch_set_uv_scale(float scale_u, float scale_v) {

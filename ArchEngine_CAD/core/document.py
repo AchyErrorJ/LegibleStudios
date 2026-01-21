@@ -230,6 +230,9 @@ class ArchDocument(QObject):
         self._furniture: List[Any] = []  # FurniturePlacement objects
         self._reference_planes: List[ReferencePlane] = []  # Building grid lines
 
+        # Reality layer analysis (physics, economics, psychology)
+        self._reality_analysis: Dict[str, Any] = {}
+
         # Furniture catalog reference
         self._furniture_catalog = get_default_catalog() if _FURNITURE_AVAILABLE else None
 
@@ -302,6 +305,45 @@ class ArchDocument(QObject):
     def reference_planes(self) -> List[ReferencePlane]:
         """Get building reference planes (grid lines)."""
         return self._reference_planes
+
+    @property
+    def reality_analysis(self) -> Dict[str, Any]:
+        """Get reality layer analysis data (physics, economics, psychology)."""
+        return self._reality_analysis
+
+    def get_environment_data(self) -> Dict[str, Any]:
+        """Get environment/physics analysis data."""
+        return self._reality_analysis.get('environment', {})
+
+    def get_materiality_data(self) -> Dict[str, Any]:
+        """Get materiality/economics analysis data."""
+        return self._reality_analysis.get('materiality', {})
+
+    def get_perception_data(self) -> Dict[str, Any]:
+        """Get perception/psychology analysis data."""
+        return self._reality_analysis.get('perception', {})
+
+    def get_room_daylight_factor(self, room_id: str) -> Optional[float]:
+        """Get daylight factor for a specific room."""
+        env = self.get_environment_data()
+        daylight_factors = env.get('daylight_factors', {})
+        return daylight_factors.get(room_id)
+
+    def get_room_comfort_score(self, room_id: str) -> Optional[float]:
+        """Get comfort score for a specific room."""
+        perception = self.get_perception_data()
+        comfort_scores = perception.get('comfort_scores', {})
+        return comfort_scores.get(room_id)
+
+    def get_total_cost(self) -> Optional[float]:
+        """Get total construction cost."""
+        materiality = self.get_materiality_data()
+        return materiality.get('total_cost')
+
+    def get_cost_per_sqft(self) -> Optional[float]:
+        """Get cost per square foot."""
+        materiality = self.get_materiality_data()
+        return materiality.get('cost_per_sqft')
 
     def get_reference_plane(self, plane_id: str) -> Optional[ReferencePlane]:
         """Get reference plane by ID."""
@@ -669,7 +711,9 @@ class ArchDocument(QObject):
         Returns:
             True if successful, False otherwise
         """
+        import traceback
         try:
+            print(f"[Document] Loading file: {file_path}")
             with open(file_path, 'r', encoding='utf-8') as f:
                 self._data = json.load(f)
 
@@ -685,10 +729,16 @@ class ArchDocument(QObject):
             self.document_changed.emit()
             event_bus.document_loaded.emit(str(file_path))
 
+            print(f"[Document] Successfully loaded file")
             return True
 
         except (json.JSONDecodeError, IOError) as e:
-            print(f"Error loading file: {e}")
+            print(f"[Document] Error loading file: {e}")
+            traceback.print_exc()
+            return False
+        except Exception as e:
+            print(f"[Document] Unexpected error loading file: {e}")
+            traceback.print_exc()
             return False
 
     def save(self, file_path: Optional[Path] = None) -> bool:
@@ -900,6 +950,11 @@ class ArchDocument(QObject):
         print(f"[Document] Rooms loaded: {len(self._rooms)}, connections: {len(self._room_connections)}")
         if not self._room_connections and len(self._rooms) > 1:
             self.detect_room_adjacencies()
+
+        # Parse reality layer analysis (physics, economics, psychology)
+        self._reality_analysis = self._data.get('reality_analysis', {})
+        if self._reality_analysis:
+            print(f"[Document] Loaded reality analysis: environment, materiality, perception")
 
     def _auto_bind_walls_to_rooms(self):
         """
@@ -1544,6 +1599,10 @@ class ArchDocument(QObject):
             for placement in self._furniture:
                 furniture.append(placement.to_dict())
             self._data['furniture'] = furniture
+
+        # Update reality layer analysis
+        if self._reality_analysis:
+            self._data['reality_analysis'] = self._reality_analysis
 
     def get_data(self) -> dict:
         """Get current document data as JSON-serializable dict.

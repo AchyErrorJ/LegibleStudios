@@ -151,6 +151,13 @@ ARCH_API void arch_select_element(int element_index);
 ARCH_API int arch_get_selected_element(void);
 
 /**
+ * Set the currently hovered element index.
+ *
+ * @param element_index Element index that is being hovered, or -1 to clear
+ */
+ARCH_API void arch_set_hovered_element(int element_index);
+
+/**
  * Pick an element at screen coordinates.
  * Uses ray casting from the camera through the given screen position.
  *
@@ -268,6 +275,13 @@ ARCH_API void arch_set_material_style(int style);
  * @return Current style (0-3)
  */
 ARCH_API int arch_get_material_style(void);
+
+/**
+ * Set the material root directory path.
+ *
+ * @param path Absolute or relative path to materials directory
+ */
+ARCH_API void arch_set_material_root(const char* path);
 
 /**
  * Set global UV/texture scale (tiling factor).

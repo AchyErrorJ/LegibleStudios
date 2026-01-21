@@ -972,6 +972,55 @@ class WallItem(QGraphicsItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setAcceptHoverEvents(True)
 
+        # Enable drag and drop
+        self.setAcceptDrops(True)
+
+        # Material drop feedback
+        self._material_drag_hover = False
+
+    def dragEnterEvent(self, event):
+        """Handle drag enter - accept material drops."""
+        mime_data = event.mimeData()
+        if mime_data.hasText() and mime_data.text().startswith("material:"):
+            event.acceptProposedAction()
+            self._material_drag_hover = True
+            self.update()  # Trigger repaint for visual feedback
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        """Handle drag leave - remove visual feedback."""
+        self._material_drag_hover = False
+        self.update()
+
+    def dropEvent(self, event):
+        """Handle material drop - apply material to wall."""
+        self._material_drag_hover = False
+
+        mime_data = event.mimeData()
+        if not mime_data.hasText() or not mime_data.text().startswith("material:"):
+            event.ignore()
+            return
+
+        # Parse material data: "material:<material_id>:<material_name>"
+        parts = mime_data.text().split(":", 2)
+        if len(parts) != 3:
+            event.ignore()
+            return
+
+        material_id = parts[1]
+        material_name = parts[2]
+
+        # Apply material to wall
+        if self.document:
+            self.document.set_wall_material(self.wall.index, material_id)
+            print(f"[PlanView] Applied material '{material_name}' to wall {self.wall.index}")
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+        self.update()
+
     def _create_grips(self):
         """Create grip items for this wall."""
         self._remove_grips()
@@ -1464,6 +1513,30 @@ class WallItem(QGraphicsItem):
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(hover_path)
+
+        # Draw material drag hover feedback (green highlight with fill)
+        if self._material_drag_hover:
+            total_thick = wall_type.total_thickness if wall_type else self.thickness
+            half = total_thick / 2 + 80  # Slightly larger margin
+            p1 = QPointF(x1 + px * half, z1 + pz * half)
+            p2 = QPointF(x1 - px * half, z1 - pz * half)
+            p3 = QPointF(x2 - px * half, z2 - pz * half)
+            p4 = QPointF(x2 + px * half, z2 + pz * half)
+
+            drag_path = QPainterPath()
+            drag_path.moveTo(p1)
+            drag_path.lineTo(p2)
+            drag_path.lineTo(p3)
+            drag_path.lineTo(p4)
+            drag_path.closeSubpath()
+
+            # Green outline with semi-transparent fill to indicate drop target
+            pen = QPen(QColor(0, 255, 100))  # Bright green
+            pen.setWidth(5)
+            pen.setStyle(Qt.PenStyle.SolidLine)
+            painter.setPen(pen)
+            painter.setBrush(QColor(0, 255, 100, 50))  # Semi-transparent green fill
+            painter.drawPath(drag_path)
 
         # Draw selection highlight
         if self.isSelected():

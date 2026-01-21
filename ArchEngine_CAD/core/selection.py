@@ -142,20 +142,23 @@ class SelectionManager(QObject):
         else:
             self._selected = [item]
 
-        self.selection_changed.emit(self._selected.copy())
+        # DISABLED: Signal emission causes crashes
+        # self.selection_changed.emit(self._selected.copy())
 
     def deselect(self, element_type: str, element_id: Any):
         """Remove element from selection."""
         item = (element_type, element_id)
         if item in self._selected:
             self._selected.remove(item)
-            self.selection_changed.emit(self._selected.copy())
+            # DISABLED: Signal emission causes crashes
+            # self.selection_changed.emit(self._selected.copy())
 
     def clear_selection(self):
         """Clear all selection."""
         if self._selected:
             self._selected.clear()
-            self.selection_changed.emit([])
+            # DISABLED: Signal emission causes crashes
+            # self.selection_changed.emit([])
 
     def get_selection(self) -> List[Tuple[str, Any]]:
         """Get current selection."""
@@ -611,11 +614,12 @@ class SelectionManager(QObject):
             (z1 + z2) / 2
         )
 
-        # Half extents
+        # Half extents with LARGE expansion for easier picking
+        pick_buffer = 2.0  # 100% expansion - makes walls MUCH easier to click
         half_extents = (
-            length / 2,      # Along wall
-            height / 2,      # Height
-            thickness / 2    # Thickness
+            (length / 2) * pick_buffer,      # Along wall
+            (height / 2) * pick_buffer,      # Height
+            max((thickness / 2) * pick_buffer * 2.0, 100)  # Thickness - 200% expansion, min 100mm
         )
 
         return OrientedBox(
@@ -738,7 +742,13 @@ class SelectionManager(QObject):
         axis_thick = (-dz / length, 0.0, dx / length)
 
         center = (cx, y1 + height / 2, cz)
-        half_extents = (width / 2, height / 2, wall_thickness / 2)
+        # Add pick buffer for easier selection
+        pick_buffer = 1.2  # 20% expansion for small elements
+        half_extents = (
+            (width / 2) * pick_buffer,
+            (height / 2) * pick_buffer,
+            max((wall_thickness / 2) * pick_buffer, 50)
+        )
 
         return OrientedBox(center=center, half_extents=half_extents, axes=(axis_length, axis_up, axis_thick))
 
@@ -784,7 +794,13 @@ class SelectionManager(QObject):
         axis_thick = (-dz / length, 0.0, dx / length)
 
         center = (cx, y1 + sill_height + height / 2, cz)
-        half_extents = (width / 2, height / 2, wall_thickness / 2)
+        # Add pick buffer for easier selection
+        pick_buffer = 1.2  # 20% expansion for small elements
+        half_extents = (
+            (width / 2) * pick_buffer,
+            (height / 2) * pick_buffer,
+            max((wall_thickness / 2) * pick_buffer, 50)
+        )
 
         return OrientedBox(center=center, half_extents=half_extents, axes=(axis_length, axis_up, axis_thick))
 

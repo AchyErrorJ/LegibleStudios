@@ -180,6 +180,7 @@ struct QBDWall {
     WallCategory category = WallCategory::Interior;
     std::string room1;          // Room on one side
     std::string room2;          // Room on other side
+    std::string material;       // Material override (e.g., "brick_red_01")
 
     f32 length() const {
         return glm::length(vec2(end.x - start.x, end.y - start.y));

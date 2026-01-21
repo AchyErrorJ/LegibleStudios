@@ -357,6 +357,41 @@ public:
      * Elements are colored based on the current visualization mode.
      */
     void drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices = {});
+
+    /**
+     * @brief Draw only selected elements with highlight color (for selection overlay)
+     * @param elements Vector of structural elements to draw
+     * @param building Building data
+     * @param selectedIndices Set of element indices to highlight
+     *
+     * This is called after the main render pass to draw selected elements
+     * with a bright yellow-orange color on top of everything else.
+     */
+    void drawSelectedElements(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices);
+
+    /**
+     * @brief Draw only hovered elements with semi-transparent highlight
+     * @param elements Vector of structural elements to draw
+     * @param building Building data
+     * @param hoveredIndices Set of element indices to highlight as hovered
+     *
+     * This renders hovered elements with a semi-transparent yellow color
+     * to provide visual feedback during mouse hover.
+     */
+    void drawHoveredElements(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& hoveredIndices);
+
+    /**
+     * @brief Draw selected and hovered elements as wireframe outlines
+     * @param elements Vector of structural elements
+     * @param building Building data
+     * @param selectedIndices Set of selected element indices
+     * @param hoveredIndex Single hovered element index (-1 if none)
+     *
+     * This renders selected and hovered elements in wireframe mode on top
+     * of the normal render pass, providing clear visual feedback.
+     */
+    void drawWireframeOutlines(const std::vector<StructuralElement>& elements, const Building& building,
+                              const std::set<int>& selectedIndices, int hoveredIndex);
     /// @}
 
     /// @name Visualization Settings
@@ -735,6 +770,9 @@ public:
 
     /** @brief Get the root directory for material textures */
     const std::string& getMaterialRoot() const { return m_materialRoot; }
+
+    /** @brief Set the material root directory and reload materials */
+    void setMaterialRoot(const std::string& root) { reloadMaterialLibrary(root); }
 
     /**
      * @brief Reload materials from a directory

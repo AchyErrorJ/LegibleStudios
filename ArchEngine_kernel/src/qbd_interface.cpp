@@ -179,6 +179,7 @@ std::optional<QBDLayout> QBDInterface::loadFromJSON(const std::string& jsonStrin
                 wall.wallType = wj.value("wall_type", "");
                 wall.levelName = wj.value("level_name", "Level 1");
                 wall.category = parseWallCategory(wj.value("category", "interior"));
+                wall.material = wj.value("material_override", "");  // Material assignment
 
                 if (wj.contains("rooms") && wj["rooms"].is_array() && wj["rooms"].size() >= 2) {
                     // Handle null room values
@@ -621,7 +622,8 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
             elem.end = vec3(wall.end.x, wall.start.y + wall.height, wall.end.z);
             elem.width = layerThickness;
             elem.depth = layerThickness;
-            elem.material = !layer.material.empty() ? layer.material : layer.name;
+            // Use wall material override if set, otherwise use layer material
+            elem.material = !wall.material.empty() ? wall.material : (!layer.material.empty() ? layer.material : layer.name);
             elem.stress = 0.0f;
             elem.deflection = 0.0f;
             elem.failed = false;
@@ -655,7 +657,8 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
                 elem.end = vec3(wall.end.x, wall.start.y + wall.height, wall.end.z);
                 elem.width = thickness;
                 elem.depth = thickness;
-                elem.material = "wall";
+                // Use wall material override if set, otherwise default to "wall"
+                elem.material = !wall.material.empty() ? wall.material : "wall";
                 elem.stress = 0.0f;
                 elem.deflection = 0.0f;
                 elem.failed = false;

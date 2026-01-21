@@ -2338,11 +2338,6 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
     for (const auto& element : elements) {
         vec3 color = getElementColor(element, building, index);
 
-        // Highlight selected elements with yellow/orange
-        bool isSelected = selectedIndices.count(static_cast<int>(index)) > 0;
-        if (isSelected) {
-            color = vec3(1.0f, 0.8f, 0.2f);  // Yellow-orange highlight
-        }
         // Bind material textures for this element (set 1)
         bindMaterialDescriptorSet(resolveMaterialName(element));
 
@@ -2389,8 +2384,12 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                     // Check if this is a diagonal wall (both X and Z extents significant)
                     bool isDiagonal = std::abs(xExtent) > 0.1f && std::abs(zExtent) > 0.1f;
 
-                    // Wall material
-                    vec4 wallMat = vec4(m_wallMetallic, m_wallRoughness, m_wallAO, m_wallEmission);
+                    // Wall material - add emissive glow when selected
+                    bool isSelected = selectedIndices.count(static_cast<int>(index)) > 0;
+                    // Format: vec4(metallic, roughness, ao, emission)
+                    // Selected elements glow with emission (1.5 = strong glow)
+                    float emission = isSelected ? 1.5f : m_wallEmission;
+                    vec4 wallMat = vec4(m_wallMetallic, m_wallRoughness, m_wallAO, emission);
 
                     if (isDiagonal) {
                         // Diagonal wall - use beam geometry
@@ -2414,7 +2413,7 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                             m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
                         }
 
-                        // Draw with wall material
+                        // Draw with wall material (includes emissive glow if selected)
                         drawMeshWithMaterial(*m_meshCache[key], mat4(1.0f), color, stressForShader, wallMat);
                     } else {
                         // Axis-aligned wall - use column geometry with wall material
@@ -2619,6 +2618,302 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
         }
 
         m_context.endDebugLabel(m_currentCommandBuffer);
+    }
+
+    m_context.endDebugLabel(m_currentCommandBuffer);
+}
+
+void Renderer::drawSelectedElements(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices) {
+    if (selectedIndices.empty()) return;
+
+    m_context.beginDebugLabel(m_currentCommandBuffer, "Selection Highlights", {1.0f, 0.8f, 0.2f, 1.0f});
+
+    // Bright yellow-orange highlight color
+    vec3 highlightColor = vec3(1.0f, 0.8f, 0.2f);
+
+    size_t index = 0;
+    for (const auto& element : elements) {
+        // Only render selected elements
+        if (selectedIndices.count(static_cast<int>(index)) == 0) {
+            index++;
+            continue;
+        }
+
+        // Render selected elements slightly larger to make them visible
+        float scale = 1.02f;  // 2% larger to show through
+
+        // Generate geometry and render with highlight color (no materials)
+        switch (element.type) {
+            case ElementType::Wall: {
+                float xExtent = element.end.x - element.start.x;
+                float zExtent = element.end.z - element.start.z;
+                float height = element.end.y - element.start.y;
+                float thickness = element.depth > 0.01f ? element.depth : 0.5f;
+
+                glm::vec3 center = (element.start + element.end) * 0.5f;
+                center.y = element.start.y;
+
+                // Create scaled transform
+                mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
+                mat4 transMat = glm::translate(mat4(1.0f), center);
+                mat4 transform = transMat * scaleMat * glm::inverse(transMat);
+
+                // Render column geometry for wall (no materials)
+                if (std::abs(xExtent) > std::abs(zExtent)) {
+                    std::string key = "col_" + std::to_string(std::abs(xExtent)) + "_" + std::to_string(thickness) + "_" + std::to_string(height);
+                    if (m_meshCache.find(key) != m_meshCache.end()) {
+                        drawMesh(*m_meshCache[key], transform, highlightColor, 0.0f);
+                    }
+                } else {
+                    std::string key = "col_" + std::to_string(thickness) + "_" + std::to_string(std::abs(zExtent)) + "_" + std::to_string(height);
+                    if (m_meshCache.find(key) != m_meshCache.end()) {
+                        drawMesh(*m_meshCache[key], transform, highlightColor, 0.0f);
+                    }
+                }
+                break;
+            }
+
+            case ElementType::Floor: {
+                glm::vec3 center = (element.start + element.end) * 0.5f;
+                center.y = element.start.y;
+                std::string key = "floor_" + std::to_string(element.end.x - element.start.x) + "_" +
+                                 std::to_string(element.end.z - element.start.z) + "_" + std::to_string(element.end.y - element.start.y);
+                if (m_meshCache.find(key) != m_meshCache.end()) {
+                    mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
+                    mat4 transMat = glm::translate(mat4(1.0f), center);
+                    mat4 transform = transMat * scaleMat * glm::inverse(transMat);
+                    drawMesh(*m_meshCache[key], transform, highlightColor, 0.0f);
+                }
+                break;
+            }
+
+            case ElementType::Column: {
+                std::string key = "col_" + std::to_string(element.width) + "_" + std::to_string(element.depth) + "_" +
+                                 std::to_string(element.end.y - element.start.y);
+                if (m_meshCache.find(key) != m_meshCache.end()) {
+                    glm::vec3 center = element.start;
+                    center.y += (element.end.y - element.start.y) * 0.5f;
+                    mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
+                    mat4 transMat = glm::translate(mat4(1.0f), center);
+                    mat4 transform = transMat * scaleMat * glm::inverse(transMat);
+                    drawMesh(*m_meshCache[key], transform, highlightColor, 0.0f);
+                }
+                break;
+            }
+
+            default:
+                // Skip other element types for now
+                break;
+        }
+
+        index++;
+    }
+
+    m_context.endDebugLabel(m_currentCommandBuffer);
+}
+
+void Renderer::drawHoveredElements(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& hoveredIndices) {
+    if (hoveredIndices.empty()) return;
+
+    m_context.beginDebugLabel(m_currentCommandBuffer, "Hover Highlights", {1.0f, 1.0f, 0.0f, 1.0f});
+
+    // Semi-transparent yellow highlight for hover
+    vec3 hoverColor = vec3(1.0f, 1.0f, 0.0f);  // Bright yellow
+
+    size_t index = 0;
+    for (const auto& element : elements) {
+        // Only render hovered elements
+        if (hoveredIndices.count(static_cast<int>(index)) == 0) {
+            index++;
+            continue;
+        }
+
+        // Render hovered elements slightly larger to make them visible
+        float scale = 1.015f;  // 1.5% larger for hover (smaller than selection)
+
+        // Generate geometry and render with hover color
+        switch (element.type) {
+            case ElementType::Wall: {
+                float xExtent = element.end.x - element.start.x;
+                float zExtent = element.end.z - element.start.z;
+                float height = element.end.y - element.start.y;
+                float thickness = element.depth > 0.01f ? element.depth : 0.5f;
+
+                glm::vec3 center = (element.start + element.end) * 0.5f;
+                center.y = element.start.y;
+
+                // Create scaled transform
+                mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
+                mat4 transMat = glm::translate(mat4(1.0f), center);
+                mat4 transform = transMat * scaleMat * glm::inverse(transMat);
+
+                // Render column geometry for wall
+                if (std::abs(xExtent) > std::abs(zExtent)) {
+                    std::string key = "col_" + std::to_string(std::abs(xExtent)) + "_" + std::to_string(thickness) + "_" + std::to_string(height);
+                    if (m_meshCache.find(key) != m_meshCache.end()) {
+                        drawMesh(*m_meshCache[key], transform, hoverColor, 0.0f);
+                    }
+                } else {
+                    std::string key = "col_" + std::to_string(thickness) + "_" + std::to_string(std::abs(zExtent)) + "_" + std::to_string(height);
+                    if (m_meshCache.find(key) != m_meshCache.end()) {
+                        drawMesh(*m_meshCache[key], transform, hoverColor, 0.0f);
+                    }
+                }
+                break;
+            }
+
+            case ElementType::Floor: {
+                glm::vec3 center = (element.start + element.end) * 0.5f;
+                center.y = element.start.y;
+                std::string key = "floor_" + std::to_string(element.end.x - element.start.x) + "_" +
+                                 std::to_string(element.end.z - element.start.z) + "_" + std::to_string(element.end.y - element.start.y);
+                if (m_meshCache.find(key) != m_meshCache.end()) {
+                    mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
+                    mat4 transMat = glm::translate(mat4(1.0f), center);
+                    mat4 transform = transMat * scaleMat * glm::inverse(transMat);
+                    drawMesh(*m_meshCache[key], transform, hoverColor, 0.0f);
+                }
+                break;
+            }
+
+            case ElementType::Door: {
+                float xExtent = element.end.x - element.start.x;
+                float zExtent = element.end.z - element.start.z;
+                float doorWidth = std::sqrt(xExtent*xExtent + zExtent*zExtent);
+                float doorHeight = element.end.y - element.start.y;
+                float doorDepth = element.depth > 0.01f ? element.depth : 0.2f;
+
+                glm::vec3 center = (element.start + element.end) * 0.5f;
+                center.y = element.start.y;
+
+                std::string key = "col_" + std::to_string(doorWidth) + "_" + std::to_string(doorDepth) + "_" + std::to_string(doorHeight);
+                if (m_meshCache.find(key) != m_meshCache.end()) {
+                    mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
+                    mat4 transMat = glm::translate(mat4(1.0f), center);
+                    mat4 transform = transMat * scaleMat * glm::inverse(transMat);
+                    drawMesh(*m_meshCache[key], transform, hoverColor, 0.0f);
+                }
+                break;
+            }
+
+            case ElementType::Window: {
+                float xExtent = element.end.x - element.start.x;
+                float zExtent = element.end.z - element.start.z;
+                float windowWidth = std::sqrt(xExtent*xExtent + zExtent*zExtent);
+                float windowHeight = element.end.y - element.start.y;
+                float windowDepth = element.depth > 0.01f ? element.depth : 0.1f;
+
+                glm::vec3 center = (element.start + element.end) * 0.5f;
+                center.y = element.start.y;
+
+                std::string key = "col_" + std::to_string(windowWidth) + "_" + std::to_string(windowDepth) + "_" + std::to_string(windowHeight);
+                if (m_meshCache.find(key) != m_meshCache.end()) {
+                    mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
+                    mat4 transMat = glm::translate(mat4(1.0f), center);
+                    mat4 transform = transMat * scaleMat * glm::inverse(transMat);
+                    drawMesh(*m_meshCache[key], transform, hoverColor, 0.0f);
+                }
+                break;
+            }
+
+            default:
+                // Skip other element types for now
+                break;
+        }
+
+        index++;
+    }
+
+    m_context.endDebugLabel(m_currentCommandBuffer);
+}
+
+void Renderer::drawWireframeOutlines(const std::vector<StructuralElement>& elements, const Building& building,
+                                    const std::set<int>& selectedIndices, int hoveredIndex) {
+    if (selectedIndices.empty() && hoveredIndex < 0) return;
+
+    m_context.beginDebugLabel(m_currentCommandBuffer, "Wireframe Outlines", {1.0f, 1.0f, 0.0f, 1.0f});
+
+    // Bind wireframe pipeline
+    if (m_wireframePipeline) {
+        m_wireframePipeline->bind(m_currentCommandBuffer);
+
+        // Render selected elements in yellow-orange
+        vec3 selectedColor = vec3(1.0f, 0.8f, 0.2f);
+        vec3 hoverColor = vec3(1.0f, 1.0f, 0.0f);  // Yellow
+
+        size_t index = 0;
+        for (const auto& element : elements) {
+            bool isSelected = selectedIndices.count(static_cast<int>(index)) > 0;
+            bool isHovered = (index == hoveredIndex);
+
+            if (!isSelected && !isHovered) {
+                index++;
+                continue;
+            }
+
+            vec3 color = isSelected ? selectedColor : hoverColor;
+
+            // Render as wireframe
+            switch (element.type) {
+                case ElementType::Wall: {
+                    float xExtent = element.end.x - element.start.x;
+                    float zExtent = element.end.z - element.start.z;
+                    float height = element.end.y - element.start.y;
+                    float thickness = element.depth > 0.01f ? element.depth : 0.5f;
+
+                    glm::vec3 center = (element.start + element.end) * 0.5f;
+                    center.y = element.start.y;
+
+                    if (std::abs(xExtent) > std::abs(zExtent)) {
+                        drawColumn(center, std::abs(xExtent), thickness, height, color, 0.0f);
+                    } else {
+                        drawColumn(center, thickness, std::abs(zExtent), height, color, 0.0f);
+                    }
+                    break;
+                }
+
+                case ElementType::Floor: {
+                    glm::vec3 center = (element.start + element.end) * 0.5f;
+                    center.y = element.start.y;
+                    drawFloor(center,
+                             element.end.x - element.start.x,
+                             element.end.z - element.start.z,
+                             element.end.y - element.start.y, color, 0.0f);
+                    break;
+                }
+
+                case ElementType::Door: {
+                    float xExtent = element.end.x - element.start.x;
+                    float zExtent = element.end.z - element.start.z;
+                    float doorWidth = std::sqrt(xExtent*xExtent + zExtent*zExtent);
+                    float doorHeight = element.end.y - element.start.y;
+                    float doorDepth = element.depth > 0.01f ? element.depth : 0.2f;
+
+                    glm::vec3 center = (element.start + element.end) * 0.5f;
+                    center.y = element.start.y;
+                    drawColumn(center, doorWidth, doorDepth, doorHeight, color, 0.0f);
+                    break;
+                }
+
+                case ElementType::Window: {
+                    float xExtent = element.end.x - element.start.x;
+                    float zExtent = element.end.z - element.start.z;
+                    float windowWidth = std::sqrt(xExtent*xExtent + zExtent*zExtent);
+                    float windowHeight = element.end.y - element.start.y;
+                    float windowDepth = element.depth > 0.01f ? element.depth : 0.1f;
+
+                    glm::vec3 center = (element.start + element.end) * 0.5f;
+                    center.y = element.start.y;
+                    drawColumn(center, windowWidth, windowDepth, windowHeight, color, 0.0f);
+                    break;
+                }
+
+                default:
+                    break;
+            }
+
+            index++;
+        }
     }
 
     m_context.endDebugLabel(m_currentCommandBuffer);
