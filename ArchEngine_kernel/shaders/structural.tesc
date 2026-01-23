@@ -23,31 +23,8 @@ layout(location = 4) out vec4 outFragLightSpacePos[];
 layout(location = 5) out vec4 outFragMaterial[];
 layout(location = 6) out vec2 outFragTexCoord[];
 
-// Uniform buffer (must match C++ UniformBufferObject exactly)
-layout(set = 0, binding = 0) uniform UniformBufferObject {
-    mat4 view;
-    mat4 proj;
-    mat4 lightViewProj;
-    vec4 lightDirection;
-    vec4 clipPlane;
-    float time;
-    float shadowBias;
-    uint enableClipping;
-    uint enableShadows;
-    uint outputLinearHDR;
-    float exposure;
-    float tessellationLevel;
-    float displacementScale;
-    vec4 materialParams;
-    vec4 materialParams2;
-    vec4 materialTint;
-    // Per-element material overrides
-    uint overrideMask;       // Bitfield for which element overrides are active
-    float _pad1, _pad2, _pad3; // Padding for alignment
-    vec4 elementOverride1;
-    vec4 elementOverride2;
-    vec4 elementOverride3;
-} ubo;
+// Shared UBO definition
+#include "include/ubo.glsl"
 
 // Compute camera position from inverse view matrix
 vec3 getCameraPosition() {

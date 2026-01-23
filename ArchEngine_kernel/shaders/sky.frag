@@ -3,25 +3,8 @@
 layout(location = 0) in vec3 viewDir;
 layout(location = 0) out vec4 outColor;
 
-// Uniform buffer (same as structural shader)
-layout(set = 0, binding = 0) uniform UniformBufferObject {
-    mat4 view;
-    mat4 proj;
-    mat4 lightViewProj;
-    vec4 lightDirection;
-    vec4 clipPlane;
-    float time;
-    float shadowBias;
-    uint enableClipping;
-    uint enableShadows;
-    uint outputLinearHDR;
-    uint _padding0;
-    uint _padding1;
-    uint _padding2;
-    vec4 materialParams;
-    vec4 materialParams2;
-    vec4 materialTint;
-} ubo;
+// Shared UBO definition
+#include "include/ubo.glsl"
 
 // Push constants for sky
 layout(push_constant) uniform SkyPushConstants {

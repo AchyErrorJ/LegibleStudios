@@ -7,6 +7,7 @@
 #include <ctime>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 
 namespace arch {
@@ -132,6 +133,7 @@ void ImGuiLayer::drawMainMenuBar(VisualizationMode& mode, bool& showDemo, bool& 
         if (ImGui::BeginMenu("Tools")) {
             ImGui::MenuItem("Show Demo", nullptr, &showDemo);
             ImGui::MenuItem("Show Metrics", nullptr, &showMetrics);
+            ImGui::MenuItem("Material Library", nullptr, &m_showMaterialLibrary);
             ImGui::MenuItem("Material Inspector", nullptr, &m_showMaterialInspector);
             ImGui::MenuItem("Render Preview", nullptr, &m_showRenderPreviewPanel);
             ImGui::EndMenu();
@@ -938,6 +940,68 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
             ImGui::SameLine();
             if (ImGui::Button("Off")) {
                 renderer.setTessellationEnabled(false);
+            }
+        }
+
+        // Parallax Occlusion Mapping (alternative to tessellation)
+        if (ImGui::CollapsingHeader("Parallax Occlusion Mapping (POM)")) {
+            bool pomEnabled = renderer.getPOMEnabled();
+            if (ImGui::Checkbox("Enable POM", &pomEnabled)) {
+                renderer.setPOMEnabled(pomEnabled);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Parallax Occlusion Mapping simulates depth using ray marching in fragment shader.\nLower performance cost than tessellation but view-dependent.");
+            }
+
+            if (pomEnabled) {
+                float heightScale = renderer.getPOMHeightScale();
+                if (ImGui::SliderFloat("Height Scale", &heightScale, 0.001f, 0.2f, "%.3f")) {
+                    renderer.setPOMHeightScale(heightScale);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Controls apparent depth of parallax effect. Higher = deeper displacement.");
+                }
+
+                float minLayers = renderer.getPOMMinLayers();
+                float maxLayers = renderer.getPOMMaxLayers();
+                if (ImGui::SliderFloat("Min Layers", &minLayers, 4.0f, 32.0f, "%.0f")) {
+                    renderer.setPOMLayers(minLayers, maxLayers);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Minimum ray marching steps (used when viewing straight-on).");
+                }
+                if (ImGui::SliderFloat("Max Layers", &maxLayers, 16.0f, 128.0f, "%.0f")) {
+                    renderer.setPOMLayers(minLayers, maxLayers);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Maximum ray marching steps (used at grazing angles). Higher = better quality but slower.");
+                }
+
+                // POM presets
+                ImGui::Text("Presets:");
+                if (ImGui::Button("Subtle##pom")) {
+                    renderer.setPOMEnabled(true);
+                    renderer.setPOMHeightScale(0.02f);
+                    renderer.setPOMLayers(8.0f, 32.0f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Medium##pom")) {
+                    renderer.setPOMEnabled(true);
+                    renderer.setPOMHeightScale(0.05f);
+                    renderer.setPOMLayers(8.0f, 48.0f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Strong##pom")) {
+                    renderer.setPOMEnabled(true);
+                    renderer.setPOMHeightScale(0.1f);
+                    renderer.setPOMLayers(12.0f, 64.0f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Off##pom")) {
+                    renderer.setPOMEnabled(false);
+                }
+
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Note: POM works best with tessellation disabled.");
             }
         }
 
@@ -1885,6 +1949,327 @@ void ImGuiLayer::drawRenderPreviewPanel(Renderer& renderer) {
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No preview rendered yet");
         }
     }
+    ImGui::End();
+}
+
+// ============================================================================
+// Material Library Panel (Improved with categories and grid view)
+// ============================================================================
+
+void ImGuiLayer::drawMaterialLibraryPanel(Renderer& renderer) {
+    if (!m_showMaterialLibrary) return;
+
+    // Auto-generate material previews on first open
+    static bool previewsGenerated = false;
+    if (!previewsGenerated) {
+        renderer.generateMaterialPreviews();
+        previewsGenerated = true;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(450, 600), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Material Library", &m_showMaterialLibrary)) {
+        // Header with filter and view options
+        ImGui::TextDisabled("Browse and Apply Materials");
+        ImGui::Separator();
+
+        // Filter input
+        ImGui::PushItemWidth(-1);
+        if (ImGui::InputText("##Filter", m_materialLibraryFilter, sizeof(m_materialLibraryFilter),
+                            ImGuiInputTextFlags_EnterReturnsTrue)) {
+            // Filter updated
+        }
+        ImGui::PopItemWidth();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Filter materials by name");
+        }
+
+        // View mode toggle and thumbnail size
+        ImGui::Spacing();
+        const char* viewModes[] = { "Grid", "List" };
+        ImGui::SetNextItemWidth(100);
+        ImGui::Combo("View", &m_materialLibraryViewMode, viewModes, 2);
+
+        if (m_materialLibraryViewMode == 0) {  // Grid view
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(150);
+            if (ImGui::SliderFloat("Size", &m_materialThumbnailSize, 80.0f, 250.0f, "%.0f")) {
+                // Clamp to reasonable range
+                m_materialThumbnailSize = std::max(80.0f, std::min(250.0f, m_materialThumbnailSize));
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Get materials from renderer using the C API
+        auto materials = renderer.getMaterialNames();
+        std::string filter = m_materialLibraryFilter;
+
+        // Group materials by category based on name patterns
+        std::map<std::string, std::vector<std::string>> categorizedMaterials;
+        std::vector<std::string> uncategorizedMaterials;
+
+        // Helper to determine category from material name
+        auto getCategoryFromName = [](const std::string& name) -> std::string {
+            std::string lowerName = name;
+            std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+
+            // Check for roof materials
+            if (lowerName.find("roof") == 0 || lowerName.find("shingle") != std::string::npos ||
+                lowerName.find("tile_") == 0) {
+                return "Roofs";
+            }
+
+            // Check for floor materials
+            if (lowerName.find("floor") == 0 || lowerName.find("wood_") == 0 ||
+                lowerName.find("tile") != std::string::npos || lowerName.find("marble") != std::string::npos ||
+                lowerName.find("stone_") == 0) {
+                return "Floors";
+            }
+
+            // Check for wall materials
+            if (lowerName.find("brick") == 0 || lowerName.find("siding") == 0 ||
+                lowerName.find("paint") == 0 || lowerName.find("concrete") == 0 ||
+                lowerName.find("stucco") == 0 || lowerName.find("drywall") != std::string::npos ||
+                lowerName.find("plaster") != std::string::npos) {
+                return "Walls";
+            }
+
+            // Check for metal materials
+            if (lowerName.find("metal") == 0 || lowerName.find("steel") != std::string::npos ||
+                lowerName.find("aluminum") != std::string::npos || lowerName.find("copper") != std::string::npos) {
+                return "Metals";
+            }
+
+            // Check for glass
+            if (lowerName.find("glass") != std::string::npos || lowerName.find("window") != std::string::npos) {
+                return "Glass";
+            }
+
+            return "";
+        };
+
+        for (const auto& material : materials) {
+            // Apply filter
+            if (!filter.empty()) {
+                std::string lowerMaterial = material;
+                std::string lowerFilter = filter;
+                std::transform(lowerMaterial.begin(), lowerMaterial.end(), lowerMaterial.begin(), ::tolower);
+                std::transform(lowerFilter.begin(), lowerFilter.end(), lowerFilter.begin(), ::tolower);
+                if (lowerMaterial.find(lowerFilter) == std::string::npos) {
+                    continue;
+                }
+            }
+
+            // Categorize based on name patterns
+            std::string category = getCategoryFromName(material);
+            if (!category.empty()) {
+                categorizedMaterials[category].push_back(material);
+            } else {
+                uncategorizedMaterials.push_back(material);
+            }
+        }
+
+        // Display materials by category
+        float windowWidth = ImGui::GetContentRegionAvail().x;
+        int itemsPerRow = std::max(1, static_cast<int>(windowWidth / (m_materialThumbnailSize + 10)));
+
+        // Helper to draw material item
+        auto drawMaterialItem = [&](const std::string& materialName) {
+            // Extract just the name part (after last slash)
+            std::string displayName = materialName;
+            size_t lastSlash = materialName.find_last_of('/');
+            if (lastSlash != std::string::npos) {
+                displayName = materialName.substr(lastSlash + 1);
+            }
+
+            bool isSelected = (m_selectedMaterialName == materialName);
+
+            if (m_materialLibraryViewMode == 0) {  // Grid view
+                ImGui::PushID(materialName.c_str());
+
+                // Thumbnail button
+                ImVec2 thumbSize(m_materialThumbnailSize, m_materialThumbnailSize * 0.75f);
+
+                // Try to get material preview texture
+                VkDescriptorSet previewTex = renderer.getMaterialPreviewDescriptor(materialName);
+                bool hasPreview = (previewTex != VK_NULL_HANDLE);
+
+                if (hasPreview) {
+                    // Render actual material preview
+                    if (ImGui::ImageButton((ImTextureID)previewTex, thumbSize, ImVec2(0, 0),
+                        ImVec2(1, 1), -1, ImVec4(0, 0, 0, 0),
+                        isSelected ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0, 0, 0, 0))) {
+                        m_selectedMaterialName = materialName;
+                    }
+                } else {
+                    // Fallback: Generate a consistent color based on material name hash
+                    size_t hash = std::hash<std::string>{}(materialName);
+                    float hue = (hash % 360) / 360.0f;
+                    float sat = 0.3f + ((hash / 360) % 100) / 200.0f;  // 0.3 - 0.8
+                    float val = 0.6f + ((hash / 36000) % 100) / 250.0f;  // 0.6 - 1.0
+                    float r, g, b;
+                    ImGui::ColorConvertHSVtoRGB(hue, sat, val, r, g, b);
+                    ImVec4 thumbColor(r, g, b, 1.0f);
+
+                    // Draw colored rectangle as placeholder thumbnail
+                    ImGui::PushStyleColor(ImGuiCol_Button, thumbColor);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, thumbColor);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, thumbColor);
+
+                    if (ImGui::Button("", thumbSize)) {
+                        m_selectedMaterialName = materialName;
+                    }
+
+                    ImGui::PopStyleColor(3);
+                }
+
+                // Drag and drop source
+                if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                    ImGui::SetDragDropPayload("ARCH_MATERIAL", materialName.c_str(), materialName.size() + 1);
+                    ImGui::Text("Apply %s", displayName.c_str());
+                    m_materialDragActive = true;
+                    m_materialDragName = materialName;
+                    ImGui::EndDragDropSource();
+                }
+
+                // Hover tooltip
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::Text("%s", displayName.c_str());
+                    ImGui::TextDisabled("Click to select, drag to apply");
+                    ImGui::EndTooltip();
+                }
+
+                // Selection indicator (only for fallback buttons, ImageButton has built-in border)
+                if (isSelected && !hasPreview) {
+                    ImDrawList* drawList = ImGui::GetWindowDrawList();
+                    ImVec2 min = ImGui::GetItemRectMin();
+                    ImVec2 max = ImGui::GetItemRectMax();
+                    float thickness = 2.0f;
+                    ImU32 color = ImGui::GetColorU32(ImVec4(1.0f, 0.8f, 0.3f, 1.0f));
+                    drawList->AddRect(min, max, color, 0.0f, 0, thickness);
+                }
+
+                // Display name below thumbnail
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + thumbSize.x);
+                ImGui::Text("%s", displayName.c_str());
+                ImGui::PopTextWrapPos();
+
+                ImGui::PopID();
+
+                // Move to next item in row
+                ImGui::SameLine();
+            } else {  // List view
+                if (ImGui::Selectable(displayName.c_str(), isSelected)) {
+                    m_selectedMaterialName = materialName;
+                }
+
+                // Drag and drop source
+                if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                    ImGui::SetDragDropPayload("ARCH_MATERIAL", materialName.c_str(), materialName.size() + 1);
+                    ImGui::Text("Apply %s", displayName.c_str());
+                    m_materialDragActive = true;
+                    m_materialDragName = materialName;
+                    ImGui::EndDragDropSource();
+                }
+            }
+        };
+
+        // Draw categorized materials
+        for (const auto& [category, categoryMaterials] : categorizedMaterials) {
+            if (ImGui::TreeNode(category.c_str())) {
+                ImGui::Spacing();
+
+                if (m_materialLibraryViewMode == 0) {  // Grid view
+                    int col = 0;
+                    for (const auto& material : categoryMaterials) {
+                        drawMaterialItem(material);
+                        col++;
+                        if (col >= itemsPerRow) {
+                            ImGui::NewLine();
+                            col = 0;
+                        }
+                    }
+                    if (col > 0) {
+                        ImGui::NewLine();
+                    }
+                } else {  // List view
+                    for (const auto& material : categoryMaterials) {
+                        drawMaterialItem(material);
+                    }
+                }
+
+                ImGui::TreePop();
+            }
+            ImGui::Separator();
+        }
+
+        // Draw uncategorized materials
+        if (!uncategorizedMaterials.empty()) {
+            if (ImGui::TreeNode("Other")) {
+                ImGui::Spacing();
+
+                if (m_materialLibraryViewMode == 0) {  // Grid view
+                    int col = 0;
+                    for (const auto& material : uncategorizedMaterials) {
+                        drawMaterialItem(material);
+                        col++;
+                        if (col >= itemsPerRow) {
+                            ImGui::NewLine();
+                            col = 0;
+                        }
+                    }
+                    if (col > 0) {
+                        ImGui::NewLine();
+                    }
+                } else {  // List view
+                    for (const auto& material : uncategorizedMaterials) {
+                        drawMaterialItem(material);
+                    }
+                }
+
+                ImGui::TreePop();
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Selected material info and actions
+        if (!m_selectedMaterialName.empty()) {
+            std::string displaySelected = m_selectedMaterialName;
+            size_t lastSlash = displaySelected.find_last_of('/');
+            if (lastSlash != std::string::npos) {
+                displaySelected = displaySelected.substr(lastSlash + 1);
+            }
+
+            ImGui::Text("Selected: %s", displaySelected.c_str());
+
+            if (ImGui::Button("Apply to Selection", ImVec2(-1, 0))) {
+                m_applyMaterialName = m_selectedMaterialName;
+                m_applyMaterialRequested = true;
+            }
+
+            ImGui::Spacing();
+        } else {
+            ImGui::TextDisabled("No material selected");
+        }
+
+        // Help text
+        ImGui::Separator();
+        ImGui::TextWrapped("Tip: Drag materials from this panel onto the 3D viewport to apply them to elements.");
+
+        // Handle drag drop end
+        if (m_materialDragActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
+                m_materialDropRequested = true;
+                m_materialDropName = m_materialDragName;
+            }
+            m_materialDragActive = false;
+        }
+    }
+
     ImGui::End();
 }
 

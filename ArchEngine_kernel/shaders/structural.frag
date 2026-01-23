@@ -12,31 +12,8 @@ layout(location = 6) in vec2 fragTexCoord;
 // Output
 layout(location = 0) out vec4 outColor;
 
-// Uniform buffer
-layout(set = 0, binding = 0) uniform UniformBufferObject {
-    mat4 view;
-    mat4 proj;
-    mat4 lightViewProj;
-    vec4 lightDirection;
-    vec4 clipPlane;
-    float time;
-    float shadowBias;
-    uint enableClipping;
-    uint enableShadows;
-    uint outputLinearHDR;  // If true, output linear HDR (tonemapping done in composite pass)
-    float exposure;        // Exposure multiplier for tonemapping
-    float tessellationLevel;  // Tessellation subdivision level
-    float displacementScale;  // Height map displacement scale
-    vec4 materialParams;    // x = UV scale, y = normal strength, z = brightness, w = contrast
-    vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
-    vec4 materialTint;      // RGB tint, w = unused
-    // Per-element material overrides
-    uint overrideMask;       // Bitfield for which element overrides are active
-    float _pad1, _pad2, _pad3; // Padding for alignment
-    vec4 elementOverride1;  // x = uvScale, y = normalStrength, z = brightness, w = contrast
-    vec4 elementOverride2;  // x = saturation, y = roughness, z = metallic, w = aoStrength
-    vec4 elementOverride3;  // RGB = tint, w = unused
-} ubo;
+// Shared UBO definition (includes override mask constants)
+#include "include/ubo.glsl"
 
 // Push constants (per-draw data including element overrides)
 layout(push_constant) uniform PushConstants {
@@ -49,18 +26,6 @@ layout(push_constant) uniform PushConstants {
     vec4 overrides2;     // x=saturation, y=roughness, z=metallic, w=aoStrength
     vec4 overrides3;     // rgb=tint, w=uvRotation (radians)
 } push;
-
-// Material override mask bits
-const uint OVERRIDE_UV_SCALE        = (1u << 0);
-const uint OVERRIDE_UV_ROTATION     = (1u << 1);
-const uint OVERRIDE_NORMAL_STRENGTH = (1u << 2);
-const uint OVERRIDE_BRIGHTNESS      = (1u << 3);
-const uint OVERRIDE_CONTRAST        = (1u << 4);
-const uint OVERRIDE_SATURATION      = (1u << 5);
-const uint OVERRIDE_ROUGHNESS       = (1u << 6);
-const uint OVERRIDE_METALLIC        = (1u << 7);
-const uint OVERRIDE_AO_STRENGTH     = (1u << 8);
-const uint OVERRIDE_TINT            = (1u << 9);
 
 // Shadow map sampler with depth comparison
 layout(set = 0, binding = 1) uniform sampler2DShadow shadowMap;
@@ -153,6 +118,71 @@ vec3 perturbNormal(vec3 N, vec3 V, vec2 texCoord, float normalStrength) {
     mat3 TBN = mat3(T, B, N);
 
     return normalize(TBN * tangentNormal);
+}
+
+// Compute TBN matrix for POM (returns transpose for view->tangent space transform)
+mat3 computeTBN(vec3 N, vec2 texCoord) {
+    vec3 Q1 = dFdx(fragPosition);
+    vec3 Q2 = dFdy(fragPosition);
+    vec2 st1 = dFdx(texCoord);
+    vec2 st2 = dFdy(texCoord);
+
+    vec3 T = normalize(Q1 * st2.t - Q2 * st1.t);
+    vec3 B = normalize(cross(N, T));
+    return mat3(T, B, N);
+}
+
+// Parallax Occlusion Mapping (POM)
+// Ray marches through height map to find surface intersection
+// Returns displaced UV coordinates
+vec2 parallaxOcclusionMapping(vec2 texCoord, vec3 viewDirTangent, float heightScale, float minLayers, float maxLayers) {
+    // Safety: skip POM if viewing nearly parallel to surface (would cause artifacts)
+    if (abs(viewDirTangent.z) < 0.001) {
+        return texCoord;
+    }
+
+    // Number of layers based on view angle (more layers at grazing angles)
+    float numLayers = mix(maxLayers, minLayers, abs(dot(vec3(0.0, 0.0, 1.0), viewDirTangent)));
+    numLayers = clamp(numLayers, 4.0, 128.0);  // Safety clamp
+
+    // Calculate the size of each layer
+    float layerDepth = 1.0 / numLayers;
+    float currentLayerDepth = 0.0;
+
+    // Direction and amount to shift UV per layer
+    vec2 P = viewDirTangent.xy / viewDirTangent.z * heightScale;
+    vec2 deltaTexCoords = P / numLayers;
+
+    // Current UV coordinates and height
+    vec2 currentTexCoords = texCoord;
+    float currentDepthMapValue = 1.0 - texture(heightMap, currentTexCoords).r;
+
+    // Ray march until we find intersection (with iteration limit for safety)
+    int maxIterations = int(numLayers) + 1;
+    int iterations = 0;
+    while (currentLayerDepth < currentDepthMapValue && iterations < maxIterations) {
+        currentTexCoords -= deltaTexCoords;
+        currentDepthMapValue = 1.0 - texture(heightMap, currentTexCoords).r;
+        currentLayerDepth += layerDepth;
+        iterations++;
+    }
+
+    // Binary search refinement for more accurate intersection
+    vec2 prevTexCoords = currentTexCoords + deltaTexCoords;
+
+    float afterDepth = currentDepthMapValue - currentLayerDepth;
+    float beforeDepth = (1.0 - texture(heightMap, prevTexCoords).r) - currentLayerDepth + layerDepth;
+
+    // Safety: avoid division by zero
+    float denom = afterDepth - beforeDepth;
+    if (abs(denom) < 0.0001) {
+        return currentTexCoords;
+    }
+
+    float weight = afterDepth / denom;
+    weight = clamp(weight, 0.0, 1.0);  // Safety clamp
+
+    return mix(currentTexCoords, prevTexCoords, weight);
 }
 
 // Calculate stress color based on utilization ratio
@@ -279,6 +309,28 @@ void main() {
             offset.x * cosR - offset.y * sinR,
             offset.x * sinR + offset.y * cosR
         ) + center;
+    }
+
+    // Apply Parallax Occlusion Mapping if enabled
+    if (ubo.pomParams.x > 0.5) {
+        // Compute camera position from inverse view matrix
+        mat4 invView = inverse(ubo.view);
+        vec3 cameraPos = invView[3].xyz;
+
+        // World-space view direction (from surface to camera)
+        vec3 viewDirWorld = normalize(cameraPos - fragPosition);
+
+        // Compute TBN matrix and transform view direction to tangent space
+        mat3 TBN = computeTBN(N, uv);
+        mat3 TBN_transpose = transpose(TBN);  // World -> Tangent space
+        vec3 viewDirTangent = normalize(TBN_transpose * viewDirWorld);
+
+        // Apply POM
+        float pomHeightScale = ubo.pomParams.y;
+        float pomMinLayers = ubo.pomParams.z;
+        float pomMaxLayers = ubo.pomParams.w;
+
+        uv = parallaxOcclusionMapping(uv, viewDirTangent, pomHeightScale, pomMinLayers, pomMaxLayers);
     }
 
     // Normal strength with override support (use push constants)

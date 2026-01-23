@@ -773,6 +773,23 @@ public:
     f32 getDisplacementScale() const { return m_displacementScale; }
     /// @}
 
+    /// @name Parallax Occlusion Mapping (POM)
+    /// @{
+
+    /** @brief Enable or disable Parallax Occlusion Mapping */
+    void setPOMEnabled(bool enabled) { m_pomEnabled = enabled; }
+    bool getPOMEnabled() const { return m_pomEnabled; }
+
+    /** @brief Set POM height scale (depth of parallax effect) */
+    void setPOMHeightScale(f32 scale) { m_pomHeightScale = scale; }
+    f32 getPOMHeightScale() const { return m_pomHeightScale; }
+
+    /** @brief Set POM layer counts for quality (min layers at perpendicular, max at grazing angles) */
+    void setPOMLayers(f32 minLayers, f32 maxLayers) { m_pomMinLayers = minLayers; m_pomMaxLayers = maxLayers; }
+    f32 getPOMMinLayers() const { return m_pomMinLayers; }
+    f32 getPOMMaxLayers() const { return m_pomMaxLayers; }
+    /// @}
+
     /// @name Material Style
     /// @{
 
@@ -813,6 +830,31 @@ public:
      * @return MaterialPreset with appropriate PBR values for the style
      */
     MaterialPreset getMaterialForElement(ElementType type) const;
+
+    /**
+     * @brief Get ImGui texture descriptor for material preview thumbnail
+     * @param materialName Name of the material
+     * @return VkDescriptorSet for ImGui Image(), or VK_NULL_HANDLE if not available
+     *
+     * Generates and caches material preview thumbnails on first call.
+     * Returns ImGui-compatible texture descriptor for displaying material previews.
+     */
+    VkDescriptorSet getMaterialPreviewDescriptor(const std::string& materialName);
+
+    /**
+     * @brief Check if material preview is ready
+     * @param materialName Name of the material
+     * @return true if preview texture is available
+     */
+    bool hasMaterialPreview(const std::string& materialName) const;
+
+    /**
+     * @brief Generate material preview thumbnails for all materials
+     *
+     * Renders all materials to thumbnail textures for display in the material library.
+     * This can take a moment if there are many materials.
+     */
+    void generateMaterialPreviews();
     /// @}
 
     /// @name Per-Element Material Overrides
@@ -1206,6 +1248,12 @@ private:
     f32 m_tessellationLevel = 8.0f;
     f32 m_displacementScale = 0.1f;
 
+    // Parallax Occlusion Mapping settings
+    bool m_pomEnabled = false;
+    f32 m_pomHeightScale = 0.05f;   // Depth of parallax effect
+    f32 m_pomMinLayers = 8.0f;      // Layers at perpendicular view
+    f32 m_pomMaxLayers = 32.0f;     // Layers at grazing angles
+
     // Per-element material overrides (sparse map for memory efficiency)
     std::unordered_map<int, ElementMaterialOverride> m_elementMaterialOverrides;
 
@@ -1250,6 +1298,40 @@ private:
     std::unique_ptr<Pipeline> m_previewPipeline;
     std::unique_ptr<Pipeline> m_previewTransparentPipeline;
     bool m_previewResourcesCreated = false;
+
+    // Material preview thumbnails
+    static constexpr u32 kMaterialPreviewSize = 256;  // Thumbnail size (larger for better visibility)
+    struct MaterialPreview {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView imageView = VK_NULL_HANDLE;
+        VkDescriptorSet imGuiDescriptor = VK_NULL_HANDLE;
+    };
+    std::unordered_map<std::string, MaterialPreview> m_materialPreviews;
+    VkRenderPass m_materialPreviewRenderPass = VK_NULL_HANDLE;
+    VkSampler m_materialPreviewSampler = VK_NULL_HANDLE;
+    std::unique_ptr<Pipeline> m_materialPreviewPipeline;  // Simple pipeline for preview rendering
+    bool m_materialPreviewResourcesCreated = false;
+    std::unique_ptr<Mesh> m_materialPreviewSphere;  // Sphere mesh for preview rendering
+    VkBuffer m_materialPreviewSphereVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_materialPreviewSphereVertexMemory = VK_NULL_HANDLE;
+    VkBuffer m_materialPreviewSphereIndexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_materialPreviewSphereIndexMemory = VK_NULL_HANDLE;
+    u32 m_materialPreviewSphereIndexCount = 0;
+
+    // Dedicated UBO for preview rendering (avoids conflicts with main renderer)
+    VkBuffer m_materialPreviewUBO = VK_NULL_HANDLE;
+    VkDeviceMemory m_materialPreviewUBOMemory = VK_NULL_HANDLE;
+    VkDescriptorSet m_materialPreviewDescriptorSet = VK_NULL_HANDLE;  // UBO descriptor set
+
+    void createMaterialPreviewResources();
+    void cleanupMaterialPreviewResources();
+    bool renderMaterialPreview(const std::string& materialName);
+    MaterialPreview createMaterialPreviewTexture();
+    void createMaterialPreviewSphereMesh();
+    void cleanupMaterialPreviewSphereMesh();
+    void createMaterialPreviewUBO();
+    void cleanupMaterialPreviewUBO();
 };
 
 } // namespace arch

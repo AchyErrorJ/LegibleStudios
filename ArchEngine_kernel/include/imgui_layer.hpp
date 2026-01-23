@@ -134,6 +134,7 @@ public:
     void drawRenderPreviewPanel(Renderer& renderer);
     void drawGeometryEditor(bool& show);
     void drawMaterialInspector(const Renderer& renderer);
+    void drawMaterialLibraryPanel(Renderer& renderer);
 
     // Geometry editor state
     struct NewElement {
@@ -253,6 +254,10 @@ public:
     void clearRenderPreviewRefreshRequest() { m_renderPreviewRefreshRequested = false; }
     void setRenderPreviewPanelVisibility(bool show) { m_showRenderPreviewPanel = show; }
     bool getRenderPreviewPanelVisibility() const { return m_showRenderPreviewPanel; }
+
+    // Material Library Panel
+    void setMaterialLibraryVisibility(bool show) { m_showMaterialLibrary = show; }
+    bool getMaterialLibraryVisibility() const { return m_showMaterialLibrary; }
 
 private:
     void createDescriptorPool();
@@ -393,6 +398,14 @@ private:
     // Live Render Preview Panel state (GPU-direct preview)
     bool m_showRenderPreviewPanel = false;
     bool m_renderPreviewRefreshRequested = false;
+
+    // Improved Material Library state
+    bool m_showMaterialLibrary = false;
+    char m_materialLibraryFilter[128] = "";
+    int m_materialLibraryViewMode = 0;  // 0=Grid, 1=List
+    float m_materialThumbnailSize = 80.0f;
+    std::string m_selectedMaterialName;
+    std::string m_hoveredMaterialName;
 
 public:
     float getRenderBrightness() const { return m_renderBrightness; }
