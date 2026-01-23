@@ -209,6 +209,7 @@ struct UniformBufferObject {
     vec4 materialParams;    // x = UV scale, y = normal strength, z = brightness, w = contrast
     vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
     vec4 materialTint;      // RGB tint multiplier, w = unused
+    vec4 pomParams;         // x = enabled (0/1), y = heightScale, z = minLayers, w = maxLayers
     // Per-element material overrides (added to global values when override mask bit is set)
     u32 overrideMask;       // Bitfield for which element overrides are active
     f32 _pad1, _pad2, _pad3; // Padding to maintain 16-byte alignment for next vec4

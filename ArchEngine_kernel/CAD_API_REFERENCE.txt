@@ -1,0 +1,223 @@
+========================================
+  ArchEngine CAD API Reference
+========================================
+
+The ArchEngineLib.dll now includes per-element material override functionality for CAD applications.
+
+NEW API FUNCTIONS
+=================
+
+Per-Element Material Overrides
+--------------------------------
+
+arch_set_element_material()
+    Set material properties for a specific element
+    Parameters:
+        - element_index: Which wall/element to modify
+        - uv_scale: Texture tiling (1.0 = default, 2.0 = 2x denser)
+        - normal_strength: Normal map intensity (1.0 = default, 2.0 = stronger)
+        - brightness: Brightness adjustment (0.0 = default, positive = brighter)
+        - contrast: Contrast (1.0 = default, >1 = higher contrast)
+    Returns: 0 on success, error code on failure
+
+arch_clear_element_material()
+    Clear override for a specific element
+    Reverts element to global material settings
+
+arch_clear_all_material_overrides()
+    Clear all element overrides
+    All elements revert to global settings
+
+arch_has_material_override()
+    Check if element has an override
+    Returns: 1 if yes, 0 if no
+
+arch_get_element_material()
+    Get override values for an element
+    Returns: Current override values
+
+arch_apply_material_batch()
+    Apply same override to multiple elements at once
+    Parameters:
+        - indices: Array of element indices
+        - count: Number of elements
+        - uv_scale, normal_strength, brightness, contrast: Values to apply
+    Returns: Number of elements successfully updated
+
+arch_get_override_count()
+    Get number of elements with overrides
+    Returns: Count of overridden elements
+
+arch_get_override_indices()
+    Get list of all element indices that have overrides
+    Parameters:
+        - out_indices: Output array
+        - max_indices: Array size
+    Returns: Number of indices retrieved
+
+
+USAGE EXAMPLE (C++)
+====================
+
+```cpp
+// Load ArchEngine DLL
+HMODULE hDll = LoadLibrary(L"ArchEngineLib.dll");
+
+// Get function pointers
+auto arch_init = (int(*)(void*, int, int))GetProcAddress(hDll, "arch_init");
+auto arch_load_file = (int(*)(const char*))GetProcAddress(hDll, "arch_load_file");
+auto arch_render_frame = (int(*)())GetProcAddress(hDll, "arch_render_frame");
+
+// New material override functions
+auto arch_set_element_material = (int(*)(int, float, float, float, float))
+    GetProcAddress(hDll, "arch_set_element_material");
+auto arch_apply_material_batch = (int(*)(const int*, int, float, float, float, float))
+    GetProcAddress(hDll, "arch_apply_material_batch");
+
+// Initialize
+arch_init(hwnd, 800, 600);
+
+// Load building
+arch_load_file("building.json");
+
+// Set material for wall #5 (denser texture)
+arch_set_element_material(5, 2.0f, 1.0f, 1.0f, 1.0f, 1.0f);
+
+// Apply darker finish to multiple walls
+int walls[] = {10, 11, 12, 13, 14};
+arch_apply_material_batch(walls, 5, 1.0f, 1.0f, -0.2f, 0.8f);
+
+// Render loop
+while (running) {
+    arch_render_frame();
+}
+
+// Cleanup
+FreeLibrary(hDll);
+```
+
+
+USAGE EXAMPLE (Python)
+=======================
+
+```python
+import ctypes
+
+# Load DLL
+arch_dll = ctypes.CDLL("ArchEngineLib.dll")
+
+# Define function signatures
+arch_init = arch_dll.arch_init
+arch_init.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+arch_init.restype = ctypes.c_int
+
+arch_load_file = arch_dll.arch_load_file
+arch_load_file.argtypes = [ctypes.c_char_p]
+arch_load_file.restype = ctypes.c_int
+
+arch_render_frame = arch_dll.arch_render_frame
+arch_render_frame.restype = ctypes.c_int
+
+# New material override functions
+arch_set_element_material = arch_dll.arch_set_element_material
+arch_set_element_material.argtypes = [ctypes.c_int, ctypes.c_float,
+                                      ctypes.c_float, ctypes.c_float,
+                                      ctypes.c_float]
+arch_set_element_material.restype = ctypes.c_int
+
+arch_apply_material_batch = arch_dll.arch_apply_material_batch
+arch_apply_material_batch.argtypes = [ctypes.POINTER(ctypes.c_int),
+                                      ctypes.c_int, ctypes.c_float,
+                                      ctypes.c_float, ctypes.c_float,
+                                      ctypes.c_float]
+arch_apply_material_batch.restype = ctypes.c_int
+
+# Initialize
+arch_init(hwnd, 800, 600)
+
+# Load building
+arch_load_file(b"building.json")
+
+# Set material for wall #5
+arch_set_element_material(5, 2.0, 1.0, 0.0, 1.0)
+
+# Apply to multiple walls
+walls = (ctypes.c_int * 5)(10, 11, 12, 13, 14)
+arch_apply_material_batch(walls, 5, 1.0, 1.0, -0.2, 0.8)
+
+# Render loop
+while running:
+    arch_render_frame()
+```
+
+
+MATERIAL PARAMETER RANGES
+==========================
+
+UV Scale:         0.1 to 200.0   (1.0 = default)
+Normal Strength:  0.0 to 5.0     (1.0 = default)
+Brightness:      -1.0 to 1.0     (0.0 = default)
+Contrast:        0.0 to 2.0     (1.0 = default)
+
+
+PRACTICAL USE CASES
+====================
+
+1. Highlight Selected Walls
+    arch_set_element_material(selected_wall, 2.0, 1.0, 0.3, 1.2);
+
+2. Make Accent Wall Darker
+    arch_set_element_material(accent_wall, 1.0, 1.0, -0.2, 0.8);
+
+3. Add Texture to Specific Surface
+    arch_set_element_material(wall_index, 3.0, 1.5, 0.0, 1.0);
+
+4. Batch Finish Room
+    int room_walls[] = {5, 6, 7, 8};
+    arch_apply_material_batch(room_walls, 4, 1.0, 1.0, 0.1, 1.1);
+
+5. Clear All Customizations
+    arch_clear_all_material_overrides();
+
+
+EXISTING API (REFERENCE)
+=========================
+
+The DLL also includes all previous functions:
+- arch_init()
+- arch_shutdown()
+- arch_load_json()
+- arch_load_file()
+- arch_render_frame()
+- arch_set_camera()
+- arch_set_camera_target()
+- arch_select_element()
+- arch_set_viz_mode()
+- arch_set_uv_scale()
+- arch_set_roughness_multiplier()
+- arch_set_metallic_multiplier()
+- arch_set_ao_strength()
+- arch_set_shadows_enabled()
+- arch_set_ssao_enabled()
+- arch_set_bloom_enabled()
+- arch_set_exposure()
+- arch_set_clipping_enabled()
+- arch_set_clip_height()
+- And more...
+
+See arch_api.h for complete documentation.
+
+
+BUILD INFORMATION
+=================
+
+DLL: ArchEngineLib.dll (772 KB)
+Header: include/arch_api.h
+Source: src/arch_api.cpp
+
+Compatible with:
+- Visual Studio 2019+
+- Windows 10/11
+- Vulkan 1.3+
+
+For more information, see README.txt

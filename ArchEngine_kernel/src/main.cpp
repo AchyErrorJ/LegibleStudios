@@ -997,6 +997,9 @@ int main(int argc, char* argv[]) {
                 }
                 imgui.drawRenderSettingsPanel(renderer, showRenderSettings);
 
+                // Material Library (improved browser with categories)
+                imgui.drawMaterialLibraryPanel(renderer);
+
                 // Material Inspector (per-element material overrides)
                 imgui.drawMaterialInspector(renderer);
 

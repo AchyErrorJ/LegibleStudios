@@ -227,3 +227,113 @@ add_custom_command(TARGET ArchEngine POST_BUILD
 
 message(STATUS "Vulkan found: ${Vulkan_LIBRARIES}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+
+# ============================================================================
+# CPack Configuration for Installer
+# ============================================================================
+
+set(CPACK_PACKAGE_NAME "ArchEngine")
+set(CPACK_PACKAGE_VENDOR "ArchEngine Suite")
+set(CPACK_PACKAGE_VERSION_MAJOR 0)
+set(CPACK_PACKAGE_VERSION_MINOR 1)
+set(CPACK_PACKAGE_VERSION_PATCH 0)
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "ArchEngine Kernel - Architectural Visualization Engine")
+set(CPACK_PACKAGE_DESCRIPTION "Real-time architectural visualization engine with PBR rendering, tessellation, and material editing capabilities")
+
+# Set installer filename
+set(CPACK_OUTPUT_FILE_PREFIX "${CMAKE_SOURCE_DIR}/dist")
+
+# Windows-specific settings
+if(WIN32)
+    # Use only ZIP if NSIS is not available
+    set(CPACK_GENERATOR "ZIP")
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "ArchEngine")
+    set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "ArchEngine")
+
+    # NSIS-specific settings
+    set(CPACK_NSIS_DISPLAY_NAME "ArchEngine")
+    set(CPACK_NSIS_PACKAGE_NAME "ArchEngine")
+    set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/yourusername/ArchEngine")
+    set(CPACK_NSIS_CONTACT "your-email@example.com")
+    set(CPACK_NSIS_HELP_LINK "https://github.com/yourusername/ArchEngine/issues")
+    set(CPACK_NSIS_MODIFY_PATH ON)
+
+    # Create desktop shortcut
+    set(CPACK_NSIS_CREATE_ICONS_EXTRA "
+        CreateShortCut '$DESKTOP\\\\ArchEngine.lnk' '$INSTDIR\\\\ArchEngine.exe'
+    ")
+
+    # Delete shortcut on uninstall
+    set(CPACK_NSIS_DELETE_ICONS_EXTRA "
+        Delete '$DESKTOP\\\\ArchEngine.lnk'
+    ")
+endif()
+
+# Installation rules
+install(TARGETS ArchEngine
+    RUNTIME DESTINATION .
+    LIBRARY DESTINATION .
+    ARCHIVE DESTINATION .
+)
+
+# Install ArchEngineLib DLL
+install(TARGETS ArchEngineLib
+    RUNTIME DESTINATION .
+    LIBRARY DESTINATION .
+    ARCHIVE DESTINATION .
+)
+
+# Install shaders directory
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/shaders/"
+    DESTINATION shaders
+    FILES_MATCHING PATTERN "*.spv" PATTERN "*.vert" PATTERN "*.frag" PATTERN "*.tesc" PATTERN "*.tese"
+)
+
+# Install materials directory
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/materials/"
+    DESTINATION materials
+)
+
+# Install required DLLs (Windows)
+if(WIN32)
+    # Install Vulkan runtime DLLs
+    if(EXISTS "${VULKAN_SDK}/Runtime/vulkan-1.dll")
+        install(FILES
+            "${VULKAN_SDK}/Runtime/vulkan-1.dll"
+            DESTINATION .
+        )
+    endif()
+
+    # Install glfw3.dll (will be copied from build directory)
+    install(FILES
+        "$<TARGET_FILE:glfw>"
+        DESTINATION .
+    )
+endif()
+
+# Install Vulkan runtime installer (if exists)
+if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/dist/vulkan_runtime/VulkanRT-Installer.exe")
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/dist/vulkan_runtime/"
+        DESTINATION vulkan_runtime
+    )
+endif()
+
+# Install launcher script
+if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch_archengine.bat")
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/launch_archengine.bat"
+        DESTINATION .
+    )
+endif()
+
+# Install README
+if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/README_INSTALL.txt")
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/README_INSTALL.txt"
+        DESTINATION .
+        RENAME README.txt
+    )
+endif()
+
+# Include CPack
+include(CPack)
