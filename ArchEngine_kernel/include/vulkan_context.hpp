@@ -211,6 +211,18 @@ public:
 
     /** @brief Get maximum anisotropy level supported */
     float getMaxSamplerAnisotropy() const { return m_maxSamplerAnisotropy; }
+
+    /** @brief Check if tessellation shaders are supported */
+    bool supportsTessellation() const { return m_deviceFeatures.tessellationShader == VK_TRUE; }
+
+    /** @brief Check if wide lines are supported (often not on AMD) */
+    bool supportsWideLines() const { return m_deviceFeatures.wideLines == VK_TRUE; }
+
+    /** @brief Check if non-solid fill mode (wireframe) is supported */
+    bool supportsFillModeNonSolid() const { return m_deviceFeatures.fillModeNonSolid == VK_TRUE; }
+
+    /** @brief Check if shader clip distance is supported */
+    bool supportsShaderClipDistance() const { return m_deviceFeatures.shaderClipDistance == VK_TRUE; }
     /// @}
 
     /// @name Configuration

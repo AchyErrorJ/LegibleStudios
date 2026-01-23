@@ -658,8 +658,7 @@ void PostProcess::createBlurPipeline() {
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushConstant;
 
-    VkPipelineLayout blurPipelineLayout;
-    if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &blurPipelineLayout) != VK_SUCCESS) {
+    if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &m_ssaoBlurPipelineLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create blur pipeline layout");
     }
 
@@ -674,7 +673,7 @@ void PostProcess::createBlurPipeline() {
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = blurPipelineLayout;
+    pipelineInfo.layout = m_ssaoBlurPipelineLayout;
     pipelineInfo.renderPass = m_ssaoRenderPass;
     pipelineInfo.subpass = 0;
 
@@ -685,9 +684,6 @@ void PostProcess::createBlurPipeline() {
 
     vkDestroyShaderModule(device, vertModule, nullptr);
     vkDestroyShaderModule(device, fragModule, nullptr);
-
-    // Note: We're leaking blurPipelineLayout here - should store it for cleanup
-    // For now, keeping it simple
 
     std::cout << "[PostProcess] Blur pipeline created" << std::endl;
 }
@@ -1705,6 +1701,7 @@ void PostProcess::cleanupSSAO() {
     if (m_ssaoPipeline) vkDestroyPipeline(device, m_ssaoPipeline, nullptr);
     if (m_ssaoBlurPipeline) vkDestroyPipeline(device, m_ssaoBlurPipeline, nullptr);
     if (m_ssaoPipelineLayout) vkDestroyPipelineLayout(device, m_ssaoPipelineLayout, nullptr);
+    if (m_ssaoBlurPipelineLayout) vkDestroyPipelineLayout(device, m_ssaoBlurPipelineLayout, nullptr);
 
     if (m_ssaoFramebuffer) vkDestroyFramebuffer(device, m_ssaoFramebuffer, nullptr);
     if (m_ssaoBlurFramebuffer) vkDestroyFramebuffer(device, m_ssaoBlurFramebuffer, nullptr);
@@ -1736,6 +1733,7 @@ void PostProcess::cleanupSSAO() {
     m_ssaoPipeline = VK_NULL_HANDLE;
     m_ssaoBlurPipeline = VK_NULL_HANDLE;
     m_ssaoPipelineLayout = VK_NULL_HANDLE;
+    m_ssaoBlurPipelineLayout = VK_NULL_HANDLE;
     m_ssaoFramebuffer = VK_NULL_HANDLE;
     m_ssaoBlurFramebuffer = VK_NULL_HANDLE;
     m_ssaoRenderPass = VK_NULL_HANDLE;

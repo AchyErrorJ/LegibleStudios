@@ -322,6 +322,53 @@ void GeometryLoader::saveToJSON(const std::string& filepath, const Building& bui
     }
 }
 
+void GeometryLoader::saveToJSON(const std::string& filepath, const Building& building, const Renderer& renderer) {
+    json data;
+    to_json(data, building);
+
+    // Add element material overrides
+    json overrides = json::array();
+    for (size_t i = 0; i < building.elements.size(); i++) {
+        const ElementMaterialOverride* override = renderer.getElementOverride(static_cast<int>(i));
+        if (override && override->active) {
+            json o;
+            o["element_index"] = static_cast<int>(i);
+
+            // Save per-parameter flags and values
+            o["has_uv_scale"] = override->hasUVScale;
+            o["has_normal_strength"] = override->hasNormalStrength;
+            o["has_brightness"] = override->hasBrightness;
+            o["has_contrast"] = override->hasContrast;
+            o["has_saturation"] = override->hasSaturation;
+            o["has_roughness"] = override->hasRoughness;
+            o["has_metallic"] = override->hasMetallic;
+            o["has_ao_strength"] = override->hasAOStrength;
+            o["has_tint"] = override->hasTint;
+
+            // Only save values if the flag is set (save space)
+            if (override->hasUVScale) o["uv_scale"] = override->uvScale;
+            if (override->hasNormalStrength) o["normal_strength"] = override->normalStrength;
+            if (override->hasBrightness) o["brightness"] = override->brightness;
+            if (override->hasContrast) o["contrast"] = override->contrast;
+            if (override->hasSaturation) o["saturation"] = override->saturation;
+            if (override->hasRoughness) o["roughness"] = override->roughness;
+            if (override->hasMetallic) o["metallic"] = override->metallic;
+            if (override->hasAOStrength) o["ao_strength"] = override->aoStrength;
+            if (override->hasTint) o["tint"] = {override->tint[0], override->tint[1], override->tint[2]};
+
+            overrides.push_back(o);
+        }
+    }
+    data["element_material_overrides"] = overrides;
+
+    std::ofstream file(filepath);
+    if (file.is_open()) {
+        file << data.dump(2);
+    } else {
+        std::cerr << "Failed to save to: " << filepath << "\n";
+    }
+}
+
 Building GeometryLoader::loadFromIFC(const std::string& filepath) {
     Building building;
     building.name = "IFC Import";
@@ -346,6 +393,109 @@ Building GeometryLoader::loadFromIFC(const std::string& filepath) {
     }
 
     return building;
+}
+
+void GeometryLoader::loadMaterialOverrides(const std::string& filepath, Renderer& renderer) {
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file for material override loading: " << filepath << "\n";
+        return;
+    }
+
+    try {
+        json data = json::parse(file);
+
+        // Check if element_material_overrides section exists
+        if (!data.contains("element_material_overrides")) {
+            return;  // No overrides in this file, that's fine
+        }
+
+        const auto& overrides = data["element_material_overrides"];
+        if (!overrides.is_array()) {
+            std::cerr << "element_material_overrides is not an array\n";
+            return;
+        }
+
+        // Load each override
+        for (const auto& o : overrides) {
+            if (!o.contains("element_index")) {
+                continue;
+            }
+
+            int elementIndex = o["element_index"];
+
+            ElementMaterialOverride override;
+            override.active = true;
+
+            // Load per-parameter flags (new format)
+            if (o.contains("has_uv_scale")) {
+                override.hasUVScale = o["has_uv_scale"];
+                override.hasNormalStrength = o.value("has_normal_strength", false);
+                override.hasBrightness = o.value("has_brightness", false);
+                override.hasContrast = o.value("has_contrast", false);
+                override.hasSaturation = o.value("has_saturation", false);
+                override.hasRoughness = o.value("has_roughness", false);
+                override.hasMetallic = o.value("has_metallic", false);
+                override.hasAOStrength = o.value("has_ao_strength", false);
+                override.hasTint = o.value("has_tint", false);
+
+                // Load values (only if flag is true)
+                override.uvScale = o.value("uv_scale", 1.0f);
+                override.normalStrength = o.value("normal_strength", 1.0f);
+                override.brightness = o.value("brightness", 0.0f);
+                override.contrast = o.value("contrast", 1.0f);
+                override.saturation = o.value("saturation", 1.0f);
+                override.roughness = o.value("roughness", 0.5f);
+                override.metallic = o.value("metallic", 0.0f);
+                override.aoStrength = o.value("ao_strength", 1.0f);
+
+                if (o.contains("tint") && o["tint"].size() >= 3) {
+                    override.tint[0] = o["tint"][0];
+                    override.tint[1] = o["tint"][1];
+                    override.tint[2] = o["tint"][2];
+                }
+            } else {
+                // Old format (without flags) - load and set flags based on value presence
+                override.uvScale = o.value("uv_scale", 1.0f);
+                override.hasUVScale = o.contains("uv_scale");
+
+                override.normalStrength = o.value("normal_strength", 1.0f);
+                override.hasNormalStrength = o.contains("normal_strength");
+
+                override.brightness = o.value("brightness", 0.0f);
+                override.hasBrightness = o.contains("brightness");
+
+                override.contrast = o.value("contrast", 1.0f);
+                override.hasContrast = o.contains("contrast");
+
+                override.saturation = o.value("saturation", 1.0f);
+                override.hasSaturation = o.contains("saturation");
+
+                override.roughness = o.value("roughness", 0.5f);
+                override.hasRoughness = o.contains("roughness");
+
+                override.metallic = o.value("metallic", 0.0f);
+                override.hasMetallic = o.contains("metallic");
+
+                override.aoStrength = o.value("ao_strength", 1.0f);
+                override.hasAOStrength = o.contains("ao_strength");
+
+                if (o.contains("tint") && o["tint"].size() >= 3) {
+                    override.tint[0] = o["tint"][0];
+                    override.tint[1] = o["tint"][1];
+                    override.tint[2] = o["tint"][2];
+                    override.hasTint = true;
+                }
+            }
+
+            renderer.setElementOverride(elementIndex, override);
+        }
+
+        std::cout << "Loaded " << overrides.size() << " element material overrides\n";
+
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to load material overrides: " << e.what() << "\n";
+    }
 }
 
 void to_json(json& j, const Building& b) {

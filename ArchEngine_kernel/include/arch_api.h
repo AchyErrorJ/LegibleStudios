@@ -534,6 +534,229 @@ ARCH_API int arch_get_room_data(int index, ArchRoomData* out_room);
  */
 ARCH_API int arch_get_all_rooms(ArchRoomData* out_rooms, int max_rooms);
 
+// =============================================================================
+// Per-Element Material Override API
+// ============================================================================
+
+/**
+ * Set material override for a specific element.
+ * Allows individual walls/elements to have different material properties.
+ *
+ * @param element_index Index of element to modify
+ * @param uv_scale UV scale multiplier (1.0 = default, 2.0 = 2x denser tiling)
+ * @param normal_strength Normal map intensity (1.0 = default, 2.0 = stronger normals)
+ * @param brightness Brightness adjustment (0.0 = default, positive = brighter)
+ * @param contrast Contrast adjustment (1.0 = default, >1 = higher contrast)
+ * @return 0 on success, non-zero on failure (invalid element index)
+ */
+ARCH_API int arch_set_element_material(int element_index,
+                                       float uv_scale,
+                                       float normal_strength,
+                                       float brightness,
+                                       float contrast);
+
+/**
+ * Clear material override for a specific element.
+ * Element will revert to using global material settings.
+ *
+ * @param element_index Index of element to clear
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_clear_element_material(int element_index);
+
+/**
+ * Clear all material overrides.
+ * All elements will revert to global material settings.
+ */
+ARCH_API void arch_clear_all_material_overrides(void);
+
+/**
+ * Check if element has a material override.
+ *
+ * @param element_index Index of element to check
+ * @return 1 if element has override, 0 otherwise
+ */
+ARCH_API int arch_has_material_override(int element_index);
+
+/**
+ * Get material override values for an element.
+ *
+ * @param element_index Index of element to query
+ * @param out_uv_scale Output: UV scale (or 0 if no override)
+ * @param out_normal_strength Output: Normal strength (or 0 if no override)
+ * @param out_brightness Output: Brightness (or 0 if no override)
+ * @param out_contrast Output: Contrast (or 0 if no override)
+ * @return 0 on success, non-zero if element has no override or invalid index
+ */
+ARCH_API int arch_get_element_material(int element_index,
+                                      float* out_uv_scale,
+                                      float* out_normal_strength,
+                                      float* out_brightness,
+                                      float* out_contrast);
+
+/**
+ * Apply material override to multiple elements at once.
+ * Useful for batch operations (e.g., select all walls and adjust together).
+ *
+ * @param indices Array of element indices
+ * @param count Number of elements in array
+ * @param uv_scale UV scale multiplier
+ * @param normal_strength Normal map intensity
+ * @param brightness Brightness adjustment
+ * @param contrast Contrast adjustment
+ * @return Number of elements successfully updated
+ */
+ARCH_API int arch_apply_material_batch(const int* indices, int count,
+                                       float uv_scale,
+                                       float normal_strength,
+                                       float brightness,
+                                       float contrast);
+
+/**
+ * Get the number of elements with material overrides.
+ *
+ * @return Count of elements with active overrides
+ */
+ARCH_API int arch_get_override_count(void);
+
+/**
+ * Get indices of all elements with material overrides.
+ *
+ * @param out_indices Output array (must be large enough)
+ * @param max_indices Maximum number of indices to retrieve
+ * @return Number of indices actually retrieved
+ */
+ARCH_API int arch_get_override_indices(int* out_indices, int max_indices);
+
+// =============================================================================
+// Material Library API
+// =============================================================================
+
+/**
+ * Get the number of available materials.
+ *
+ * @return Number of materials in the library
+ */
+ARCH_API int arch_get_material_count(void);
+
+/**
+ * Get material name by index.
+ *
+ * @param index Material index (0 to material_count-1)
+ * @return Material name (valid until next API call), or NULL if invalid index
+ */
+ARCH_API const char* arch_get_material_name(int index);
+
+/**
+ * Get material category/path.
+ * Examples: "walls", "floors", "roofs", "windows", "doors"
+ *
+ * @param index Material index
+ * @return Category string (valid until next API call), or NULL if invalid
+ */
+ARCH_API const char* arch_get_material_category(int index);
+
+/**
+ * Get all materials in a specific category.
+ *
+ * @param category Category filter (e.g., "walls", "floors")
+ * @param out_indices Output array for material indices
+ * @param max_indices Maximum number of indices to retrieve
+ * @return Number of materials found in category
+ */
+ARCH_API int arch_get_materials_by_category(const char* category,
+                                            int* out_indices,
+                                            int max_indices);
+
+/**
+ * Find material index by name.
+ *
+ * @param name Material name to search for
+ * @return Material index, or -1 if not found
+ */
+ARCH_API int arch_find_material(const char* name);
+
+/**
+ * Apply a material to an element.
+ *
+ * @param element_index Index of element to modify
+ * @param material_name Name of material to apply
+ * @return 0 on success, non-zero on failure (invalid index or material not found)
+ */
+ARCH_API int arch_apply_material_to_element(int element_index, const char* material_name);
+
+/**
+ * Apply a material to multiple elements at once.
+ *
+ * @param indices Array of element indices
+ * @param count Number of elements
+ * @param material_name Name of material to apply
+ * @return Number of elements successfully updated
+ */
+ARCH_API int arch_apply_material_to_batch(const int* indices, int count, const char* material_name);
+
+/**
+ * Get the material currently applied to an element.
+ *
+ * @param element_index Index of element to query
+ * @param out_name Output buffer for material name
+ * @param max_length Maximum length of output buffer
+ * @return 0 on success, non-zero on failure (no material or invalid index)
+ */
+ARCH_API int arch_get_element_material_name(int element_index, char* out_name, int max_length);
+
+// =============================================================================
+// Material Preview API
+// =============================================================================
+
+/**
+ * Material preview handle.
+ * Returned by arch_create_material_preview(), used by arch_get_preview_pixels().
+ */
+typedef void* ArchPreviewHandle;
+
+/**
+ * Create a material preview render.
+ * Renders the specified material to an offscreen texture.
+ *
+ * @param material_name Name of material to preview
+ * @param width Preview width in pixels (recommended: 128, 256, 512)
+ * @param height Preview height in pixels
+ * @return Preview handle, or NULL on failure
+ */
+ARCH_API ArchPreviewHandle arch_create_material_preview(const char* material_name,
+                                                       int width, int height);
+
+/**
+ * Destroy a material preview and release resources.
+ *
+ * @param preview Preview handle to destroy
+ */
+ARCH_API void arch_destroy_material_preview(ArchPreviewHandle preview);
+
+/**
+ * Get preview image pixels.
+ * Returns RGBA8 data (4 bytes per pixel).
+ *
+ * @param preview Preview handle
+ * @param out_pixels Output buffer (must be width * height * 4 bytes)
+ * @param buffer_size Size of output buffer
+ * @return 0 on success, non-zero on failure (buffer too small or invalid handle)
+ */
+ARCH_API int arch_get_preview_pixels(ArchPreviewHandle preview,
+                                     unsigned char* out_pixels,
+                                     int buffer_size);
+
+/**
+ * Get preview dimensions.
+ *
+ * @param preview Preview handle
+ * @param out_width Output: width in pixels
+ * @param out_height Output: height in pixels
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_get_preview_size(ArchPreviewHandle preview, int* out_width, int* out_height);
+
 #ifdef __cplusplus
 }
 #endif

@@ -158,6 +158,7 @@ private:
 
     // SSAO pipeline
     VkPipelineLayout m_ssaoPipelineLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_ssaoBlurPipelineLayout = VK_NULL_HANDLE;  // Separate layout for blur pass
     VkPipeline m_ssaoPipeline = VK_NULL_HANDLE;
     VkPipeline m_ssaoBlurPipeline = VK_NULL_HANDLE;
 

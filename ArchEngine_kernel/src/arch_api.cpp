@@ -869,4 +869,392 @@ ARCH_API int arch_get_all_rooms(ArchRoomData* out_rooms, int max_rooms) {
     return count;
 }
 
+// =============================================================================
+// Per-Element Material Override Implementation
+// =============================================================================
+
+ARCH_API int arch_set_element_material(int element_index,
+                                       float uv_scale,
+                                       float normal_strength,
+                                       float brightness,
+                                       float contrast) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        setError("Renderer not initialized");
+        return -1;
+    }
+
+    if (element_index < 0 || element_index >= static_cast<int>(g_building.elements.size())) {
+        setError("Invalid element index");
+        return -2;
+    }
+
+    // Build override mask
+    u32 mask = 0;
+    if (uv_scale != 1.0f) mask |= (1u << 0);  // OVERRIDE_UV_SCALE
+    if (normal_strength != 1.0f) mask |= (1u << 1);  // OVERRIDE_NORMAL_STRENGTH
+    if (brightness != 0.0f) mask |= (1u << 2);  // OVERRIDE_BRIGHTNESS
+    if (contrast != 1.0f) mask |= (1u << 3);  // OVERRIDE_CONTRAST
+
+    // Apply override via renderer
+    g_renderer->setElementOverride(element_index, mask, uv_scale, normal_strength, brightness, contrast);
+
+    return 0;
+}
+
+ARCH_API int arch_clear_element_material(int element_index) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        setError("Renderer not initialized");
+        return -1;
+    }
+
+    if (element_index < 0 || element_index >= static_cast<int>(g_building.elements.size())) {
+        setError("Invalid element index");
+        return -2;
+    }
+
+    g_renderer->clearElementOverride(element_index);
+    return 0;
+}
+
+ARCH_API void arch_clear_all_material_overrides(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->clearAllElementOverrides();
+    }
+}
+
+ARCH_API int arch_has_material_override(int element_index) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer || element_index < 0 || element_index >= static_cast<int>(g_building.elements.size())) {
+        return 0;
+    }
+
+    return g_renderer->hasElementOverride(element_index) ? 1 : 0;
+}
+
+ARCH_API int arch_get_element_material(int element_index,
+                                      float* out_uv_scale,
+                                      float* out_normal_strength,
+                                      float* out_brightness,
+                                      float* out_contrast) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        setError("Renderer not initialized");
+        return -1;
+    }
+
+    if (element_index < 0 || element_index >= static_cast<int>(g_building.elements.size())) {
+        setError("Invalid element index");
+        return -2;
+    }
+
+    if (!g_renderer->hasElementOverride(element_index)) {
+        return -3;  // No override
+    }
+
+    // Get override values
+    const auto* override = g_renderer->getElementOverride(element_index);
+    if (override) {
+        if (out_uv_scale) *out_uv_scale = override->uvScale;
+        if (out_normal_strength) *out_normal_strength = override->normalStrength;
+        if (out_brightness) *out_brightness = override->brightness;
+        if (out_contrast) *out_contrast = override->contrast;
+    }
+
+    return 0;
+}
+
+ARCH_API int arch_apply_material_batch(const int* indices, int count,
+                                       float uv_scale,
+                                       float normal_strength,
+                                       float brightness,
+                                       float contrast) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        setError("Renderer not initialized");
+        return 0;
+    }
+
+    if (!indices || count <= 0) {
+        setError("Invalid indices array");
+        return 0;
+    }
+
+    // Build override mask
+    u32 mask = 0;
+    if (uv_scale != 1.0f) mask |= (1u << 0);
+    if (normal_strength != 1.0f) mask |= (1u << 1);
+    if (brightness != 0.0f) mask |= (1u << 2);
+    if (contrast != 1.0f) mask |= (1u << 3);
+
+    int updated = 0;
+    for (int i = 0; i < count; i++) {
+        int idx = indices[i];
+        if (idx >= 0 && idx < static_cast<int>(g_building.elements.size())) {
+            g_renderer->setElementOverride(idx, mask, uv_scale, normal_strength, brightness, contrast);
+            updated++;
+        }
+    }
+
+    return updated;
+}
+
+ARCH_API int arch_get_override_count(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        return 0;
+    }
+
+    return static_cast<int>(g_renderer->getOverrideCount());
+}
+
+ARCH_API int arch_get_override_indices(int* out_indices, int max_indices) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        return 0;
+    }
+
+    if (!out_indices || max_indices <= 0) {
+        return 0;
+    }
+
+    return g_renderer->getElementOverrideIndices(out_indices, max_indices);
+}
+
+// =============================================================================
+// Material Library API Implementation
+// =============================================================================
+
+ARCH_API int arch_get_material_count(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        return 0;
+    }
+
+    return static_cast<int>(g_renderer->getMaterialNames().size());
+}
+
+ARCH_API const char* arch_get_material_name(int index) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        setError("Renderer not initialized");
+        return nullptr;
+    }
+
+    const auto& materials = g_renderer->getMaterialNames();
+    if (index < 0 || index >= static_cast<int>(materials.size())) {
+        setError("Invalid material index");
+        return nullptr;
+    }
+
+    // Store in static buffer for next API call (valid until next call)
+    static std::string g_materialNameBuffer;
+    g_materialNameBuffer = materials[index];
+    return g_materialNameBuffer.c_str();
+}
+
+ARCH_API const char* arch_get_material_category(int index) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        setError("Renderer not initialized");
+        return nullptr;
+    }
+
+    const auto& materials = g_renderer->getMaterialNames();
+    if (index < 0 || index >= static_cast<int>(materials.size())) {
+        setError("Invalid material index");
+        return nullptr;
+    }
+
+    // Extract category from material path (format: "category/material_name")
+    const std::string& materialPath = materials[index];
+    size_t slashPos = materialPath.find('/');
+    std::string category = (slashPos != std::string::npos)
+                          ? materialPath.substr(0, slashPos)
+                          : "general";
+
+    static std::string g_categoryBuffer;
+    g_categoryBuffer = category;
+    return g_categoryBuffer.c_str();
+}
+
+ARCH_API int arch_get_materials_by_category(const char* category,
+                                            int* out_indices,
+                                            int max_indices) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        setError("Renderer not initialized");
+        return 0;
+    }
+
+    if (!category || !out_indices || max_indices <= 0) {
+        setError("Invalid parameters");
+        return 0;
+    }
+
+    const auto& materials = g_renderer->getMaterialNames();
+    std::string catPrefix = std::string(category) + "/";
+    int found = 0;
+
+    for (size_t i = 0; i < materials.size() && found < max_indices; i++) {
+        // Check if material starts with category prefix
+        if (materials[i].compare(0, catPrefix.length(), catPrefix) == 0) {
+            out_indices[found++] = static_cast<int>(i);
+        }
+    }
+
+    return found;
+}
+
+ARCH_API int arch_find_material(const char* name) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        return -1;
+    }
+
+    if (!name) {
+        return -1;
+    }
+
+    const auto& materials = g_renderer->getMaterialNames();
+    for (size_t i = 0; i < materials.size(); i++) {
+        if (materials[i] == name) {
+            return static_cast<int>(i);
+        }
+    }
+
+    return -1;  // Not found
+}
+
+ARCH_API int arch_apply_material_to_element(int element_index, const char* material_name) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        setError("Renderer not initialized");
+        return -1;
+    }
+
+    if (element_index < 0 || element_index >= static_cast<int>(g_building.elements.size())) {
+        setError("Invalid element index");
+        return -2;
+    }
+
+    if (!material_name) {
+        setError("Invalid material name");
+        return -3;
+    }
+
+    // Find material index
+    int matIndex = arch_find_material(material_name);
+    if (matIndex < 0) {
+        setError("Material not found");
+        return -4;
+    }
+
+    // Get category from material path
+    const std::string& materialPath = g_renderer->getMaterialNames()[matIndex];
+    size_t slashPos = materialPath.find('/');
+    std::string category = (slashPos != std::string::npos)
+                          ? materialPath.substr(0, slashPos)
+                          : "general";
+
+    // Set override mask for material application
+    u32 mask = (1u << 0);  // UV_SCALE
+
+    // Different UV scales for different categories
+    float uvScale = 1.0f;
+    if (category == "walls") uvScale = 1.0f;
+    else if (category == "floors") uvScale = 2.0f;
+    else if (category == "roofs") uvScale = 1.5f;
+
+    g_renderer->setElementOverride(element_index, mask, uvScale, 1.0f, 0.0f, 1.0f);
+
+    return 0;
+}
+
+ARCH_API int arch_apply_material_to_batch(const int* indices, int count, const char* material_name) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        setError("Renderer not initialized");
+        return 0;
+    }
+
+    if (!indices || count <= 0) {
+        setError("Invalid indices array");
+        return 0;
+    }
+
+    if (!material_name) {
+        setError("Invalid material name");
+        return 0;
+    }
+
+    // Find material index
+    int matIndex = arch_find_material(material_name);
+    if (matIndex < 0) {
+        setError("Material not found");
+        return 0;
+    }
+
+    int updated = 0;
+    for (int i = 0; i < count; i++) {
+        int idx = indices[i];
+        if (idx >= 0 && idx < static_cast<int>(g_building.elements.size())) {
+            if (arch_apply_material_to_element(idx, material_name) == 0) {
+                updated++;
+            }
+        }
+    }
+
+    return updated;
+}
+
+ARCH_API int arch_get_element_material_name(int element_index, char* out_name, int max_length) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        setError("Renderer not initialized");
+        return -1;
+    }
+
+    if (element_index < 0 || element_index >= static_cast<int>(g_building.elements.size())) {
+        setError("Invalid element index");
+        return -2;
+    }
+
+    if (!out_name || max_length <= 0) {
+        setError("Invalid output buffer");
+        return -3;
+    }
+
+    // Check if element has an override
+    if (!g_renderer->hasElementOverride(element_index)) {
+        // No override - return empty string
+        out_name[0] = '\0';
+        return -4;
+    }
+
+    // For now, return "custom" since we don't track which material was applied
+    // TODO: Track applied material names in element metadata
+    std::strncpy(out_name, "custom", max_length - 1);
+    out_name[max_length - 1] = '\0';
+
+    return 0;
+}
+
 } // extern "C"
