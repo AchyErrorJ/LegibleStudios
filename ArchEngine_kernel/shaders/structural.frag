@@ -12,25 +12,20 @@ layout(location = 6) in vec2 fragTexCoord;
 // Output
 layout(location = 0) out vec4 outColor;
 
-// Uniform buffer
-layout(set = 0, binding = 0) uniform UniformBufferObject {
-    mat4 view;
-    mat4 proj;
-    mat4 lightViewProj;
-    vec4 lightDirection;
-    vec4 clipPlane;
-    float time;
-    float shadowBias;
-    uint enableClipping;
-    uint enableShadows;
-    uint outputLinearHDR;  // If true, output linear HDR (tonemapping done in composite pass)
-    float exposure;        // Exposure multiplier for tonemapping
-    float tessellationLevel;  // Tessellation subdivision level
-    float displacementScale;  // Height map displacement scale
-    vec4 materialParams;    // x = UV scale, y = normal strength, z = brightness, w = contrast
-    vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
-    vec4 materialTint;      // RGB tint, w = unused
-} ubo;
+// Shared UBO definition (includes override mask constants)
+#include "include/ubo.glsl"
+
+// Push constants (per-draw data including element overrides)
+layout(push_constant) uniform PushConstants {
+    mat4 model;
+    vec4 color;
+    vec4 material;       // x = metallic, y = roughness, z = ao, w = emission
+    uint overrideMask;   // Which overrides are active
+    float _pad1, _pad2, _pad3;  // Padding for vec4 alignment
+    vec4 overrides1;     // x=uvScale, y=normalStrength, z=brightness, w=contrast
+    vec4 overrides2;     // x=saturation, y=roughness, z=metallic, w=aoStrength
+    vec4 overrides3;     // rgb=tint, w=uvRotation (radians)
+} push;
 
 // Shadow map sampler with depth comparison
 layout(set = 0, binding = 1) uniform sampler2DShadow shadowMap;
@@ -123,6 +118,71 @@ vec3 perturbNormal(vec3 N, vec3 V, vec2 texCoord, float normalStrength) {
     mat3 TBN = mat3(T, B, N);
 
     return normalize(TBN * tangentNormal);
+}
+
+// Compute TBN matrix for POM (returns transpose for view->tangent space transform)
+mat3 computeTBN(vec3 N, vec2 texCoord) {
+    vec3 Q1 = dFdx(fragPosition);
+    vec3 Q2 = dFdy(fragPosition);
+    vec2 st1 = dFdx(texCoord);
+    vec2 st2 = dFdy(texCoord);
+
+    vec3 T = normalize(Q1 * st2.t - Q2 * st1.t);
+    vec3 B = normalize(cross(N, T));
+    return mat3(T, B, N);
+}
+
+// Parallax Occlusion Mapping (POM)
+// Ray marches through height map to find surface intersection
+// Returns displaced UV coordinates
+vec2 parallaxOcclusionMapping(vec2 texCoord, vec3 viewDirTangent, float heightScale, float minLayers, float maxLayers) {
+    // Safety: skip POM if viewing nearly parallel to surface (would cause artifacts)
+    if (abs(viewDirTangent.z) < 0.001) {
+        return texCoord;
+    }
+
+    // Number of layers based on view angle (more layers at grazing angles)
+    float numLayers = mix(maxLayers, minLayers, abs(dot(vec3(0.0, 0.0, 1.0), viewDirTangent)));
+    numLayers = clamp(numLayers, 4.0, 128.0);  // Safety clamp
+
+    // Calculate the size of each layer
+    float layerDepth = 1.0 / numLayers;
+    float currentLayerDepth = 0.0;
+
+    // Direction and amount to shift UV per layer
+    vec2 P = viewDirTangent.xy / viewDirTangent.z * heightScale;
+    vec2 deltaTexCoords = P / numLayers;
+
+    // Current UV coordinates and height
+    vec2 currentTexCoords = texCoord;
+    float currentDepthMapValue = 1.0 - texture(heightMap, currentTexCoords).r;
+
+    // Ray march until we find intersection (with iteration limit for safety)
+    int maxIterations = int(numLayers) + 1;
+    int iterations = 0;
+    while (currentLayerDepth < currentDepthMapValue && iterations < maxIterations) {
+        currentTexCoords -= deltaTexCoords;
+        currentDepthMapValue = 1.0 - texture(heightMap, currentTexCoords).r;
+        currentLayerDepth += layerDepth;
+        iterations++;
+    }
+
+    // Binary search refinement for more accurate intersection
+    vec2 prevTexCoords = currentTexCoords + deltaTexCoords;
+
+    float afterDepth = currentDepthMapValue - currentLayerDepth;
+    float beforeDepth = (1.0 - texture(heightMap, prevTexCoords).r) - currentLayerDepth + layerDepth;
+
+    // Safety: avoid division by zero
+    float denom = afterDepth - beforeDepth;
+    if (abs(denom) < 0.0001) {
+        return currentTexCoords;
+    }
+
+    float weight = afterDepth / denom;
+    weight = clamp(weight, 0.0, 1.0);  // Safety clamp
+
+    return mix(currentTexCoords, prevTexCoords, weight);
 }
 
 // Calculate stress color based on utilization ratio
@@ -223,8 +283,63 @@ void main() {
     vec3 L = normalize(-ubo.lightDirection.xyz);
     vec3 H = normalize(V + L);
 
+    // Calculate UV coordinates with override support (replacement, not additive)
+    float uvScale = ubo.materialParams.x;
+    float uvRotation = 0.0;  // Default: no rotation
+
+    // Use push constant override for UV scale (only if UV scale bit is set)
+    if ((push.overrideMask & OVERRIDE_UV_SCALE) != 0u) {
+        uvScale = push.overrides1.x;  // Use push constant override value
+    }
+    // Use push constant override for UV rotation
+    if ((push.overrideMask & OVERRIDE_UV_ROTATION) != 0u) {
+        uvRotation = push.overrides3.w;  // Rotation in radians
+    }
+
+    // Apply scale first
+    vec2 uv = fragTexCoord * uvScale;
+
+    // Apply rotation around center (0.5, 0.5) if rotation is set
+    if (uvRotation != 0.0) {
+        vec2 center = vec2(0.5) * uvScale;  // Center point scales with UV
+        float cosR = cos(uvRotation);
+        float sinR = sin(uvRotation);
+        vec2 offset = uv - center;
+        uv = vec2(
+            offset.x * cosR - offset.y * sinR,
+            offset.x * sinR + offset.y * cosR
+        ) + center;
+    }
+
+    // Apply Parallax Occlusion Mapping if enabled
+    if (ubo.pomParams.x > 0.5) {
+        // Compute camera position from inverse view matrix
+        mat4 invView = inverse(ubo.view);
+        vec3 cameraPos = invView[3].xyz;
+
+        // World-space view direction (from surface to camera)
+        vec3 viewDirWorld = normalize(cameraPos - fragPosition);
+
+        // Compute TBN matrix and transform view direction to tangent space
+        mat3 TBN = computeTBN(N, uv);
+        mat3 TBN_transpose = transpose(TBN);  // World -> Tangent space
+        vec3 viewDirTangent = normalize(TBN_transpose * viewDirWorld);
+
+        // Apply POM
+        float pomHeightScale = ubo.pomParams.y;
+        float pomMinLayers = ubo.pomParams.z;
+        float pomMaxLayers = ubo.pomParams.w;
+
+        uv = parallaxOcclusionMapping(uv, viewDirTangent, pomHeightScale, pomMinLayers, pomMaxLayers);
+    }
+
+    // Normal strength with override support (use push constants)
+    float normalStrength = ubo.materialParams.y;
+    if ((push.overrideMask & OVERRIDE_NORMAL_STRENGTH) != 0u) {
+        normalStrength = push.overrides1.y;
+    }
+
     // Sample material textures
-    vec2 uv = fragTexCoord * ubo.materialParams.x;
     vec3 texAlbedo = texture(albedoMap, uv).rgb;
     vec3 texNormal = texture(normalMap, uv).rgb;
     float texRoughness = texture(roughnessMap, uv).r;
@@ -235,7 +350,7 @@ void main() {
 
     // Perturb normal using normal map (only if not flat normal)
     if (length(texNormal - vec3(0.5, 0.5, 1.0)) > 0.01) {
-        N = perturbNormal(N, V, uv, ubo.materialParams.y);
+        N = perturbNormal(N, V, uv, normalStrength);
     }
 
     // Extract push constant material properties (used as multipliers/overrides)
@@ -244,16 +359,39 @@ void main() {
     float materialAO = fragMaterial.z * texAO;
     float emission = fragMaterial.w;
 
-    // Apply material adjustments from UBO
+    // Apply material adjustments from UBO with override support (replacement for most, additive for roughness/metallic)
     float brightness = ubo.materialParams.z;
     float contrast = ubo.materialParams.w;
     float saturation = ubo.materialParams2.x;
-    float roughnessOffset = ubo.materialParams2.y;
-    float metallicOffset = ubo.materialParams2.z;
+    float roughnessOffset = ubo.materialParams2.y;  // Additive offset
+    float metallicOffset = ubo.materialParams2.z;    // Additive offset
     float aoStrength = ubo.materialParams2.w;
     vec3 tint = ubo.materialTint.rgb;
 
-    // Apply roughness/metallic/AO offsets
+    // Apply element overrides from push constants (all per-element overrides)
+    if ((push.overrideMask & OVERRIDE_BRIGHTNESS) != 0u) {
+        brightness = push.overrides1.z;
+    }
+    if ((push.overrideMask & OVERRIDE_CONTRAST) != 0u) {
+        contrast = push.overrides1.w;
+    }
+    if ((push.overrideMask & OVERRIDE_SATURATION) != 0u) {
+        saturation = push.overrides2.x;
+    }
+    if ((push.overrideMask & OVERRIDE_ROUGHNESS) != 0u) {
+        roughnessOffset = push.overrides2.y;
+    }
+    if ((push.overrideMask & OVERRIDE_METALLIC) != 0u) {
+        metallicOffset = push.overrides2.z;
+    }
+    if ((push.overrideMask & OVERRIDE_AO_STRENGTH) != 0u) {
+        aoStrength = push.overrides2.w;
+    }
+    if ((push.overrideMask & OVERRIDE_TINT) != 0u) {
+        tint = push.overrides3.rgb;
+    }
+
+    // Apply roughness/metallic with offset (additive), AO and others as direct values
     roughness = clamp(roughness + roughnessOffset, 0.04, 1.0);
     metallic = clamp(metallic + metallicOffset, 0.0, 1.0);
     materialAO = clamp(materialAO * aoStrength, 0.0, 1.0);
@@ -271,6 +409,7 @@ void main() {
     albedo = mix(vec3(gray), albedo, saturation);
     // Tint: multiply
     albedo *= tint;
+
     // Clamp to valid range
     albedo = clamp(albedo, 0.0, 1.0);
 
@@ -323,8 +462,11 @@ void main() {
     vec3 kD_ambient = 1.0 - kS_ambient;
     kD_ambient *= 1.0 - metallic;
 
-    // Diffuse ambient
-    vec3 irradiance = ambientColor + vec3(0.15, 0.18, 0.22);  // Sky-ish ambient
+    // Diffuse ambient with sky/ground gradient
+    vec3 skyAmbient = vec3(0.18, 0.22, 0.28);    // Slightly blue sky
+    vec3 groundAmbient = vec3(0.12, 0.10, 0.08); // Warm ground bounce
+    float skyBlend = N.y * 0.5 + 0.5;            // 0 = facing down, 1 = facing up
+    vec3 irradiance = ambientColor + mix(groundAmbient, skyAmbient, skyBlend);
     vec3 diffuseAmbient = irradiance * albedo;
 
     // Simple specular ambient (approximate)

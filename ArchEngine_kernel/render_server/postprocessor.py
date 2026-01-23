@@ -316,5 +316,12 @@ POSTPROCESS_PRESETS = {
         'saturation': 0.2,
         'bloom_intensity': 0.2,
         'vignette': 0.15
+    },
+    'print_ready': {
+        'saturation': 0.4,      # Boost saturation to survive CMYK conversion
+        'vibrance': 0.3,        # Extra boost to less saturated colors
+        'contrast': 0.2,        # Slight contrast boost
+        'sharpness': 0.35,      # Crisp for print
+        'exposure': -0.05       # Slightly darker (prints often come out lighter)
     }
 }

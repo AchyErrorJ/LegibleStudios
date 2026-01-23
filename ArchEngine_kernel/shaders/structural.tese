@@ -23,25 +23,20 @@ layout(location = 4) out vec4 fragLightSpacePos;
 layout(location = 5) out vec4 fragMaterial;
 layout(location = 6) out vec2 fragTexCoord;
 
-// Uniform buffer (must match C++ UniformBufferObject exactly)
-layout(set = 0, binding = 0) uniform UniformBufferObject {
-    mat4 view;
-    mat4 proj;
-    mat4 lightViewProj;
-    vec4 lightDirection;
-    vec4 clipPlane;
-    float time;
-    float shadowBias;
-    uint enableClipping;
-    uint enableShadows;
-    uint outputLinearHDR;
-    float exposure;
-    float tessellationLevel;
-    float displacementScale;
-    vec4 materialParams;
-    vec4 materialParams2;
-    vec4 materialTint;
-} ubo;
+// Shared UBO definition (includes override mask constants)
+#include "include/ubo.glsl"
+
+// Push constants (per-draw data including element overrides)
+layout(push_constant) uniform PushConstants {
+    mat4 model;
+    vec4 color;
+    vec4 material;       // x = metallic, y = roughness, z = ao, w = emission
+    uint overrideMask;   // Which overrides are active
+    float _pad1, _pad2, _pad3;  // Padding for vec4 alignment
+    vec4 overrides1;     // x=uvScale, y=normalStrength, z=brightness, w=contrast
+    vec4 overrides2;     // x=saturation, y=roughness, z=metallic, w=aoStrength
+    vec4 overrides3;     // rgb=tint, w=uvRotation (radians)
+} push;
 
 // Height map sampler (set 1, binding 7 - after other material textures)
 layout(set = 1, binding = 7) uniform sampler2D heightMap;
@@ -73,9 +68,28 @@ void main() {
     vec4 lightSpacePos = interpolate4(inFragLightSpacePos[0], inFragLightSpacePos[1], inFragLightSpacePos[2]);
     vec4 material = interpolate4(inFragMaterial[0], inFragMaterial[1], inFragMaterial[2]);
 
-    // Apply UV scale from material params
+    // Apply UV scale with override support (replacement, not additive)
     float uvScale = ubo.materialParams.x;
+    float uvRotation = 0.0;
+    if ((push.overrideMask & OVERRIDE_UV_SCALE) != 0u) {
+        uvScale = push.overrides1.x;  // Use push constant override
+    }
+    if ((push.overrideMask & OVERRIDE_UV_ROTATION) != 0u) {
+        uvRotation = push.overrides3.w;  // Rotation in radians
+    }
     vec2 scaledTexCoord = texCoord * uvScale;
+
+    // Apply rotation around center if rotation is set
+    if (uvRotation != 0.0) {
+        vec2 center = vec2(0.5) * uvScale;
+        float cosR = cos(uvRotation);
+        float sinR = sin(uvRotation);
+        vec2 offset = scaledTexCoord - center;
+        scaledTexCoord = vec2(
+            offset.x * cosR - offset.y * sinR,
+            offset.x * sinR + offset.y * cosR
+        ) + center;
+    }
 
     // Sample height map (only if displacement is enabled)
     if (ubo.displacementScale > 0.0) {
@@ -89,7 +103,9 @@ void main() {
         position += normal * displacement;
 
         // Recompute normal using finite differences for better lighting
-        float texelSize = 1.0 / 1024.0; // Assume 1024x1024 height map
+        // Scale texel size with UV scale so gradients sample correctly when texture is tiled
+        float baseTexelSize = 1.0 / 1024.0; // Assume 1024x1024 height map
+        float texelSize = baseTexelSize * uvScale;
         float heightL = texture(heightMap, scaledTexCoord + vec2(-texelSize, 0)).r;
         float heightR = texture(heightMap, scaledTexCoord + vec2(texelSize, 0)).r;
         float heightD = texture(heightMap, scaledTexCoord + vec2(0, -texelSize)).r;
@@ -117,6 +133,8 @@ void main() {
     fragPosition = position;
     fragNormal = normal;
     fragColor = color;
+    // Pass the original texCoord - fragment shader handles UV scaling
+    // This ensures displacement and texture sampling use consistent coordinates
     fragTexCoord = texCoord;
     fragStress = stress;
     fragLightSpacePos = lightSpacePos;

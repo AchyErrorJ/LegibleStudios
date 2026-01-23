@@ -17,6 +17,8 @@
 #include "types.hpp"
 #include <set>
 #include <functional>
+#include <cstddef>
+#include <iostream>
 #include "vulkan_context.hpp"
 #include "pipeline.hpp"
 #include "mesh.hpp"
@@ -37,8 +39,44 @@ namespace arch {
 struct RenderStats {
     u32 drawCalls = 0;      ///< Number of draw calls this frame
     u32 triangles = 0;      ///< Total triangles rendered this frame
+    u32 culledElements = 0; ///< Elements culled by frustum this frame
     f32 frameTimeMs = 0.0f; ///< CPU frame time in milliseconds
     f32 gpuTimeMs = 0.0f;   ///< GPU frame time in milliseconds
+};
+
+/**
+ * @brief Per-element material override
+ *
+ * Stores material property adjustments for a specific element.
+ * Values are additive: final_value = global_value + adjustment.
+ * Set all values to 0.0 (and tint to 1.0) to use global defaults.
+ */
+struct ElementMaterialOverride {
+    bool active = false;        ///< True if any override has been set
+
+    // Per-parameter override flags
+    bool hasUVScale = false;
+    bool hasUVRotation = false;
+    bool hasNormalStrength = false;
+    bool hasBrightness = false;
+    bool hasContrast = false;
+    bool hasSaturation = false;
+    bool hasRoughness = false;
+    bool hasMetallic = false;
+    bool hasAOStrength = false;
+    bool hasTint = false;
+
+    // Direct replacement values (not additive)
+    float uvScale = 1.0f;           ///< Direct UV scale value (0.1 to 200)
+    float uvRotation = 0.0f;        ///< UV rotation in degrees (0 to 360)
+    float normalStrength = 1.0f;    ///< Direct normal strength value (0 to 5)
+    float brightness = 0.0f;        ///< Direct brightness value (-1 to 1)
+    float contrast = 1.0f;          ///< Direct contrast value (0 to 2)
+    float saturation = 1.0f;        ///< Direct saturation value (0 to 2)
+    float roughness = 0.5f;         ///< Direct roughness value (0 to 1)
+    float metallic = 0.0f;          ///< Direct metallic value (0 to 1)
+    float aoStrength = 1.0f;        ///< Direct AO strength value (0 to 2)
+    float tint[3] = {0, 0, 0};      ///< Tint offset values (-1 to 1, additive color)
 };
 
 /**
@@ -324,6 +362,12 @@ public:
      * @param material Vec4 with (metallic, roughness, ao, emission)
      */
     void drawMeshWithMaterial(Mesh& mesh, const mat4& transform, vec3 color, f32 stress, vec4 material);
+
+    /**
+     * @brief Draw mesh with material and per-element override support
+     * @param elementId Element index to look up overrides (-1 = no override)
+     */
+    void drawMeshWithMaterialAndOverride(Mesh& mesh, const mat4& transform, vec3 color, f32 stress, vec4 material, int elementId);
 
     /**
      * @brief Draw a reference grid on the ground plane
@@ -666,8 +710,22 @@ public:
      * @brief Set UV scale for material texture tiling
      * @param scale UV multiplier (higher = more repetition)
      */
-    void setMaterialUVScale(f32 scale) { m_materialUVScale = scale; }
-    f32 getMaterialUVScale() const { return m_materialUVScale; }
+    void setMaterialUVScale(f32 scale) {
+        static int callCount = 0;
+        if (callCount < 10 || scale != m_materialUVScale) {
+            std::cout << "[setMaterialUVScale] " << m_materialUVScale << " -> " << scale << " (call #" << callCount << ")" << std::endl;
+            callCount++;
+        }
+        m_materialUVScale = scale;
+    }
+    f32 getMaterialUVScale() const {
+        static int callCount = 0;
+        if (callCount < 10) {
+            std::cout << "[getMaterialUVScale] returning " << m_materialUVScale << " (call #" << callCount << ")" << std::endl;
+            callCount++;
+        }
+        return m_materialUVScale;
+    }
 
     /**
      * @brief Set normal map strength
@@ -715,6 +773,23 @@ public:
     f32 getDisplacementScale() const { return m_displacementScale; }
     /// @}
 
+    /// @name Parallax Occlusion Mapping (POM)
+    /// @{
+
+    /** @brief Enable or disable Parallax Occlusion Mapping */
+    void setPOMEnabled(bool enabled) { m_pomEnabled = enabled; }
+    bool getPOMEnabled() const { return m_pomEnabled; }
+
+    /** @brief Set POM height scale (depth of parallax effect) */
+    void setPOMHeightScale(f32 scale) { m_pomHeightScale = scale; }
+    f32 getPOMHeightScale() const { return m_pomHeightScale; }
+
+    /** @brief Set POM layer counts for quality (min layers at perpendicular, max at grazing angles) */
+    void setPOMLayers(f32 minLayers, f32 maxLayers) { m_pomMinLayers = minLayers; m_pomMaxLayers = maxLayers; }
+    f32 getPOMMinLayers() const { return m_pomMinLayers; }
+    f32 getPOMMaxLayers() const { return m_pomMaxLayers; }
+    /// @}
+
     /// @name Material Style
     /// @{
 
@@ -755,6 +830,105 @@ public:
      * @return MaterialPreset with appropriate PBR values for the style
      */
     MaterialPreset getMaterialForElement(ElementType type) const;
+
+    /**
+     * @brief Get ImGui texture descriptor for material preview thumbnail
+     * @param materialName Name of the material
+     * @return VkDescriptorSet for ImGui Image(), or VK_NULL_HANDLE if not available
+     *
+     * Generates and caches material preview thumbnails on first call.
+     * Returns ImGui-compatible texture descriptor for displaying material previews.
+     */
+    VkDescriptorSet getMaterialPreviewDescriptor(const std::string& materialName);
+
+    /**
+     * @brief Check if material preview is ready
+     * @param materialName Name of the material
+     * @return true if preview texture is available
+     */
+    bool hasMaterialPreview(const std::string& materialName) const;
+
+    /**
+     * @brief Generate material preview thumbnails for all materials
+     *
+     * Renders all materials to thumbnail textures for display in the material library.
+     * This can take a moment if there are many materials.
+     */
+    void generateMaterialPreviews();
+    /// @}
+
+    /// @name Per-Element Material Overrides
+    /// @{
+
+    /**
+     * @brief Set material override for a specific element
+     * @param elementId Unique ID of the element (typically the index in elements vector)
+     * @param override Material override parameters to apply
+     *
+     * Override values are added to global material values.
+     * This allows per-element material customization (e.g., make one wall darker).
+     */
+    void setElementOverride(int elementId, const ElementMaterialOverride& override);
+
+    /**
+     * @brief Set material override for an element (individual parameters)
+     * @param elementId Unique ID of the element
+     * @param mask Override mask bitfield
+     * @param uvScale UV scale value
+     * @param normalStrength Normal strength value
+     * @param brightness Brightness value
+     * @param contrast Contrast value
+     */
+    void setElementOverride(int elementId, u32 mask, float uvScale, float normalStrength, float brightness, float contrast);
+
+    /**
+     * @brief Check if element has a material override
+     * @param elementId Unique ID of the element
+     * @return True if element has override, false otherwise
+     */
+    bool hasElementOverride(int elementId) const;
+
+    /**
+     * @brief Get material override for an element
+     * @param elementId Unique ID of the element
+     * @return Pointer to override if exists, nullptr otherwise
+     */
+    const ElementMaterialOverride* getElementOverride(int elementId) const;
+
+    /**
+     * @brief Remove override for a specific element
+     * @param elementId Unique ID of the element
+     */
+    void clearElementOverride(int elementId);
+
+    /**
+     * @brief Remove all element material overrides
+     */
+    void clearAllElementOverrides();
+
+    /**
+     * @brief Get count of elements with active overrides
+     * @return Number of elements with overrides
+     */
+    size_t getOverrideCount() const { return m_elementMaterialOverrides.size(); }
+
+    /**
+     * @brief Get indices of all elements with overrides
+     * @param outIndices Output array to fill with indices
+     * @param maxIndices Maximum number of indices to retrieve
+     * @return Number of indices actually retrieved
+     */
+    size_t getElementOverrideIndices(int* outIndices, size_t maxIndices) const;
+
+    /**
+     * @brief Apply element override to UBO (internal use by drawStructuralFrame)
+     * @param elementId ID of the element to apply overrides for
+     * @return Override mask bitfield (0 if no override)
+     *
+     * This updates the UBO element override fields for the current element
+     * and returns a mask indicating which override parameters are active.
+     */
+    u32 applyElementOverrideToUBO(int elementId);
     /// @}
 
     /// @name Vulkan Access
@@ -837,10 +1011,75 @@ public:
      * @return true if save succeeded
      */
     bool saveHighResEXR(const std::string& filepath);
+
+    /**
+     * @brief Quick preview render (1080p, 1 sample) for fast print preview
+     * Much faster than full high-res render, allows iterating on post-processing settings
+     * @param elements Scene elements to render
+     * @param building Building data
+     * @param filepath Output file path
+     * @param brightness Brightness multiplier
+     * @return true if render succeeded
+     */
+    bool renderPreview(const std::vector<StructuralElement>& elements,
+                      const Building& building,
+                      const std::string& filepath,
+                      float brightness = 1.0f);
+    /// @}
+
+    /// @name Live Preview Rendering
+    /// @{
+
+    /**
+     * @brief Create persistent GPU resources for inline preview rendering
+     *
+     * Creates a fixed-resolution (640x360) render target that stays on GPU
+     * for fast ImGui display. Only call once; resources persist until cleanup.
+     */
+    void createPreviewResources();
+
+    /**
+     * @brief Clean up preview rendering resources
+     *
+     * Must be called before ImGui shutdown. Removes ImGui texture descriptor
+     * and destroys all Vulkan resources.
+     */
+    void cleanupPreviewResources();
+
+    /**
+     * @brief Render scene to preview texture for ImGui display
+     * @param elements Structural elements to render
+     * @param building Building data for visualization
+     * @return true if rendering succeeded
+     *
+     * Renders at 640x360, single sample, directly to GPU texture.
+     * Result is immediately available via getPreviewDescriptor().
+     */
+    bool renderPreviewToTexture(const std::vector<StructuralElement>& elements,
+                                const Building& building);
+
+    /**
+     * @brief Get ImGui-compatible descriptor for preview texture
+     * @return VkDescriptorSet suitable for ImGui::Image(), or VK_NULL_HANDLE if not created
+     */
+    VkDescriptorSet getPreviewDescriptor() const { return m_previewImGuiDescriptor; }
+
+    /** @brief Get preview width in pixels */
+    u32 getPreviewWidth() const { return kPreviewWidth; }
+
+    /** @brief Get preview height in pixels */
+    u32 getPreviewHeight() const { return kPreviewHeight; }
+
+    /** @brief Check if preview resources are ready */
+    bool hasPreviewResources() const { return m_previewResourcesCreated; }
     /// @}
 
 private:
     static constexpr u32 kMaxMaterialSets = 128;
+
+    // Preview rendering constants (1080p for high-quality inline preview)
+    static constexpr u32 kPreviewWidth = 1920;
+    static constexpr u32 kPreviewHeight = 1080;
 
     void createRenderPass();
     void createFramebuffers();
@@ -934,10 +1173,13 @@ private:
     u32 m_imageIndex = 0;
     bool m_frameStarted = false;
     VkCommandBuffer m_currentCommandBuffer = VK_NULL_HANDLE;
+    int m_currentDrawElementId = -1;  // Element ID for per-element overrides (-1 = none)
 
-    // Camera and time
+    // Camera, frustum, and time
     Camera m_camera;
+    Frustum m_frustum;  // Cached frustum for culling
     f32 m_time = 0.0f;
+    u32 m_culledCount = 0;  // Debug: elements culled this frame
 
     // Visualization mode
     VisualizationMode m_vizMode = VisualizationMode::Material;
@@ -1006,6 +1248,19 @@ private:
     f32 m_tessellationLevel = 8.0f;
     f32 m_displacementScale = 0.1f;
 
+    // Parallax Occlusion Mapping settings
+    bool m_pomEnabled = false;
+    f32 m_pomHeightScale = 0.05f;   // Depth of parallax effect
+    f32 m_pomMinLayers = 8.0f;      // Layers at perpendicular view
+    f32 m_pomMaxLayers = 32.0f;     // Layers at grazing angles
+
+    // Per-element material overrides (sparse map for memory efficiency)
+    std::unordered_map<int, ElementMaterialOverride> m_elementMaterialOverrides;
+
+    // Note: Element overrides are now stored entirely in UBO, no push constant cache needed
+
+
+
     // Stats
     RenderStats m_stats;
 
@@ -1028,6 +1283,55 @@ private:
     void createHighResResources(u32 width, u32 height);
     void cleanupHighResResources();
     void copyHighResImageToBuffer();
+
+    // Live preview rendering resources (GPU-direct, stays on GPU for ImGui)
+    VkImage m_previewImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_previewMemory = VK_NULL_HANDLE;
+    VkImageView m_previewImageView = VK_NULL_HANDLE;
+    VkSampler m_previewSampler = VK_NULL_HANDLE;
+    VkImage m_previewDepthImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_previewDepthMemory = VK_NULL_HANDLE;
+    VkImageView m_previewDepthView = VK_NULL_HANDLE;
+    VkFramebuffer m_previewFramebuffer = VK_NULL_HANDLE;
+    VkRenderPass m_previewRenderPass = VK_NULL_HANDLE;
+    VkDescriptorSet m_previewImGuiDescriptor = VK_NULL_HANDLE;
+    std::unique_ptr<Pipeline> m_previewPipeline;
+    std::unique_ptr<Pipeline> m_previewTransparentPipeline;
+    bool m_previewResourcesCreated = false;
+
+    // Material preview thumbnails
+    static constexpr u32 kMaterialPreviewSize = 256;  // Thumbnail size (larger for better visibility)
+    struct MaterialPreview {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView imageView = VK_NULL_HANDLE;
+        VkDescriptorSet imGuiDescriptor = VK_NULL_HANDLE;
+    };
+    std::unordered_map<std::string, MaterialPreview> m_materialPreviews;
+    VkRenderPass m_materialPreviewRenderPass = VK_NULL_HANDLE;
+    VkSampler m_materialPreviewSampler = VK_NULL_HANDLE;
+    std::unique_ptr<Pipeline> m_materialPreviewPipeline;  // Simple pipeline for preview rendering
+    bool m_materialPreviewResourcesCreated = false;
+    std::unique_ptr<Mesh> m_materialPreviewSphere;  // Sphere mesh for preview rendering
+    VkBuffer m_materialPreviewSphereVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_materialPreviewSphereVertexMemory = VK_NULL_HANDLE;
+    VkBuffer m_materialPreviewSphereIndexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_materialPreviewSphereIndexMemory = VK_NULL_HANDLE;
+    u32 m_materialPreviewSphereIndexCount = 0;
+
+    // Dedicated UBO for preview rendering (avoids conflicts with main renderer)
+    VkBuffer m_materialPreviewUBO = VK_NULL_HANDLE;
+    VkDeviceMemory m_materialPreviewUBOMemory = VK_NULL_HANDLE;
+    VkDescriptorSet m_materialPreviewDescriptorSet = VK_NULL_HANDLE;  // UBO descriptor set
+
+    void createMaterialPreviewResources();
+    void cleanupMaterialPreviewResources();
+    bool renderMaterialPreview(const std::string& materialName);
+    MaterialPreview createMaterialPreviewTexture();
+    void createMaterialPreviewSphereMesh();
+    void cleanupMaterialPreviewSphereMesh();
+    void createMaterialPreviewUBO();
+    void cleanupMaterialPreviewUBO();
 };
 
 } // namespace arch
