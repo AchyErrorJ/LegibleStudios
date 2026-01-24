@@ -954,6 +954,7 @@ int main(int argc, char* argv[]) {
 
                     renderer.drawSky();
                     renderer.drawGrid(150.0f, 5.0f);
+                    renderer.drawTerrain(buildings[currentBuilding].terrainMesh);
                     renderer.drawStructuralFrame(buildings[currentBuilding].elements, buildings[currentBuilding], imgui.getSelectedElements());
 
                     renderer.endHDRRenderPass();
@@ -972,6 +973,9 @@ int main(int argc, char* argv[]) {
 
                     // Draw reference grid
                     renderer.drawGrid(150.0f, 5.0f);
+
+                    // Draw terrain (if present)
+                    renderer.drawTerrain(buildings[currentBuilding].terrainMesh);
 
                     // Draw current building with visualization mode coloring
                     // Highlight all selected elements

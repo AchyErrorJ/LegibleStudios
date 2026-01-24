@@ -23,6 +23,9 @@
 
 namespace arch {
 
+// Forward declaration for Light (full definition in lights.hpp)
+struct Light;
+
 // Type aliases
 using u8  = uint8_t;
 using u16 = uint16_t;
@@ -124,6 +127,19 @@ struct MeshData {
     bool hasData() const { return !vertices.empty() && !faces.empty(); }
 };
 
+// Terrain mesh data (from elevation API)
+struct TerrainMesh {
+    std::vector<Vertex> vertices;  // Pre-colored vertices (elevation gradient in color)
+    std::vector<u32> indices;
+
+    f32 width_ft = 0.0f;           // Original width in feet
+    f32 depth_ft = 0.0f;           // Original depth in feet
+    f32 min_elevation = 0.0f;      // Minimum elevation (feet)
+    f32 max_elevation = 0.0f;      // Maximum elevation (feet)
+
+    bool hasData() const { return !vertices.empty() && !indices.empty(); }
+};
+
 // Structural element for rendering
 struct StructuralElement {
     ElementType type;
@@ -177,6 +193,73 @@ struct Camera {
     }
 };
 
+// Serializable camera state for project save/load
+struct CameraState {
+    vec3 position = {0.0f, 5.0f, 20.0f};
+    vec3 target = {0.0f, 0.0f, 0.0f};
+    vec3 up = {0.0f, 1.0f, 0.0f};
+    f32 fov = 45.0f;
+    f32 nearPlane = 0.1f;
+    f32 farPlane = 1000.0f;
+    f32 speed = 10.0f;
+    f32 sensitivity = 0.1f;
+    bool isOrthographic = false;
+    f32 orthoSize = 50.0f;
+    CameraView view = CameraView::Perspective;
+
+    // Convert to Camera for rendering
+    Camera toCamera() const {
+        Camera cam;
+        cam.position = position;
+        cam.target = target;
+        cam.up = up;
+        cam.fov = fov;
+        cam.nearPlane = nearPlane;
+        cam.farPlane = farPlane;
+        cam.speed = speed;
+        cam.sensitivity = sensitivity;
+        cam.isOrthographic = isOrthographic;
+        cam.orthoSize = orthoSize;
+        cam.view = view;
+        return cam;
+    }
+
+    // Create from Camera
+    static CameraState fromCamera(const Camera& cam) {
+        CameraState state;
+        state.position = cam.position;
+        state.target = cam.target;
+        state.up = cam.up;
+        state.fov = cam.fov;
+        state.nearPlane = cam.nearPlane;
+        state.farPlane = cam.farPlane;
+        state.speed = cam.speed;
+        state.sensitivity = cam.sensitivity;
+        state.isOrthographic = cam.isOrthographic;
+        state.orthoSize = cam.orthoSize;
+        state.view = cam.view;
+        return state;
+    }
+};
+
+// Maximum number of lights supported in a single frame
+constexpr u32 MAX_LIGHTS = 16;
+
+// Light types for the multi-light system
+enum class LightType : u32 {
+    Directional = 0,  // Sun/moon light - parallel rays, no falloff
+    Point = 1,        // Omnidirectional light with distance falloff
+    Spot = 2          // Cone-shaped light with direction and falloff
+};
+
+// GPU-friendly light structure for UBO (matches GLSL layout exactly)
+struct GPULight {
+    vec4 positionType;      // xyz = world position, w = type (cast to LightType)
+    vec4 directionRange;    // xyz = direction (for spot/directional), w = range (for point/spot)
+    vec4 colorIntensity;    // rgb = color, a = intensity
+    vec4 spotParams;        // x = innerAngle (cos), y = outerAngle (cos), z = shadowIndex (-1 = none), w = reserved
+};
+
 // Push constants for shaders (per-draw data including element overrides)
 struct PushConstants {
     mat4 model;              // 64 bytes
@@ -196,7 +279,7 @@ struct UniformBufferObject {
     mat4 view;
     mat4 proj;
     mat4 lightViewProj;     // Shadow mapping (Phase 4)
-    vec4 lightDirection;    // Directional light direction
+    vec4 lightDirection;    // Directional light direction (sun)
     vec4 clipPlane;         // Section clipping plane (Phase 5)
     f32 time;
     f32 shadowBias;         // Shadow mapping bias
@@ -210,12 +293,18 @@ struct UniformBufferObject {
     vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
     vec4 materialTint;      // RGB tint multiplier, w = unused
     vec4 pomParams;         // x = enabled (0/1), y = heightScale, z = minLayers, w = maxLayers
+    // Debug visualization
+    u32 materialDebugMode;  // 0=None, 1=Displacement, 2=POMDepth, 3=Normals, 4=UVs, 5=AO
     // Per-element material overrides (added to global values when override mask bit is set)
     u32 overrideMask;       // Bitfield for which element overrides are active
-    f32 _pad1, _pad2, _pad3; // Padding to maintain 16-byte alignment for next vec4
+    f32 _pad1, _pad2;       // Padding to maintain 16-byte alignment for next vec4
     vec4 elementOverride1;  // x = uvScale, y = normalStrength, z = brightness, w = contrast
     vec4 elementOverride2;  // x = saturation, y = roughness, z = metallic, w = aoStrength
     vec4 elementOverride3;  // RGB = tint, w = unused
+    // Multiple light sources
+    u32 numLights;          // Number of active lights (0-16)
+    f32 _pad3, _pad4, _pad5;  // Padding for alignment
+    GPULight lights[MAX_LIGHTS];  // Array of lights
 };
 
 // Material override mask bits (for PushConstants::overrideMask)
@@ -703,6 +792,9 @@ struct Building {
     std::vector<WallType> wallTypes;
     std::vector<ParametricWall> parametricWalls;
     std::vector<WallCorner> wallCorners;
+
+    // Terrain mesh (from elevation API)
+    TerrainMesh terrainMesh;
 };
 
 } // namespace arch

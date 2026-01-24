@@ -26,6 +26,8 @@
 #include "environment_map.hpp"
 #include "post_process.hpp"
 #include "texture.hpp"
+#include "project.hpp"
+#include "lights.hpp"
 #include <unordered_map>
 
 namespace arch {
@@ -192,6 +194,30 @@ public:
      * @return True if HDR pipeline is active
      */
     bool isPostProcessingEnabled() const { return m_postProcessingEnabled; }
+
+    /**
+     * @brief Set post-process debug visualization mode
+     * @param mode Debug mode (None, SSAOOnly, BloomOnly, HDRScene, Depth)
+     */
+    void setPostProcessDebugMode(PostProcessDebugMode mode);
+
+    /**
+     * @brief Get current post-process debug mode
+     * @return Current debug mode
+     */
+    PostProcessDebugMode getPostProcessDebugMode() const;
+
+    /**
+     * @brief Set material/displacement debug visualization mode
+     * @param mode Debug mode (None, Displacement, POMDepth, Normals, UVs, AO)
+     */
+    void setMaterialDebugMode(MaterialDebugMode mode) { m_materialDebugMode = mode; }
+
+    /**
+     * @brief Get current material debug mode
+     * @return Current material debug mode
+     */
+    MaterialDebugMode getMaterialDebugMode() const { return m_materialDebugMode; }
 
     /**
      * @brief Begin HDR render pass for post-processing path
@@ -401,6 +427,16 @@ public:
      * Elements are colored based on the current visualization mode.
      */
     void drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices = {});
+
+    /**
+     * @brief Draw terrain mesh with elevation-based coloring
+     * @param terrain TerrainMesh data from building
+     *
+     * Renders the terrain mesh if it has data. Uses pre-computed vertex colors
+     * for elevation visualization. Terrain is rendered with identity transform
+     * (pre-positioned in world space).
+     */
+    void drawTerrain(const TerrainMesh& terrain);
     /// @}
 
     /// @name Visualization Settings
@@ -450,6 +486,61 @@ public:
 
     /** @brief Get current shadow bias */
     f32 getShadowBias() const { return m_shadowBias; }
+    /// @}
+
+    /// @name Multi-Light System
+    /// @{
+
+    /**
+     * @brief Add a light to the scene
+     * @param light The light to add
+     * @return Index of the added light, or -1 if max lights reached
+     */
+    i32 addLight(const Light& light);
+
+    /**
+     * @brief Remove a light by index
+     * @param index Index of the light to remove
+     */
+    void removeLight(u32 index);
+
+    /**
+     * @brief Remove all lights from the scene
+     */
+    void clearLights();
+
+    /**
+     * @brief Get number of active lights
+     * @return Number of lights currently in the scene
+     */
+    u32 getLightCount() const { return static_cast<u32>(m_lights.size()); }
+
+    /**
+     * @brief Get a mutable reference to a light
+     * @param index Light index
+     * @return Pointer to light, or nullptr if index invalid
+     */
+    Light* getLight(u32 index);
+
+    /**
+     * @brief Get a const reference to a light
+     * @param index Light index
+     * @return Const pointer to light, or nullptr if index invalid
+     */
+    const Light* getLight(u32 index) const;
+
+    /**
+     * @brief Get all lights
+     * @return Vector of all lights in the scene
+     */
+    const std::vector<Light>& getLights() const { return m_lights; }
+
+    /**
+     * @brief Set all lights at once (e.g., from loaded scene)
+     * @param lights Vector of lights to set
+     */
+    void setLights(const std::vector<Light>& lights);
+
     /// @}
 
     /// @name Environment Map Settings
@@ -913,6 +1004,40 @@ public:
     size_t getOverrideCount() const { return m_elementMaterialOverrides.size(); }
 
     /**
+     * @brief Get all element material overrides
+     * @return Reference to the overrides map
+     */
+    const std::unordered_map<int, ElementMaterialOverride>& getAllElementOverrides() const {
+        return m_elementMaterialOverrides;
+    }
+
+    /**
+     * @brief Set all element material overrides at once
+     * @param overrides Map of element ID to override settings
+     */
+    void setAllElementOverrides(const std::unordered_map<int, ElementMaterialOverride>& overrides) {
+        m_elementMaterialOverrides = overrides;
+    }
+
+    /**
+     * @brief Get all render settings as a single struct
+     * @return RenderSettings containing all current settings
+     */
+    RenderSettings getRenderSettings() const;
+
+    /**
+     * @brief Apply all render settings from a struct
+     * @param settings RenderSettings to apply
+     */
+    void setRenderSettings(const RenderSettings& settings);
+
+    /**
+     * @brief Get the current camera
+     * @return Reference to the current camera
+     */
+    const Camera& getCamera() const { return m_camera; }
+
+    /**
      * @brief Get indices of all elements with overrides
      * @param outIndices Output array to fill with indices
      * @param maxIndices Maximum number of indices to retrieve
@@ -1168,6 +1293,10 @@ private:
     std::unordered_map<const MeshData*, std::string> m_customMeshKeyCache;  // Maps custom mesh pointers to cache keys
     std::unique_ptr<Mesh> m_gridMesh;
 
+    // Terrain mesh (separate from element meshes, recreated on terrain data change)
+    std::unique_ptr<Mesh> m_terrainMesh;
+    const TerrainMesh* m_lastTerrainData = nullptr;  // Track if terrain data changed
+
     // Frame state
     u32 m_currentFrame = 0;
     u32 m_imageIndex = 0;
@@ -1195,6 +1324,9 @@ private:
     bool m_outputLinearHDR = false;  // True when rendering to HDR buffer (skip in-shader tonemapping)
     VkDescriptorSet m_shadowHeightMapDescriptorSet = VK_NULL_HANDLE;  // For tessellated shadows
 
+    // Multiple light sources
+    std::vector<Light> m_lights;  // Up to MAX_LIGHTS (16)
+
     // Environment mapping
     std::unique_ptr<EnvironmentMap> m_envMap;
     VkDescriptorSetLayout m_skyDescriptorSetLayout = VK_NULL_HANDLE;
@@ -1206,6 +1338,9 @@ private:
     bool m_ssaoEnabled = true;
     bool m_bloomEnabled = true;
     bool m_postProcessingEnabled = false;  // Master switch for HDR pipeline (TODO: need HDR-compatible sky pipeline)
+
+    // Debug visualization modes
+    MaterialDebugMode m_materialDebugMode = MaterialDebugMode::None;
 
     // Section clipping
     bool m_clippingEnabled = false;
