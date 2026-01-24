@@ -30,6 +30,8 @@ void PostProcess::initialize(u32 width, u32 height) {
     createBlurPipeline();
     createBloomResources();
     createBloomPipelines();
+    createSSRResources();
+    createSSRPipeline();
     createFullscreenQuad();
 
     m_initialized = true;
@@ -41,6 +43,7 @@ void PostProcess::cleanup() {
 
     m_context.waitIdle();
     cleanupComposite();
+    cleanupSSR();
     cleanupBloom();
     cleanupSSAO();
     cleanupHDR();
@@ -285,19 +288,19 @@ void PostProcess::createSSAOResources() {
 
     vkMapMemory(device, m_ssaoUniformMemory, 0, uniformSize, 0, &m_ssaoUniformMapped);
 
-    // Create descriptor pool - enough for SSAO, bloom, and composite across frames
+    // Create descriptor pool - enough for SSAO, bloom, SSR, and composite across frames
     u32 frameCount = m_context.getMaxFramesInFlight();
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = frameCount * 12 + 3;  // SSAO (3), bloom (2), composite (3) per frame + blur/sample
+    poolSizes[0].descriptorCount = frameCount * 20 + 10;  // SSAO (3), bloom (2), composite (5), SSR (4) per frame + extras
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[1].descriptorCount = frameCount + 2;
+    poolSizes[1].descriptorCount = frameCount + 4;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<u32>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = frameCount * 6 + 6;  // SSAO + bloom + composite per frame + extra
+    poolInfo.maxSets = frameCount * 8 + 10;  // SSAO + bloom + composite + SSR per frame + extra
     // Allow descriptor sets to be updated while bound (for dynamic SSAO depth/normal binding)
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 
@@ -846,10 +849,10 @@ void PostProcess::createHDRResources() {
         throw std::runtime_error("Failed to create HDR sampler");
     }
 
-    // Create HDR render pass
-    std::array<VkAttachmentDescription, 2> attachments{};
+    // Create HDR render pass with 3 attachments: color, normal (for SSR), depth
+    std::array<VkAttachmentDescription, 3> attachments{};
 
-    // Color attachment
+    // Color attachment (location 0)
     attachments[0].format = VK_FORMAT_R16G16B16A16_SFLOAT;
     attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
     attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -859,8 +862,9 @@ void PostProcess::createHDRResources() {
     attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    // Depth attachment
-    attachments[1].format = VK_FORMAT_D32_SFLOAT;
+    // Normal + roughness attachment for SSR (location 1)
+    // xyz = world normal (packed as *0.5+0.5), w = roughness
+    attachments[1].format = VK_FORMAT_R16G16B16A16_SFLOAT;
     attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
     attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -869,18 +873,31 @@ void PostProcess::createHDRResources() {
     attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     attachments[1].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
-    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    // Depth attachment
+    attachments[2].format = VK_FORMAT_D32_SFLOAT;
+    attachments[2].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachments[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[2].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    // Color attachments (HDR color + normal)
+    std::array<VkAttachmentReference, 2> colorRefs{};
+    colorRefs[0].attachment = 0;
+    colorRefs[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorRefs[1].attachment = 1;
+    colorRefs[1].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference depthRef{};
-    depthRef.attachment = 1;
+    depthRef.attachment = 2;
     depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
+    subpass.colorAttachmentCount = static_cast<u32>(colorRefs.size());
+    subpass.pColorAttachments = colorRefs.data();
     subpass.pDepthStencilAttachment = &depthRef;
 
     VkRenderPassCreateInfo renderPassInfo{};
@@ -911,6 +928,15 @@ void PostProcess::createHDRTargets() {
     m_hdrColorView = m_context.createImageView(m_hdrColorImage, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                VK_IMAGE_ASPECT_COLOR_BIT);
 
+    // Create normal + roughness buffer for SSR (xyz = normal, w = roughness)
+    m_context.createImage(m_width, m_height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
+                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                         m_hdrNormalImage, m_hdrNormalMemory);
+
+    m_hdrNormalView = m_context.createImageView(m_hdrNormalImage, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                VK_IMAGE_ASPECT_COLOR_BIT);
+
     // Create HDR depth buffer
     m_context.createImage(m_width, m_height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -920,8 +946,8 @@ void PostProcess::createHDRTargets() {
     m_hdrDepthView = m_context.createImageView(m_hdrDepthImage, VK_FORMAT_D32_SFLOAT,
                                                VK_IMAGE_ASPECT_DEPTH_BIT);
 
-    // Create framebuffer
-    std::array<VkImageView, 2> fbAttachments = {m_hdrColorView, m_hdrDepthView};
+    // Create framebuffer with 3 attachments: color, normal, depth
+    std::array<VkImageView, 3> fbAttachments = {m_hdrColorView, m_hdrNormalView, m_hdrDepthView};
 
     VkFramebufferCreateInfo fbInfo{};
     fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -1231,8 +1257,8 @@ void PostProcess::createCompositePipeline(VkRenderPass renderPass, VkSampleCount
         return shaderModule;
     };
 
-    // Create descriptor set layout for composite (3 textures: HDR, SSAO, bloom)
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+    // Create descriptor set layout for composite (5 textures: HDR, SSAO, bloom, SSR, normalRoughness)
+    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
 
     bindings[0].binding = 0;  // HDR scene
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1249,6 +1275,16 @@ void PostProcess::createCompositePipeline(VkRenderPass renderPass, VkSampleCount
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    bindings[3].binding = 3;  // SSR
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    bindings[4].binding = 4;  // Normal + Roughness (for SSR blend)
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[4].descriptorCount = 1;
+    bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<u32>(bindings.size());
@@ -1258,11 +1294,11 @@ void PostProcess::createCompositePipeline(VkRenderPass renderPass, VkSampleCount
         throw std::runtime_error("Failed to create composite descriptor set layout");
     }
 
-    // Push constant for composite parameters
+    // Push constant for composite parameters (12 floats to match shader)
     VkPushConstantRange pushConstant{};
     pushConstant.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstant.offset = 0;
-    pushConstant.size = sizeof(f32) * 8;  // bloomIntensity, exposure, ssaoIntensity, enableSSAO, enableBloom, tonemapMode, padding[2]
+    pushConstant.size = sizeof(f32) * 12;  // bloomIntensity, exposure, ssaoIntensity, enableSSAO, enableBloom, tonemapMode, debugMode, nearPlane, farPlane, enableSSR, ssrIntensity, padding
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -1510,7 +1546,7 @@ void PostProcess::composite(VkCommandBuffer cmd, VkRenderPass renderPass, VkFram
 
     VkDescriptorSet compositeSet = m_compositeDescSets[frameIndex];
 
-    std::array<VkDescriptorImageInfo, 3> imageInfos{};
+    std::array<VkDescriptorImageInfo, 5> imageInfos{};
 
     // HDR scene
     imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1527,8 +1563,18 @@ void PostProcess::composite(VkCommandBuffer cmd, VkRenderPass renderPass, VkFram
     imageInfos[2].imageView = m_bloomResultView ? m_bloomResultView : m_hdrColorView;
     imageInfos[2].sampler = m_bloomSampler ? m_bloomSampler : m_hdrSampler;
 
-    std::array<VkWriteDescriptorSet, 3> writes{};
-    for (u32 i = 0; i < 3; i++) {
+    // SSR (use HDR view as fallback if SSR not ready)
+    imageInfos[3].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfos[3].imageView = m_ssrView ? m_ssrView : m_hdrColorView;
+    imageInfos[3].sampler = m_ssrSampler ? m_ssrSampler : m_hdrSampler;
+
+    // Normal + Roughness buffer (use HDR view as fallback)
+    imageInfos[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfos[4].imageView = m_hdrNormalView ? m_hdrNormalView : m_hdrColorView;
+    imageInfos[4].sampler = m_hdrSampler;
+
+    std::array<VkWriteDescriptorSet, 5> writes{};
+    for (u32 i = 0; i < 5; i++) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = compositeSet;
         writes[i].dstBinding = i;
@@ -1570,7 +1616,7 @@ void PostProcess::composite(VkCommandBuffer cmd, VkRenderPass renderPass, VkFram
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipelineLayout,
                            0, 1, &compositeSet, 0, nullptr);
 
-    // Push composite params
+    // Push composite params (must match shader layout exactly)
     struct CompositeParams {
         f32 bloomIntensity;
         f32 exposure;
@@ -1578,7 +1624,12 @@ void PostProcess::composite(VkCommandBuffer cmd, VkRenderPass renderPass, VkFram
         u32 enableSSAO;
         u32 enableBloom;
         u32 tonemapMode;
-        f32 padding[2];
+        u32 debugMode;
+        f32 nearPlane;
+        f32 farPlane;
+        u32 enableSSR;
+        f32 ssrIntensity;
+        f32 padding;
     } params;
 
     params.bloomIntensity = m_bloomConfig.intensity;
@@ -1587,8 +1638,12 @@ void PostProcess::composite(VkCommandBuffer cmd, VkRenderPass renderPass, VkFram
     params.enableSSAO = m_ssaoConfig.enabled ? 1u : 0u;
     params.enableBloom = m_bloomConfig.enabled ? 1u : 0u;
     params.tonemapMode = m_compositeConfig.tonemapMode;
-    params.padding[0] = 0.0f;
-    params.padding[1] = 0.0f;
+    params.debugMode = static_cast<u32>(m_debugMode);
+    params.nearPlane = 0.1f;
+    params.farPlane = 1000.0f;
+    params.enableSSR = m_ssrConfig.enabled ? 1u : 0u;
+    params.ssrIntensity = 1.0f;  // SSR intensity from config (default 1.0)
+    params.padding = 0.0f;
 
     vkCmdPushConstants(cmd, m_compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositeParams), &params);
@@ -1630,6 +1685,9 @@ void PostProcess::cleanupHDR() {
     m_hdrColorView = VK_NULL_HANDLE;
     m_hdrColorImage = VK_NULL_HANDLE;
     m_hdrColorMemory = VK_NULL_HANDLE;
+    m_hdrNormalView = VK_NULL_HANDLE;
+    m_hdrNormalImage = VK_NULL_HANDLE;
+    m_hdrNormalMemory = VK_NULL_HANDLE;
     m_hdrDepthView = VK_NULL_HANDLE;
     m_hdrDepthImage = VK_NULL_HANDLE;
     m_hdrDepthMemory = VK_NULL_HANDLE;
@@ -1643,6 +1701,9 @@ void PostProcess::cleanupHDRTargets() {
     if (m_hdrColorView) vkDestroyImageView(device, m_hdrColorView, nullptr);
     if (m_hdrColorImage) vkDestroyImage(device, m_hdrColorImage, nullptr);
     if (m_hdrColorMemory) vkFreeMemory(device, m_hdrColorMemory, nullptr);
+    if (m_hdrNormalView) vkDestroyImageView(device, m_hdrNormalView, nullptr);
+    if (m_hdrNormalImage) vkDestroyImage(device, m_hdrNormalImage, nullptr);
+    if (m_hdrNormalMemory) vkFreeMemory(device, m_hdrNormalMemory, nullptr);
     if (m_hdrDepthView) vkDestroyImageView(device, m_hdrDepthView, nullptr);
     if (m_hdrDepthImage) vkDestroyImage(device, m_hdrDepthImage, nullptr);
     if (m_hdrDepthMemory) vkFreeMemory(device, m_hdrDepthMemory, nullptr);
@@ -1651,6 +1712,9 @@ void PostProcess::cleanupHDRTargets() {
     m_hdrColorView = VK_NULL_HANDLE;
     m_hdrColorImage = VK_NULL_HANDLE;
     m_hdrColorMemory = VK_NULL_HANDLE;
+    m_hdrNormalView = VK_NULL_HANDLE;
+    m_hdrNormalImage = VK_NULL_HANDLE;
+    m_hdrNormalMemory = VK_NULL_HANDLE;
     m_hdrDepthView = VK_NULL_HANDLE;
     m_hdrDepthImage = VK_NULL_HANDLE;
     m_hdrDepthMemory = VK_NULL_HANDLE;
@@ -1786,6 +1850,446 @@ void PostProcess::cleanupBloom() {
     m_bloomPipelineLayout = VK_NULL_HANDLE;
     m_bloomDescLayout = VK_NULL_HANDLE;
     m_bloomResultView = VK_NULL_HANDLE;
+}
+
+// ============================================================================
+// SSR (Screen Space Reflections) Implementation
+// ============================================================================
+
+void PostProcess::createSSRResources() {
+    auto device = m_context.getDevice();
+
+    // Create SSR output image (RGBA16F for HDR reflections with confidence)
+    m_context.createImage(m_width, m_height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
+                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                         m_ssrImage, m_ssrMemory);
+
+    m_ssrView = m_context.createImageView(m_ssrImage, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    // Create sampler
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+
+    if (vkCreateSampler(device, &samplerInfo, nullptr, &m_ssrSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSR sampler");
+    }
+
+    // Create render pass for SSR
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = 1;
+    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &m_ssrRenderPass) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSR render pass");
+    }
+
+    // Create framebuffer
+    VkFramebufferCreateInfo fbInfo{};
+    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbInfo.renderPass = m_ssrRenderPass;
+    fbInfo.attachmentCount = 1;
+    fbInfo.pAttachments = &m_ssrView;
+    fbInfo.width = m_width;
+    fbInfo.height = m_height;
+    fbInfo.layers = 1;
+
+    if (vkCreateFramebuffer(device, &fbInfo, nullptr, &m_ssrFramebuffer) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSR framebuffer");
+    }
+
+    std::cout << "[PostProcess] SSR resources created (" << m_width << "x" << m_height << ")" << std::endl;
+}
+
+void PostProcess::createSSRPipeline() {
+    auto device = m_context.getDevice();
+
+    // Load shaders
+    auto loadShader = [&](const std::string& filename) -> VkShaderModule {
+        std::ifstream file(filename, std::ios::ate | std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("Failed to open shader file: " + filename);
+        }
+        size_t fileSize = static_cast<size_t>(file.tellg());
+        std::vector<char> buffer(fileSize);
+        file.seekg(0);
+        file.read(buffer.data(), fileSize);
+        file.close();
+
+        VkShaderModuleCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        createInfo.codeSize = buffer.size();
+        createInfo.pCode = reinterpret_cast<const u32*>(buffer.data());
+
+        VkShaderModule shaderModule;
+        if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create shader module");
+        }
+        return shaderModule;
+    };
+
+    VkShaderModule vertModule = loadShader("shaders/ssr.vert.spv");
+    VkShaderModule fragModule = loadShader("shaders/ssr.frag.spv");
+
+    // Create descriptor set layout (3 textures: HDR scene, normal+roughness, depth)
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+
+    bindings[0].binding = 0;  // HDR scene
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    bindings[1].binding = 1;  // Normal + roughness
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    bindings[2].binding = 2;  // Depth
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<u32>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_ssrDescLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSR descriptor set layout");
+    }
+
+    // Push constant for SSR parameters (matrices + params)
+    VkPushConstantRange pushConstant{};
+    pushConstant.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstant.offset = 0;
+    pushConstant.size = sizeof(mat4) * 3 + sizeof(vec4) * 2;  // projection, invProjection, view, params, params2
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &m_ssrDescLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
+
+    if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &m_ssrPipelineLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSR pipeline layout");
+    }
+
+    // Create graphics pipeline
+    VkPipelineShaderStageCreateInfo vertStage{};
+    vertStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vertStage.module = vertModule;
+    vertStage.pName = "main";
+
+    VkPipelineShaderStageCreateInfo fragStage{};
+    fragStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragStage.module = fragModule;
+    fragStage.pName = "main";
+
+    VkPipelineShaderStageCreateInfo stages[] = {vertStage, fragStage};
+
+    // Vertex input (fullscreen quad)
+    VkVertexInputBindingDescription vertexBinding{};
+    vertexBinding.binding = 0;
+    vertexBinding.stride = sizeof(f32) * 4;  // pos.xy, uv.xy
+    vertexBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    std::array<VkVertexInputAttributeDescription, 2> vertexAttribs{};
+    vertexAttribs[0].binding = 0;
+    vertexAttribs[0].location = 0;
+    vertexAttribs[0].format = VK_FORMAT_R32G32_SFLOAT;
+    vertexAttribs[0].offset = 0;
+    vertexAttribs[1].binding = 0;
+    vertexAttribs[1].location = 1;
+    vertexAttribs[1].format = VK_FORMAT_R32G32_SFLOAT;
+    vertexAttribs[1].offset = sizeof(f32) * 2;
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &vertexBinding;
+    vertexInput.vertexAttributeDescriptionCount = static_cast<u32>(vertexAttribs.size());
+    vertexInput.pVertexAttributeDescriptions = vertexAttribs.data();
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<f32>(m_width);
+    viewport.height = static_cast<f32>(m_height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = {m_width, m_height};
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.depthClampEnable = VK_FALSE;
+    rasterizer.rasterizerDiscardEnable = VK_FALSE;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.depthBiasEnable = VK_FALSE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.logicOpEnable = VK_FALSE;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates = dynamicStates;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = m_ssrPipelineLayout;
+    pipelineInfo.renderPass = m_ssrRenderPass;
+    pipelineInfo.subpass = 0;
+
+    if (vkCreateGraphicsPipelines(device, m_context.getPipelineCache(), 1, &pipelineInfo,
+                                   nullptr, &m_ssrPipeline) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create SSR pipeline");
+    }
+
+    vkDestroyShaderModule(device, vertModule, nullptr);
+    vkDestroyShaderModule(device, fragModule, nullptr);
+
+    // Allocate descriptor sets
+    u32 frameCount = static_cast<u32>(m_context.getSwapchainImageCount());
+    m_ssrDescSets.resize(frameCount);
+
+    std::vector<VkDescriptorSetLayout> layouts(frameCount, m_ssrDescLayout);
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_descriptorPool;
+    allocInfo.descriptorSetCount = frameCount;
+    allocInfo.pSetLayouts = layouts.data();
+
+    if (vkAllocateDescriptorSets(device, &allocInfo, m_ssrDescSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate SSR descriptor sets");
+    }
+
+    // Update descriptor sets
+    for (u32 i = 0; i < frameCount; i++) {
+        VkDescriptorImageInfo hdrInfo{};
+        hdrInfo.sampler = m_hdrSampler;
+        hdrInfo.imageView = m_hdrColorView;
+        hdrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.sampler = m_hdrSampler;
+        normalInfo.imageView = m_hdrNormalView;
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkDescriptorImageInfo depthInfo{};
+        depthInfo.sampler = m_hdrSampler;
+        depthInfo.imageView = m_hdrDepthView;
+        depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+        std::array<VkWriteDescriptorSet, 3> writes{};
+
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = m_ssrDescSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].descriptorCount = 1;
+        writes[0].pImageInfo = &hdrInfo;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = m_ssrDescSets[i];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo = &normalInfo;
+
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = m_ssrDescSets[i];
+        writes[2].dstBinding = 2;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].descriptorCount = 1;
+        writes[2].pImageInfo = &depthInfo;
+
+        vkUpdateDescriptorSets(device, static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
+    }
+
+    std::cout << "[PostProcess] SSR pipeline created" << std::endl;
+}
+
+void PostProcess::generateSSR(VkCommandBuffer cmd, const mat4& projection, const mat4& invProjection,
+                               const mat4& view, u32 frameIndex) {
+    if (!m_ssrConfig.enabled || !m_ssrPipeline) {
+        return;
+    }
+
+    // Begin SSR render pass
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = m_ssrRenderPass;
+    renderPassInfo.framebuffer = m_ssrFramebuffer;
+    renderPassInfo.renderArea.offset = {0, 0};
+    renderPassInfo.renderArea.extent = {m_width, m_height};
+
+    VkClearValue clearValue = {};
+    clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    renderPassInfo.clearValueCount = 1;
+    renderPassInfo.pClearValues = &clearValue;
+
+    vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ssrPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ssrPipelineLayout, 0, 1,
+                            &m_ssrDescSets[frameIndex], 0, nullptr);
+
+    // Set viewport and scissor
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<f32>(m_width);
+    viewport.height = static_cast<f32>(m_height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = {m_width, m_height};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // Push constants (matches shader layout)
+    struct SSRPushConstants {
+        mat4 projection;
+        mat4 invProjection;
+        mat4 view;
+        vec4 params;    // maxDistance, thickness, stride, iterations
+        vec4 params2;   // fadeStart, fadeEnd, jitter, unused
+    } pushConstants;
+
+    pushConstants.projection = projection;
+    pushConstants.invProjection = invProjection;
+    pushConstants.view = view;
+    pushConstants.params = vec4(m_ssrConfig.maxDistance, m_ssrConfig.thickness,
+                                m_ssrConfig.stride, static_cast<f32>(m_ssrConfig.iterations));
+    pushConstants.params2 = vec4(m_ssrConfig.fadeStart, m_ssrConfig.fadeEnd, 0.0f, 0.0f);
+
+    vkCmdPushConstants(cmd, m_ssrPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(pushConstants), &pushConstants);
+
+    // Draw fullscreen quad
+    drawFullscreenQuad(cmd);
+
+    vkCmdEndRenderPass(cmd);
+}
+
+void PostProcess::cleanupSSR() {
+    auto device = m_context.getDevice();
+
+    if (m_ssrView) vkDestroyImageView(device, m_ssrView, nullptr);
+    if (m_ssrImage) vkDestroyImage(device, m_ssrImage, nullptr);
+    if (m_ssrMemory) vkFreeMemory(device, m_ssrMemory, nullptr);
+    if (m_ssrSampler) vkDestroySampler(device, m_ssrSampler, nullptr);
+    if (m_ssrFramebuffer) vkDestroyFramebuffer(device, m_ssrFramebuffer, nullptr);
+    if (m_ssrRenderPass) vkDestroyRenderPass(device, m_ssrRenderPass, nullptr);
+    if (m_ssrPipeline) vkDestroyPipeline(device, m_ssrPipeline, nullptr);
+    if (m_ssrPipelineLayout) vkDestroyPipelineLayout(device, m_ssrPipelineLayout, nullptr);
+    if (m_ssrDescLayout) vkDestroyDescriptorSetLayout(device, m_ssrDescLayout, nullptr);
+
+    m_ssrView = VK_NULL_HANDLE;
+    m_ssrImage = VK_NULL_HANDLE;
+    m_ssrMemory = VK_NULL_HANDLE;
+    m_ssrSampler = VK_NULL_HANDLE;
+    m_ssrFramebuffer = VK_NULL_HANDLE;
+    m_ssrRenderPass = VK_NULL_HANDLE;
+    m_ssrPipeline = VK_NULL_HANDLE;
+    m_ssrPipelineLayout = VK_NULL_HANDLE;
+    m_ssrDescLayout = VK_NULL_HANDLE;
+    m_ssrDescSets.clear();
 }
 
 } // namespace arch

@@ -1257,4 +1257,208 @@ ARCH_API int arch_get_element_material_name(int element_index, char* out_name, i
     return 0;
 }
 
+} // extern "C" (temporarily close for C++ terrain helpers)
+
+// =============================================================================
+// Terrain Mesh API Implementation
+// =============================================================================
+
+// Global terrain state (C++ namespace, not exported)
+namespace {
+    bool g_terrainEnabled = true;
+    vec3 g_terrainOffset = {0.0f, 0.0f, 0.0f};
+    float g_terrainRoughness = 0.8f;
+    float g_terrainMetallic = 0.0f;
+    int g_terrainColorMode = 0;  // 0=elevation gradient
+
+    // Elevation color gradient (same as geometry_loader.cpp)
+    vec3 getTerrainElevationColor(float normalizedElevation) {
+        float t = glm::clamp(normalizedElevation, 0.0f, 1.0f);
+
+        // Four-stop gradient: green -> tan -> gray -> white
+        const vec3 lowGreen = vec3(0.34f, 0.55f, 0.30f);   // Low elevation - grass/forest
+        const vec3 midTan = vec3(0.72f, 0.60f, 0.40f);     // Mid elevation - dirt/rock
+        const vec3 highGray = vec3(0.55f, 0.55f, 0.55f);   // High elevation - bare rock
+        const vec3 peakWhite = vec3(0.95f, 0.95f, 0.95f);  // Peak - snow
+
+        if (t < 0.33f) {
+            return glm::mix(lowGreen, midTan, t / 0.33f);
+        } else if (t < 0.66f) {
+            return glm::mix(midTan, highGray, (t - 0.33f) / 0.33f);
+        } else {
+            return glm::mix(highGray, peakWhite, (t - 0.66f) / 0.34f);
+        }
+    }
+}
+
+extern "C" {  // Re-open for C API functions
+
+ARCH_API int arch_set_terrain_data(const ArchTerrainVertex* vertices, int vertex_count,
+                                   const unsigned int* indices, int index_count,
+                                   float width_ft, float depth_ft,
+                                   float min_elevation, float max_elevation) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!vertices || vertex_count <= 0) {
+        setError("Invalid vertices array");
+        return -1;
+    }
+
+    if (!indices || index_count <= 0 || index_count % 3 != 0) {
+        setError("Invalid indices array (must be multiple of 3)");
+        return -2;
+    }
+
+    // Clear existing terrain
+    g_building.terrainMesh.vertices.clear();
+    g_building.terrainMesh.indices.clear();
+
+    // Store metadata
+    g_building.terrainMesh.width_ft = width_ft;
+    g_building.terrainMesh.depth_ft = depth_ft;
+    g_building.terrainMesh.min_elevation = min_elevation;
+    g_building.terrainMesh.max_elevation = max_elevation;
+
+    // Compute elevation range for color mapping
+    float elevRange = max_elevation - min_elevation;
+    if (elevRange < 0.001f) elevRange = 1.0f;  // Avoid division by zero
+
+    // Convert vertices: feet to mm, compute colors
+    const float feetToMm = 304.8f;
+    g_building.terrainMesh.vertices.reserve(vertex_count);
+
+    for (int i = 0; i < vertex_count; i++) {
+        const ArchTerrainVertex& src = vertices[i];
+        Vertex vert{};
+
+        // Position: convert feet to mm, swap Y/Z for coordinate system
+        // API: X=east, Y=up(elevation), Z=north
+        // Engine: X=east, Y=up, Z=south (flip Z)
+        vert.position = vec3(
+            src.pos_x * feetToMm,
+            src.pos_y * feetToMm,  // Y is elevation (up)
+            -src.pos_z * feetToMm  // Flip Z for south
+        );
+
+        // Apply offset
+        vert.position += vec3(
+            g_terrainOffset.x * feetToMm,
+            g_terrainOffset.y * feetToMm,
+            -g_terrainOffset.z * feetToMm
+        );
+
+        // Normal (swap Y/Z, flip Z)
+        vert.normal = glm::normalize(vec3(src.normal_x, src.normal_y, -src.normal_z));
+
+        // UV
+        vert.texCoord = vec2(src.u, src.v);
+
+        // Compute color from elevation
+        float normalizedElev = (src.pos_y - min_elevation) / elevRange;
+        if (g_terrainColorMode == 0) {
+            vert.color = getTerrainElevationColor(normalizedElev);
+        } else {
+            // Uniform gray
+            vert.color = vec3(0.5f, 0.5f, 0.5f);
+        }
+
+        g_building.terrainMesh.vertices.push_back(vert);
+    }
+
+    // Copy indices
+    g_building.terrainMesh.indices.reserve(index_count);
+    for (int i = 0; i < index_count; i++) {
+        g_building.terrainMesh.indices.push_back(indices[i]);
+    }
+
+    // Reset renderer's terrain cache to force rebuild
+    if (g_renderer) {
+        g_renderer->invalidateTerrainCache();
+    }
+
+    std::cout << "[Terrain API] Set terrain: " << vertex_count << " vertices, "
+              << (index_count / 3) << " triangles, elevation " << min_elevation
+              << "-" << max_elevation << " ft\n";
+
+    return 0;
+}
+
+ARCH_API void arch_clear_terrain(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    g_building.terrainMesh.vertices.clear();
+    g_building.terrainMesh.indices.clear();
+    g_building.terrainMesh.width_ft = 0.0f;
+    g_building.terrainMesh.depth_ft = 0.0f;
+    g_building.terrainMesh.min_elevation = 0.0f;
+    g_building.terrainMesh.max_elevation = 0.0f;
+
+    if (g_renderer) {
+        g_renderer->invalidateTerrainCache();
+    }
+
+    std::cout << "[Terrain API] Cleared terrain data\n";
+}
+
+ARCH_API int arch_has_terrain(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_building.terrainMesh.hasData() ? 1 : 0;
+}
+
+ARCH_API int arch_get_terrain_info(float* out_width_ft, float* out_depth_ft,
+                                   float* out_min_elev, float* out_max_elev,
+                                   int* out_vertex_count, int* out_triangle_count) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_building.terrainMesh.hasData()) {
+        return -1;
+    }
+
+    if (out_width_ft) *out_width_ft = g_building.terrainMesh.width_ft;
+    if (out_depth_ft) *out_depth_ft = g_building.terrainMesh.depth_ft;
+    if (out_min_elev) *out_min_elev = g_building.terrainMesh.min_elevation;
+    if (out_max_elev) *out_max_elev = g_building.terrainMesh.max_elevation;
+    if (out_vertex_count) *out_vertex_count = static_cast<int>(g_building.terrainMesh.vertices.size());
+    if (out_triangle_count) *out_triangle_count = static_cast<int>(g_building.terrainMesh.indices.size() / 3);
+
+    return 0;
+}
+
+ARCH_API void arch_set_terrain_enabled(int enabled) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_terrainEnabled = (enabled != 0);
+}
+
+ARCH_API int arch_get_terrain_enabled(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_terrainEnabled ? 1 : 0;
+}
+
+ARCH_API void arch_set_terrain_offset(float offset_x, float offset_y, float offset_z) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_terrainOffset = vec3(offset_x, offset_y, offset_z);
+
+    // If terrain exists, we need to rebuild it with the new offset
+    // For now, just store the offset - a full rebuild would require re-calling set_terrain_data
+    std::cout << "[Terrain API] Set offset: (" << offset_x << ", " << offset_y << ", " << offset_z << ") ft\n";
+}
+
+ARCH_API void arch_get_terrain_offset(float* out_x, float* out_y, float* out_z) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (out_x) *out_x = g_terrainOffset.x;
+    if (out_y) *out_y = g_terrainOffset.y;
+    if (out_z) *out_z = g_terrainOffset.z;
+}
+
+ARCH_API void arch_set_terrain_material(float roughness, float metallic) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_terrainRoughness = glm::clamp(roughness, 0.0f, 1.0f);
+    g_terrainMetallic = glm::clamp(metallic, 0.0f, 1.0f);
+}
+
+ARCH_API void arch_set_terrain_color_mode(int mode) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_terrainColorMode = mode;
+}
+
 } // extern "C"

@@ -437,6 +437,14 @@ public:
      * (pre-positioned in world space).
      */
     void drawTerrain(const TerrainMesh& terrain);
+
+    /**
+     * @brief Invalidate terrain mesh cache
+     *
+     * Call this when terrain data has been modified externally (e.g., via API)
+     * to force the renderer to rebuild the GPU mesh on next draw.
+     */
+    void invalidateTerrainCache() { m_lastTerrainData = nullptr; m_terrainMesh.reset(); }
     /// @}
 
     /// @name Visualization Settings
@@ -638,6 +646,22 @@ public:
 
     /** @brief Get current bloom blur iterations */
     u32 getBloomIterations() const;
+    /// @}
+
+    /// @name SSR (Screen Space Reflections) Settings
+    /// @{
+
+    /** @brief Enable or disable screen space reflections */
+    void setSSREnabled(bool enabled);
+
+    /** @brief Check if SSR is enabled */
+    bool getSSREnabled() const { return m_ssrEnabled; }
+
+    /** @brief Set SSR configuration */
+    void setSSRConfig(const SSRConfig& config);
+
+    /** @brief Get current SSR configuration */
+    SSRConfig getSSRConfig() const;
     /// @}
 
     /// @name Tonemapping Settings
@@ -1213,6 +1237,8 @@ private:
     void createDescriptorPool();
     void createDescriptorSets();
     void createMaterialDescriptorSetLayout();
+    void createIBLDescriptorSetLayout();
+    void updateIBLDescriptorSet();
     void createDefaultMaterialDescriptorSet();
     void createUniformBuffers();
     void createPipeline();
@@ -1225,6 +1251,7 @@ private:
 
     VkDescriptorSet createMaterialDescriptorSetForMaterial(const Material& material);
     void buildMaterialDescriptorSets();
+    void bindIBLDescriptorSet();
     void bindMaterialDescriptorSet(const std::string& materialName);
     std::string resolveMaterialName(const StructuralElement& element) const;
 
@@ -1261,6 +1288,11 @@ private:
     std::unordered_map<std::string, VkDescriptorSet> m_materialDescriptorSets;
     std::unique_ptr<MaterialLibrary> m_materialLibrary;
     std::string m_materialRoot = "materials";
+
+    // IBL descriptor set (set 2) - irradiance, prefiltered, BRDF LUT
+    VkDescriptorSetLayout m_iblDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet m_iblDescriptorSet = VK_NULL_HANDLE;
+    bool m_iblDescriptorSetValid = false;
 
     // Uniform buffers
     std::vector<VkBuffer> m_uniformBuffers;
@@ -1333,10 +1365,11 @@ private:
     std::vector<VkDescriptorSet> m_skyDescriptorSets;
     bool m_useHdrEnvMap = false;
 
-    // Post-processing (SSAO, bloom, etc.)
+    // Post-processing (SSAO, bloom, SSR, etc.)
     std::unique_ptr<PostProcess> m_postProcess;
     bool m_ssaoEnabled = true;
     bool m_bloomEnabled = true;
+    bool m_ssrEnabled = true;
     bool m_postProcessingEnabled = false;  // Master switch for HDR pipeline (TODO: need HDR-compatible sky pipeline)
 
     // Debug visualization modes

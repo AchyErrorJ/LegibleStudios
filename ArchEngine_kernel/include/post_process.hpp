@@ -3,6 +3,7 @@
 #include "types.hpp"
 #include "vulkan_context.hpp"
 #include <random>
+#include <nlohmann/json_fwd.hpp>
 
 namespace arch {
 
@@ -31,6 +32,46 @@ struct CompositeConfig {
     u32 tonemapMode = 1;        // 0=Reinhard, 1=ACES, 2=Uncharted2
     bool enabled = true;
 };
+
+// SSR (Screen Space Reflections) configuration
+struct SSRConfig {
+    f32 maxDistance = 100.0f;     // Max ray march distance
+    f32 thickness = 0.5f;         // Depth comparison thickness
+    f32 stride = 1.0f;            // Initial ray step size
+    u32 iterations = 64;          // Max ray march iterations
+    f32 fadeStart = 0.8f;         // Screen edge fade start (0-1)
+    f32 fadeEnd = 1.0f;           // Screen edge fade end (0-1)
+    bool enabled = true;
+};
+
+// Debug visualization modes for post-processing
+enum class PostProcessDebugMode : u32 {
+    None = 0,           // Normal rendering (all effects combined)
+    SSAOOnly = 1,       // Show SSAO buffer (grayscale)
+    BloomOnly = 2,      // Show bloom buffer
+    HDRScene = 3,       // Show HDR scene without effects
+    Depth = 4,          // Show linearized depth buffer
+};
+
+// Debug visualization modes for material/displacement effects
+enum class MaterialDebugMode : u32 {
+    None = 0,           // Normal rendering
+    Displacement = 1,   // Show tessellation displacement as color
+    POMDepth = 2,       // Show POM parallax depth
+    Normals = 3,        // Show surface normals
+    UVs = 4,            // Show UV coordinates
+    AO = 5,             // Show ambient occlusion from texture
+};
+
+// JSON serialization declarations for post-process configs
+void to_json(nlohmann::json& j, const SSAOConfig& c);
+void from_json(const nlohmann::json& j, SSAOConfig& c);
+
+void to_json(nlohmann::json& j, const BloomConfig& c);
+void from_json(const nlohmann::json& j, BloomConfig& c);
+
+void to_json(nlohmann::json& j, const CompositeConfig& c);
+void from_json(const nlohmann::json& j, CompositeConfig& c);
 
 // Post-processing pipeline
 class PostProcess {
@@ -64,14 +105,30 @@ public:
     void setBloomConfig(const BloomConfig& config) { m_bloomConfig = config; }
     const BloomConfig& getBloomConfig() const { return m_bloomConfig; }
 
+    // SSR
+    void setSSRConfig(const SSRConfig& config) { m_ssrConfig = config; }
+    const SSRConfig& getSSRConfig() const { return m_ssrConfig; }
+
+    // Generate SSR from HDR scene, normal/roughness, and depth
+    void generateSSR(VkCommandBuffer cmd, const mat4& projection, const mat4& invProjection,
+                     const mat4& view, u32 frameIndex);
+
+    // Get SSR result for composite
+    VkImageView getSSRImageView() const { return m_ssrView; }
+
     void setCompositeConfig(const CompositeConfig& config) { m_compositeConfig = config; }
     const CompositeConfig& getCompositeConfig() const { return m_compositeConfig; }
+
+    // Debug visualization mode
+    void setDebugMode(PostProcessDebugMode mode) { m_debugMode = mode; }
+    PostProcessDebugMode getDebugMode() const { return m_debugMode; }
 
     // HDR scene rendering - call these instead of direct swapchain rendering
     VkRenderPass getHDRRenderPass() const { return m_hdrRenderPass; }
     VkFramebuffer getHDRFramebuffer() const { return m_hdrFramebuffer; }
     VkImageView getHDRColorView() const { return m_hdrColorView; }
     VkImageView getHDRDepthView() const { return m_hdrDepthView; }
+    VkImageView getHDRNormalView() const { return m_hdrNormalView; }  // For SSR
 
     // Generate bloom from HDR scene
     void generateBloom(VkCommandBuffer cmd, u32 frameIndex);
@@ -101,9 +158,12 @@ private:
     void createBlurPipeline();
     void createBloomResources();
     void createBloomPipelines();
+    void createSSRResources();
+    void createSSRPipeline();
     void createFullscreenQuad();
 
     void cleanupHDR();
+    void cleanupSSR();
     void cleanupSSAO();
     void cleanupSSAOSizeDependent();
     void cleanupBloom();
@@ -118,6 +178,8 @@ private:
     SSAOConfig m_ssaoConfig;
     BloomConfig m_bloomConfig;
     CompositeConfig m_compositeConfig;
+    SSRConfig m_ssrConfig;
+    PostProcessDebugMode m_debugMode = PostProcessDebugMode::None;
 
     // HDR render target (scene is rendered here first)
     VkImage m_hdrColorImage = VK_NULL_HANDLE;
@@ -126,6 +188,10 @@ private:
     VkImage m_hdrDepthImage = VK_NULL_HANDLE;
     VkDeviceMemory m_hdrDepthMemory = VK_NULL_HANDLE;
     VkImageView m_hdrDepthView = VK_NULL_HANDLE;
+    // Normal + roughness buffer for SSR (R16G16B16A16 - xyz=normal, w=roughness)
+    VkImage m_hdrNormalImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_hdrNormalMemory = VK_NULL_HANDLE;
+    VkImageView m_hdrNormalView = VK_NULL_HANDLE;
     VkRenderPass m_hdrRenderPass = VK_NULL_HANDLE;
     VkFramebuffer m_hdrFramebuffer = VK_NULL_HANDLE;
     VkSampler m_hdrSampler = VK_NULL_HANDLE;
@@ -204,6 +270,19 @@ private:
     VkDeviceMemory m_quadVertexMemory = VK_NULL_HANDLE;
     VkBuffer m_quadIndexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_quadIndexMemory = VK_NULL_HANDLE;
+
+    // SSR resources
+    VkImage m_ssrImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_ssrMemory = VK_NULL_HANDLE;
+    VkImageView m_ssrView = VK_NULL_HANDLE;
+    VkSampler m_ssrSampler = VK_NULL_HANDLE;
+
+    VkRenderPass m_ssrRenderPass = VK_NULL_HANDLE;
+    VkFramebuffer m_ssrFramebuffer = VK_NULL_HANDLE;
+    VkPipelineLayout m_ssrPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline m_ssrPipeline = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_ssrDescLayout = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_ssrDescSets;
 };
 
 } // namespace arch

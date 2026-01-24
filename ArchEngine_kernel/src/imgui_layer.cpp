@@ -767,6 +767,139 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
 
         ImGui::Separator();
 
+        // Multi-Light System
+        if (ImGui::CollapsingHeader("Additional Lights")) {
+            static int selectedLightIdx = -1;
+            u32 lightCount = renderer.getLightCount();
+
+            ImGui::Text("Lights: %u / %u", lightCount, MAX_LIGHTS);
+
+            // Add light buttons
+            if (lightCount < MAX_LIGHTS) {
+                if (ImGui::Button("+ Point Light")) {
+                    Light light = Light::createPoint(vec3(0.0f, 3.0f, 0.0f), vec3(1.0f), 5.0f, 15.0f);
+                    renderer.addLight(light);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("+ Spot Light")) {
+                    Light light = Light::createSpot(vec3(0.0f, 5.0f, 0.0f), vec3(0.0f, -1.0f, 0.0f),
+                                                     vec3(1.0f), 8.0f, 20.0f, 25.0f, 40.0f);
+                    renderer.addLight(light);
+                }
+            }
+
+            if (ImGui::Button("Clear All Lights")) {
+                renderer.clearLights();
+                selectedLightIdx = -1;
+            }
+
+            ImGui::Separator();
+
+            // Light list
+            for (u32 i = 0; i < lightCount; i++) {
+                Light* light = renderer.getLight(i);
+                if (!light) continue;
+
+                const char* typeNames[] = {"Directional", "Point", "Spot"};
+                LightType type = light->getType();
+                int typeIdx = static_cast<int>(type);
+
+                char label[64];
+                snprintf(label, sizeof(label), "Light %u (%s)", i, typeNames[typeIdx]);
+
+                bool isSelected = (selectedLightIdx == static_cast<int>(i));
+                if (ImGui::Selectable(label, isSelected)) {
+                    selectedLightIdx = isSelected ? -1 : static_cast<int>(i);
+                }
+            }
+
+            // Edit selected light
+            if (selectedLightIdx >= 0 && selectedLightIdx < static_cast<int>(lightCount)) {
+                Light* light = renderer.getLight(static_cast<u32>(selectedLightIdx));
+                if (light) {
+                    ImGui::Separator();
+                    ImGui::Text("Edit Light %d", selectedLightIdx);
+
+                    // Position
+                    vec3 pos = light->getPosition();
+                    if (ImGui::DragFloat3("Position", &pos.x, 0.1f)) {
+                        light->setPosition(pos);
+                    }
+
+                    // Color
+                    vec3 color = light->getColor();
+                    if (ImGui::ColorEdit3("Color", &color.x)) {
+                        light->setColor(color);
+                    }
+
+                    // Intensity
+                    float intensity = light->getIntensity();
+                    if (ImGui::SliderFloat("Intensity", &intensity, 0.1f, 50.0f)) {
+                        light->setIntensity(intensity);
+                    }
+
+                    // Range (for point/spot)
+                    LightType type = light->getType();
+                    if (type == LightType::Point || type == LightType::Spot) {
+                        float range = light->getRange();
+                        if (ImGui::SliderFloat("Range", &range, 1.0f, 100.0f)) {
+                            light->setRange(range);
+                        }
+                    }
+
+                    // Direction and angles (for spot)
+                    if (type == LightType::Spot) {
+                        vec3 dir = light->getDirection();
+                        if (ImGui::DragFloat3("Direction", &dir.x, 0.01f, -1.0f, 1.0f)) {
+                            light->setDirection(dir);
+                        }
+
+                        float innerAngle = light->getInnerAngleDeg();
+                        float outerAngle = light->getOuterAngleDeg();
+                        bool anglesChanged = false;
+                        if (ImGui::SliderFloat("Inner Angle", &innerAngle, 5.0f, 85.0f, "%.1f deg")) {
+                            anglesChanged = true;
+                        }
+                        if (ImGui::SliderFloat("Outer Angle", &outerAngle, 10.0f, 90.0f, "%.1f deg")) {
+                            anglesChanged = true;
+                        }
+                        if (anglesChanged) {
+                            // Ensure outer >= inner
+                            if (outerAngle < innerAngle) outerAngle = innerAngle + 5.0f;
+                            light->setSpotAngles(innerAngle, outerAngle);
+                        }
+                    }
+
+                    // Presets
+                    ImGui::Separator();
+                    ImGui::Text("Presets:");
+                    if (ImGui::Button("Warm")) {
+                        light->setColor(vec3(1.0f, 0.85f, 0.7f));
+                        light->setIntensity(3.0f);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Cool")) {
+                        light->setColor(vec3(0.9f, 0.95f, 1.0f));
+                        light->setIntensity(4.0f);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Candle")) {
+                        light->setColor(vec3(1.0f, 0.6f, 0.2f));
+                        light->setIntensity(1.5f);
+                    }
+
+                    // Remove button
+                    ImGui::Separator();
+                    if (ImGui::Button("Remove This Light")) {
+                        renderer.removeLight(static_cast<u32>(selectedLightIdx));
+                        selectedLightIdx = -1;
+                    }
+                }
+            }
+        }
+
+        ImGui::Separator();
+
         // SSAO Settings
         if (ImGui::CollapsingHeader("Ambient Occlusion (SSAO)", ImGuiTreeNodeFlags_DefaultOpen)) {
             bool ssaoEnabled = renderer.getSSAOEnabled();
@@ -1700,6 +1833,56 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                 "8K: 7680x4320 (33 MP) - Ultra high detail"
             };
             ImGui::TextWrapped("%s", resInfo[m_renderResolution]);
+        }
+
+        ImGui::Separator();
+
+        // Debug Visualization modes
+        if (ImGui::CollapsingHeader("Debug Visualization")) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Use these to verify effects are working");
+
+            // Post-processing debug mode
+            ImGui::Text("Post-Processing:");
+            const char* ppDebugModes[] = { "None (Normal)", "SSAO Only", "Bloom Only", "HDR Scene (No FX)", "Depth Edges" };
+            int currentPPDebug = static_cast<int>(renderer.getPostProcessDebugMode());
+            if (ImGui::Combo("PP Debug Mode", &currentPPDebug, ppDebugModes, IM_ARRAYSIZE(ppDebugModes))) {
+                renderer.setPostProcessDebugMode(static_cast<PostProcessDebugMode>(currentPPDebug));
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "None: Normal rendering with all effects\n"
+                    "SSAO Only: Show ambient occlusion buffer (dark = occluded)\n"
+                    "Bloom Only: Show bloom contribution\n"
+                    "HDR Scene: Scene without SSAO/bloom (tests tonemapping)\n"
+                    "Depth Edges: Show depth-based edge detection"
+                );
+            }
+
+            ImGui::Spacing();
+
+            // Material/Displacement debug mode
+            ImGui::Text("Material/Displacement:");
+            const char* matDebugModes[] = { "None (Normal)", "Displacement", "POM Depth", "Normals", "UVs", "AO Map" };
+            int currentMatDebug = static_cast<int>(renderer.getMaterialDebugMode());
+            if (ImGui::Combo("Material Debug Mode", &currentMatDebug, matDebugModes, IM_ARRAYSIZE(matDebugModes))) {
+                renderer.setMaterialDebugMode(static_cast<MaterialDebugMode>(currentMatDebug));
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "None: Normal rendering\n"
+                    "Displacement: Show tessellation displacement as color\n"
+                    "POM Depth: Show parallax depth offset\n"
+                    "Normals: Show surface normals\n"
+                    "UVs: Show UV coordinates\n"
+                    "AO Map: Show ambient occlusion from texture"
+                );
+            }
+
+            // Quick reset button
+            if (ImGui::Button("Reset All Debug Modes")) {
+                renderer.setPostProcessDebugMode(PostProcessDebugMode::None);
+                renderer.setMaterialDebugMode(MaterialDebugMode::None);
+            }
         }
 
         ImGui::Separator();

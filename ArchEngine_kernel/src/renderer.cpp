@@ -28,9 +28,14 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
         m_shadowMap = std::make_unique<ShadowMap>(m_context, m_context.getConfig().shadowMapResolution);
     }
 
-    // Create environment map (procedural sky by default)
+    // Create environment map (procedural sky by default) and generate IBL
     m_envMap = std::make_unique<EnvironmentMap>(m_context);
     m_envMap->createProceduralSky();
+    // Generate IBL textures for the procedural sky
+    IBLConfig iblConfig;
+    if (m_envMap->generateIBLTextures(iblConfig)) {
+        // Note: IBL descriptor set will be updated after createIBLDescriptorSetLayout() is called
+    }
 
     // Create post-processing pipeline (SSAO, bloom, etc.)
     m_postProcess = std::make_unique<PostProcess>(m_context);
@@ -42,6 +47,11 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
     createUniformBuffers();
     createDescriptorSets();
     createMaterialDescriptorSetLayout();
+    createIBLDescriptorSetLayout();
+    // Update IBL descriptor set with procedural sky IBL textures
+    if (m_envMap && m_envMap->hasIBLTextures()) {
+        updateIBLDescriptorSet();
+    }
     createDefaultMaterialDescriptorSet();
 
     // Create shadow height map descriptor set for tessellated shadows
@@ -558,6 +568,49 @@ void Renderer::createMaterialDescriptorSetLayout() {
     }
 }
 
+void Renderer::createIBLDescriptorSetLayout() {
+    // IBL descriptor set layout (set 2) - irradiance, prefiltered, BRDF LUT
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+
+    // Binding 0: Irradiance cubemap (diffuse IBL)
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 1: Prefiltered cubemap (specular IBL)
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 2: BRDF LUT
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<u32>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+
+    if (vkCreateDescriptorSetLayout(m_context.getDevice(), &layoutInfo, nullptr, &m_iblDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create IBL descriptor set layout");
+    }
+
+    // Allocate IBL descriptor set
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_descriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_iblDescriptorSetLayout;
+
+    if (vkAllocateDescriptorSets(m_context.getDevice(), &allocInfo, &m_iblDescriptorSet) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate IBL descriptor set");
+    }
+}
+
 void Renderer::createDefaultMaterialDescriptorSet() {
     // Create material library and default textures
     m_materialLibrary = std::make_unique<MaterialLibrary>(m_context);
@@ -646,6 +699,7 @@ void Renderer::createPipeline() {
     m_pipelineLayout = PipelineLayoutBuilder(m_context)
         .addDescriptorSetLayout(m_descriptorSetLayout)           // Set 0: UBO + shadow map
         .addDescriptorSetLayout(m_materialDescriptorSetLayout)   // Set 1: Material textures
+        .addDescriptorSetLayout(m_iblDescriptorSetLayout)        // Set 2: IBL textures
         .addPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, 0, sizeof(PushConstants))
         .build();
 
@@ -1359,6 +1413,18 @@ void Renderer::runPostProcessing() {
     // Generate bloom from HDR color buffer
     if (m_bloomEnabled) {
         m_postProcess->generateBloom(m_currentCommandBuffer, m_currentFrame);
+    }
+
+    // Generate SSR (Screen Space Reflections)
+    if (m_ssrEnabled) {
+        mat4 invProj = glm::inverse(proj);
+        m_postProcess->generateSSR(
+            m_currentCommandBuffer,
+            proj,
+            invProj,
+            view,
+            m_currentFrame
+        );
     }
 }
 
@@ -2280,6 +2346,13 @@ void Renderer::buildMaterialDescriptorSets() {
     }
 }
 
+void Renderer::bindIBLDescriptorSet() {
+    if (m_iblDescriptorSetValid && m_iblDescriptorSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_pipelineLayout, 2, 1, &m_iblDescriptorSet, 0, nullptr);
+    }
+}
+
 void Renderer::bindMaterialDescriptorSet(const std::string& materialName) {
     VkDescriptorSet set = m_defaultMaterialDescriptorSet;
     auto it = m_materialDescriptorSets.find(materialName);
@@ -2462,6 +2535,9 @@ void Renderer::drawLoadArrow(vec3 start, vec3 end, f32 magnitude) {
 
 void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices) {
     m_context.beginDebugLabel(m_currentCommandBuffer, "Structural Frame", {0.2f, 0.6f, 0.9f, 1.0f});
+
+    // Bind IBL descriptor set (set 2) - only needs to be done once per frame
+    bindIBLDescriptorSet();
 
     // Debug: count element types on first call per building change
     static std::string lastBuilding;
@@ -2843,8 +2919,57 @@ bool Renderer::loadHdrEnvironment(const std::string& filepath) {
     bool success = m_envMap->loadFromFile(filepath);
     if (success) {
         m_useHdrEnvMap = true;
+
+        // Generate IBL textures
+        IBLConfig iblConfig;
+        if (m_envMap->generateIBLTextures(iblConfig)) {
+            updateIBLDescriptorSet();
+        }
     }
     return success;
+}
+
+void Renderer::updateIBLDescriptorSet() {
+    if (!m_envMap || !m_envMap->hasIBLTextures()) {
+        m_iblDescriptorSetValid = false;
+        return;
+    }
+
+    // Update IBL descriptor set with generated textures
+    VkDescriptorImageInfo irradianceInfo = m_envMap->getIrradianceDescriptorInfo();
+    VkDescriptorImageInfo prefilteredInfo = m_envMap->getPrefilteredDescriptorInfo();
+    VkDescriptorImageInfo brdfLutInfo = m_envMap->getBRDFLutDescriptorInfo();
+
+    std::array<VkWriteDescriptorSet, 3> writes{};
+
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = m_iblDescriptorSet;
+    writes[0].dstBinding = 0;
+    writes[0].dstArrayElement = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].descriptorCount = 1;
+    writes[0].pImageInfo = &irradianceInfo;
+
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = m_iblDescriptorSet;
+    writes[1].dstBinding = 1;
+    writes[1].dstArrayElement = 0;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &prefilteredInfo;
+
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = m_iblDescriptorSet;
+    writes[2].dstBinding = 2;
+    writes[2].dstArrayElement = 0;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].descriptorCount = 1;
+    writes[2].pImageInfo = &brdfLutInfo;
+
+    vkUpdateDescriptorSets(m_context.getDevice(), static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
+
+    m_iblDescriptorSetValid = true;
+    std::cout << "[Renderer] IBL descriptor set updated" << std::endl;
 }
 
 // SSAO settings
@@ -2937,6 +3062,27 @@ void Renderer::setBloomIterations(u32 iterations) {
 
 u32 Renderer::getBloomIterations() const {
     return m_postProcess ? m_postProcess->getBloomConfig().iterations : 5;
+}
+
+// SSR settings
+void Renderer::setSSREnabled(bool enabled) {
+    m_ssrEnabled = enabled;
+    if (m_postProcess) {
+        auto config = m_postProcess->getSSRConfig();
+        config.enabled = enabled;
+        m_postProcess->setSSRConfig(config);
+    }
+}
+
+void Renderer::setSSRConfig(const SSRConfig& config) {
+    if (m_postProcess) {
+        m_postProcess->setSSRConfig(config);
+    }
+    m_ssrEnabled = config.enabled;
+}
+
+SSRConfig Renderer::getSSRConfig() const {
+    return m_postProcess ? m_postProcess->getSSRConfig() : SSRConfig{};
 }
 
 // Tonemapping settings

@@ -101,6 +101,7 @@ set(ENGINE_SOURCES
     src/ipc_server.cpp
     src/post_process.cpp
     src/texture.cpp
+    src/project.cpp
 )
 
 # Header files
@@ -125,6 +126,7 @@ set(ENGINE_HEADERS
     include/ipc_server.hpp
     include/post_process.hpp
     include/texture.hpp
+    include/project.hpp
 )
 
 # Library sources (excludes main.cpp, includes arch_api.cpp)
@@ -150,6 +152,7 @@ set(LIB_SOURCES
     src/post_process.cpp
     src/arch_api.cpp
     src/texture.cpp
+    src/project.cpp
 )
 
 # Shared library (DLL) for embedding in Qt/Python
@@ -196,7 +199,13 @@ target_link_libraries(ArchEngine PRIVATE
 find_program(GLSLC glslc HINTS $ENV{VULKAN_SDK}/Bin)
 
 if(GLSLC)
-    file(GLOB SHADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.vert" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.frag")
+    file(GLOB SHADER_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.vert"
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.frag"
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.comp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.tesc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.tese"
+    )
 
     foreach(SHADER ${SHADER_SOURCES})
         get_filename_component(SHADER_NAME ${SHADER} NAME)

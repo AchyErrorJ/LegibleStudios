@@ -24,5 +24,10 @@ void main() {
         result += texture(inputTexture, fragTexCoord - offset).rgb * weights[i];
     }
 
-    outColor = vec4(result, 1.0);
+    // Guard against NaN/Inf propagation
+    if (any(isnan(result)) || any(isinf(result))) {
+        result = vec3(0.0);
+    }
+
+    outColor = vec4(clamp(result, 0.0, 100.0), 1.0);
 }

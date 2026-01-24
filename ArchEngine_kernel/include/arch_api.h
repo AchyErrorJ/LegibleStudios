@@ -757,6 +757,118 @@ ARCH_API int arch_get_preview_pixels(ArchPreviewHandle preview,
  */
 ARCH_API int arch_get_preview_size(ArchPreviewHandle preview, int* out_width, int* out_height);
 
+// =============================================================================
+// Terrain Mesh API
+// =============================================================================
+
+/**
+ * Terrain vertex structure for direct data upload.
+ * Position in feet (will be converted to mm internally).
+ */
+typedef struct {
+    float pos_x, pos_y, pos_z;    // Position in feet (x=east, y=up/elevation, z=north)
+    float normal_x, normal_y, normal_z;  // Surface normal
+    float u, v;                   // UV coordinates (0-1)
+} ArchTerrainVertex;
+
+/**
+ * Set terrain mesh data directly.
+ * This allows Python to generate terrain data and upload it without JSON.
+ *
+ * Positions are expected in feet and will be converted to millimeters internally.
+ * Vertex colors are computed automatically from elevation (Y coordinate).
+ *
+ * @param vertices Array of terrain vertices
+ * @param vertex_count Number of vertices
+ * @param indices Array of triangle indices (3 per triangle)
+ * @param index_count Number of indices
+ * @param width_ft Terrain width in feet (X dimension)
+ * @param depth_ft Terrain depth in feet (Z dimension)
+ * @param min_elevation Minimum elevation in feet
+ * @param max_elevation Maximum elevation in feet
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_set_terrain_data(const ArchTerrainVertex* vertices, int vertex_count,
+                                   const unsigned int* indices, int index_count,
+                                   float width_ft, float depth_ft,
+                                   float min_elevation, float max_elevation);
+
+/**
+ * Clear terrain mesh data.
+ * Removes any loaded terrain from the scene.
+ */
+ARCH_API void arch_clear_terrain(void);
+
+/**
+ * Check if terrain data is loaded.
+ *
+ * @return 1 if terrain exists, 0 otherwise
+ */
+ARCH_API int arch_has_terrain(void);
+
+/**
+ * Get terrain information.
+ *
+ * @param out_width_ft Output: terrain width in feet (or NULL to skip)
+ * @param out_depth_ft Output: terrain depth in feet (or NULL to skip)
+ * @param out_min_elev Output: minimum elevation in feet (or NULL to skip)
+ * @param out_max_elev Output: maximum elevation in feet (or NULL to skip)
+ * @param out_vertex_count Output: number of vertices (or NULL to skip)
+ * @param out_triangle_count Output: number of triangles (or NULL to skip)
+ * @return 0 on success, -1 if no terrain loaded
+ */
+ARCH_API int arch_get_terrain_info(float* out_width_ft, float* out_depth_ft,
+                                   float* out_min_elev, float* out_max_elev,
+                                   int* out_vertex_count, int* out_triangle_count);
+
+/**
+ * Set terrain visibility.
+ *
+ * @param enabled 1 to show terrain, 0 to hide
+ */
+ARCH_API void arch_set_terrain_enabled(int enabled);
+
+/**
+ * Get terrain visibility state.
+ *
+ * @return 1 if enabled, 0 if disabled
+ */
+ARCH_API int arch_get_terrain_enabled(void);
+
+/**
+ * Set terrain position offset.
+ * Useful for centering terrain under a building.
+ *
+ * @param offset_x X offset in feet
+ * @param offset_y Y offset in feet (vertical)
+ * @param offset_z Z offset in feet
+ */
+ARCH_API void arch_set_terrain_offset(float offset_x, float offset_y, float offset_z);
+
+/**
+ * Get terrain position offset.
+ *
+ * @param out_x Output: X offset in feet
+ * @param out_y Output: Y offset in feet
+ * @param out_z Output: Z offset in feet
+ */
+ARCH_API void arch_get_terrain_offset(float* out_x, float* out_y, float* out_z);
+
+/**
+ * Set terrain material properties.
+ *
+ * @param roughness Surface roughness (0.0-1.0, default 0.8)
+ * @param metallic Surface metallic value (0.0-1.0, default 0.0)
+ */
+ARCH_API void arch_set_terrain_material(float roughness, float metallic);
+
+/**
+ * Set terrain color mode.
+ *
+ * @param mode 0=Elevation gradient (default), 1=Uniform gray, 2=Satellite texture (future)
+ */
+ARCH_API void arch_set_terrain_color_mode(int mode);
+
 #ifdef __cplusplus
 }
 #endif
