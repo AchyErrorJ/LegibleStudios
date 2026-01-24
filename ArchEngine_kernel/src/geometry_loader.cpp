@@ -4,6 +4,37 @@
 
 namespace arch {
 
+// Feet to millimeters conversion factor
+constexpr f32 FT_TO_MM = 304.8f;
+
+// Compute terrain elevation color based on normalized height [0-1]
+// Returns a topographic gradient: green -> tan -> gray -> white
+static vec3 getElevationColor(f32 normalizedElevation) {
+    // Clamp to [0, 1]
+    f32 t = glm::clamp(normalizedElevation, 0.0f, 1.0f);
+
+    // Color stops for topographic map
+    const vec3 lowGreen  = vec3(0.34f, 0.55f, 0.30f);   // Grass green
+    const vec3 midTan    = vec3(0.72f, 0.60f, 0.40f);   // Tan/brown
+    const vec3 highGray  = vec3(0.55f, 0.55f, 0.55f);   // Rock gray
+    const vec3 peakWhite = vec3(0.95f, 0.95f, 0.95f);   // Snow white
+
+    // Four-stop gradient
+    if (t < 0.25f) {
+        // Low elevation: deep green to grass green
+        return glm::mix(vec3(0.2f, 0.4f, 0.2f), lowGreen, t * 4.0f);
+    } else if (t < 0.50f) {
+        // Lower-mid: green to tan
+        return glm::mix(lowGreen, midTan, (t - 0.25f) * 4.0f);
+    } else if (t < 0.75f) {
+        // Upper-mid: tan to gray
+        return glm::mix(midTan, highGray, (t - 0.50f) * 4.0f);
+    } else {
+        // High: gray to white (snow caps)
+        return glm::mix(highGray, peakWhite, (t - 0.75f) * 4.0f);
+    }
+}
+
 void GeometryLoader::addColumn(Building& building, vec3 position, f32 width, f32 depth, f32 height,
                                const std::string& material, f32 stress) {
     StructuralElement col;
@@ -336,6 +367,7 @@ void GeometryLoader::saveToJSON(const std::string& filepath, const Building& bui
 
             // Save per-parameter flags and values
             o["has_uv_scale"] = override->hasUVScale;
+            o["has_uv_rotation"] = override->hasUVRotation;
             o["has_normal_strength"] = override->hasNormalStrength;
             o["has_brightness"] = override->hasBrightness;
             o["has_contrast"] = override->hasContrast;
@@ -347,6 +379,7 @@ void GeometryLoader::saveToJSON(const std::string& filepath, const Building& bui
 
             // Only save values if the flag is set (save space)
             if (override->hasUVScale) o["uv_scale"] = override->uvScale;
+            if (override->hasUVRotation) o["uv_rotation"] = override->uvRotation;
             if (override->hasNormalStrength) o["normal_strength"] = override->normalStrength;
             if (override->hasBrightness) o["brightness"] = override->brightness;
             if (override->hasContrast) o["contrast"] = override->contrast;
@@ -430,6 +463,7 @@ void GeometryLoader::loadMaterialOverrides(const std::string& filepath, Renderer
             // Load per-parameter flags (new format)
             if (o.contains("has_uv_scale")) {
                 override.hasUVScale = o["has_uv_scale"];
+                override.hasUVRotation = o.value("has_uv_rotation", false);
                 override.hasNormalStrength = o.value("has_normal_strength", false);
                 override.hasBrightness = o.value("has_brightness", false);
                 override.hasContrast = o.value("has_contrast", false);
@@ -441,6 +475,7 @@ void GeometryLoader::loadMaterialOverrides(const std::string& filepath, Renderer
 
                 // Load values (only if flag is true)
                 override.uvScale = o.value("uv_scale", 1.0f);
+                override.uvRotation = o.value("uv_rotation", 0.0f);
                 override.normalStrength = o.value("normal_strength", 1.0f);
                 override.brightness = o.value("brightness", 0.0f);
                 override.contrast = o.value("contrast", 1.0f);
@@ -458,6 +493,9 @@ void GeometryLoader::loadMaterialOverrides(const std::string& filepath, Renderer
                 // Old format (without flags) - load and set flags based on value presence
                 override.uvScale = o.value("uv_scale", 1.0f);
                 override.hasUVScale = o.contains("uv_scale");
+
+                override.uvRotation = o.value("uv_rotation", 0.0f);
+                override.hasUVRotation = o.contains("uv_rotation");
 
                 override.normalStrength = o.value("normal_strength", 1.0f);
                 override.hasNormalStrength = o.contains("normal_strength");
@@ -588,6 +626,81 @@ void from_json(const json& j, Building& b) {
             ParametricWall wall;
             from_json(pw, wall);
             b.parametricWalls.push_back(wall);
+        }
+    }
+
+    // Parse terrain mesh
+    if (j.contains("terrain_mesh")) {
+        const auto& tm = j["terrain_mesh"];
+
+        // Get elevation range for color computation
+        f32 minElev = tm.value("min_elevation", 0.0f);
+        f32 maxElev = tm.value("max_elevation", 100.0f);
+        f32 elevRange = maxElev - minElev;
+        if (elevRange < 0.001f) elevRange = 1.0f;  // Avoid division by zero
+
+        // Store metadata
+        b.terrainMesh.width_ft = tm.value("width_ft", 0.0f);
+        b.terrainMesh.depth_ft = tm.value("depth_ft", 0.0f);
+        b.terrainMesh.min_elevation = minElev;
+        b.terrainMesh.max_elevation = maxElev;
+
+        // Parse vertices with feet-to-mm conversion and elevation coloring
+        if (tm.contains("vertices")) {
+            for (const auto& v : tm["vertices"]) {
+                Vertex vert;
+
+                // Position: convert feet to millimeters
+                // JSON format: position is [x, y, z] where z is elevation
+                if (v.contains("position") && v["position"].size() >= 3) {
+                    f32 x_ft = v["position"][0].get<f32>();
+                    f32 y_ft = v["position"][1].get<f32>();
+                    f32 z_ft = v["position"][2].get<f32>();  // This is elevation
+
+                    // Convert to mm: X stays X, Y becomes elevation (up), Z stays Z (depth)
+                    // In the renderer, Y is up, so we swap: position.y = elevation * FT_TO_MM
+                    vert.position = vec3(x_ft * FT_TO_MM, z_ft * FT_TO_MM, y_ft * FT_TO_MM);
+
+                    // Compute color from elevation
+                    f32 normalizedElev = (z_ft - minElev) / elevRange;
+                    vert.color = getElevationColor(normalizedElev);
+                }
+
+                // Normal
+                if (v.contains("normal") && v["normal"].size() >= 3) {
+                    f32 nx = v["normal"][0].get<f32>();
+                    f32 ny = v["normal"][1].get<f32>();
+                    f32 nz = v["normal"][2].get<f32>();
+                    // Swap Y and Z to match coordinate system
+                    vert.normal = glm::normalize(vec3(nx, nz, ny));
+                } else {
+                    vert.normal = vec3(0.0f, 1.0f, 0.0f);  // Default up
+                }
+
+                // UV coordinates
+                if (v.contains("uv") && v["uv"].size() >= 2) {
+                    vert.texCoord = vec2(v["uv"][0].get<f32>(), v["uv"][1].get<f32>());
+                } else {
+                    vert.texCoord = vec2(0.0f, 0.0f);
+                }
+
+                vert.stress = 0.0f;  // Terrain has no stress
+
+                b.terrainMesh.vertices.push_back(vert);
+            }
+        }
+
+        // Parse indices
+        if (tm.contains("indices")) {
+            for (const auto& idx : tm["indices"]) {
+                b.terrainMesh.indices.push_back(idx.get<u32>());
+            }
+        }
+
+        if (b.terrainMesh.hasData()) {
+            std::cout << "[Terrain] Loaded mesh: " << b.terrainMesh.vertices.size()
+                      << " vertices, " << (b.terrainMesh.indices.size() / 3)
+                      << " triangles, elevation " << minElev << "-" << maxElev << " ft\n";
         }
     }
 }

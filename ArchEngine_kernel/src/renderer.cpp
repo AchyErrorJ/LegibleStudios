@@ -167,6 +167,10 @@ void Renderer::clearMeshCache() {
 
     // Clear the custom mesh key cache (maps mesh pointers to cache keys)
     m_customMeshKeyCache.clear();
+
+    // Clear terrain mesh cache
+    m_terrainMesh.reset();
+    m_lastTerrainData = nullptr;
 }
 
 void Renderer::createRenderPass() {
@@ -1647,16 +1651,31 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
     // POM parameters: enabled, heightScale, minLayers, maxLayers
     ubo.pomParams = vec4(m_pomEnabled ? 1.0f : 0.0f, m_pomHeightScale, m_pomMinLayers, m_pomMaxLayers);
 
+    // Debug visualization mode
+    ubo.materialDebugMode = static_cast<u32>(m_materialDebugMode);
+
     // Element overrides - initialize with safe defaults (identity values that don't change rendering)
     // These values are used for elements without overrides, and as base values for elements with partial overrides
     // DO NOT use zeros - that would make textures disappear!
     ubo.overrideMask = 0;  // No overrides by default
     ubo._pad1 = 0.0f;
     ubo._pad2 = 0.0f;
-    ubo._pad3 = 0.0f;
     ubo.elementOverride1 = vec4(1.0f, 1.0f, 0.0f, 1.0f);  // uvScale=1, normal=1, brightness=0, contrast=1
     ubo.elementOverride2 = vec4(1.0f, 0.0f, 0.0f, 1.0f);  // saturation=1, roughness=0, metallic=0, ao=1
     ubo.elementOverride3 = vec4(0.0f, 0.0f, 0.0f, 0.0f);  // tint=(0,0,0)
+
+    // Multiple light sources
+    ubo.numLights = static_cast<u32>(std::min(m_lights.size(), static_cast<size_t>(MAX_LIGHTS)));
+    ubo._pad3 = 0.0f;
+    ubo._pad4 = 0.0f;
+    ubo._pad5 = 0.0f;
+    for (u32 i = 0; i < ubo.numLights; ++i) {
+        ubo.lights[i] = m_lights[i];  // GPULight and Light are compatible (inheritance)
+    }
+    // Zero out unused light slots for safety
+    for (u32 i = ubo.numLights; i < MAX_LIGHTS; ++i) {
+        ubo.lights[i] = GPULight{};
+    }
 
     std::memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
 }
@@ -2767,6 +2786,39 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
     m_context.endDebugLabel(m_currentCommandBuffer);
 }
 
+void Renderer::drawTerrain(const TerrainMesh& terrain) {
+    if (!terrain.hasData()) {
+        return;
+    }
+
+    m_context.beginDebugLabel(m_currentCommandBuffer, "Terrain", {0.4f, 0.7f, 0.3f, 1.0f});
+
+    // Check if terrain data has changed and we need to rebuild the mesh
+    if (&terrain != m_lastTerrainData || !m_terrainMesh) {
+        m_lastTerrainData = &terrain;
+
+        // Create mesh from terrain vertices and indices
+        m_terrainMesh = std::make_unique<Mesh>(m_context, terrain.vertices, terrain.indices);
+
+        std::cout << "[Terrain] Created GPU mesh: " << terrain.vertices.size()
+                  << " vertices, " << (terrain.indices.size() / 3) << " triangles\n";
+    }
+
+    // Use default material descriptor set (no texture, just vertex colors)
+    bindMaterialDescriptorSet("");
+
+    // Clear per-element override (terrain has no element ID)
+    m_currentDrawElementId = -1;
+
+    // Terrain material: rough, non-metallic surface
+    vec4 terrainMaterial = vec4(0.0f, 0.85f, 1.0f, 0.0f);  // metallic=0, roughness=0.85, ao=1, emission=0
+
+    // Draw with identity transform (terrain is pre-positioned in world space)
+    drawMeshWithMaterial(*m_terrainMesh, mat4(1.0f), vec3(1.0f), 0.0f, terrainMaterial);
+
+    m_context.endDebugLabel(m_currentCommandBuffer);
+}
+
 void Renderer::updateClipPlane() {
     // Create clip plane based on axis and height
     // Clip plane equation: ax + by + cz + d = 0
@@ -2910,6 +2962,132 @@ void Renderer::setTonemapMode(u32 mode) {
 
 u32 Renderer::getTonemapMode() const {
     return m_postProcess ? m_postProcess->getCompositeConfig().tonemapMode : 1;
+}
+
+// Debug visualization modes
+void Renderer::setPostProcessDebugMode(PostProcessDebugMode mode) {
+    if (m_postProcess) {
+        m_postProcess->setDebugMode(mode);
+    }
+}
+
+PostProcessDebugMode Renderer::getPostProcessDebugMode() const {
+    if (m_postProcess) {
+        return m_postProcess->getDebugMode();
+    }
+    return PostProcessDebugMode::None;
+}
+
+// Project settings - batch get/set for project save/load
+RenderSettings Renderer::getRenderSettings() const {
+    RenderSettings settings;
+
+    // Shadows
+    settings.shadowsEnabled = m_shadowsEnabled;
+    settings.shadowBias = m_shadowBias;
+    settings.lightDirection = m_lightDirection;
+
+    // Post-processing
+    if (m_postProcess) {
+        settings.ssao = m_postProcess->getSSAOConfig();
+        settings.bloom = m_postProcess->getBloomConfig();
+        settings.composite = m_postProcess->getCompositeConfig();
+    }
+    settings.ssaoEnabled = m_ssaoEnabled;
+    settings.bloomEnabled = m_bloomEnabled;
+    settings.postProcessingEnabled = m_postProcessingEnabled;
+
+    // Material defaults
+    settings.defaultMetallic = m_defaultMetallic;
+    settings.defaultRoughness = m_defaultRoughness;
+    settings.defaultAO = m_defaultAO;
+    settings.defaultEmission = m_defaultEmission;
+
+    // Material adjustments
+    settings.materialUVScale = m_materialUVScale;
+    settings.normalStrength = m_normalStrength;
+    settings.materialBrightness = m_materialBrightness;
+    settings.materialContrast = m_materialContrast;
+    settings.materialSaturation = m_materialSaturation;
+    settings.materialRoughnessOffset = m_materialRoughnessOffset;
+    settings.materialMetallicOffset = m_materialMetallicOffset;
+    settings.materialAOStrength = m_materialAOStrength;
+    settings.materialTint = m_materialTint;
+
+    // Tessellation & POM
+    settings.tessellationEnabled = m_tessellationEnabled;
+    settings.pomEnabled = m_pomEnabled;
+    settings.tessellationLevel = m_tessellationLevel;
+    settings.displacementScale = m_displacementScale;
+    settings.pomHeightScale = m_pomHeightScale;
+    settings.pomMinLayers = m_pomMinLayers;
+    settings.pomMaxLayers = m_pomMaxLayers;
+
+    // Clipping
+    settings.clippingEnabled = m_clippingEnabled;
+    settings.clipFlipped = m_clipFlipped;
+    settings.clipAxis = m_clipAxis;
+    settings.clipHeight = m_clipHeight;
+
+    // Style
+    settings.vizMode = m_vizMode;
+    settings.materialStyle = m_materialStyle;
+
+    return settings;
+}
+
+void Renderer::setRenderSettings(const RenderSettings& settings) {
+    // Shadows
+    m_shadowsEnabled = settings.shadowsEnabled;
+    m_shadowBias = settings.shadowBias;
+    m_lightDirection = settings.lightDirection;
+
+    // Post-processing
+    if (m_postProcess) {
+        m_postProcess->setSSAOConfig(settings.ssao);
+        m_postProcess->setBloomConfig(settings.bloom);
+        m_postProcess->setCompositeConfig(settings.composite);
+    }
+    m_ssaoEnabled = settings.ssaoEnabled;
+    m_bloomEnabled = settings.bloomEnabled;
+    m_postProcessingEnabled = settings.postProcessingEnabled;
+
+    // Material defaults
+    m_defaultMetallic = settings.defaultMetallic;
+    m_defaultRoughness = settings.defaultRoughness;
+    m_defaultAO = settings.defaultAO;
+    m_defaultEmission = settings.defaultEmission;
+
+    // Material adjustments
+    m_materialUVScale = settings.materialUVScale;
+    m_normalStrength = settings.normalStrength;
+    m_materialBrightness = settings.materialBrightness;
+    m_materialContrast = settings.materialContrast;
+    m_materialSaturation = settings.materialSaturation;
+    m_materialRoughnessOffset = settings.materialRoughnessOffset;
+    m_materialMetallicOffset = settings.materialMetallicOffset;
+    m_materialAOStrength = settings.materialAOStrength;
+    m_materialTint = settings.materialTint;
+
+    // Tessellation & POM
+    m_tessellationEnabled = settings.tessellationEnabled;
+    m_pomEnabled = settings.pomEnabled;
+    m_tessellationLevel = settings.tessellationLevel;
+    m_displacementScale = settings.displacementScale;
+    m_pomHeightScale = settings.pomHeightScale;
+    m_pomMinLayers = settings.pomMinLayers;
+    m_pomMaxLayers = settings.pomMaxLayers;
+
+    // Clipping
+    m_clippingEnabled = settings.clippingEnabled;
+    m_clipFlipped = settings.clipFlipped;
+    m_clipAxis = settings.clipAxis;
+    m_clipHeight = settings.clipHeight;
+    updateClipPlane();  // Recompute clip plane from axis/height
+
+    // Style
+    m_vizMode = settings.vizMode;
+    m_materialStyle = settings.materialStyle;
 }
 
 #if 0  // Ray tracing disabled - incomplete implementation (missing header declarations)
@@ -5369,6 +5547,58 @@ u32 Renderer::applyElementOverrideToUBO(int elementId) {
     // Use m_currentDrawElementId = elementId; before calling draw functions instead
     (void)elementId;  // Suppress unused parameter warning
     return 0;
+}
+
+// ============================================================================
+// Multi-Light System Implementation
+// ============================================================================
+
+i32 Renderer::addLight(const Light& light) {
+    if (m_lights.size() >= MAX_LIGHTS) {
+        std::cerr << "[Renderer] Cannot add light: max lights (" << MAX_LIGHTS << ") reached" << std::endl;
+        return -1;
+    }
+    m_lights.push_back(light);
+    return static_cast<i32>(m_lights.size() - 1);
+}
+
+void Renderer::removeLight(u32 index) {
+    if (index >= m_lights.size()) {
+        std::cerr << "[Renderer] Cannot remove light: invalid index " << index << std::endl;
+        return;
+    }
+    m_lights.erase(m_lights.begin() + index);
+}
+
+void Renderer::clearLights() {
+    m_lights.clear();
+}
+
+Light* Renderer::getLight(u32 index) {
+    if (index >= m_lights.size()) {
+        return nullptr;
+    }
+    return &m_lights[index];
+}
+
+const Light* Renderer::getLight(u32 index) const {
+    if (index >= m_lights.size()) {
+        return nullptr;
+    }
+    return &m_lights[index];
+}
+
+void Renderer::setLights(const std::vector<Light>& lights) {
+    m_lights.clear();
+    size_t count = std::min(lights.size(), static_cast<size_t>(MAX_LIGHTS));
+    m_lights.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        m_lights.push_back(lights[i]);
+    }
+    if (lights.size() > MAX_LIGHTS) {
+        std::cerr << "[Renderer] Warning: " << (lights.size() - MAX_LIGHTS)
+                  << " lights were dropped (max " << MAX_LIGHTS << ")" << std::endl;
+    }
 }
 
 } // namespace arch
