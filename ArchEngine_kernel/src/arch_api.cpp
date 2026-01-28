@@ -74,7 +74,7 @@ namespace {
         camera.up = vec3(0, 1, 0);
         camera.fov = g_cameraFOV;
         camera.nearPlane = 0.1f;
-        camera.farPlane = 500.0f;
+        camera.farPlane = 10000.0f;  // Increased from 500ft to 10000ft for better zoom-out range
         camera.isOrthographic = g_cameraOrthographic;
         camera.orthoSize = g_cameraDistance * 0.5f;  // Scale ortho based on distance
 
@@ -238,6 +238,19 @@ ARCH_API int arch_load_json(const char* json_str) {
             }
         }
 
+        // Scale terrain mesh vertices from mm to feet
+        if (g_building.terrainMesh.hasData()) {
+            for (auto& v : g_building.terrainMesh.vertices) {
+                v.position *= mmToFeet;
+            }
+            g_building.terrainMesh.min_elevation *= mmToFeet;
+            g_building.terrainMesh.max_elevation *= mmToFeet;
+            std::cout << "[ArchAPI] Scaled terrain mesh: "
+                      << g_building.terrainMesh.vertices.size() << " vertices, "
+                      << "elevation range: " << g_building.terrainMesh.min_elevation
+                      << " to " << g_building.terrainMesh.max_elevation << " feet" << std::endl;
+        }
+
         std::cout << "[ArchAPI] Loaded building with " << g_building.elements.size() << " elements" << std::endl;
 
         // Reset camera to fit
@@ -289,6 +302,19 @@ ARCH_API int arch_load_file(const char* file_path) {
             }
         }
 
+        // Scale terrain mesh vertices from mm to feet
+        if (g_building.terrainMesh.hasData()) {
+            for (auto& v : g_building.terrainMesh.vertices) {
+                v.position *= mmToFeet;
+            }
+            g_building.terrainMesh.min_elevation *= mmToFeet;
+            g_building.terrainMesh.max_elevation *= mmToFeet;
+            std::cout << "[ArchAPI] Scaled terrain mesh: "
+                      << g_building.terrainMesh.vertices.size() << " vertices, "
+                      << "elevation range: " << g_building.terrainMesh.min_elevation
+                      << " to " << g_building.terrainMesh.max_elevation << " feet" << std::endl;
+        }
+
         std::cout << "[ArchAPI] Loaded file: " << file_path << " (" << g_building.elements.size() << " elements)" << std::endl;
 
         arch_reset_camera();
@@ -319,6 +345,13 @@ ARCH_API int arch_render_frame(void) {
             g_renderer->beginRenderPass(clearColor);
 
             g_renderer->drawSky();
+
+            // DEBUG: Draw terrain FIRST (before grid) to ensure visibility
+            if (g_building.terrainMesh.hasData()) {
+                std::cout << "[arch_api] Drawing terrain BEFORE grid" << std::endl;
+                g_renderer->drawTerrain(g_building.terrainMesh);
+            }
+
             g_renderer->drawGrid(150.0f, 5.0f);
 
             // Draw building with selection

@@ -70,6 +70,7 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
     }
 
     createPipeline();
+    initTerrainPipeline();
 
     // Create grid mesh
     auto [gridVerts, gridIndices] = Geometry::createGrid(100.0f, 5.0f);
@@ -106,6 +107,18 @@ Renderer::~Renderer() {
     m_tessWireframePipeline.reset();
     m_hdrTessPipeline.reset();
     m_hdrTessWireframePipeline.reset();
+    m_terrainPipeline.reset();
+
+    // Cleanup terrain buffers
+    if (m_terrainVertexBuffer) {
+        vkDestroyBuffer(m_context.getDevice(), m_terrainVertexBuffer, nullptr);
+    }
+    if (m_terrainIndexBuffer) {
+        vkDestroyBuffer(m_context.getDevice(), m_terrainIndexBuffer, nullptr);
+    }
+    if (m_terrainPipelineLayout) {
+        vkDestroyPipelineLayout(m_context.getDevice(), m_terrainPipelineLayout, nullptr);
+    }
 
     for (size_t i = 0; i < m_context.getSwapchainImageCount(); ++i) {
         vkDestroyBuffer(m_context.getDevice(), m_uniformBuffers[i], nullptr);
@@ -2332,9 +2345,13 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             else if (e.type == ElementType::Wall) walls++;
         }
         std::cout << "[Renderer] Building: " << building.name << " - " << walls << " walls, " << doors << " doors, " << windows << " windows\n";
+        std::cout << "[Renderer] Terrain check: " << building.terrainMesh.vertices.size() << " vertices, "
+                  << building.terrainMesh.indices.size() << " indices, hasData=" << building.terrainMesh.hasData() << "\n";
     }
 
+    std::cout << "[Renderer] Starting elements loop, count=" << elements.size() << std::endl;
     size_t index = 0;
+    /* TEMPORARILY DISABLED FOR TERRAIN DEBUG
     for (const auto& element : elements) {
         vec3 color = getElementColor(element, building, index);
 
@@ -2530,15 +2547,23 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
         }
         index++;
     }
+    */
 
+    std::cout << "[Renderer] After first loop (opaque elements)" << std::endl;
+
+    /* TEMPORARILY DISABLED FOR TERRAIN DEBUG
     // Second pass: Render transparent windows with alpha blending
     Pipeline* transparentPipeline = m_outputLinearHDR ? m_hdrTransparentPipeline.get() : m_transparentPipeline.get();
+    std::cout << "[Renderer] Transparent pipeline: " << (transparentPipeline ? "valid" : "NULL") << std::endl;
+
     if (transparentPipeline) {
+        std::cout << "[Renderer] Entering transparent windows loop" << std::endl;
         m_context.beginDebugLabel(m_currentCommandBuffer, "Transparent Windows", {0.4f, 0.7f, 0.9f, 1.0f});
         transparentPipeline->bind(m_currentCommandBuffer);
 
         index = 0;
         for (const auto& element : elements) {
+            if (index == 0) std::cout << "[Renderer] Inside transparent loop, element count=" << elements.size() << std::endl;
             if (element.type != ElementType::Window) {
                 index++;
                 continue;
@@ -2617,6 +2642,24 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             }
         }
 
+        m_context.endDebugLabel(m_currentCommandBuffer);
+        std::cout << "[Renderer] After transparent windows loop" << std::endl;
+    }
+    */
+
+    std::cout << "[Renderer] Before terrain check, hasData=" << building.terrainMesh.hasData() << std::endl;
+
+    // Draw terrain mesh AFTER building elements (at the end)
+    if (building.terrainMesh.hasData()) {
+        std::cout << "[Renderer] Drawing terrain: " << building.terrainMesh.vertices.size()
+                  << " vertices, indices: " << building.terrainMesh.indices.size() << std::endl;
+        if (!building.terrainMesh.vertices.empty()) {
+            const auto& v = building.terrainMesh.vertices[0];
+            std::cout << "[Renderer] First vertex position: ("
+                      << v.position.x << ", " << v.position.y << ", " << v.position.z << ")" << std::endl;
+        }
+        m_context.beginDebugLabel(m_currentCommandBuffer, "Terrain", {0.3f, 0.5f, 0.3f, 1.0f});
+        drawTerrain(building.terrainMesh);
         m_context.endDebugLabel(m_currentCommandBuffer);
     }
 
@@ -4067,6 +4110,154 @@ bool Renderer::saveHighResEXR(const std::string& filepath) {
         pngPath.replace(extPos, 4, ".png");
     }
     return saveHighResPNG(pngPath);
+}
+
+// ============================================================================
+// TERRAIN RENDERING
+// ============================================================================
+
+void Renderer::initTerrainPipeline() {
+    // Create pipeline layout with push constants for elevation data
+    // Push constants: minElevation, maxElevation, elevationRange, padding
+    m_terrainPipelineLayout = PipelineLayoutBuilder(m_context)
+        .addDescriptorSetLayout(m_descriptorSetLayout)  // Set 0: UBO (camera, etc.)
+        .addPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(f32) * 4)
+        .build();
+
+    // Create terrain pipeline configuration
+    VkSampleCountFlagBits msaaSamples = m_context.getMsaaSamples();
+
+    PipelineConfig terrainConfig = PipelineConfig::defaultConfig();
+    terrainConfig.renderPass = m_renderPass;
+    terrainConfig.pipelineLayout = m_terrainPipelineLayout;
+    terrainConfig.multisample.rasterizationSamples = msaaSamples;
+    terrainConfig.rasterization.cullMode = VK_CULL_MODE_NONE;  // Disable culling for terrain
+
+    if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+        terrainConfig.multisample.sampleShadingEnable = VK_TRUE;
+        terrainConfig.multisample.minSampleShading = 0.2f;
+    }
+
+    // Create the terrain pipeline
+    m_terrainPipeline = std::make_unique<Pipeline>(m_context,
+        "shaders/terrain.vert.spv",
+        "shaders/terrain.frag.spv",
+        terrainConfig);
+
+    std::cout << "[Renderer] Terrain pipeline initialized" << std::endl;
+}
+
+void Renderer::uploadTerrainBuffers(const TerrainMesh& terrain) {
+    if (!terrain.hasData()) return;
+
+    u32 vertexCount = static_cast<u32>(terrain.vertices.size());
+    u32 indexCount = static_cast<u32>(terrain.indices.size());
+
+    VkDeviceSize vertexBufferSize = sizeof(Vertex) * vertexCount;
+    VkDeviceSize indexBufferSize = sizeof(u32) * indexCount;
+
+    // Create vertex buffer with staging
+    VkBuffer stagingVertexBuffer;
+    VkDeviceMemory stagingVertexMemory;
+    m_context.createBuffer(vertexBufferSize,
+                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          stagingVertexBuffer, stagingVertexMemory);
+
+    // Copy vertex data to staging buffer
+    void* data;
+    vkMapMemory(m_context.getDevice(), stagingVertexMemory, 0, vertexBufferSize, 0, &data);
+    memcpy(data, terrain.vertices.data(), vertexBufferSize);
+    vkUnmapMemory(m_context.getDevice(), stagingVertexMemory);
+
+    // Create device-local vertex buffer
+    m_context.createBuffer(vertexBufferSize,
+                          VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                          m_terrainVertexBuffer, m_terrainVertexMemory);
+
+    // Copy from staging to device buffer
+    m_context.copyBuffer(stagingVertexBuffer, m_terrainVertexBuffer, vertexBufferSize);
+
+    // Cleanup staging buffer
+    vkDestroyBuffer(m_context.getDevice(), stagingVertexBuffer, nullptr);
+    vkFreeMemory(m_context.getDevice(), stagingVertexMemory, nullptr);
+
+    // Create index buffer with staging
+    VkBuffer stagingIndexBuffer;
+    VkDeviceMemory stagingIndexMemory;
+    m_context.createBuffer(indexBufferSize,
+                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          stagingIndexBuffer, stagingIndexMemory);
+
+    // Copy index data to staging buffer
+    vkMapMemory(m_context.getDevice(), stagingIndexMemory, 0, indexBufferSize, 0, &data);
+    memcpy(data, terrain.indices.data(), indexBufferSize);
+    vkUnmapMemory(m_context.getDevice(), stagingIndexMemory);
+
+    // Create device-local index buffer
+    m_context.createBuffer(indexBufferSize,
+                          VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                          m_terrainIndexBuffer, m_terrainIndexMemory);
+
+    // Copy from staging to device buffer
+    m_context.copyBuffer(stagingIndexBuffer, m_terrainIndexBuffer, indexBufferSize);
+
+    // Cleanup staging buffer
+    vkDestroyBuffer(m_context.getDevice(), stagingIndexBuffer, nullptr);
+    vkFreeMemory(m_context.getDevice(), stagingIndexMemory, nullptr);
+
+    m_terrainIndexCount = indexCount;
+
+    std::cout << "[Renderer] Uploaded terrain: " << vertexCount
+              << " vertices, " << indexCount << " indices" << std::endl;
+}
+
+void Renderer::drawTerrain(const TerrainMesh& terrainMesh) {
+    if (!terrainMesh.hasData()) return;
+
+    // DEBUG: Try using the standard pipeline instead of terrain pipeline
+    if (!m_pipeline) return;
+
+    // Upload buffers if needed
+    if (!m_terrainVertexBuffer || m_terrainIndexCount != static_cast<u32>(terrainMesh.indices.size())) {
+        uploadTerrainBuffers(terrainMesh);
+
+        // DEBUG: Print all vertex positions
+        std::cout << "[Renderer] Terrain vertices (" << terrainMesh.vertices.size() << "):" << std::endl;
+        for (size_t i = 0; i < std::min(size_t(8), terrainMesh.vertices.size()); i++) {
+            const auto& v = terrainMesh.vertices[i];
+            std::cout << "  [" << i << "] pos=(" << v.position.x << ", " << v.position.y << ", " << v.position.z << ")" << std::endl;
+        }
+    }
+
+    // DEBUG: Use standard structural pipeline (same as grid) instead of terrain pipeline
+    m_pipeline->bind(m_currentCommandBuffer);
+
+    // Bind descriptor set (uniform buffers for camera)
+    vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                           m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
+
+    // Push identity matrix and red color
+    PushConstants push{};
+    push.model = mat4(1.0f);
+    push.color = vec4(1.0f, 0.0f, 0.0f, 1.0f);  // Bright red
+    vkCmdPushConstants(m_currentCommandBuffer, m_pipelineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(PushConstants), &push);
+
+    // Bind vertex and index buffers
+    VkBuffer vertexBuffers[] = {m_terrainVertexBuffer};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(m_currentCommandBuffer, 0, 1, vertexBuffers, offsets);
+    vkCmdBindIndexBuffer(m_currentCommandBuffer, m_terrainIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    // Draw terrain
+    vkCmdDrawIndexed(m_currentCommandBuffer, m_terrainIndexCount, 1, 0, 0, 0);
+
+    std::cout << "[Renderer] Drew terrain using standard pipeline" << std::endl;
 }
 
 } // namespace arch

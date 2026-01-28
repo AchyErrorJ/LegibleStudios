@@ -358,6 +358,7 @@ struct QBDLayout {
     std::unordered_map<std::string, QBDRoom> rooms;
     std::vector<std::string> unplacedRooms;
     std::vector<WallType> wallTypes;
+    TerrainMesh terrain_mesh;  // Terrain mesh for site topography
 
     QBDSummary summary;
     QBDAnswers answers;

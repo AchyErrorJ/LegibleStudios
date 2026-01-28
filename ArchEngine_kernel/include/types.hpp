@@ -124,6 +124,19 @@ struct MeshData {
     bool hasData() const { return !vertices.empty() && !faces.empty(); }
 };
 
+// Terrain mesh from elevation data
+struct TerrainMesh {
+    std::vector<Vertex> vertices;  // Position, normal, color, UV, stress (unused)
+    std::vector<u32> indices;      // Triangle indices
+
+    f32 width_ft;                  // Property width in feet
+    f32 depth_ft;                  // Property depth in feet
+    f32 min_elevation;             // Minimum elevation in feet
+    f32 max_elevation;             // Maximum elevation in feet
+
+    bool hasData() const { return !vertices.empty() && !indices.empty(); }
+};
+
 // Structural element for rendering
 struct StructuralElement {
     ElementType type;
@@ -562,6 +575,9 @@ struct Building {
     std::vector<WallType> wallTypes;
     std::vector<ParametricWall> parametricWalls;
     std::vector<WallCorner> wallCorners;
+
+    // Terrain mesh from elevation data
+    TerrainMesh terrainMesh;
 };
 
 } // namespace arch

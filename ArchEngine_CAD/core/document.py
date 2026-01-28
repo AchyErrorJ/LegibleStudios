@@ -229,6 +229,7 @@ class ArchDocument(QObject):
         self._room_connections: List[RoomConnection] = []  # Room adjacencies
         self._furniture: List[Any] = []  # FurniturePlacement objects
         self._reference_planes: List[ReferencePlane] = []  # Building grid lines
+        self._terrain_mesh: Optional[Dict[str, Any]] = None  # Terrain mesh from elevation data
 
         # Reality layer analysis (physics, economics, psychology)
         self._reality_analysis: Dict[str, Any] = {}
@@ -238,6 +239,10 @@ class ArchDocument(QObject):
 
         # Version control (git-based)
         self._version_control: Optional[VersionControl] = None
+
+        # Constraint system
+        from core.constraints import ConstraintSystem
+        self.constraints = ConstraintSystem(self)
 
     @property
     def file_path(self) -> Optional[Path]:
@@ -305,6 +310,11 @@ class ArchDocument(QObject):
     def reference_planes(self) -> List[ReferencePlane]:
         """Get building reference planes (grid lines)."""
         return self._reference_planes
+
+    @property
+    def terrain_mesh(self) -> Optional[Dict[str, Any]]:
+        """Get terrain mesh data (from Google Maps elevation)."""
+        return self._terrain_mesh
 
     @property
     def reality_analysis(self) -> Dict[str, Any]:
@@ -714,8 +724,21 @@ class ArchDocument(QObject):
         import traceback
         try:
             print(f"[Document] Loading file: {file_path}")
+            print(f"[Document] File exists: {file_path.exists()}")
+            print(f"[Document] File absolute path: {file_path.absolute()}")
             with open(file_path, 'r', encoding='utf-8') as f:
                 self._data = json.load(f)
+
+            # DEBUG: Verify what was actually loaded
+            print(f"[Document] Actually loaded: {self._data.get('name', 'NO NAME')}")
+            print(f"[Document] Building ID: {self._data.get('building_id', 'NO ID')}")
+            walls_count = len(self._data.get('walls_batch', []))
+            print(f"[Document] Walls in loaded file: {walls_count}")
+            terrain_mesh = self._data.get('terrain_mesh', {})
+            terrain_vertices = len(terrain_mesh.get('vertices', []))
+            print(f"[Document] Terrain vertices in loaded file: {terrain_vertices}")
+            if terrain_vertices > 0:
+                print(f"[Document] Terrain triangle count: {terrain_mesh.get('triangle_count', 0)}")
 
             self._file_path = Path(file_path)
             self._modified = False
@@ -950,6 +973,18 @@ class ArchDocument(QObject):
         print(f"[Document] Rooms loaded: {len(self._rooms)}, connections: {len(self._room_connections)}")
         if not self._room_connections and len(self._rooms) > 1:
             self.detect_room_adjacencies()
+
+        # Infer constraints from layout
+        self.constraints.infer_constraints_from_layout(self)
+
+        # Parse terrain mesh (from Google Maps elevation)
+        # Save it before _data gets rebuilt
+        terrain_mesh = self._data.get('terrain_mesh')
+        self._terrain_mesh = terrain_mesh
+        if self._terrain_mesh:
+            print(f"[Document] Loaded terrain mesh: {self._terrain_mesh.get('vertex_count', 0)} vertices, {self._terrain_mesh.get('triangle_count', 0)} triangles")
+            # Ensure it stays in _data after rebuilding
+            self._data['terrain_mesh'] = self._terrain_mesh
 
         # Parse reality layer analysis (physics, economics, psychology)
         self._reality_analysis = self._data.get('reality_analysis', {})
@@ -1603,6 +1638,13 @@ class ArchDocument(QObject):
         # Update reality layer analysis
         if self._reality_analysis:
             self._data['reality_analysis'] = self._reality_analysis
+
+        # Update terrain mesh
+        if self._terrain_mesh:
+            self._data['terrain_mesh'] = self._terrain_mesh
+            print(f"[Document] _update_data: Adding terrain_mesh to _data ({len(self._terrain_mesh.get('vertices', []))} vertices)")
+        else:
+            print(f"[Document] _update_data: WARNING - self._terrain_mesh is None or empty!")
 
     def get_data(self) -> dict:
         """Get current document data as JSON-serializable dict.

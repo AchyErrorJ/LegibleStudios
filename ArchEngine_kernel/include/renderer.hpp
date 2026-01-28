@@ -392,6 +392,12 @@ public:
      */
     void drawWireframeOutlines(const std::vector<StructuralElement>& elements, const Building& building,
                               const std::set<int>& selectedIndices, int hoveredIndex);
+
+    /**
+     * @brief Draw terrain mesh with elevation-based coloring
+     * @param terrainMesh The terrain mesh to render
+     */
+    void drawTerrain(const TerrainMesh& terrainMesh);
     /// @}
 
     /// @name Visualization Settings
@@ -891,6 +897,8 @@ private:
     void createUniformBuffers();
     void createPipeline();
     void createSkyPipeline();
+    void initTerrainPipeline();
+    void uploadTerrainBuffers(const TerrainMesh& terrain);
 
     void cleanupSwapchain();
     void recreateSwapchain();
@@ -957,6 +965,18 @@ private:
     std::unique_ptr<Pipeline> m_tessWireframePipeline;
     std::unique_ptr<Pipeline> m_hdrTessPipeline;
     std::unique_ptr<Pipeline> m_hdrTessWireframePipeline;
+
+    // Terrain rendering pipeline
+    std::unique_ptr<Pipeline> m_terrainPipeline;
+    VkPipelineLayout m_terrainPipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_terrainDescriptorLayout = VK_NULL_HANDLE;
+
+    // Terrain vertex/index buffers
+    VkBuffer m_terrainVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_terrainVertexMemory = VK_NULL_HANDLE;
+    VkBuffer m_terrainIndexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_terrainIndexMemory = VK_NULL_HANDLE;
+    u32 m_terrainIndexCount = 0;
 
     // Sky pipeline
     VkPipelineLayout m_skyPipelineLayout = VK_NULL_HANDLE;

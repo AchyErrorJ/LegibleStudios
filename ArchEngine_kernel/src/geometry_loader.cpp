@@ -440,6 +440,61 @@ void from_json(const json& j, Building& b) {
             b.parametricWalls.push_back(wall);
         }
     }
+
+    // Parse terrain mesh
+    std::cout << "[Loader] Checking for terrain_mesh in JSON..." << std::endl;
+    if (j.contains("terrain_mesh")) {
+        std::cout << "[Loader] Found terrain_mesh!" << std::endl;
+        const auto& tm = j["terrain_mesh"];
+
+        b.terrainMesh.width_ft = tm.value("width_ft", 100.0f);
+        b.terrainMesh.depth_ft = tm.value("depth_ft", 120.0f);
+        b.terrainMesh.min_elevation = tm.value("min_elevation", 0.0f);
+        b.terrainMesh.max_elevation = tm.value("max_elevation", 100.0f);
+
+        // Parse vertices
+        if (tm.contains("vertices")) {
+            for (const auto& v : tm["vertices"]) {
+                Vertex vertex;
+
+                // Position (convert feet to millimeters: 1 ft = 304.8 mm)
+                if (v.contains("position")) {
+                    f32 x = v["position"][0];
+                    f32 y = v["position"][1];
+                    f32 z = v["position"][2];
+                    vertex.position = vec3(x * 304.8f, y * 304.8f, z * 304.8f);
+                }
+
+                // Normal
+                if (v.contains("normal")) {
+                    vertex.normal = vec3(v["normal"][0], v["normal"][1], v["normal"][2]);
+                }
+
+                // UV coordinates
+                if (v.contains("uv")) {
+                    vertex.texCoord = vec2(v["uv"][0], v["uv"][1]);
+                }
+
+                // Color (will be computed from elevation in shader)
+                vertex.color = vec3(0.5f, 0.5f, 0.5f);
+                vertex.stress = 0.0f;
+
+                b.terrainMesh.vertices.push_back(vertex);
+            }
+        }
+
+        // Parse indices
+        if (tm.contains("indices")) {
+            for (const auto& idx : tm["indices"]) {
+                b.terrainMesh.indices.push_back(idx);
+            }
+        }
+
+        std::cout << "[Terrain] Loaded mesh: " << b.terrainMesh.vertices.size()
+                  << " vertices, " << b.terrainMesh.indices.size() / 3 << " triangles\n";
+        std::cout << "[Terrain] Elevation range: " << b.terrainMesh.min_elevation
+                  << "' to " << b.terrainMesh.max_elevation << "'\n";
+    }
 }
 
 // ============================================================================

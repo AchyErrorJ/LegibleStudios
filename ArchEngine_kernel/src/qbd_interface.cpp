@@ -488,6 +488,77 @@ std::optional<QBDLayout> QBDInterface::loadFromJSON(const std::string& jsonStrin
             }
         }
 
+        std::cout << "[QBD] Checking for terrain_mesh in JSON..." << std::endl;
+
+        // Parse terrain mesh
+        if (j.contains("terrain_mesh")) {
+            std::cout << "[QBD] Found terrain_mesh in JSON" << std::endl;
+            const auto& tm = j["terrain_mesh"];
+
+            layout.terrain_mesh.width_ft = tm.value("width_ft", 100.0f);
+            layout.terrain_mesh.depth_ft = tm.value("depth_ft", 100.0f);
+            layout.terrain_mesh.min_elevation = tm.value("min_elevation", 0.0f);
+            layout.terrain_mesh.max_elevation = tm.value("max_elevation", 10.0f);
+
+            // Parse vertices
+            if (tm.contains("vertices") && tm["vertices"].is_array()) {
+                for (const auto& vj : tm["vertices"]) {
+                    Vertex v;
+                    if (vj.contains("position") && vj["position"].is_array() && vj["position"].size() >= 3) {
+                        v.position = vec3(
+                            static_cast<f32>(vj["position"][0]),
+                            static_cast<f32>(vj["position"][1]),
+                            static_cast<f32>(vj["position"][2])
+                        );
+                    }
+                    if (vj.contains("normal") && vj["normal"].is_array() && vj["normal"].size() >= 3) {
+                        v.normal = vec3(
+                            static_cast<f32>(vj["normal"][0]),
+                            static_cast<f32>(vj["normal"][1]),
+                            static_cast<f32>(vj["normal"][2])
+                        );
+                    }
+                    if (vj.contains("color") && vj["color"].is_array() && vj["color"].size() >= 3) {
+                        v.color = vec3(
+                            static_cast<f32>(vj["color"][0]),
+                            static_cast<f32>(vj["color"][1]),
+                            static_cast<f32>(vj["color"][2])
+                        );
+                    }
+                    // texCoord, stress are optional (use uv or texCoord from JSON)
+                    if (vj.contains("uv") && vj["uv"].is_array() && vj["uv"].size() >= 2) {
+                        v.texCoord = vec2(
+                            static_cast<f32>(vj["uv"][0]),
+                            static_cast<f32>(vj["uv"][1])
+                        );
+                    } else if (vj.contains("texCoord") && vj["texCoord"].is_array() && vj["texCoord"].size() >= 2) {
+                        v.texCoord = vec2(
+                            static_cast<f32>(vj["texCoord"][0]),
+                            static_cast<f32>(vj["texCoord"][1])
+                        );
+                    }
+                    if (vj.contains("stress")) {
+                        v.stress = vj["stress"];
+                    }
+                    // Note: elevation is stored in position.y, not as separate field
+                    layout.terrain_mesh.vertices.push_back(v);
+                }
+            }
+
+            // Parse indices
+            if (tm.contains("indices") && tm["indices"].is_array()) {
+                for (const auto& ij : tm["indices"]) {
+                    if (ij.is_number()) {
+                        layout.terrain_mesh.indices.push_back(ij.get<u32>());
+                    }
+                }
+            }
+
+            std::cout << "[QBD] Loaded terrain mesh: "
+                      << layout.terrain_mesh.vertices.size() << " vertices, "
+                      << layout.terrain_mesh.indices.size() << " indices" << std::endl;
+        }
+
         std::cout << "[QBD] Loaded layout: " << layout.width << "x" << layout.depth
                   << " with " << layout.walls.size() << " walls, "
                   << layout.floors.size() << " floors, "
@@ -804,6 +875,13 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
 
     // Convert to parametric walls
     building.parametricWalls = toParametricWalls(layout);
+
+    // Copy terrain mesh
+    building.terrainMesh = layout.terrain_mesh;
+    if (building.terrainMesh.hasData()) {
+        std::cout << "[QBD] Copied terrain mesh to building: "
+                  << building.terrainMesh.vertices.size() << " vertices" << std::endl;
+    }
 
     return building;
 }

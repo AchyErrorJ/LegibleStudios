@@ -8,7 +8,7 @@ import math
 
 from PyQt6.QtWidgets import (
     QGraphicsItem, QGraphicsRectItem, QGraphicsLineItem,
-    QGraphicsTextItem, QGraphicsEllipseItem
+    QGraphicsTextItem, QGraphicsEllipseItem, QWidget
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QLineF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPainterPath, QFont, QPolygonF
@@ -16,7 +16,9 @@ from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPainterPath, QFont, QPo
 from views.base_view import BaseView, ViewMode
 from core.document import ArchDocument, Wall, Door, Window, Room
 from core.events import event_bus
+from core.constraints import ConstraintSystem
 from app.config import Config
+from widgets.constraint_info import ConstraintTooltip
 
 
 # =============================================================================
@@ -2471,11 +2473,14 @@ class RoomItem(QGraphicsItem):
         self._drag_start_pos = None
         self._is_dragging = False
         self._resize_grips = []  # Corner resize handles
+        self._is_hovered = False
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable)
         # Don't use ItemIsMovable - we handle movement manually via vertices
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+        # Enable hover events for constraint tooltip
+        self.setAcceptHoverEvents(True)
         self._update_z_for_lod()
 
     def keyPressEvent(self, event):
@@ -2507,11 +2512,11 @@ class RoomItem(QGraphicsItem):
         lod = self._view.lod_level if self._view else 2
         if lod == 1:
             # LOD 1 (blob view) - rooms on top, fully interactive
-            self.setZValue(100)
+            self.setZValue(150)  # Above walls (which are at 0-110)
             self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         else:
-            # Other LODs - rooms behind walls
-            self.setZValue(-10)
+            # Other LODs - rooms on top of walls for hover detection
+            self.setZValue(150)  # Above walls for hover to work
             self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
             # Remove grips when not in LOD 1
             self._remove_grips()
@@ -2803,6 +2808,26 @@ class RoomItem(QGraphicsItem):
         else:
             super().mouseReleaseEvent(event)
 
+    def hoverEnterEvent(self, event):
+        """Show constraint tooltip when hovering over room."""
+        self._is_hovered = True
+        print(f"[RoomItem] hoverEnter: {self.room.name} (id={self.room.id})")
+        # Notify view to show constraint tooltip
+        if self._view and hasattr(self._view, '_show_room_constraints'):
+            self._view._show_room_constraints(self.room.id, self.room.name)
+        super().hoverEnterEvent(event)
+        self.update()
+
+    def hoverLeaveEvent(self, event):
+        """Hide constraint tooltip when leaving room."""
+        self._is_hovered = False
+        print(f"[RoomItem] hoverLeave: {self.room.name}")
+        # Notify view to hide constraint tooltip
+        if self._view and hasattr(self._view, '_hide_room_constraints'):
+            self._view._hide_room_constraints()
+        super().hoverLeaveEvent(event)
+        self.update()
+
     def paint(self, painter: QPainter, option, widget):
         """Paint the room with mode-aware rendering."""
         # Early return if no vertices
@@ -2854,6 +2879,10 @@ class RoomItem(QGraphicsItem):
         if self.isSelected():
             fill_color = QColor(100, 200, 255, 120)
             border_color = QColor(100, 200, 255)
+        elif self._is_hovered:
+            fill_color = QColor(base_color.red(), base_color.green(), base_color.blue(), min(fill_alpha + 50, 200))
+            border_color = QColor(0, 200, 255)  # Cyan for hover
+            border_width += 10
         else:
             border_color = base_color.darker(120)
 
@@ -2989,6 +3018,10 @@ class PlanView(BaseView):
 
         # Enable drop for room palette
         self.setAcceptDrops(True)
+
+        # Constraint tooltip for showing constraints on hover
+        self._constraint_tooltip = ConstraintTooltip(document.constraints, self)
+        self._constraint_tooltip.hide()
 
     def dragEnterEvent(self, event):
         """Accept room drops from palette."""
@@ -3280,6 +3313,35 @@ class PlanView(BaseView):
         ]
 
     # =========================================================================
+    # Constraint Visualization
+    # =========================================================================
+
+    def _show_room_constraints(self, room_id: str, room_name: str):
+        """Show constraint tooltip for a room."""
+        print(f"[PlanView] _show_room_constraints: {room_name} (id={room_id})")
+        if not hasattr(self, '_constraint_tooltip'):
+            print("[PlanView] No constraint tooltip found!")
+            return
+
+        # Get cursor position in view coordinates
+        cursor_pos = self.mapFromGlobal(self.cursor().pos())
+
+        # Position tooltip near cursor with offset
+        tooltip_x = cursor_pos.x() + 20
+        tooltip_y = cursor_pos.y() + 20
+
+        # Show tooltip
+        self._constraint_tooltip.show_constraints(room_id, room_name)
+        self._constraint_tooltip.move(tooltip_x, tooltip_y)
+        self._constraint_tooltip.raise_()
+        print(f"[PlanView] Tooltip shown at ({tooltip_x}, {tooltip_y})")
+
+    def _hide_room_constraints(self):
+        """Hide constraint tooltip."""
+        if hasattr(self, '_constraint_tooltip'):
+            self._constraint_tooltip.hide()
+
+    # =========================================================================
     # Mouse Event Forwarding to Tools
     # =========================================================================
 
@@ -3327,6 +3389,11 @@ class PlanView(BaseView):
                 0
             )
             return
+
+        # Update constraint tooltip position if visible
+        if hasattr(self, '_constraint_tooltip') and self._constraint_tooltip.isVisible():
+            cursor_pos = event.position().toPoint()
+            self._constraint_tooltip.move(cursor_pos.x() + 20, cursor_pos.y() + 20)
 
         # Forward to tool
         if self._tool_manager and self._tool_manager.active_tool:

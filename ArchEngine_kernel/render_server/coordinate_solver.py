@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 import math
 import heapq
+import json
+import os
 
 from room_relationships import (
     SpatialGraph, Zone, ExteriorRequirement, ROOM_TYPES
@@ -35,6 +37,10 @@ from wall_graph import (
 class Point(NamedTuple):
     x: float
     y: float
+
+    def distance_to(self, other: 'Point') -> float:
+        """Calculate Euclidean distance to another point"""
+        return ((self.x - other.x) ** 2 + (self.y - other.y) ** 2) ** 0.5
 
 
 class Rect(NamedTuple):
@@ -138,6 +144,23 @@ class Rect(NamedTuple):
         """Check if this rect touches any edge of bounds"""
         return any(self.is_on_boundary(bounds, edge, tolerance)
                    for edge in ["south", "north", "east", "west"])
+
+    def contains_point(self, point: Point, tolerance: float = 0.01) -> bool:
+        """Check if point is inside this rectangle"""
+        return (self.x - tolerance <= point.x <= self.x2 + tolerance and
+                self.y - tolerance <= point.y <= self.y2 + tolerance)
+
+    def distance_to_point(self, point: Point) -> float:
+        """Calculate minimum distance from point to rectangle"""
+        # If point is inside, distance is 0
+        if self.contains_point(point):
+            return 0.0
+
+        # Distance to each edge
+        dx = max(self.x - point.x, 0, point.x - self.x2)
+        dy = max(self.y - point.y, 0, point.y - self.y2)
+
+        return math.sqrt(dx*dx + dy*dy)
 
 
 # =============================================================================
@@ -275,6 +298,181 @@ class PlacedLayout:
 
 
 # =============================================================================
+# SCORING CONFIGURATION
+# =============================================================================
+
+class ScoringConfig:
+    """
+    User-configurable scoring criteria for layout solver.
+
+    Loads weights and rules from scoring_config.json, allowing users to
+    modify layout priorities without changing code.
+    """
+
+    # Default configuration (used if config file not found)
+    DEFAULT_CONFIG = {
+        "scoring_weights": {
+            "circulation_completeness": {"weight": 300, "enabled": True},
+            "constraint_satisfaction": {"weight": 200, "enabled": True},
+            "circulation_efficiency": {"weight": 15, "enabled": True},
+            "zone_organization": {"weight": 2, "enabled": True},
+            "room_shape_quality": {"weight": 3, "enabled": True},
+            "exterior_access": {"weight": 10, "enabled": True},
+        },
+        "placement_scoring": {
+            "base_score": 100,
+            "must_touch_bonus": 80,
+            "must_touch_nearby_bonus": 20,
+            "must_touch_far_penalty": -30,
+            "exterior_bonus": 40,
+            "exterior_corner_bonus": 30,
+            "exterior_perpendicular_bonus": 40,
+            "no_exterior_penalty": -20,
+            "aspect_ratio_bonus": 20,
+            "aspect_ratio_penalty": -30,
+            "extension_penalty_per_sqft": 0.5,
+            "center_of_building_bonus": 5,
+            "circulation_connection_bonus": 100,
+            "circulation_connection_penalty": -80,
+            "entry_corner_bonus": 30,
+            "entry_corner_distance_factor": 3,
+            "ideal_aspect_range": [0.6, 1.0],
+        },
+        "circulation_pairs": [
+            {"rooms": ["kitchen", "dining"], "bonus": 1.5, "name": "kitchen-dining"},
+            {"rooms": ["living", "dining"], "bonus": 1.0, "name": "living-dining"},
+            {"rooms": ["entry", "living"], "bonus": 1.0, "name": "entry-living"},
+            {"rooms": ["entry", "hallway"], "bonus": 0.8, "name": "entry-hallway"},
+            {"rooms": ["hallway", "bedroom_2"], "bonus": 0.8, "name": "hallway-bedroom_2"},
+            {"rooms": ["hallway", "bedroom_3"], "bonus": 0.8, "name": "hallway-bedroom_3"},
+            {"rooms": ["hallway", "bathroom_2"], "bonus": 0.6, "name": "hallway-bathroom_2"},
+            {"rooms": ["primary_bedroom", "primary_bath"], "bonus": 1.5, "name": "primary_bedroom-bath"},
+            {"rooms": ["primary_bedroom", "primary_closet"], "bonus": 1.0, "name": "primary_bedroom-closet"},
+            {"rooms": ["laundry", "mudroom"], "bonus": 0.8, "name": "laundry-mudroom"},
+            {"rooms": ["laundry", "hallway"], "bonus": 0.5, "name": "laundry-hallway"},
+        ],
+        "room_groups": {
+            "public": {"rooms": ["entry", "living", "dining", "kitchen", "hallway"]},
+            "private": {"rooms": ["primary_bedroom", "bedroom_2", "bedroom_3"]},
+            "wet": {"rooms": ["kitchen", "primary_bath", "bathroom_2", "laundry"]},
+        },
+        "circulation_hubs": {"rooms": ["hallway", "entry"]},
+        "critical_rooms": {"cannot_skip": ["primary_bedroom", "bedroom_2", "bedroom_3", "garage", "laundry"]},
+        "exterior_required_rooms": {"rooms": ["living", "dining", "kitchen", "primary_bedroom", "bedroom_2", "bedroom_3", "office"]},
+        "solver_parameters": {
+            "grid_size": 2.0,
+            "max_branching_critical": 300,
+            "max_branching_standard": 150,
+            "max_nodes": 500000,
+            "max_solutions_to_track": 10,
+            "corner_threshold_ratio": 0.2,
+        },
+    }
+
+    def __init__(self, config_path: Optional[str] = None):
+        """Load scoring configuration from JSON file or use defaults"""
+        self.config_path = config_path or self._find_config_path()
+        self.config = self._load_config()
+
+    def _find_config_path(self) -> Optional[str]:
+        """Find the scoring_config.json file"""
+        # Try same directory as this file
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(current_dir, "scoring_config.json")
+        if os.path.exists(config_path):
+            return config_path
+        return None
+
+    def _load_config(self) -> Dict:
+        """Load configuration from JSON file or use defaults"""
+        if self.config_path and os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, 'r') as f:
+                    loaded = json.load(f)
+                    print(f"[Config] Loaded scoring configuration from {self.config_path}")
+                    return loaded
+            except Exception as e:
+                print(f"[Config] Error loading config: {e}, using defaults")
+
+        print("[Config] Using default scoring configuration")
+        return self.DEFAULT_CONFIG.copy()
+
+    def save_config(self, path: Optional[str] = None) -> None:
+        """Save current configuration to JSON file"""
+        save_path = path or self.config_path or "scoring_config.json"
+        try:
+            with open(save_path, 'w') as f:
+                json.dump(self.config, f, indent=2)
+            print(f"[Config] Saved configuration to {save_path}")
+        except Exception as e:
+            print(f"[Config] Error saving config: {e}")
+
+    def get_weight(self, category: str) -> float:
+        """Get scoring weight for a category"""
+        return self.config.get("scoring_weights", {}).get(category, {}).get("weight", 0)
+
+    def is_enabled(self, category: str) -> bool:
+        """Check if a scoring category is enabled"""
+        return self.config.get("scoring_weights", {}).get(category, {}).get("enabled", True)
+
+    def get_placement_score(self, key: str) -> float:
+        """Get placement scoring value"""
+        return self.config.get("placement_scoring", {}).get(key, 0)
+
+    def get_circulation_pairs(self) -> List[Tuple[Tuple[str, str], float, str]]:
+        """Get list of circulation pairs with bonuses"""
+        pairs = self.config.get("circulation_pairs", [])
+        return [(tuple(p["rooms"]), p["bonus"], p["name"]) for p in pairs]
+
+    def get_room_group(self, group_name: str) -> Set[str]:
+        """Get set of rooms in a group"""
+        groups = self.config.get("room_groups", {})
+        return set(groups.get(group_name, {}).get("rooms", []))
+
+    def get_circulation_hubs(self) -> Set[str]:
+        """Get set of circulation hub rooms"""
+        return set(self.config.get("circulation_hubs", {}).get("rooms", []))
+
+    def get_critical_rooms(self) -> Set[str]:
+        """Get set of critical rooms that cannot be skipped"""
+        return set(self.config.get("critical_rooms", {}).get("cannot_skip", []))
+
+    def get_exterior_required_rooms(self) -> Set[str]:
+        """Get set of rooms that should have exterior walls"""
+        return set(self.config.get("exterior_required_rooms", {}).get("rooms", []))
+
+    def get_solver_param(self, key: str, default=None):
+        """Get solver parameter value"""
+        return self.config.get("solver_parameters", {}).get(key, default)
+
+    def apply_overrides(self, overrides: Dict):
+        """
+        Apply runtime overrides to the scoring configuration.
+
+        Args:
+            overrides: Dict with keys matching config structure, e.g.:
+                {
+                    "scoring_weights": {
+                        "circulation_completeness": {"weight": 500}
+                    },
+                    "placement_scoring": {
+                        "must_touch_bonus": 100
+                    }
+                }
+        """
+        def deep_update(base_dict, override_dict):
+            """Recursively update nested dictionaries"""
+            for key, value in override_dict.items():
+                if key in base_dict and isinstance(base_dict[key], dict) and isinstance(value, dict):
+                    deep_update(base_dict[key], value)
+                else:
+                    base_dict[key] = value
+
+        deep_update(self.config, overrides)
+        print(f"[ScoringConfig] Applied overrides: {overrides}")
+
+
+# =============================================================================
 # COORDINATE SOLVER
 # =============================================================================
 
@@ -291,7 +489,7 @@ class CoordinateSolver:
 
     def __init__(self, layout_spec: LayoutSpec, grid_size: float = 2.0,
                  allow_extensions: bool = True, max_extension: float = 0.3,
-                 creative_mode: bool = False):
+                 creative_mode: bool = False, scoring_config: Optional[ScoringConfig] = None):
         """
         Initialize the coordinate solver.
 
@@ -302,9 +500,15 @@ class CoordinateSolver:
             max_extension: Maximum extension as fraction of building size
             creative_mode: If True, use organic growth with liberal dead space
                           to create interesting non-rectangular floor plans
+            scoring_config: Optional ScoringConfig for user-modifiable criteria
         """
         self.spec = layout_spec
-        self.grid = grid_size
+        self.scoring_config = scoring_config or ScoringConfig()
+
+        # Load grid size from config if not specified
+        config_grid_size = self.scoring_config.get_solver_param("grid_size")
+        self.grid = grid_size if grid_size != 2.0 else (config_grid_size or 2.0)
+
         self.initial_bounds = Rect(0, 0, layout_spec.building_width, layout_spec.building_depth)
         self.bounds = self.initial_bounds  # Current bounds (may expand)
 
@@ -320,9 +524,21 @@ class CoordinateSolver:
         self.best_partial: Dict[str, PlacedRoom] = {}
         self.nodes_explored = 0
 
+        # Track multiple complete solutions for quality comparison
+        self.complete_solutions: List[Tuple[float, Dict[str, PlacedRoom]]] = []
+        self.max_solutions_to_track = self.scoring_config.get_solver_param("max_solutions_to_track", 10)
+
         # Constraint relaxation state
         self.relaxed_constraints: Set[str] = set()  # Rooms with relaxed must-touch
         self.exterior_relaxed: Set[str] = set()  # Rooms with relaxed exterior requirement
+
+        # Diagnostic logging
+        self.debug = True  # Enable detailed solver diagnostics
+        self.placement_log: List[str] = []  # Track placement decisions
+
+        # Branching limits from config
+        self.max_branching_critical = self.scoring_config.get_solver_param("max_branching_critical", 300)
+        self.max_branching_standard = self.scoring_config.get_solver_param("max_branching_standard", 150)
 
     def solve(self, max_nodes: int = 50000) -> PlacedLayout:
         """Solve for room positions and generate wall coordinates"""
@@ -340,13 +556,41 @@ class CoordinateSolver:
         else:
             self._place_rooms(order, max_nodes)
 
-        # Use best partial if no complete solution found
-        if not self.placed and self.best_partial:
+        # Select best solution from complete solutions found
+        if self.complete_solutions:
+            # Sort by score (highest first) and use the best one
+            self.complete_solutions.sort(key=lambda x: x[0], reverse=True)
+            best_score, best_solution = self.complete_solutions[0]
+            self.placed = best_solution
+            print(f"[Solver] Found {len(self.complete_solutions)} complete solutions, using best (score: {best_score:.1f})")
+        elif not self.placed and self.best_partial:
+            # Fallback to best partial if no complete solution
             self.placed = self.best_partial
             print(f"[Solver] Using best partial solution: {len(self.placed)} rooms")
 
         # Generate wall coordinates from placed rooms
         walls = self._generate_wall_coordinates()
+
+        # Print detailed scoring breakdown
+        if self.placed and self.debug:
+            print("\n[Solver] === LAYOUT QUALITY BREAKDOWN ===")
+            breakdown = self._get_quality_breakdown()
+            for category, details in breakdown.items():
+                print(f"[Solver] {category}: {details['score']:.1f}")
+                if 'items' in details:
+                    for item, score in details['items'].items():
+                        if score != 0:
+                            print(f"  - {item}: {score:.1f}")
+            print(f"[Solver] === TOTAL: {sum(d['score'] for d in breakdown.values()):.1f} ===\n")
+
+            # Print room placement details
+            if self.placement_log:
+                print("[Solver] === ROOM PLACEMENTS ===")
+                for log_entry in self.placement_log[:20]:  # Show first 20 placements
+                    print(f"[Solver] {log_entry}")
+                if len(self.placement_log) > 20:
+                    print(f"[Solver] ... and {len(self.placement_log) - 20} more")
+                print()
 
         # Get actual building bounds (may be larger than initial if extended)
         actual_bounds = self._get_current_bounds()
@@ -362,7 +606,16 @@ class CoordinateSolver:
         )
 
         print(f"[Solver] Done: {len(self.placed)}/{len(self.spec.room_areas)} rooms placed")
+        unplaced = [r for r in self.spec.room_areas if r not in self.placed]
+        if unplaced:
+            print(f"[Solver] Failed to place: {unplaced}")
+            print(f"[Solver] Possible reasons:")
+            print(f"[Solver]   • Building too small for all rooms (tried {self.nodes_explored} positions)")
+            print(f"[Solver]   • Constraint conflicts (rooms need to touch but couldn't fit)")
+            print(f"[Solver]   • Insufficient exterior wall space for rooms that need it")
+            print(f"[Solver] Solution: Try larger building size or fewer rooms")
         print(f"[Solver] Nodes explored: {self.nodes_explored}")
+        print(f"[Solver] Layout quality score: {layout.score:.1f}")
 
         return layout
 
@@ -1162,20 +1415,44 @@ class CoordinateSolver:
         if self.nodes_explored >= max_nodes:
             return False
 
-        # All rooms placed
+        # All rooms placed - track this complete solution
         if index >= len(order):
-            return True
+            # Only track if ALL rooms were actually placed (not skipped)
+            if len(self.placed) == len(self.spec.room_areas):
+                # Calculate quality score for this complete solution
+                quality_score = self._calculate_layout_quality()
+
+                # Store this solution if it's among the best
+                solution = dict(self.placed)
+                self.complete_solutions.append((quality_score, solution))
+
+                # Keep only top N solutions
+                if len(self.complete_solutions) > self.max_solutions_to_track:
+                    self.complete_solutions.sort(key=lambda x: x[0], reverse=True)
+                    self.complete_solutions = self.complete_solutions[:self.max_solutions_to_track]
+
+            # Continue searching for more solutions
+            return len(self.complete_solutions) < self.max_solutions_to_track
 
         room_id = order[index]
         area_spec = self.spec.room_areas[room_id]
+
+        # CRITICAL: Important rooms that can NEVER be skipped (from config)
+        critical_rooms = self.scoring_config.get_critical_rooms()
+        is_critical = room_id in critical_rooms
 
         # Calculate branch limit based on constraints
         must_touch = self.spec.constraints.must_touch.get(room_id, set())
         needs_exterior = room_id in self.spec.constraints.must_have_exterior
         is_constrained = bool(must_touch) or needs_exterior
 
-        # More branches for constrained rooms
-        branch_limit = 150 if is_constrained else 80
+        # More branches for critical and constrained rooms (from config)
+        if is_critical:
+            branch_limit = self.max_branching_critical
+        elif is_constrained:
+            branch_limit = self.max_branching_standard
+        else:
+            branch_limit = 80
 
         # Check if this is an "attached" room (must touch a specific parent)
         is_attached = self._is_attached_room(room_id)
@@ -1191,11 +1468,12 @@ class CoordinateSolver:
             candidates = self._generate_candidates(room_id, area_spec, relaxed=True)
 
         if not candidates:
-            if is_attached or not allow_skip:
+            # Critical rooms can NEVER be skipped - attached rooms also can't be skipped
+            if is_attached or is_critical or not allow_skip:
                 # Force backtracking to try different earlier positions
                 return False
             else:
-                # Skip this room (only in later passes)
+                # Skip this room (only for non-critical rooms in later passes)
                 return self._search(order, index + 1, max_nodes, relaxed, allow_skip)
 
         # Score and sort candidates
@@ -1210,6 +1488,12 @@ class CoordinateSolver:
             # Place room
             self.placed[room_id] = PlacedRoom(room_id, rect)
 
+            # Log placement if debugging
+            if self.debug and index < len(order):  # Only log during initial placement, not backtracking
+                self.placement_log.append(
+                    f"  {room_id}: pos=({rect.x:.1f}, {rect.y:.1f}) {rect.width:.1f}x{rect.height:.1f}, score={score:.1f}"
+                )
+
             # Recurse
             if self._search(order, index + 1, max_nodes, relaxed, allow_skip):
                 return True
@@ -1218,11 +1502,12 @@ class CoordinateSolver:
             del self.placed[room_id]
 
         # Couldn't place with any candidate
-        if is_attached or not allow_skip:
+        # Critical rooms can NEVER be skipped - attached rooms also can't be skipped
+        if is_attached or is_critical or not allow_skip:
             # Force backtrack
             return False
         else:
-            # Skip this room (only in later passes)
+            # Skip this room (only for non-critical rooms in later passes)
             return self._search(order, index + 1, max_nodes, relaxed, allow_skip)
 
     def _is_attached_room(self, room_id: str) -> bool:
@@ -1338,21 +1623,50 @@ class CoordinateSolver:
         return list(set(positions))
 
     def _add_entry_edge_positions(self, positions: List, width: float, height: float):
-        """Add positions along the entry edge for the first room"""
+        """Add positions along the entry edge for the first room.
+
+        Corner positions are returned first (will be tried before edge positions).
+        Returns a list, not a set, to preserve ordering.
+        """
         grid = int(self.grid)
+        edge_positions = []
+
+        # Helper to add positions with priority (corners first)
+        def add_edge_positions_with_corners(edge_type, primary_range, secondary_coord, is_primary_x):
+            corner_positions = []
+            center_positions = []
+
+            for val in primary_range:
+                pos = (float(val), float(secondary_coord)) if is_primary_x else (float(secondary_coord), float(val))
+                # Check if this is a corner position (within 20% of either end)
+                range_length = primary_range[-1] - primary_range[0]
+                dist_from_start = abs(val - primary_range[0])
+                dist_from_end = abs(val - primary_range[-1])
+                is_corner = dist_from_start < range_length * 0.2 or dist_from_end < range_length * 0.2
+
+                if is_corner:
+                    corner_positions.append(pos)
+                else:
+                    center_positions.append(pos)
+
+            # Return corner positions first, then center positions
+            return corner_positions + center_positions
 
         if self.spec.entry_edge == "south":
-            for x in range(0, int(self.bounds.width - width) + 1, grid):
-                positions.append((float(x), 0.0))
+            x_values = list(range(0, int(self.bounds.width - width) + 1, grid))
+            edge_positions = add_edge_positions_with_corners("south", x_values, 0.0, is_primary_x=True)
         elif self.spec.entry_edge == "north":
-            for x in range(0, int(self.bounds.width - width) + 1, grid):
-                positions.append((float(x), self.bounds.height - height))
+            x_values = list(range(0, int(self.bounds.width - width) + 1, grid))
+            edge_positions = add_edge_positions_with_corners("north", x_values, self.bounds.height - height, is_primary_x=True)
         elif self.spec.entry_edge == "west":
-            for y in range(0, int(self.bounds.height - height) + 1, grid):
-                positions.append((0.0, float(y)))
+            y_values = list(range(0, int(self.bounds.height - height) + 1, grid))
+            edge_positions = add_edge_positions_with_corners("west", y_values, 0.0, is_primary_x=False)
         else:  # east
-            for y in range(0, int(self.bounds.height - height) + 1, grid):
-                positions.append((self.bounds.width - width, float(y)))
+            y_values = list(range(0, int(self.bounds.height - height) + 1, grid))
+            edge_positions = add_edge_positions_with_corners("east", y_values, self.bounds.width - width, is_primary_x=False)
+
+        # Extend positions list (corner positions will be first)
+        positions.extend(edge_positions)
 
     def _add_adjacent_positions(self, positions: List, placed_rect: Rect,
                                 width: float, height: float):
@@ -1601,7 +1915,7 @@ class CoordinateSolver:
         """
         Score a candidate position (higher = better).
 
-        Improved scoring:
+        Uses configurable scoring weights from ScoringConfig:
         1. Bonus for touching must-touch rooms
         2. Bonus for exterior when required/preferred
         3. Better aspect ratio scoring
@@ -1611,7 +1925,8 @@ class CoordinateSolver:
         if not self._is_valid_position(room_id, rect, relaxed):
             return -1
 
-        score = 100.0
+        # Load scoring values from config
+        score = self.scoring_config.get_placement_score("base_score")
 
         # EXTENSION PENALTY: Prefer staying within initial bounds
         is_extension = (rect.x < -0.01 or rect.y < -0.01 or
@@ -1629,22 +1944,47 @@ class CoordinateSolver:
             if rect.y2 > self.initial_bounds.height:
                 ext_area += (rect.y2 - self.initial_bounds.height) * rect.width
             # Penalize proportional to extension area
-            score -= ext_area * 0.5
+            score -= ext_area * self.scoring_config.get_placement_score("extension_penalty_per_sqft")
 
         # MUST-TOUCH BONUS: Very strong preference for touching required rooms
         must_touch = self.spec.constraints.must_touch.get(room_id, set())
         for other_id in must_touch:
             if other_id in self.placed:
                 if rect.touches(self.placed[other_id].rect):
-                    score += 80  # Very strong bonus for satisfying must-touch
+                    score += self.scoring_config.get_placement_score("must_touch_bonus")
                 elif self._is_nearby(rect, self.placed[other_id].rect, self.grid * 2):
-                    score += 20  # Smaller bonus for being nearby
+                    score += self.scoring_config.get_placement_score("must_touch_nearby_bonus")
                 else:
-                    score -= 30  # Penalty for being far from must-touch room
+                    score += self.scoring_config.get_placement_score("must_touch_far_penalty")
 
         # CONNECTIVITY: Prefer touching any placed rooms
         touches_count = sum(1 for p in self.placed.values() if rect.touches(p.rect))
         score += touches_count * 15
+
+        # CIRCULATION COMPLETENESS: Strong preference for connecting to hallway/entry
+        # Rooms that should connect to circulation (hallway or entry)
+        circulation_rooms = {'living', 'kitchen', 'dining', 'primary_bedroom', 'bedroom_2',
+                            'bedroom_3', 'primary_bath', 'bathroom_2', 'laundry', 'mudroom',
+                            'primary_closet', 'closet_2', 'closet_3'}
+
+        if room_id in circulation_rooms:
+            circulation_hubs = []
+            if 'hallway' in self.placed:
+                circulation_hubs.append('hallway')
+            if 'entry' in self.placed:
+                circulation_hubs.append('entry')
+
+            if circulation_hubs:
+                touches_hub = False
+                for hub_id in circulation_hubs:
+                    if rect.touches(self.placed[hub_id].rect):
+                        touches_hub = True
+                        score += self.scoring_config.get_placement_score("circulation_connection_bonus")
+                        break
+
+                if not touches_hub:
+                    # Heavy penalty for not connecting to circulation when hub exists
+                    score += self.scoring_config.get_placement_score("circulation_connection_penalty")
 
         # ASPECT RATIO: Prefer rooms that are not too narrow
         score += rect.aspect * 10
@@ -1654,19 +1994,48 @@ class CoordinateSolver:
         if room_id == "entry":
             if rect.is_on_boundary(self.initial_bounds, self.spec.entry_edge):
                 score += 50
-            # Near entry position
-            if self.spec.entry_edge == "south":
-                dist = abs(rect.center.x - self.initial_bounds.width * self.spec.entry_position)
-                score -= dist * 2
-            elif self.spec.entry_edge == "north":
-                dist = abs(rect.center.x - self.initial_bounds.width * self.spec.entry_position)
-                score -= dist * 2
-            elif self.spec.entry_edge == "west":
-                dist = abs(rect.center.y - self.initial_bounds.height * self.spec.entry_position)
-                score -= dist * 2
-            else:  # east
-                dist = abs(rect.center.y - self.initial_bounds.height * self.spec.entry_position)
-                score -= dist * 2
+
+            # PREFER CORNER POSITIONS: Entry should be at corner for exterior access
+            # Calculate distance to nearest corner along the entry edge
+            entry_corner_bonus = self.scoring_config.get_placement_score("entry_corner_bonus")
+            entry_corner_factor = self.scoring_config.get_placement_score("entry_corner_distance_factor")
+
+            if self.spec.entry_edge in ["south", "north"]:
+                # For south/north edges, corners are at x=0 and x=width
+                dist_to_left_corner = rect.center.x
+                dist_to_right_corner = self.initial_bounds.width - rect.center.x
+                min_dist_to_corner = min(dist_to_left_corner, dist_to_right_corner)
+                # Bonus for being near corner (minimum distance = maximum bonus)
+                score += max(0, entry_corner_bonus - min_dist_to_corner * entry_corner_factor)
+            else:  # east or west
+                # For east/west edges, corners are at y=0 and y=height
+                dist_to_bottom_corner = rect.center.y
+                dist_to_top_corner = self.initial_bounds.height - rect.center.y
+                min_dist_to_corner = min(dist_to_bottom_corner, dist_to_top_corner)
+                # Bonus for being near corner
+                score += max(0, entry_corner_bonus - min_dist_to_corner * entry_corner_factor)
+
+            # Also check if on a perpendicular boundary (corner has 2 exterior walls)
+            touches_perpendicular = False
+            if self.spec.entry_edge == "south" and rect.x <= 0.1:
+                touches_perpendicular = True
+            elif self.spec.entry_edge == "south" and rect.x2 >= self.initial_bounds.width - 0.1:
+                touches_perpendicular = True
+            elif self.spec.entry_edge == "north" and rect.x <= 0.1:
+                touches_perpendicular = True
+            elif self.spec.entry_edge == "north" and rect.x2 >= self.initial_bounds.width - 0.1:
+                touches_perpendicular = True
+            elif self.spec.entry_edge == "west" and rect.y <= 0.1:
+                touches_perpendicular = True
+            elif self.spec.entry_edge == "west" and rect.y2 >= self.initial_bounds.height - 0.1:
+                touches_perpendicular = True
+            elif self.spec.entry_edge == "east" and rect.y <= 0.1:
+                touches_perpendicular = True
+            elif self.spec.entry_edge == "east" and rect.y2 >= self.initial_bounds.height - 0.1:
+                touches_perpendicular = True
+
+            if touches_perpendicular:
+                score += self.scoring_config.get_placement_score("exterior_perpendicular_bonus")
 
         # EXTERIOR PREFERENCE
         needs_exterior = room_id in self.spec.constraints.must_have_exterior
@@ -1674,11 +2043,12 @@ class CoordinateSolver:
 
         if needs_exterior or prefers_exterior:
             # Extensions count as exterior (they create new exterior walls)
+            exterior_bonus = self.scoring_config.get_placement_score("exterior_bonus")
             if rect.touches_any_boundary(current_bounds) or is_extension:
-                score += 30 if needs_exterior else 15
+                score += exterior_bonus if needs_exterior else exterior_bonus / 2
             elif needs_exterior and relaxed:
                 # In relaxed mode, penalize but don't reject
-                score -= 20
+                score += self.scoring_config.get_placement_score("no_exterior_penalty")
 
         # CORNER PLACEMENT: Good for small rooms
         area_spec = self.spec.room_areas[room_id]
@@ -1688,7 +2058,7 @@ class CoordinateSolver:
                 max(0, rect.y), max(0, self.initial_bounds.height - rect.y2)
             )
             if corner_dist < 1:
-                score += 10
+                score += self.scoring_config.get_placement_score("center_of_building_bonus")
 
         # SPACE EFFICIENCY: Prefer positions that leave usable space
         # Penalize creating narrow strips (within initial bounds)
@@ -1779,50 +2149,60 @@ class CoordinateSolver:
         return (open_start, open_end, opening.opening_type)
 
     def _generate_exterior_walls(self) -> List[WallCoordinate]:
-        """Generate exterior wall coordinates"""
+        """Generate exterior wall coordinates that follow the actual building perimeter"""
 
         walls = []
         wall_counter = 1000  # Start high to avoid ID conflicts
 
-        # Collect all room edges that touch the boundary
-        # For simplicity, create 4 perimeter walls
+        # Compute the actual building perimeter from all placed rooms
+        perimeter_edges = self._compute_building_perimeter()
 
-        edges = {
-            "south": (Point(0, 0), Point(self.bounds.width, 0)),
-            "east": (Point(self.bounds.width, 0), Point(self.bounds.width, self.bounds.height)),
-            "north": (Point(self.bounds.width, self.bounds.height), Point(0, self.bounds.height)),
-            "west": (Point(0, self.bounds.height), Point(0, 0))
-        }
+        # Create wall coordinates from perimeter edges
+        for edge_start, edge_end in perimeter_edges:
+            wall_id = f"ext_{wall_counter}"
+            wall_counter += 1
 
-        for edge_name, (start, end) in edges.items():
-            # Find rooms on this edge
-            rooms_on_edge = [
-                room_id for room_id, room in self.placed.items()
-                if room.rect.is_on_boundary(self.bounds, edge_name)
-            ]
+            # Find rooms adjacent to this edge
+            rooms_on_edge = []
+            edge_mid = Point((edge_start.x + edge_end.x) / 2, (edge_start.y + edge_end.y) / 2)
+
+            for room_id, room in self.placed.items():
+                # Check if room contains this edge midpoint
+                if room.rect.contains_point(edge_mid):
+                    rooms_on_edge.append(room_id)
+                    break
+                # Also check if room is near this edge
+                elif room.rect.distance_to_point(edge_mid) < self.grid:
+                    rooms_on_edge.append(room_id)
 
             wall_coord = WallCoordinate(
-                wall_id=f"ext_{edge_name}",
-                start=start,
-                end=end,
+                wall_id=wall_id,
+                start=edge_start,
+                end=edge_end,
                 wall_type=WallType.EXTERIOR,
                 room1="exterior",
                 room2=rooms_on_edge[0] if rooms_on_edge else "unassigned"
             )
 
             # Add front door to entry edge
-            if edge_name == self.spec.entry_edge and "entry" in rooms_on_edge:
-                # Find entry room and add door
+            if "entry" in rooms_on_edge:
                 entry_room = self.placed.get("entry")
-                if entry_room:
+                if entry_room and self._is_entry_edge(edge_start, edge_end, entry_room.rect):
+                    # Add door at entry room center
                     door_x = entry_room.rect.center.x
-                    door_y = entry_room.rect.y if edge_name == "south" else entry_room.rect.y2
-                    half_door = 1.5
+                    door_y = entry_room.rect.center.y
+                    half_door = 1.0  # 2ft door
 
-                    if edge_name in ["south", "north"]:
+                    # Determine door orientation based on edge direction
+                    edge_dx = edge_end.x - edge_start.x
+                    edge_dy = edge_end.y - edge_start.y
+
+                    if abs(edge_dx) > abs(edge_dy):
+                        # Horizontal edge
                         door_start = Point(door_x - half_door, door_y)
                         door_end = Point(door_x + half_door, door_y)
                     else:
+                        # Vertical edge
                         door_start = Point(door_x, door_y - half_door)
                         door_end = Point(door_x, door_y + half_door)
 
@@ -1831,6 +2211,363 @@ class CoordinateSolver:
             walls.append(wall_coord)
 
         return walls
+
+    def _compute_building_perimeter(self) -> List[Tuple[Point, Point]]:
+        """
+        Compute the actual building perimeter as a series of edges.
+        This follows the outer boundary of all placed rooms combined.
+        """
+        if not self.placed:
+            # Fallback to simple rectangle
+            return [
+                (Point(0, 0), Point(self.bounds.width, 0)),
+                (Point(self.bounds.width, 0), Point(self.bounds.width, self.bounds.height)),
+                (Point(self.bounds.width, self.bounds.height), Point(0, self.bounds.height)),
+                (Point(0, self.bounds.height), Point(0, 0))
+            ]
+
+        # Collect all unique exterior edges from all rooms
+        exterior_edges = []
+
+        for room_id, room in self.placed.items():
+            # Get all edges of this room
+            room_edges = [
+                (Point(room.rect.x, room.rect.y), Point(room.rect.x2, room.rect.y)),  # Bottom
+                (Point(room.rect.x2, room.rect.y), Point(room.rect.x2, room.rect.y2)),  # Right
+                (Point(room.rect.x2, room.rect.y2), Point(room.rect.x, room.rect.y2)),  # Top
+                (Point(room.rect.x, room.rect.y2), Point(room.rect.x, room.rect.y))  # Left
+            ]
+
+            # For each edge, check if it's exterior (not shared with another room)
+            for edge_start, edge_end in room_edges:
+                is_exterior = True
+                edge_mid = Point((edge_start.x + edge_end.x) / 2, (edge_start.y + edge_end.y) / 2)
+
+                for other_id, other in self.placed.items():
+                    if other_id == room_id:
+                        continue
+
+                    # Check if this edge is shared with another room
+                    if other.rect.contains_point(edge_mid):
+                        is_exterior = False
+                        break
+
+                    # Check if edge is interior (touching another room)
+                    if room.rect.touches(other.rect):
+                        # Check if this edge is on the touching side
+                        if self._edge_is_adjacent(edge_start, edge_end, room.rect, other.rect):
+                            is_exterior = False
+                            break
+
+                if is_exterior:
+                    exterior_edges.append((edge_start, edge_end))
+
+        # Merge colinear edges and simplify the perimeter
+        simplified_edges = self._simplify_perimeter(exterior_edges)
+
+        return simplified_edges
+
+    def _edge_is_adjacent(self, edge_start: Point, edge_end: Point, rect1: Rect, rect2: Rect) -> bool:
+        """Check if an edge is adjacent to another room's rectangle"""
+        # Check if any point on the edge touches rect2
+        edge_mid = Point((edge_start.x + edge_end.x) / 2, (edge_start.y + edge_end.y) / 2)
+
+        # If the midpoint is within a small distance of rect2, this edge is adjacent
+        margin = self.grid / 2
+
+        return (rect1.x - margin <= edge_mid.x <= rect1.x2 + margin and
+                rect2.contains_point(edge_mid))
+
+    def _simplify_perimeter(self, edges: List[Tuple[Point, Point]]) -> List[Tuple[Point, Point]]:
+        """
+        Simplify the perimeter by:
+        1. Merging colinear edges
+        2. Removing very short segments
+        3. Ordering edges into a continuous loop
+        """
+        if not edges:
+            return []
+
+        # Tolerance for considering points as the same
+        tolerance = self.grid / 2
+
+        # Remove duplicate edges
+        unique_edges = []
+        seen = set()
+        for start, end in edges:
+            # Create a canonical key (order points consistently)
+            key = tuple(sorted([(
+                round(start.x / tolerance) * tolerance,
+                round(start.y / tolerance) * tolerance
+            ), (
+                round(end.x / tolerance) * tolerance,
+                round(end.y / tolerance) * tolerance
+            )]))
+            if key not in seen:
+                seen.add(key)
+                unique_edges.append((start, end))
+
+        # Merge colinear edges
+        merged = []
+        for start, end in unique_edges:
+            # Try to merge with last edge if colinear
+            if merged:
+                last_start, last_end = merged[-1]
+                if self._points_equal(last_end, start, tolerance):
+                    # Edges connect - check if colinear
+                    if self._colinear(last_start, last_end, end, tolerance):
+                        # Merge into one edge
+                        merged[-1] = (last_start, end)
+                        continue
+
+            merged.append((start, end))
+
+        # Filter very short edges (< grid size)
+        filtered = [
+            (start, end) for start, end in merged
+            if math.sqrt((end.x - start.x)**2 + (end.y - start.y)**2) >= self.grid
+        ]
+
+        return filtered
+
+    def _points_equal(self, p1: Point, p2: Point, tolerance: float) -> bool:
+        """Check if two points are equal within tolerance"""
+        return (abs(p1.x - p2.x) < tolerance and abs(p1.y - p2.y) < tolerance)
+
+    def _colinear(self, p1: Point, p2: Point, p3: Point, tolerance: float) -> bool:
+        """Check if three points are colinear"""
+        # Calculate cross product
+        cross = (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x)
+        return abs(cross) < tolerance
+
+    def _is_entry_edge(self, edge_start: Point, edge_end: Point, entry_rect: Rect) -> bool:
+        """Check if this edge should have the entry door"""
+        # Entry door goes on the edge closest to entry room center
+        edge_mid = Point((edge_start.x + edge_end.x) / 2, (edge_start.y + edge_end.y) / 2)
+
+        # Check if entry room center is close to this edge
+        center_dist = abs(entry_rect.center.x - edge_mid.x) + abs(entry_rect.center.y - edge_mid.y)
+
+        # Also check if this edge is on the south side (typical entry location)
+        tolerance = self.grid / 2
+        is_south_edge = abs(edge_start.y - self.bounds.y) < tolerance and abs(edge_end.y - self.bounds.y) < tolerance
+
+        return center_dist < self.grid * 2 or is_south_edge
+
+    def _calculate_layout_quality(self) -> float:
+        """
+        Calculate comprehensive quality score for a complete layout.
+
+        Considers:
+        1. Constraint satisfaction (must-touch relationships)
+        2. Circulation efficiency (proximity of related rooms)
+        3. Zone organization (public vs private separation)
+        4. Room shape quality (aspect ratios)
+        5. Exterior access satisfaction
+        """
+        breakdown = self._get_quality_breakdown()
+        return sum(category['score'] for category in breakdown.values())
+
+    def _get_quality_breakdown(self) -> Dict[str, Dict]:
+        """
+        Get detailed breakdown of layout quality score.
+
+        Uses configurable weights from ScoringConfig.
+
+        Returns:
+            Dict with scoring categories and item-level details
+        """
+        if not self.placed:
+            return {}
+
+        breakdown = {
+            'circulation_completeness': {'score': 0.0, 'items': {}},  # HIGHEST PRIORITY
+            'constraint_satisfaction': {'score': 0.0, 'items': {}},
+            'circulation_efficiency': {'score': 0.0, 'items': {}},
+            'zone_organization': {'score': 0.0, 'items': {}},
+            'room_shape_quality': {'score': 0.0, 'items': {}},
+            'exterior_access': {'score': 0.0, 'items': {}},
+        }
+
+        # 0. CIRCULATION COMPLETENESS (HIGHEST PRIORITY - all rooms must connect to circulation)
+        # Check that all habitable rooms connect to hallway or entry
+        if self.scoring_config.is_enabled('circulation_completeness') and ('hallway' in self.placed or 'entry' in self.placed):
+            circ_rooms = ['entry', 'living', 'kitchen', 'dining', 'hallway',
+                         'primary_bedroom', 'bedroom_2', 'bedroom_3',
+                         'primary_bath', 'bathroom_2',
+                         'primary_closet', 'closet_2', 'closet_3',
+                         'laundry', 'mudroom']
+
+            # Find all rooms that should connect to circulation (from config)
+            circulation_hubs = self.scoring_config.get_circulation_hubs()
+            present_hubs = [h for h in circulation_hubs if h in self.placed]
+
+            circ_score = 0
+            circ_items = {}
+            circ_total = 0
+            circ_satisfied = 0
+
+            for room_id in circ_rooms:
+                if room_id not in self.placed or room_id in present_hubs:
+                    continue
+
+                circ_total += 1
+                room_rect = self.placed[room_id].rect
+
+                # Check if this room touches any circulation hub
+                touches_circulation = False
+                for hub_id in present_hubs:
+                    if room_rect.touches(self.placed[hub_id].rect):
+                        touches_circulation = True
+                        break
+
+                if touches_circulation:
+                    circ_satisfied += 1
+                    circ_items[f"{room_id}-circulation"] = 50  # Strong bonus for connecting
+                else:
+                    circ_items[f"{room_id}-circulation"] = -100  # HEAVY penalty for isolation
+
+            # Calculate overall circulation completeness using config weight
+            if circ_total > 0:
+                completeness_ratio = circ_satisfied / circ_total
+                weight = self.scoring_config.get_weight('circulation_completeness')
+                circ_score = completeness_ratio * weight
+                # Add bonus for complete connectivity
+                if circ_satisfied == circ_total:
+                    circ_score += 50  # Extra bonus for all rooms connected
+
+            breakdown['circulation_completeness']['score'] = circ_score
+            breakdown['circulation_completeness']['items'] = circ_items
+
+        # 1. CONSTRAINT SATISFACTION (most important)
+        if self.scoring_config.is_enabled('constraint_satisfaction'):
+            must_touch_satisfied = 0
+            must_touch_total = 0
+            constraint_items = {}
+
+            for room_id, must_touch in self.spec.constraints.must_touch.items():
+                if room_id not in self.placed:
+                    continue
+                for other_id in must_touch:
+                    if other_id in self.placed:
+                        must_touch_total += 1
+                        pair_name = f"{room_id}-{other_id}"
+                        if self.placed[room_id].rect.touches(self.placed[other_id].rect):
+                            must_touch_satisfied += 1
+                            weight = self.scoring_config.get_weight('constraint_satisfaction')
+                            constraint_items[pair_name] = weight / must_touch_total if must_touch_total > 0 else 0
+                        else:
+                            constraint_items[pair_name] = 0
+
+            if must_touch_total > 0:
+                constraint_ratio = must_touch_satisfied / must_touch_total
+                weight = self.scoring_config.get_weight('constraint_satisfaction')
+                breakdown['constraint_satisfaction']['score'] = constraint_ratio * weight
+                breakdown['constraint_satisfaction']['items'] = constraint_items
+
+        # 2. CIRCULATION EFFICIENCY
+        if self.scoring_config.is_enabled('circulation_efficiency'):
+            # Use circulation pairs from config
+            circulation_pairs = self.scoring_config.get_circulation_pairs()
+
+            circ_score = 0
+            circ_items = {}
+
+            for (room_pair, bonus, name) in circulation_pairs:
+                r1, r2 = room_pair
+                if r1 in self.placed and r2 in self.placed:
+                    rect1 = self.placed[r1].rect
+                    rect2 = self.placed[r2].rect
+
+                    if rect1.touches(rect2):
+                        weight = self.scoring_config.get_weight('circulation_efficiency')
+                        item_score = bonus * weight
+                        circ_score += item_score
+                        circ_items[f"{name} (touching)"] = item_score
+                    else:
+                        dist = rect1.center.distance_to(rect2.center)
+                        if dist < 10:
+                            weight = self.scoring_config.get_weight('circulation_efficiency')
+                            item_score = bonus * (weight * 2/3) * (1 - dist / 10)
+                            circ_score += item_score
+                            circ_items[f"{name} ({dist:.1f}ft)"] = item_score
+
+            breakdown['circulation_efficiency']['score'] = circ_score
+            breakdown['circulation_efficiency']['items'] = circ_items
+
+        # 3. ZONE ORGANIZATION
+        if self.scoring_config.is_enabled('zone_organization'):
+            # Use room groups from config
+            public_rooms = self.scoring_config.get_room_group("public")
+            private_rooms = self.scoring_config.get_room_group("private")
+
+            public_centers = []
+            private_centers = []
+
+            for room_id, room in self.placed.items():
+                if room_id in public_rooms:
+                    public_centers.append(room.rect.center)
+                elif room_id in private_rooms:
+                    private_centers.append(room.rect.center)
+
+            zone_score = 0
+            zone_items = {}
+            if len(public_centers) >= 2 and len(private_centers) >= 1:
+                pub_center_x = sum(c.x for c in public_centers) / len(public_centers)
+                pub_center_y = sum(c.y for c in public_centers) / len(public_centers)
+                priv_center_x = sum(c.x for c in private_centers) / len(private_centers)
+                priv_center_y = sum(c.y for c in private_centers) / len(private_centers)
+
+                zone_dist = ((pub_center_x - priv_center_x) ** 2 +
+                            (pub_center_y - priv_center_y) ** 2) ** 0.5
+                weight = self.scoring_config.get_weight('zone_organization')
+                zone_score = min(zone_dist * weight, 30)
+                zone_items['public_private_separation'] = zone_score
+
+            breakdown['zone_organization']['score'] = zone_score
+            breakdown['zone_organization']['items'] = zone_items
+
+        # 4. ROOM SHAPE QUALITY
+        if self.scoring_config.is_enabled('room_shape_quality'):
+            shape_score = 0
+            shape_items = {}
+
+            for room_id, room in self.placed.items():
+                aspect = room.rect.aspect
+                if 0.6 <= aspect <= 1.6:
+                    weight = self.scoring_config.get_weight('room_shape_quality')
+                    shape_score += weight
+                    shape_items[room_id] = weight
+                elif aspect < 0.3 or aspect > 3.0:
+                    shape_score -= 5
+                    shape_items[room_id] = -5
+
+            breakdown['room_shape_quality']['score'] = shape_score
+            breakdown['room_shape_quality']['items'] = shape_items
+
+        # 5. EXTERIOR ACCESS
+        if self.scoring_config.is_enabled('exterior_access'):
+            exterior_score = 0
+            exterior_items = {}
+
+            # Use exterior required rooms from config
+            exterior_required = self.scoring_config.get_exterior_required_rooms()
+
+            for room_id in exterior_required:
+                if room_id in self.placed:
+                    room = self.placed[room_id]
+                    current_bounds = self._get_current_bounds()
+                    if room.rect.touches_any_boundary(current_bounds):
+                        weight = self.scoring_config.get_weight('exterior_access')
+                        exterior_score += weight
+                        exterior_items[room_id] = weight
+                    else:
+                        exterior_items[room_id] = 0
+
+            breakdown['exterior_access']['score'] = exterior_score
+            breakdown['exterior_access']['items'] = exterior_items
+
+        return breakdown
 
     def _calculate_score(self) -> float:
         """Calculate layout quality score"""
@@ -1875,7 +2612,8 @@ def solve_layout(spatial_graph: SpatialGraph,
                 width: float, depth: float,
                 grid_size: float = 2.0,
                 max_nodes: int = 50000,
-                creative_mode: bool = False) -> PlacedLayout:
+                creative_mode: bool = False,
+                config_overrides: Dict = None) -> PlacedLayout:
     """
     Convenience function to solve a layout from a spatial graph.
 
@@ -1887,12 +2625,20 @@ def solve_layout(spatial_graph: SpatialGraph,
         max_nodes: Max search nodes
         creative_mode: If True, use organic growth with liberal dead space
                       for interesting non-rectangular building shapes
+        config_overrides: Optional dict to override scoring config values
 
     Returns:
         PlacedLayout with room and wall coordinates
     """
     spec = LayoutSpec.from_spatial_graph(spatial_graph, width, depth)
-    solver = CoordinateSolver(spec, grid_size, creative_mode=creative_mode)
+
+    # Create scoring config with overrides
+    scoring_config = ScoringConfig()
+    if config_overrides:
+        scoring_config.apply_overrides(config_overrides)
+
+    solver = CoordinateSolver(spec, grid_size, creative_mode=creative_mode,
+                             scoring_config=scoring_config)
     return solver.solve(max_nodes)
 
 

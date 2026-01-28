@@ -1,0 +1,102 @@
+{
+  "name": "Simple Test Building",
+  "walls": [
+    {
+      "index": 0,
+      "start": [0, 2700, 0],
+      "end": [5000, 2700, 0],
+      "height": 2700,
+      "category": "exterior",
+      "wall_type": "",
+      "is_structural": true
+    },
+    {
+      "index": 1,
+      "start": [5000, 2700, 0],
+      "end": [5000, 2700, 4000],
+      "height": 2700,
+      "category": "exterior",
+      "wall_type": "",
+      "is_structural": true
+    },
+    {
+      "index": 2,
+      "start": [5000, 2700, 4000],
+      "end": [0, 2700, 4000],
+      "height": 2700,
+      "category": "exterior",
+      "wall_type": "",
+      "is_structural": true
+    },
+    {
+      "index": 3,
+      "start": [0, 2700, 4000],
+      "end": [0, 2700, 0],
+      "height": 2700,
+      "category": "exterior",
+      "wall_type": "",
+      "is_structural": true
+    },
+    {
+      "index": 4,
+      "start": [2500, 2700, 0],
+      "end": [2500, 2700, 2000],
+      "height": 2700,
+      "category": "interior",
+      "wall_type": "",
+      "is_structural": false
+    },
+    {
+      "index": 5,
+      "start": [2500, 2700, 2000],
+      "end": [5000, 2700, 2000],
+      "height": 2700,
+      "category": "interior",
+      "wall_type": "",
+      "is_structural": false
+    }
+  ],
+  "doors": [
+    {
+      "index": 0,
+      "wall_index": 0,
+      "position": 2000,
+      "width": 900,
+      "height": 2100,
+      "swing": "left",
+      "door_type": ""
+    }
+  ],
+  "windows": [
+    {
+      "index": 0,
+      "wall_index": 2,
+      "position": 1500,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "window_type": ""
+    },
+    {
+      "index": 1,
+      "wall_index": 3,
+      "position": 1000,
+      "width": 1200,
+      "height": 1200,
+      "sill_height": 900,
+      "window_type": ""
+    }
+  ],
+  "rooms": {
+    "0": {
+      "index": 0,
+      "name": "Living Room",
+      "area": 25.0,
+      "vertices": [[0, 2700, 0], [5000, 2700, 0], [5000, 2700, 4000], [0, 2700, 4000]],
+      "floor_height": 0
+    }
+  },
+  "wall_types": {},
+  "door_types": {},
+  "window_types": {}
+}

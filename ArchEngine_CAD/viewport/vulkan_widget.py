@@ -524,7 +524,7 @@ class VulkanViewportWidget(QWidget):
         # Camera state for mouse interaction
         self._camera_yaw = 0.5
         self._camera_pitch = 0.4
-        self._camera_distance = 60.0
+        self._camera_distance = 300.0  # Increased for giant navigation space
         self._camera_target = [20.0, 10.0, 15.0]  # x, y, z target point
         self._last_mouse_pos = None
         self._dragging = False
@@ -695,6 +695,9 @@ class VulkanViewportWidget(QWidget):
 
                 self._lib.arch_get_material_style.argtypes = []
                 self._lib.arch_get_material_style.restype = ctypes.c_int
+
+                self._lib.arch_set_material_root.argtypes = [ctypes.c_char_p]
+                self._lib.arch_set_material_root.restype = None
             except AttributeError:
                 print("[VulkanWidget] Material style API not available")
 
@@ -874,6 +877,15 @@ class VulkanViewportWidget(QWidget):
 
             self._initialized = True
             print("[VulkanWidget] Renderer initialized")
+
+            # Set material root to the materials directory (relative to CAD root)
+            materials_dir = str(Path(__file__).parent.parent / "materials")
+            if Path(materials_dir).exists():
+                try:
+                    self._lib.arch_set_material_root(materials_dir.encode('utf-8'))
+                    print(f"[VulkanWidget] Set material root: {materials_dir}")
+                except Exception as e:
+                    print(f"[VulkanWidget] Warning: Could not set material root: {e}")
 
             # Start render loop
             self._render_timer = QTimer(self)
@@ -1148,6 +1160,15 @@ class VulkanViewportWidget(QWidget):
 
         try:
             with self._api_lock:
+                # Debug: Check if terrain_mesh is in data
+                has_terrain = 'terrain_mesh' in data
+                if has_terrain:
+                    tm = data.get('terrain_mesh', {})
+                    vcount = len(tm.get('vertices', []))
+                    print(f"[VulkanWidget] Sending terrain to renderer: {vcount} vertices")
+                else:
+                    print(f"[VulkanWidget] WARNING: No terrain_mesh in data being sent to renderer")
+
                 json_str = json.dumps(data).encode('utf-8')
                 result = self._lib.arch_load_json(json_str)
 
@@ -1308,22 +1329,38 @@ class VulkanViewportWidget(QWidget):
 
     def select_element(self, index: int):
         """Select an element by index (-1 to clear)."""
+        # Update DLL selection for 3D highlighting
         if self._initialized and self._lib:
-            self._lib.arch_select_element(index)
-            if index >= 0:
-                self.element_selected.emit(index)
+            try:
+                self._lib.arch_select_element(index)
+            except Exception as e:
+                pass  # Silently fail if function not available
+
+        # Store selection locally for 3D rendering
+        self._selected_element_index = index
+
+        if index >= 0:
+            self.element_selected.emit(index)
 
     def get_selected_element(self) -> int:
         """Get currently selected element index (-1 if none)."""
+        return getattr(self, '_selected_element_index', -1)
+
+    def _set_hovered_element(self, index: int):
+        """Set hovered element index (-1 to clear)."""
+        # Update DLL hovered element for 3D highlighting
         if self._initialized and self._lib:
-            return self._lib.arch_get_selected_element()
-        return -1
+            try:
+                self._lib.arch_set_hovered_element(index)
+            except Exception as e:
+                # If the function doesn't exist yet, silently ignore
+                pass
 
     def pick_element(self, screen_x: int, screen_y: int) -> int:
         """
         Pick element at screen coordinates.
 
-        First tries DLL-based picking, then falls back to Python-side ray casting.
+        Uses DLL picking for pixel-perfect accuracy.
 
         Args:
             screen_x: X coordinate in widget pixels
@@ -1332,22 +1369,22 @@ class VulkanViewportWidget(QWidget):
         Returns:
             Element index at that position, or -1 if no hit
         """
-        # Try DLL picking first
-        result = -1
+        # Try DLL picking first (pixel-perfect, uses actual geometry)
         if self._initialized and self._lib:
             try:
                 result = self._lib.arch_pick_element(screen_x, screen_y)
-            except Exception:
-                pass  # DLL function may not exist
+                if result >= 0:
+                    return result
+            except Exception as e:
+                pass  # DLL picking failed, will fall back to Python
 
-        # Fall back to Python picking if DLL returns -1 and we have selection manager
-        if result < 0 and self._selection_manager and self._document:
+        # Fall back to Python picking if DLL fails
+        result = -1
+        if self._selection_manager and self._document:
             self._update_selection_camera()
             hit = self._selection_manager.pick_and_select(screen_x, screen_y, add=False)
             if hit:
-                # Convert element type and id to index for compatibility
                 result = self._get_element_index(hit.element_type, hit.element_id)
-                self._last_pick_pos = (screen_x, screen_y)
 
         return result
 
@@ -1375,8 +1412,6 @@ class VulkanViewportWidget(QWidget):
                 index = self._get_element_index(hit.element_type, hit.element_id)
                 if index >= 0:
                     self.select_element(index)
-                current, total = self._selection_manager.get_cycle_info()
-                print(f"[Viewport] Selection cycle: {current}/{total} - {hit.element_type} {hit.element_id}")
                 return True
         return False
 
@@ -1765,8 +1800,12 @@ class VulkanViewportWidget(QWidget):
 
     def mousePressEvent(self, event):
         """Handle mouse press for camera control, section dragging, or element selection."""
-        if self._route_overlay_mouse(event):
-            return
+        try:
+            if self._route_overlay_mouse(event):
+                return
+        except Exception as e:
+            pass  # Overlay routing failed, continue with normal handling
+
         if event.button() == Qt.MouseButton.LeftButton and self._section_mode:
             # Left mouse in section mode = drag section plane
             self._section_dragging = True
@@ -1778,38 +1817,54 @@ class VulkanViewportWidget(QWidget):
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton and not self._section_mode:
-            # Left click = pick/select element
-            pos = event.pos()
-            element_idx = self.pick_element(pos.x(), pos.y())
-            if element_idx >= 0:
-                self.select_element(element_idx)
-                # Show info about overlapping elements
-                current, total = self.get_selection_cycle_info()
-                if total > 1:
-                    print(f"[Viewport] Selected element {element_idx} ({current}/{total} overlapping - press Tab to cycle)")
-                else:
-                    print(f"[Viewport] Selected element {element_idx}")
+            # Left click drag = orbit (rotate) - IMPROVED for flying navigation
+            # Ctrl+Left click = select element (precision selection)
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                # Selection mode
+                try:
+                    pos = event.pos()
+                    if self._selection_manager and self._document:
+                        self._update_selection_camera()
+                        hit = self._selection_manager.pick_and_select(pos.x(), pos.y(), add=False)
+                        if hit:
+                            index = self._get_element_index(hit.element_type, hit.element_id)
+                            if index >= 0:
+                                self.select_element(index)
+                        else:
+                            self.select_element(-1)
+                except Exception as e:
+                    pass
+                event.accept()
+                return
             else:
-                # Click on empty space = deselect
-                self.select_element(-1)
-                self.element_selected.emit(-1)
-                # Clear selection manager state
-                if self._selection_manager:
-                    self._selection_manager.clear_selection()
-            event.accept()
-            return
-        if event.button() == Qt.MouseButton.MiddleButton:
-            # Middle mouse = pan
+                # Orbit mode (drag to rotate view)
+                self._dragging = True
+                self._panning = False
+                self._last_mouse_pos = event.pos()
+                event.accept()
+                return
+        if event.button() == Qt.MouseButton.RightButton:
+            # Right click = pan - IMPROVED
             self._dragging = True
             self._panning = True
             self._last_mouse_pos = event.pos()
             event.accept()
             return
-        elif event.button() == Qt.MouseButton.RightButton:
-            # Right mouse = orbit
-            self._dragging = True
-            self._panning = False
-            self._last_mouse_pos = event.pos()
+        if event.button() == Qt.MouseButton.MiddleButton:
+            # Middle click = quick select (legacy support)
+            try:
+                pos = event.pos()
+                if self._selection_manager and self._document:
+                    self._update_selection_camera()
+                    hit = self._selection_manager.pick_and_select(pos.x(), pos.y(), add=False)
+                    if hit:
+                        index = self._get_element_index(hit.element_type, hit.element_id)
+                        if index >= 0:
+                            self.select_element(index)
+                    else:
+                        self.select_element(-1)
+            except Exception as e:
+                pass
             event.accept()
             return
         super().mousePressEvent(event)
@@ -1917,12 +1972,17 @@ class VulkanViewportWidget(QWidget):
             if new_hover != self._hovered_element:
                 self._hovered_element = new_hover
                 self.element_hovered.emit(top_hit.element_type, top_hit.element_id)
+                # Update DLL hovered element for 3D highlighting
+                hover_index = self._get_element_index(top_hit.element_type, top_hit.element_id)
+                self._set_hovered_element(hover_index)
                 # Change cursor to indicate selectable
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
         else:
             if self._hovered_element is not None:
                 self._hovered_element = None
                 self.element_hovered.emit('', None)
+                # Clear DLL hovered element
+                self._set_hovered_element(-1)
                 self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def leaveEvent(self, event):
@@ -1930,6 +1990,8 @@ class VulkanViewportWidget(QWidget):
         if self._hovered_element is not None:
             self._hovered_element = None
             self.element_hovered.emit('', None)
+            # Clear DLL hovered element
+            self._set_hovered_element(-1)
             self.setCursor(Qt.CursorShape.ArrowCursor)
         super().leaveEvent(event)
 
@@ -1964,11 +2026,14 @@ class VulkanViewportWidget(QWidget):
         ndc_x = (cursor_pos.x() / self.width()) * 2.0 - 1.0
         ndc_y = 1.0 - (cursor_pos.y() / self.height()) * 2.0  # Flip Y
 
-        # Calculate zoom
+        # Calculate zoom - NO LIMITS on zoom distance
         zoom_factor = 0.15
         old_distance = self._camera_distance
         new_distance = old_distance * (1.0 - delta * zoom_factor)
-        new_distance = max(5.0, min(500.0, new_distance))
+        # Remove zoom limits - allow infinite zoom in/out
+        # Just prevent negative distance or zero
+        if new_distance < 0.1:
+            new_distance = 0.1
 
         # How much the distance changed
         distance_delta = old_distance - new_distance
@@ -2021,11 +2086,9 @@ class VulkanViewportWidget(QWidget):
             # 'S' key toggles section mode
             self._section_mode = not self._section_mode
             if self._section_mode:
-                print("[Viewport] Section mode ON - drag to adjust section plane")
                 # Change cursor to indicate section mode
                 self.setCursor(Qt.CursorShape.SplitVCursor)
             else:
-                print("[Viewport] Section mode OFF")
                 self.setCursor(Qt.CursorShape.ArrowCursor)
             event.accept()
             return
@@ -2035,7 +2098,6 @@ class VulkanViewportWidget(QWidget):
                 self._section_mode = False
                 self._section_dragging = False
                 self.setCursor(Qt.CursorShape.ArrowCursor)
-                print("[Viewport] Section mode OFF")
                 event.accept()
                 return
         elif event.key() == Qt.Key.Key_C and self._section_mode:
@@ -2043,8 +2105,6 @@ class VulkanViewportWidget(QWidget):
             current_axis = self.get_clip_axis()
             new_axis = (current_axis + 1) % 3
             self.set_clip_axis(new_axis)
-            axis_names = ["X (Left/Right)", "Y (Up/Down)", "Z (Front/Back)"]
-            print(f"[Viewport] Section axis: {axis_names[new_axis]}")
             self.section_changed.emit(
                 self.get_clipping_enabled(),
                 new_axis,
@@ -2057,7 +2117,6 @@ class VulkanViewportWidget(QWidget):
             # 'F' flips section direction
             flipped = not self.get_clip_flipped()
             self.set_clip_flipped(flipped)
-            print(f"[Viewport] Section flipped: {flipped}")
             self.section_changed.emit(
                 self.get_clipping_enabled(),
                 self.get_clip_axis(),

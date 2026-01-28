@@ -1,0 +1,64 @@
+{
+  "name": "Test Building with Reality Analysis",
+  "walls": [
+    {
+      "index": 0,
+      "start": [0, 2700, 0],
+      "end": [5000, 2700, 0],
+      "height": 2700,
+      "category": "exterior",
+      "wall_type": "",
+      "is_structural": true
+    }
+  ],
+  "rooms": {
+    "0": {
+      "index": 0,
+      "name": "Living Room",
+      "area": 25.0,
+      "vertices": [[0, 2700, 0], [5000, 2700, 0], [5000, 2700, 4000], [0, 2700, 4000]],
+      "floor_height": 0
+    }
+  },
+  "reality_analysis": {
+    "environment": {
+      "thermal_load_kw": 15.5,
+      "cooling_load_kw": 12.3,
+      "peak_heating_month": "January",
+      "passive_strategies": ["solar_gain", "thermal_mass"],
+      "daylight_factors": {
+        "0": 2.5
+      },
+      "acoustic_privacy": {
+        "0": "good"
+      },
+      "physics_violations": []
+    },
+    "materiality": {
+      "total_cost": 150000,
+      "cost_per_sqft": 150.0,
+      "budget_status": "under",
+      "construction_weeks": 12,
+      "crew_size": 6,
+      "carbon_footprint_kg": 45000,
+      "lifecycle_cost_30yr": 300000,
+      "risk_factors": ["weather_delays"]
+    },
+    "perception": {
+      "wayfinding_score": 0.85,
+      "comfort_scores": {
+        "0": 0.78
+      },
+      "delight_scores": {
+        "0": 0.72
+      },
+      "overall_experience": 0.8,
+      "critical_issues": [],
+      "enhancement_opportunities": ["add_skylight"]
+    },
+    "overall_score": 0.82
+  },
+  "wall_types": {},
+  "door_types": {},
+  "window_types": {}
+}

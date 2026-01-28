@@ -527,6 +527,7 @@ class SmartPanelContainer(QWidget):
     context_changed = pyqtSignal()
     request_gravity_center = pyqtSignal()  # Emitted when user hovers a dimmed panel
     request_lod_change = pyqtSignal(int)  # Emitted with the LOD level the panel needs
+    material_assigned = pyqtSignal(str, str)  # Emitted when material is assigned (element_type, material_id)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -578,6 +579,10 @@ class SmartPanelContainer(QWidget):
         # Special handling for Navigation panel - connect signals
         if definition.id == 'navigation':
             self._connect_navigation_panel(content)
+
+        # Special handling for Material picker panel - forward signal
+        if definition.id == 'material_picker' and hasattr(content, 'material_assigned'):
+            content.material_assigned.connect(self.material_assigned.emit)
 
         # Wrap in smart panel widget
         panel_widget = SmartPanelWidget(
@@ -724,3 +729,34 @@ class SmartPanelContainer(QWidget):
     def get_workflow_stage(self) -> str:
         """Get current workflow stage name."""
         return self._panel_manager._context.workflow_stage.value
+
+    def initialize_panel(self, panel_id: str, **kwargs):
+        """Initialize a panel with dependencies (document, viewport, etc.).
+
+        This allows passing document/viewport to panels that need them.
+        The panel must have corresponding set_* methods.
+
+        Example:
+            container.initialize_panel('material_picker', document=self.document, viewport=self.viewport_3d)
+        """
+        widget = self._panel_widgets.get(panel_id)
+        if not widget:
+            return
+
+        # Get the content widget (first child of SmartPanelWidget's layout)
+        content_widget = None
+        for child in widget.findChildren(type(widget._content_widget)):
+            content_widget = child
+            break
+
+        if not content_widget:
+            content_widget = widget._content_widget
+
+        # Call set_* methods for each keyword argument
+        for key, value in kwargs.items():
+            setter_name = f'set_{key}'
+            if hasattr(content_widget, setter_name):
+                getattr(content_widget, setter_name)(value)
+            # Also try on the wrapper panel (for MaterialPickerPanel)
+            elif hasattr(widget, setter_name):
+                getattr(widget, setter_name)(value)

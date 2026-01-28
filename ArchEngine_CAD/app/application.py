@@ -7,9 +7,10 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QMainWindow, QDockWidget, QToolBar, QStatusBar,
     QFileDialog, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QLabel, QTabWidget, QApplication, QStackedWidget
+    QSplitter, QLabel, QTabWidget, QApplication, QStackedWidget,
+    QProgressDialog
 )
-from PyQt6.QtCore import Qt, QSettings, QTimer
+from PyQt6.QtCore import Qt, QSettings, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 
 from app.config import Config
@@ -77,6 +78,12 @@ from core.selection_manager import SelectionManager
 # QBD Questionnaire
 from dialogs.qbd_questionnaire import show_questionnaire
 
+# Site Dialog
+from dialogs.site_dialog import show_site_dialog
+
+# Solver Parameters Panel
+from panels.solver_params_panel import SolverParamsPanel
+
 # QBD Generator
 import sys
 qbd_path = Path(__file__).parent.parent.parent / "ArchEngine_kernel" / "render_server"
@@ -91,6 +98,94 @@ if qbd_path.exists():
         QBD_GENERATOR_AVAILABLE = True
     except ImportError as e:
         print(f"[App] Could not import QBD generator: {e}")
+
+
+# =============================================================================
+# QBD GENERATION WORKER THREAD
+# =============================================================================
+
+class QBDGenerationWorker(QThread):
+    """
+    Worker thread for QBD floor plan generation.
+    Runs the solver in background to keep UI responsive.
+    """
+    progress = pyqtSignal(str)  # Progress updates
+    finished = pyqtSignal(dict)  # Result (success or failure)
+    error = pyqtSignal(str)  # Error message
+
+    def __init__(self, qbd_answers, grid_size=2.0, max_nodes=10000, config_overrides=None):
+        super().__init__()
+        self.qbd_answers = qbd_answers
+        self.grid_size = grid_size
+        self.max_nodes = max_nodes
+        self.config_overrides = config_overrides
+
+    def _progress_wrapper(self, original_stdout):
+        """Create a stdout wrapper that emits progress signals."""
+        import sys
+
+        class ProgressWriter:
+            def __init__(self, parent, original):
+                self.parent = parent
+                self.original = original
+                self.step_emitted = set()
+
+            def write(self, text):
+                # Write to original stdout
+                self.original.write(text)
+
+                # Check for specific solver messages and emit progress
+                if "Created graph" in text and "1" not in self.step_emitted:
+                    self.parent.progress.emit("Step 1: Creating room graph ✓")
+                    self.step_emitted.add("1")
+                elif "Solving layout" in text or "Searching" in text:
+                    if "2" not in self.step_emitted:
+                        self.parent.progress.emit("Step 2: Placing rooms (this takes 10-30 seconds)...\nSearching for optimal layout...")
+                        self.step_emitted.add("2")
+                elif "Placed" in text and "rooms" in text:
+                    if "3" not in self.step_emitted:
+                        self.parent.progress.emit("Step 3: Creating walls, doors, and windows...")
+                        self.step_emitted.add("3")
+
+            def flush(self):
+                self.original.flush()
+
+        return ProgressWriter(self, original_stdout)
+
+    def run(self):
+        """Run the QBD generation in background thread."""
+        import sys
+
+        try:
+            self.progress.emit("Starting generation...")
+
+            # Wrap stdout to capture progress
+            old_stdout = sys.stdout
+            sys.stdout = self._progress_wrapper(old_stdout)
+
+            result = generate_floor_plan_from_qbd(
+                self.qbd_answers,
+                grid_size=self.grid_size,
+                max_nodes=self.max_nodes,
+                output_format=OutputFormat.ARCHENGINE,
+                config_overrides=self.config_overrides
+            )
+
+            # Restore stdout
+            sys.stdout = old_stdout
+
+            if result.get("success"):
+                self.progress.emit("Generation complete!")
+                self.finished.emit(result)
+            else:
+                error_msg = result.get("error", "Unknown error")
+                self.error.emit(error_msg)
+
+        except Exception as e:
+            sys.stdout = old_stdout  # Restore stdout
+            import traceback
+            error_text = f"Generation error: {str(e)}\n\n{traceback.format_exc()}"
+            self.error.emit(error_text)
 
 
 class ArchEngineApplication(QMainWindow):
@@ -131,6 +226,11 @@ class ArchEngineApplication(QMainWindow):
         # Initialize unified Selection Manager
         self.selection_manager = SelectionManager(self)
         self._updating_from_selection_manager = False  # Prevent signal loops
+
+        # QBD generation state
+        self._qbd_answers = None  # Store for regeneration with new parameters
+        self._qbd_worker = None  # Background generation worker
+        self._site_data = None  # Store site definition
 
         # Initialize LiveSync server for UE5 connection
         self._livesync_server = None
@@ -679,6 +779,26 @@ class ArchEngineApplication(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
         self.tabifyDockWidget(self.properties_dock, self.chat_dock)
         self.window_menu.addAction(self.chat_dock.toggleViewAction())
+
+        # =================================================================
+        # Solver Parameters Dock - QBD algorithm tuning
+        # ==================================================================
+        self.solver_params_dock = QDockWidget("Solver Parameters", self)
+        self.solver_params_dock.setObjectName("solver_params_dock")
+        self.solver_params_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.solver_params_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable |
+            QDockWidget.DockWidgetFeature.DockWidgetFloatable |
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+        self.solver_params_panel = SolverParamsPanel()
+        self.solver_params_panel.setMinimumWidth(280)
+        self.solver_params_dock.setWidget(self.solver_params_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.solver_params_dock)
+        self.tabifyDockWidget(self.chat_dock, self.solver_params_dock)
+        self.window_menu.addAction(self.solver_params_dock.toggleViewAction())
+        # Connect parameter changes to regenerate
+        self.solver_params_panel.params_changed.connect(self._on_solver_params_changed)
 
         # =================================================================
         # Smart Panels Dock - Context-aware tool panels
@@ -1357,19 +1477,37 @@ class ArchEngineApplication(QMainWindow):
         QTimer.singleShot(100, self._show_new_building_questionnaire)
 
     def _show_new_building_questionnaire(self):
-        """Show the QBD questionnaire dialog for new buildings."""
+        """Show site dialog first, then QBD questionnaire for new buildings."""
+        # Step 1: Define site (or load existing)
+        site_data = show_site_dialog(self)
+
+        if not site_data:
+            # User cancelled site dialog
+            print("[App] Site definition cancelled - starting with blank document")
+            return
+
+        # Store site data for this design
+        self._site_data = site_data
+        print(f"[App] Site defined: {site_data.get('property_width_ft')}x{site_data.get('property_depth_ft')} ft")
+        print(f"[App]   Buildable area: {site_data.get('buildable_area_sqft'):.0f} sq ft")
+        print(f"[App]   Road location: {site_data.get('road_location')}")
+
+        # Step 2: Show building questionnaire
         answers = show_questionnaire(self)
 
         if answers:
-            # User clicked Generate - process the answers
+            # User clicked Generate - process the answers with site context
             print(f"[App] QBD Answers: {answers}")
             self._process_qbd_answers(answers)
         else:
             # User clicked Skip or closed - start with blank document
             print("[App] Starting with blank document")
 
-    def _process_qbd_answers(self, answers: dict):
+    def _process_qbd_answers(self, answers: dict, config_overrides=None):
         """Process QBD questionnaire answers and generate building."""
+        # Store answers for regeneration with modified parameters
+        self._qbd_answers = answers
+
         import json
 
         # Format answers for display
@@ -1391,79 +1529,57 @@ class ArchEngineApplication(QMainWindow):
 
         # Try to generate building
         if QBD_GENERATOR_AVAILABLE:
-            try:
-                # Convert questionnaire answers to QBD format
-                qbd_answers = {
-                    "start": answers.get('building_type', 'residential'),
-                    "res_type": answers.get('residence_type', 'single_family'),
-                    "bedrooms": str(answers.get('bedrooms', 2)),
-                    "bathrooms": str(answers.get('bathrooms', 1)),
-                    "sqft": str(answers.get('sqft', 1200)),
-                    "garage": answers.get('garage', 'none'),
-                    "special_rooms": answers.get('special_rooms', []),
-                    "style": answers.get('style', 'modern')
-                }
+            # Convert questionnaire answers to QBD format
+            qbd_answers = {
+                "start": answers.get('building_type', 'residential'),
+                "res_type": answers.get('residence_type', 'single_family'),
+                "bedrooms": str(answers.get('bedrooms', 2)),
+                "bathrooms": str(answers.get('bathrooms', 1)),
+                "sqft": str(answers.get('sqft', 1200)),
+                "garage": answers.get('garage', 'none'),
+                "special_rooms": answers.get('special_rooms', []),
+                "style": answers.get('style', 'modern')
+            }
 
-                print(f"[App] Generating building with QBD: {qbd_answers}")
+            print(f"[App] Generating building with QBD: {qbd_answers}")
 
-                # Generate the floor plan
-                result = generate_floor_plan_from_qbd(
-                    qbd_answers,
-                    grid_size=2.0,
-                    max_nodes=50000,
-                    output_format=OutputFormat.ARCHENGINE
-                )
+            # Create progress dialog
+            progress_dialog = QProgressDialog(
+                "Generating floor plan...\n\nStep 1: Creating room graph...",
+                "Cancel",
+                0, 0, self
+            )
+            progress_dialog.setWindowTitle("Generating Layout")
+            progress_dialog.setWindowModality(Qt.WindowModality.NonModal)
+            progress_dialog.setMinimumDuration(0)  # Show immediately
+            progress_dialog.show()
 
-                if result.get("success"):
-                    print(f"[App] QBD generation successful!")
-                    print(f"[App]   Dimensions: {result['width']:.0f}x{result['depth']:.0f} mm")
-                    print(f"[App]   Walls: {result['summary']['total_walls']}")
-                    print(f"[App]   Doors: {result['summary']['doors']}")
-                    print(f"[App]   Windows: {result['summary']['windows']}")
-                    print(f"[App]   Rooms: {result['summary']['rooms_placed']}")
+            # Store reference to worker so we can cancel it
+            # Increase max_nodes for more rooms (10000 per room)
+            num_bedrooms = int(answers.get('bedrooms', 2))
+            num_rooms = num_bedrooms * 4 + 8  # Rough estimate
+            max_nodes = max(10000, num_rooms * 800)  # 800 nodes per room
 
-                    # Load into document
-                    self.document.load_from_dict(result)
+            self._qbd_worker = QBDGenerationWorker(
+                qbd_answers,
+                grid_size=2.0,
+                max_nodes=max_nodes,
+                config_overrides=config_overrides
+            )
 
-                    # Show success message
-                    self.status_bar.showMessage(
-                        f"Generated: {result['summary']['rooms_placed']} rooms, "
-                        f"{result['summary']['total_walls']} walls, "
-                        f"{result['summary']['doors']} doors",
-                        5000
-                    )
+            # Connect signals
+            self._qbd_worker.progress.connect(lambda msg: progress_dialog.setLabelText(msg))
+            self._qbd_worker.finished.connect(lambda result: self._on_qbd_finished(result, progress_dialog))
+            self._qbd_worker.error.connect(lambda error: self._on_qbd_error(error, progress_dialog))
 
-                    # Update chat with success
-                    if hasattr(self.chat_panel, '_chat_display'):
-                        success_msg = f"✓ Building generated!\n\n"
-                        success_msg += f"Rooms: {result['summary']['rooms_placed']}\n"
-                        success_msg += f"Walls: {result['summary']['total_walls']}\n"
-                        success_msg += f"Doors: {result['summary']['doors']}\n"
-                        success_msg += f"Windows: {result['summary']['windows']}"
-                        self.chat_panel._chat_display.setText(success_msg)
+            # Handle cancellation
+            progress_dialog.canceled.connect(self._qbd_worker.terminate)
 
-                else:
-                    error_msg = result.get("error", "Unknown error")
-                    print(f"[App] QBD generation failed: {error_msg}")
-                    self.status_bar.showMessage(f"Generation failed: {error_msg}", 5000)
+            # Start generation in background
+            self._qbd_worker.start()
 
-                    QMessageBox.warning(
-                        self,
-                        "Generation Failed",
-                        f"Could not generate building:\n{error_msg}"
-                    )
-
-            except Exception as e:
-                import traceback
-                print(f"[App] Error during building generation: {e}")
-                print(traceback.format_exc())
-                self.status_bar.showMessage(f"Error: {str(e)}", 5000)
-
-                QMessageBox.critical(
-                    self,
-                    "Generation Error",
-                    f"Error generating building:\n{str(e)}"
-                )
+            # Update status bar
+            self.status_bar.showMessage("Generating floor plan in background...")
         else:
             print(f"[App] QBD Generator not available")
             self.status_bar.showMessage("QBD generator not available", 5000)
@@ -1473,6 +1589,133 @@ class ArchEngineApplication(QMainWindow):
                 self.chat_panel._chat_display.setText(
                     f"Design requirements:\n\n{msg}\n\n(QBD Generator not found - install ArchEngine_kernel)"
                 )
+
+    def _on_qbd_finished(self, result, progress_dialog):
+        """Called when QBD generation completes successfully."""
+        progress_dialog.close()
+
+        print(f"[App] QBD generation successful!")
+        print(f"[App]   Dimensions: {result['width']:.0f}x{result['depth']:.0f} mm")
+        print(f"[App]   Walls: {result['summary']['total_walls']}")
+        print(f"[App]   Doors: {result['summary']['doors']}")
+        print(f"[App]   Windows: {result['summary']['windows']}")
+        print(f"[App]   Rooms: {result['summary']['rooms_placed']}/{result['summary']['rooms_requested']}")
+
+        # Check if all rooms were placed
+        rooms_placed = result['summary']['rooms_placed']
+        rooms_requested = result['summary']['rooms_requested']
+        unplaced_rooms = result.get('unplaced_rooms', [])
+
+        if unplaced_rooms:
+            print(f"[App]   WARNING: {len(unplaced_rooms)} rooms could not be placed: {unplaced_rooms}")
+
+        # Include terrain mesh if available from site definition
+        if hasattr(self, '_site_data') and self._site_data.get('terrain_mesh'):
+            result['terrain_mesh'] = self._site_data['terrain_mesh']
+            print("[App] Including terrain mesh in building data")
+
+        # Block signals to prevent multiple 3D updates during load
+        self.document.blockSignals(True)
+
+        # Load into document
+        self.document.load_from_dict(result)
+
+        # Re-enable signals
+        self.document.blockSignals(False)
+
+        # Manually trigger single 3D viewport update
+        self.status_bar.showMessage("Regenerating 3D view...")
+        QApplication.processEvents()
+
+        if hasattr(self, '_do_viewport_update'):
+            self._do_viewport_update()
+
+        # Show success message
+        self.status_bar.showMessage(
+            f"Generated: {rooms_placed}/{rooms_requested} rooms, "
+            f"{result['summary']['total_walls']} walls, "
+            f"{result['summary']['doors']} doors",
+            5000
+        )
+
+        # Update chat with success
+        if hasattr(self.chat_panel, '_chat_display'):
+            success_msg = f"✓ Building generated!\n\n"
+            success_msg += f"Rooms: {rooms_placed}/{rooms_requested} placed\n"
+            success_msg += f"Walls: {result['summary']['total_walls']}\n"
+            success_msg += f"Doors: {result['summary']['doors']}\n"
+            success_msg += f"Windows: {result['summary']['windows']}"
+
+            if unplaced_rooms:
+                success_msg += f"\n\n⚠ Could not place {len(unplaced_rooms)} room(s):\n"
+                for room in unplaced_rooms:
+                    # Format room name nicely
+                    room_name = room.replace('_', ' ').title()
+                    success_msg += f"  • {room_name}\n"
+                success_msg += f"\nTry increasing building size or reducing number of rooms."
+
+            self.chat_panel._chat_display.setText(success_msg)
+
+        # Show warning dialog if rooms were not placed
+        if unplaced_rooms:
+            warning_title = "Some Rooms Could Not Be Placed"
+            warning_msg = (
+                f"The solver could only place {rooms_placed} out of {rooms_requested} rooms.\n\n"
+                f"Rooms not placed:\n"
+            )
+            for room in unplaced_rooms:
+                room_name = room.replace('_', ' ').title()
+                warning_msg += f"  • {room_name}\n"
+
+            warning_msg += "\nPossible solutions:\n"
+            warning_msg += "  • Try a larger building size\n"
+            warning_msg += "  • Reduce the number of rooms\n"
+            warning_msg += "  • Remove some optional rooms (garage, office, etc.)"
+
+            QMessageBox.warning(self, warning_title, warning_msg)
+
+        # Clean up worker reference
+        self._qbd_worker = None
+
+    def _on_qbd_error(self, error_msg, progress_dialog):
+        """Called when QBD generation fails."""
+        progress_dialog.close()
+        print(f"[App] QBD generation failed: {error_msg}")
+        self.status_bar.showMessage(f"Generation failed", 5000)
+
+        QMessageBox.warning(
+            self,
+            "Generation Failed",
+            f"Could not generate building:\n{error_msg}"
+        )
+
+        # Clean up worker reference
+        self._qbd_worker = None
+
+    def _on_solver_params_changed(self, config_overrides: dict):
+        """Called when solver parameters are changed - regenerates layout with new parameters."""
+        if not self._qbd_answers:
+            QMessageBox.information(
+                self,
+                "No Building to Regenerate",
+                "Generate a building first (File > New), then adjust parameters to regenerate."
+            )
+            return
+
+        print(f"[App] Regenerating with parameter overrides: {config_overrides}")
+
+        # Confirm with user since this replaces current document
+        reply = QMessageBox.question(
+            self,
+            "Regenerate Layout?",
+            "This will replace your current layout with a new one using the adjusted parameters.\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            # Regenerate with stored answers and new parameter overrides
+            self._process_qbd_answers(self._qbd_answers, config_overrides=config_overrides)
 
     def _on_open(self):
         """Open existing document."""

@@ -612,15 +612,34 @@ class FixturePalettePanel(PlaceholderPanel):
         )
 
 
-class MaterialPickerPanel(PlaceholderPanel):
-    """Material selection panel."""
+class MaterialPickerPanel(QWidget):
+    """Material selection panel - uses the real MaterialsPanel implementation."""
+
+    # Forward signal from materials panel
+    material_assigned = pyqtSignal(str, str)  # element_type, material_id
+
     def __init__(self, parent=None):
-        super().__init__(
-            "Materials",
-            "Select materials for surfaces",
-            "#90EE90",
-            parent
-        )
+        super().__init__(parent)
+        # Import and wrap the actual MaterialsPanel
+        from panels.materials_panel import MaterialsPanel
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._materials_panel = MaterialsPanel(parent)
+        # Forward the material_assigned signal
+        self._materials_panel.material_assigned.connect(self.material_assigned.emit)
+        layout.addWidget(self._materials_panel)
+
+    def set_document(self, document):
+        """Forward document to the materials panel."""
+        if hasattr(self._materials_panel, 'set_document'):
+            self._materials_panel.set_document(document)
+
+    def set_viewport(self, viewport):
+        """Forward viewport to the materials panel."""
+        if hasattr(self._materials_panel, 'set_viewport'):
+            self._materials_panel.set_viewport(viewport)
 
 
 class CoordinatesPanel(PlaceholderPanel):

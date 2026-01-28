@@ -1,0 +1,180 @@
+{
+  "version": "1.0",
+  "description": "Scoring criteria weights and rules for QBD layout solver. Users can modify these values to change layout priorities.",
+
+  "scoring_weights": {
+    "circulation_completeness": {
+      "weight": 300,
+      "description": "All rooms must connect to hallway/entry circulation network",
+      "enabled": true,
+      "penalty_per_isolated_room": -100,
+      "bonus_per_connected_room": 50,
+      "bonus_for_complete_connectivity": 50
+    },
+    "constraint_satisfaction": {
+      "weight": 200,
+      "description": "Must-touch relationships between rooms",
+      "enabled": true,
+      "penalty_per_unsatisfied": 0
+    },
+    "circulation_efficiency": {
+      "weight": 15,
+      "description": "Proximity of related rooms (kitchen-dining, living-dining, etc.)",
+      "enabled": true
+    },
+    "zone_organization": {
+      "weight": 2,
+      "description": "Public vs private zone separation",
+      "enabled": true,
+      "bonus_per_unit_distance": 2
+    },
+    "room_shape_quality": {
+      "weight": 3,
+      "description": "Aspect ratio preferences (avoid overly long/narrow rooms)",
+      "enabled": true,
+      "penalty_threshold": 0.4,
+      "penalty_per_aspect_point": 50
+    },
+    "exterior_access": {
+      "weight": 10,
+      "description": "Rooms that should have exterior walls",
+      "enabled": true,
+      "bonus_per_required_room": 30
+    }
+  },
+
+  "placement_scoring": {
+    "base_score": 100,
+    "description": "Base score for candidate positions during search",
+
+    "must_touch_bonus": 80,
+    "must_touch_nearby_bonus": 20,
+    "must_touch_far_penalty": -30,
+
+    "exterior_bonus": 40,
+    "exterior_corner_bonus": 30,
+    "exterior_perpendicular_bonus": 40,
+    "no_exterior_penalty": -20,
+
+    "aspect_ratio_bonus": 20,
+    "aspect_ratio_penalty": -30,
+    "ideal_aspect_range": [0.6, 1.0],
+
+    "extension_penalty_per_sqft": 0.5,
+    "center_of_building_bonus": 5,
+
+    "circulation_connection_bonus": 100,
+    "circulation_connection_penalty": -80,
+
+    "entry_corner_bonus": 30,
+    "entry_corner_distance_factor": 3
+  },
+
+  "circulation_pairs": [
+    {
+      "rooms": ["kitchen", "dining"],
+      "bonus": 1.5,
+      "name": "kitchen-dining",
+      "description": "Kitchen and dining should be adjacent"
+    },
+    {
+      "rooms": ["living", "dining"],
+      "bonus": 1.0,
+      "name": "living-dining",
+      "description": "Living and dining should be adjacent"
+    },
+    {
+      "rooms": ["entry", "living"],
+      "bonus": 1.0,
+      "name": "entry-living",
+      "description": "Entry should lead to living area"
+    },
+    {
+      "rooms": ["entry", "hallway"],
+      "bonus": 0.8,
+      "name": "entry-hallway",
+      "description": "Entry should connect to hallway"
+    },
+    {
+      "rooms": ["hallway", "bedroom_2"],
+      "bonus": 0.8,
+      "name": "hallway-bedroom_2",
+      "description": "Bedrooms should access from hallway"
+    },
+    {
+      "rooms": ["hallway", "bedroom_3"],
+      "bonus": 0.8,
+      "name": "hallway-bedroom_3",
+      "description": "Bedrooms should access from hallway"
+    },
+    {
+      "rooms": ["hallway", "bathroom_2"],
+      "bonus": 0.6,
+      "name": "hallway-bathroom_2",
+      "description": "Bathrooms should access from hallway"
+    },
+    {
+      "rooms": ["primary_bedroom", "primary_bath"],
+      "bonus": 1.5,
+      "name": "primary_bedroom-bath",
+      "description": "Primary bedroom should have ensuite bath"
+    },
+    {
+      "rooms": ["primary_bedroom", "primary_closet"],
+      "bonus": 1.0,
+      "name": "primary_bedroom-closet",
+      "description": "Primary bedroom should connect to closet"
+    },
+    {
+      "rooms": ["laundry", "mudroom"],
+      "bonus": 0.8,
+      "name": "laundry-mudroom",
+      "description": "Laundry should be near mudroom"
+    },
+    {
+      "rooms": ["laundry", "hallway"],
+      "bonus": 0.5,
+      "name": "laundry-hallway",
+      "description": "Laundry should access from hallway"
+    }
+  ],
+
+  "room_groups": {
+    "public": {
+      "rooms": ["entry", "living", "dining", "kitchen", "hallway"],
+      "description": "Public/social zones"
+    },
+    "private": {
+      "rooms": ["primary_bedroom", "bedroom_2", "bedroom_3"],
+      "description": "Private/sleeping zones"
+    },
+    "wet": {
+      "rooms": ["kitchen", "primary_bath", "bathroom_2", "laundry"],
+      "description": "Wet rooms (plumbing)"
+    }
+  },
+
+  "circulation_hubs": {
+    "rooms": ["hallway", "entry"],
+    "description": "Rooms that serve as circulation connection points"
+  },
+
+  "critical_rooms": {
+    "cannot_skip": ["primary_bedroom", "bedroom_2", "bedroom_3"],
+    "description": "Critical rooms that must always be placed"
+  },
+
+  "exterior_required_rooms": {
+    "rooms": ["living", "dining", "kitchen", "primary_bedroom", "bedroom_2", "bedroom_3", "office"],
+    "description": "Rooms that should have exterior walls"
+  },
+
+  "solver_parameters": {
+    "grid_size": 2.0,
+    "max_branching_critical": 500,
+    "max_branching_standard": 300,
+    "max_nodes": 500000,
+    "max_solutions_to_track": 10,
+    "corner_threshold_ratio": 0.2
+  }
+}
