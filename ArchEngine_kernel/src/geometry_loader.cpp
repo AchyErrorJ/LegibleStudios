@@ -4,6 +4,37 @@
 
 namespace arch {
 
+// Feet to millimeters conversion factor
+constexpr f32 FT_TO_MM = 304.8f;
+
+// Compute terrain elevation color based on normalized height [0-1]
+// Returns a topographic gradient: green -> tan -> gray -> white
+static vec3 getElevationColor(f32 normalizedElevation) {
+    // Clamp to [0, 1]
+    f32 t = glm::clamp(normalizedElevation, 0.0f, 1.0f);
+
+    // Color stops for topographic map
+    const vec3 lowGreen  = vec3(0.34f, 0.55f, 0.30f);   // Grass green
+    const vec3 midTan    = vec3(0.72f, 0.60f, 0.40f);   // Tan/brown
+    const vec3 highGray  = vec3(0.55f, 0.55f, 0.55f);   // Rock gray
+    const vec3 peakWhite = vec3(0.95f, 0.95f, 0.95f);   // Snow white
+
+    // Four-stop gradient
+    if (t < 0.25f) {
+        // Low elevation: deep green to grass green
+        return glm::mix(vec3(0.2f, 0.4f, 0.2f), lowGreen, t * 4.0f);
+    } else if (t < 0.50f) {
+        // Lower-mid: green to tan
+        return glm::mix(lowGreen, midTan, (t - 0.25f) * 4.0f);
+    } else if (t < 0.75f) {
+        // Upper-mid: tan to gray
+        return glm::mix(midTan, highGray, (t - 0.50f) * 4.0f);
+    } else {
+        // High: gray to white (snow caps)
+        return glm::mix(highGray, peakWhite, (t - 0.75f) * 4.0f);
+    }
+}
+
 void GeometryLoader::addColumn(Building& building, vec3 position, f32 width, f32 depth, f32 height,
                                const std::string& material, f32 stress) {
     StructuralElement col;
@@ -322,6 +353,55 @@ void GeometryLoader::saveToJSON(const std::string& filepath, const Building& bui
     }
 }
 
+void GeometryLoader::saveToJSON(const std::string& filepath, const Building& building, const Renderer& renderer) {
+    json data;
+    to_json(data, building);
+
+    // Add element material overrides
+    json overrides = json::array();
+    for (size_t i = 0; i < building.elements.size(); i++) {
+        const ElementMaterialOverride* override = renderer.getElementOverride(static_cast<int>(i));
+        if (override && override->active) {
+            json o;
+            o["element_index"] = static_cast<int>(i);
+
+            // Save per-parameter flags and values
+            o["has_uv_scale"] = override->hasUVScale;
+            o["has_uv_rotation"] = override->hasUVRotation;
+            o["has_normal_strength"] = override->hasNormalStrength;
+            o["has_brightness"] = override->hasBrightness;
+            o["has_contrast"] = override->hasContrast;
+            o["has_saturation"] = override->hasSaturation;
+            o["has_roughness"] = override->hasRoughness;
+            o["has_metallic"] = override->hasMetallic;
+            o["has_ao_strength"] = override->hasAOStrength;
+            o["has_tint"] = override->hasTint;
+
+            // Only save values if the flag is set (save space)
+            if (override->hasUVScale) o["uv_scale"] = override->uvScale;
+            if (override->hasUVRotation) o["uv_rotation"] = override->uvRotation;
+            if (override->hasNormalStrength) o["normal_strength"] = override->normalStrength;
+            if (override->hasBrightness) o["brightness"] = override->brightness;
+            if (override->hasContrast) o["contrast"] = override->contrast;
+            if (override->hasSaturation) o["saturation"] = override->saturation;
+            if (override->hasRoughness) o["roughness"] = override->roughness;
+            if (override->hasMetallic) o["metallic"] = override->metallic;
+            if (override->hasAOStrength) o["ao_strength"] = override->aoStrength;
+            if (override->hasTint) o["tint"] = {override->tint[0], override->tint[1], override->tint[2]};
+
+            overrides.push_back(o);
+        }
+    }
+    data["element_material_overrides"] = overrides;
+
+    std::ofstream file(filepath);
+    if (file.is_open()) {
+        file << data.dump(2);
+    } else {
+        std::cerr << "Failed to save to: " << filepath << "\n";
+    }
+}
+
 Building GeometryLoader::loadFromIFC(const std::string& filepath) {
     Building building;
     building.name = "IFC Import";
@@ -346,6 +426,114 @@ Building GeometryLoader::loadFromIFC(const std::string& filepath) {
     }
 
     return building;
+}
+
+void GeometryLoader::loadMaterialOverrides(const std::string& filepath, Renderer& renderer) {
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file for material override loading: " << filepath << "\n";
+        return;
+    }
+
+    try {
+        json data = json::parse(file);
+
+        // Check if element_material_overrides section exists
+        if (!data.contains("element_material_overrides")) {
+            return;  // No overrides in this file, that's fine
+        }
+
+        const auto& overrides = data["element_material_overrides"];
+        if (!overrides.is_array()) {
+            std::cerr << "element_material_overrides is not an array\n";
+            return;
+        }
+
+        // Load each override
+        for (const auto& o : overrides) {
+            if (!o.contains("element_index")) {
+                continue;
+            }
+
+            int elementIndex = o["element_index"];
+
+            ElementMaterialOverride override;
+            override.active = true;
+
+            // Load per-parameter flags (new format)
+            if (o.contains("has_uv_scale")) {
+                override.hasUVScale = o["has_uv_scale"];
+                override.hasUVRotation = o.value("has_uv_rotation", false);
+                override.hasNormalStrength = o.value("has_normal_strength", false);
+                override.hasBrightness = o.value("has_brightness", false);
+                override.hasContrast = o.value("has_contrast", false);
+                override.hasSaturation = o.value("has_saturation", false);
+                override.hasRoughness = o.value("has_roughness", false);
+                override.hasMetallic = o.value("has_metallic", false);
+                override.hasAOStrength = o.value("has_ao_strength", false);
+                override.hasTint = o.value("has_tint", false);
+
+                // Load values (only if flag is true)
+                override.uvScale = o.value("uv_scale", 1.0f);
+                override.uvRotation = o.value("uv_rotation", 0.0f);
+                override.normalStrength = o.value("normal_strength", 1.0f);
+                override.brightness = o.value("brightness", 0.0f);
+                override.contrast = o.value("contrast", 1.0f);
+                override.saturation = o.value("saturation", 1.0f);
+                override.roughness = o.value("roughness", 0.5f);
+                override.metallic = o.value("metallic", 0.0f);
+                override.aoStrength = o.value("ao_strength", 1.0f);
+
+                if (o.contains("tint") && o["tint"].size() >= 3) {
+                    override.tint[0] = o["tint"][0];
+                    override.tint[1] = o["tint"][1];
+                    override.tint[2] = o["tint"][2];
+                }
+            } else {
+                // Old format (without flags) - load and set flags based on value presence
+                override.uvScale = o.value("uv_scale", 1.0f);
+                override.hasUVScale = o.contains("uv_scale");
+
+                override.uvRotation = o.value("uv_rotation", 0.0f);
+                override.hasUVRotation = o.contains("uv_rotation");
+
+                override.normalStrength = o.value("normal_strength", 1.0f);
+                override.hasNormalStrength = o.contains("normal_strength");
+
+                override.brightness = o.value("brightness", 0.0f);
+                override.hasBrightness = o.contains("brightness");
+
+                override.contrast = o.value("contrast", 1.0f);
+                override.hasContrast = o.contains("contrast");
+
+                override.saturation = o.value("saturation", 1.0f);
+                override.hasSaturation = o.contains("saturation");
+
+                override.roughness = o.value("roughness", 0.5f);
+                override.hasRoughness = o.contains("roughness");
+
+                override.metallic = o.value("metallic", 0.0f);
+                override.hasMetallic = o.contains("metallic");
+
+                override.aoStrength = o.value("ao_strength", 1.0f);
+                override.hasAOStrength = o.contains("ao_strength");
+
+                if (o.contains("tint") && o["tint"].size() >= 3) {
+                    override.tint[0] = o["tint"][0];
+                    override.tint[1] = o["tint"][1];
+                    override.tint[2] = o["tint"][2];
+                    override.hasTint = true;
+                }
+            }
+
+            renderer.setElementOverride(elementIndex, override);
+        }
+
+        std::cout << "Loaded " << overrides.size() << " element material overrides\n";
+
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to load material overrides: " << e.what() << "\n";
+    }
 }
 
 void to_json(json& j, const Building& b) {
@@ -442,58 +630,78 @@ void from_json(const json& j, Building& b) {
     }
 
     // Parse terrain mesh
-    std::cout << "[Loader] Checking for terrain_mesh in JSON..." << std::endl;
     if (j.contains("terrain_mesh")) {
-        std::cout << "[Loader] Found terrain_mesh!" << std::endl;
         const auto& tm = j["terrain_mesh"];
 
-        b.terrainMesh.width_ft = tm.value("width_ft", 100.0f);
-        b.terrainMesh.depth_ft = tm.value("depth_ft", 120.0f);
-        b.terrainMesh.min_elevation = tm.value("min_elevation", 0.0f);
-        b.terrainMesh.max_elevation = tm.value("max_elevation", 100.0f);
+        // Get elevation range for color computation
+        f32 minElev = tm.value("min_elevation", 0.0f);
+        f32 maxElev = tm.value("max_elevation", 100.0f);
+        f32 elevRange = maxElev - minElev;
+        if (elevRange < 0.001f) elevRange = 1.0f;  // Avoid division by zero
 
-        // Parse vertices
+        // Store metadata
+        b.terrainMesh.width_ft = tm.value("width_ft", 0.0f);
+        b.terrainMesh.depth_ft = tm.value("depth_ft", 0.0f);
+        b.terrainMesh.min_elevation = minElev;
+        b.terrainMesh.max_elevation = maxElev;
+
+        // Parse vertices with feet-to-mm conversion and elevation coloring
         if (tm.contains("vertices")) {
             for (const auto& v : tm["vertices"]) {
-                Vertex vertex;
+                Vertex vert;
 
-                // Position (convert feet to millimeters: 1 ft = 304.8 mm)
-                if (v.contains("position")) {
-                    f32 x = v["position"][0];
-                    f32 y = v["position"][1];
-                    f32 z = v["position"][2];
-                    vertex.position = vec3(x * 304.8f, y * 304.8f, z * 304.8f);
+                // Position: convert feet to millimeters
+                // JSON format: position is [x, y, z] where z is elevation
+                if (v.contains("position") && v["position"].size() >= 3) {
+                    f32 x_ft = v["position"][0].get<f32>();
+                    f32 y_ft = v["position"][1].get<f32>();
+                    f32 z_ft = v["position"][2].get<f32>();  // This is elevation
+
+                    // Convert to mm: X stays X, Y becomes elevation (up), Z stays Z (depth)
+                    // In the renderer, Y is up, so we swap: position.y = elevation * FT_TO_MM
+                    vert.position = vec3(x_ft * FT_TO_MM, z_ft * FT_TO_MM, y_ft * FT_TO_MM);
+
+                    // Compute color from elevation
+                    f32 normalizedElev = (z_ft - minElev) / elevRange;
+                    vert.color = getElevationColor(normalizedElev);
                 }
 
                 // Normal
-                if (v.contains("normal")) {
-                    vertex.normal = vec3(v["normal"][0], v["normal"][1], v["normal"][2]);
+                if (v.contains("normal") && v["normal"].size() >= 3) {
+                    f32 nx = v["normal"][0].get<f32>();
+                    f32 ny = v["normal"][1].get<f32>();
+                    f32 nz = v["normal"][2].get<f32>();
+                    // Swap Y and Z to match coordinate system
+                    vert.normal = glm::normalize(vec3(nx, nz, ny));
+                } else {
+                    vert.normal = vec3(0.0f, 1.0f, 0.0f);  // Default up
                 }
 
                 // UV coordinates
-                if (v.contains("uv")) {
-                    vertex.texCoord = vec2(v["uv"][0], v["uv"][1]);
+                if (v.contains("uv") && v["uv"].size() >= 2) {
+                    vert.texCoord = vec2(v["uv"][0].get<f32>(), v["uv"][1].get<f32>());
+                } else {
+                    vert.texCoord = vec2(0.0f, 0.0f);
                 }
 
-                // Color (will be computed from elevation in shader)
-                vertex.color = vec3(0.5f, 0.5f, 0.5f);
-                vertex.stress = 0.0f;
+                vert.stress = 0.0f;  // Terrain has no stress
 
-                b.terrainMesh.vertices.push_back(vertex);
+                b.terrainMesh.vertices.push_back(vert);
             }
         }
 
         // Parse indices
         if (tm.contains("indices")) {
             for (const auto& idx : tm["indices"]) {
-                b.terrainMesh.indices.push_back(idx);
+                b.terrainMesh.indices.push_back(idx.get<u32>());
             }
         }
 
-        std::cout << "[Terrain] Loaded mesh: " << b.terrainMesh.vertices.size()
-                  << " vertices, " << b.terrainMesh.indices.size() / 3 << " triangles\n";
-        std::cout << "[Terrain] Elevation range: " << b.terrainMesh.min_elevation
-                  << "' to " << b.terrainMesh.max_elevation << "'\n";
+        if (b.terrainMesh.hasData()) {
+            std::cout << "[Terrain] Loaded mesh: " << b.terrainMesh.vertices.size()
+                      << " vertices, " << (b.terrainMesh.indices.size() / 3)
+                      << " triangles, elevation " << minElev << "-" << maxElev << " ft\n";
+        }
     }
 }
 

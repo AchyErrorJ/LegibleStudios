@@ -63,6 +63,10 @@ createDeflectedBeam(vec3 start, vec3 end, f32 width, f32 height,
 std::pair<std::vector<Vertex>, std::vector<u32>>
 createGrid(f32 size, f32 spacing, vec3 color = {0.3f, 0.3f, 0.3f});
 
+// Generate sphere mesh (for material previews)
+std::pair<std::vector<Vertex>, std::vector<u32>>
+createSphere(f32 radius = 1.0f, u32 rings = 24, u32 sectors = 48, vec3 color = {1.0f, 1.0f, 1.0f});
+
 // Generate arrow (for load visualization)
 std::pair<std::vector<Vertex>, std::vector<u32>>
 createArrow(vec3 start, vec3 end, f32 headSize = 0.3f, vec3 color = {1.0f, 0.5f, 0.0f});

@@ -69,7 +69,46 @@ public:
         int format = 0;         // 0=PNG, 1=EXR
         bool upscale = false;   // If true, render at 4K and upscale to target
         int upscaleMethod = 0;  // 0=realesrgan, 1=lanczos
-        float brightness = 1.3f; // Brightness multiplier to compensate for no bloom
+        float brightness = 1.0f; // Brightness multiplier (1.0 = match viewport)
+        int postProcessPreset = 0; // 0=none, 1=subtle, 2=vivid, 3=warm, 4=architectural, 5=golden_hour, 6=print_ready
+        // Manual post-process overrides (negative = use preset values)
+        float postExposure = -1.0f;
+        float postContrast = -1.0f;
+        float postSaturation = -1.0f;
+        float postVibrance = -1.0f;
+        float postSharpness = -1.0f;
+        float postVignette = -1.0f;
+    };
+
+    struct MaterialOverrideRequest {
+        std::vector<int> elementIndices;  // Elements to apply override to
+
+        // Per-parameter flags (which parameters should be overridden)
+        bool hasUVScale = false;
+        bool hasUVRotation = false;
+        bool hasNormalStrength = false;
+        bool hasBrightness = false;
+        bool hasContrast = false;
+        bool hasSaturation = false;
+        bool hasRoughness = false;
+        bool hasMetallic = false;
+        bool hasAOStrength = false;
+        bool hasTint = false;
+
+        // Direct replacement values (except roughness/metallic which are additive offsets)
+        float uvScale = 1.0f;
+        float uvRotation = 0.0f;      // Rotation in degrees
+        float normalStrength = 1.0f;
+        float brightness = 0.0f;
+        float contrast = 1.0f;
+        float saturation = 1.0f;
+        float roughness = 0.0f;       // Additive offset
+        float metallic = 0.0f;        // Additive offset
+        float aoStrength = 1.0f;
+        float tint[3] = {0, 0, 0};
+
+        bool resetSelected = false;  // If true, clear overrides for selected elements
+        bool resetAll = false;      // If true, clear all overrides
     };
 
     ImGuiLayer(VulkanContext& context, GLFWwindow* window, VkRenderPass renderPass);
@@ -89,9 +128,13 @@ public:
     void drawPhysicsPanel(const FrameAnalysis& analysis, bool physicsAvailable);
     void drawVisualizationPanel(VisualizationMode& mode, Renderer& renderer);
     void drawHelpPanel(bool& show);
-    void drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles);
+    void drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles, u32 culledElements = 0);
     void drawRenderSettingsPanel(Renderer& renderer, bool& show);
+    void drawPreviewWindow();
+    void drawRenderPreviewPanel(Renderer& renderer);
     void drawGeometryEditor(bool& show);
+    void drawMaterialInspector(const Renderer& renderer);
+    void drawMaterialLibraryPanel(Renderer& renderer);
 
     // Geometry editor state
     struct NewElement {
@@ -200,6 +243,22 @@ public:
     void setHighResRenderState(bool inFlight, const std::string& status, float progress = 0.0f);
     float getHighResRenderProgress() const { return m_highResRenderProgress; }
 
+    // Material Inspector (per-element material overrides)
+    bool wasMaterialOverrideRequested() const { return m_materialOverrideRequested; }
+    MaterialOverrideRequest takeMaterialOverrideRequest();
+    void setMaterialInspectorVisibility(bool show) { m_showMaterialInspector = show; }
+    bool getMaterialInspectorVisibility() const { return m_showMaterialInspector; }
+
+    // Live Render Preview Panel (GPU-direct inline preview)
+    bool wasRenderPreviewRefreshRequested() const { return m_renderPreviewRefreshRequested; }
+    void clearRenderPreviewRefreshRequest() { m_renderPreviewRefreshRequested = false; }
+    void setRenderPreviewPanelVisibility(bool show) { m_showRenderPreviewPanel = show; }
+    bool getRenderPreviewPanelVisibility() const { return m_showRenderPreviewPanel; }
+
+    // Material Library Panel
+    void setMaterialLibraryVisibility(bool show) { m_showMaterialLibrary = show; }
+    bool getMaterialLibraryVisibility() const { return m_showMaterialLibrary; }
+
 private:
     void createDescriptorPool();
     void uploadFonts();
@@ -290,11 +349,71 @@ private:
     int m_renderFormat = 0;         // 0=PNG, 1=EXR
     bool m_renderUpscale = false;
     int m_renderUpscaleMethod = 0;
-    float m_renderBrightness = 1.3f; // Brightness multiplier to compensate for missing bloom
+    float m_renderBrightness = 1.0f; // Brightness multiplier (1.0 = match viewport)
+    int m_renderPostProcess = 4;    // 0=none, 1=subtle, 2=vivid, 3=warm, 4=architectural, 5=golden_hour, 6=print_ready
     char m_renderOutputPath[260] = "renders/render.png";
+
+    // Post-process manual adjustments (negative = use preset)
+    float m_postExposure = -1.0f;
+    float m_postContrast = -1.0f;
+    float m_postSaturation = -1.0f;
+    float m_postVibrance = -1.0f;
+    float m_postSharpness = -1.0f;
+    float m_postVignette = -1.0f;
+    bool m_showPostProcessAdvanced = false;
+
+    // Print preview state
+    bool m_previewRequested = false;
+    bool m_showPreviewWindow = false;
+    std::string m_previewImagePath;
+    std::string mPreviewPostProcessedImage;
+
+    // Material Inspector state
+    bool m_showMaterialInspector = false;
+    bool m_materialOverrideRequested = false;
+    MaterialOverrideRequest m_materialOverrideRequest;
+    // Override parameter values (defaults matching global values)
+    float m_inspectorUVScale = 1.0f;
+    float m_inspectorUVRotation = 0.0f;    // Rotation in degrees
+    float m_inspectorNormalStrength = 1.0f;
+    float m_inspectorBrightness = 0.0f;
+    float m_inspectorContrast = 1.0f;
+    float m_inspectorSaturation = 1.0f;
+    float m_inspectorRoughness = 0.0f;     // Offset, not direct value
+    float m_inspectorMetallic = 0.0f;      // Offset, not direct value
+    float m_inspectorAOStrength = 1.0f;
+    float m_inspectorTint[3] = {0, 0, 0};
+    // Track which parameters have been modified by user (only override changed params)
+    bool m_modifiedUVScale = false;
+    bool m_modifiedUVRotation = false;
+    bool m_modifiedNormalStrength = false;
+    bool m_modifiedBrightness = false;
+    bool m_modifiedContrast = false;
+    bool m_modifiedSaturation = false;
+    bool m_modifiedRoughness = false;
+    bool m_modifiedMetallic = false;
+    bool m_modifiedAOStrength = false;
+    bool m_modifiedTint = false;
+
+    // Live Render Preview Panel state (GPU-direct preview)
+    bool m_showRenderPreviewPanel = false;
+    bool m_renderPreviewRefreshRequested = false;
+
+    // Improved Material Library state
+    bool m_showMaterialLibrary = false;
+    char m_materialLibraryFilter[128] = "";
+    int m_materialLibraryViewMode = 0;  // 0=Grid, 1=List
+    float m_materialThumbnailSize = 80.0f;
+    std::string m_selectedMaterialName;
+    std::string m_hoveredMaterialName;
 
 public:
     float getRenderBrightness() const { return m_renderBrightness; }
+    bool wasPreviewRequested() const { return m_previewRequested; }
+    void clearPreviewRequest() { m_previewRequested = false; }
+    const std::string& getPreviewImagePath() const { return m_previewImagePath; }
+    void setPreviewImagePath(const std::string& path) { m_previewImagePath = path; }
+    void showPreviewWindow(bool show) { m_showPreviewWindow = show; }
 };
 
 } // namespace arch

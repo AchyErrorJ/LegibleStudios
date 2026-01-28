@@ -15,6 +15,7 @@ namespace arch {
 // Static default textures
 std::unique_ptr<Texture> Texture::s_white;
 std::unique_ptr<Texture> Texture::s_black;
+std::unique_ptr<Texture> Texture::s_grey;
 std::unique_ptr<Texture> Texture::s_normalDefault;
 
 Texture::Texture(VulkanContext& context)
@@ -157,6 +158,10 @@ void Texture::createDefaultTextures(VulkanContext& context) {
     s_black = std::make_unique<Texture>(context);
     s_black->createSolidColor(vec4(0.0f, 0.0f, 0.0f, 1.0f), false);
 
+    // Grey texture (0.5 - default height map, means no displacement)
+    s_grey = std::make_unique<Texture>(context);
+    s_grey->createSolidColor(vec4(0.5f, 0.5f, 0.5f, 1.0f), false);
+
     // Default normal map (flat surface pointing up in tangent space)
     s_normalDefault = std::make_unique<Texture>(context);
     s_normalDefault->createSolidColor(vec4(0.5f, 0.5f, 1.0f, 1.0f), false);
@@ -166,6 +171,7 @@ void Texture::createDefaultTextures(VulkanContext& context) {
 
 Texture* Texture::getWhite() { return s_white.get(); }
 Texture* Texture::getBlack() { return s_black.get(); }
+Texture* Texture::getGrey() { return s_grey.get(); }
 Texture* Texture::getNormalDefault() { return s_normalDefault.get(); }
 
 // ============================================================================
@@ -188,7 +194,7 @@ MaterialLibrary::MaterialLibrary(VulkanContext& context)
     m_defaultMaterial.aoMap = Texture::getWhite();         // White = no occlusion
     m_defaultMaterial.emissiveMap = Texture::getBlack();
     m_defaultMaterial.opacityMap = Texture::getWhite();
-    m_defaultMaterial.heightMap = Texture::getBlack();
+    m_defaultMaterial.heightMap = Texture::getGrey();  // Grey = 0.5 = no displacement
     m_defaultMaterial.albedoColor = vec3(0.8f);
     m_defaultMaterial.roughness = 0.5f;
     m_defaultMaterial.metallic = 0.0f;
@@ -253,7 +259,7 @@ Material* MaterialLibrary::loadMaterial(const std::string& name, const std::stri
     mat->heightMap = tryLoad("height", false);
     if (!mat->heightMap) mat->heightMap = tryLoad("displacement", false);
     if (!mat->heightMap) mat->heightMap = tryLoad("bump", false);
-    if (!mat->heightMap) mat->heightMap = Texture::getBlack();  // Black = no displacement
+    if (!mat->heightMap) mat->heightMap = Texture::getGrey();   // Grey (0.5) = no displacement
 
     auto* ptr = mat.get();
     m_materials[name] = std::move(mat);
@@ -310,7 +316,7 @@ Material* MaterialLibrary::createSolidMaterial(const std::string& name, vec3 alb
     mat->aoMap = Texture::getWhite();
     mat->emissiveMap = Texture::getBlack();
     mat->opacityMap = Texture::getWhite();
-    mat->heightMap = Texture::getBlack();
+    mat->heightMap = Texture::getGrey();  // Grey (0.5) = no displacement
 
     auto* ptr = mat.get();
     m_materials[name] = std::move(mat);

@@ -7,31 +7,19 @@ layout(location = 2) in vec3 inColor;
 layout(location = 3) in vec2 inTexCoord;
 layout(location = 4) in float inStress;
 
-// Uniform buffer
-layout(set = 0, binding = 0) uniform UniformBufferObject {
-    mat4 view;
-    mat4 proj;
-    mat4 lightViewProj;
-    vec4 lightDirection;
-    vec4 clipPlane;
-    float time;
-    float shadowBias;
-    uint enableClipping;
-    uint enableShadows;
-    uint outputLinearHDR;
-    float exposure;
-    float tessellationLevel;
-    float displacementScale;
-    vec4 materialParams;
-    vec4 materialParams2;
-    vec4 materialTint;
-} ubo;
+// Shared UBO definition
+#include "include/ubo.glsl"
 
-// Push constants
+// Push constants (per-draw data including element overrides)
 layout(push_constant) uniform PushConstants {
     mat4 model;
-    vec4 color;      // RGB = albedo override, A = stress
-    vec4 material;   // x = metallic, y = roughness, z = ao, w = emission
+    vec4 color;          // RGB = albedo override, A = stress
+    vec4 material;       // x = metallic, y = roughness, z = ao, w = emission
+    uint overrideMask;   // Which overrides are active
+    float _pad1, _pad2, _pad3;  // Padding for vec4 alignment
+    vec4 overrides1;     // x=uvScale, y=normalStrength, z=brightness, w=contrast
+    vec4 overrides2;     // x=saturation, y=roughness, z=metallic, w=aoStrength
+    vec4 overrides3;     // rgb=tint, w=uvRotation (radians)
 } push;
 
 // Output to fragment shader

@@ -6,11 +6,10 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow, QDockWidget, QToolBar, QStatusBar,
-    QFileDialog, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QLabel, QTabWidget, QApplication, QStackedWidget,
-    QProgressDialog
+    QFileDialog, QMessageBox, QWidget, QVBoxLayout,
+    QSplitter, QLabel, QTabWidget
 )
-from PyQt6.QtCore import Qt, QSettings, QTimer, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QSettings, QTimer
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 
 from app.config import Config
@@ -41,9 +40,9 @@ _api_server_process = None
 # Sheet system imports
 from sheets.sheet_registry import SheetRegistry
 from panels.sheet_manager import SheetManagerPanel
-from panels.properties_panel import PropertiesPanel
 from panels.chat_panel import ChatPanel
 from panels.materials_panel import MaterialsPanel
+from panels.onboarding_overlay import OnboardingOverlay
 from generators.generator_service import GeneratorService
 
 # Optional viewport imports
@@ -71,121 +70,6 @@ try:
     from sync import get_vulkan_sync_client, HAS_VULKAN_SYNC
 except ImportError:
     HAS_VULKAN_SYNC = False
-
-# Selection Manager
-from core.selection_manager import SelectionManager
-
-# QBD Questionnaire
-from dialogs.qbd_questionnaire import show_questionnaire
-
-# Site Dialog
-from dialogs.site_dialog import show_site_dialog
-
-# Solver Parameters Panel
-from panels.solver_params_panel import SolverParamsPanel
-
-# QBD Generator
-import sys
-qbd_path = Path(__file__).parent.parent.parent / "ArchEngine_kernel" / "render_server"
-QBD_GENERATOR_AVAILABLE = False
-generate_floor_plan_from_qbd = None
-OutputFormat = None
-
-if qbd_path.exists():
-    sys.path.append(str(qbd_path))
-    try:
-        from qbd_layout_generator import generate_floor_plan_from_qbd, OutputFormat
-        QBD_GENERATOR_AVAILABLE = True
-    except ImportError as e:
-        print(f"[App] Could not import QBD generator: {e}")
-
-
-# =============================================================================
-# QBD GENERATION WORKER THREAD
-# =============================================================================
-
-class QBDGenerationWorker(QThread):
-    """
-    Worker thread for QBD floor plan generation.
-    Runs the solver in background to keep UI responsive.
-    """
-    progress = pyqtSignal(str)  # Progress updates
-    finished = pyqtSignal(dict)  # Result (success or failure)
-    error = pyqtSignal(str)  # Error message
-
-    def __init__(self, qbd_answers, grid_size=2.0, max_nodes=10000, config_overrides=None):
-        super().__init__()
-        self.qbd_answers = qbd_answers
-        self.grid_size = grid_size
-        self.max_nodes = max_nodes
-        self.config_overrides = config_overrides
-
-    def _progress_wrapper(self, original_stdout):
-        """Create a stdout wrapper that emits progress signals."""
-        import sys
-
-        class ProgressWriter:
-            def __init__(self, parent, original):
-                self.parent = parent
-                self.original = original
-                self.step_emitted = set()
-
-            def write(self, text):
-                # Write to original stdout
-                self.original.write(text)
-
-                # Check for specific solver messages and emit progress
-                if "Created graph" in text and "1" not in self.step_emitted:
-                    self.parent.progress.emit("Step 1: Creating room graph ✓")
-                    self.step_emitted.add("1")
-                elif "Solving layout" in text or "Searching" in text:
-                    if "2" not in self.step_emitted:
-                        self.parent.progress.emit("Step 2: Placing rooms (this takes 10-30 seconds)...\nSearching for optimal layout...")
-                        self.step_emitted.add("2")
-                elif "Placed" in text and "rooms" in text:
-                    if "3" not in self.step_emitted:
-                        self.parent.progress.emit("Step 3: Creating walls, doors, and windows...")
-                        self.step_emitted.add("3")
-
-            def flush(self):
-                self.original.flush()
-
-        return ProgressWriter(self, original_stdout)
-
-    def run(self):
-        """Run the QBD generation in background thread."""
-        import sys
-
-        try:
-            self.progress.emit("Starting generation...")
-
-            # Wrap stdout to capture progress
-            old_stdout = sys.stdout
-            sys.stdout = self._progress_wrapper(old_stdout)
-
-            result = generate_floor_plan_from_qbd(
-                self.qbd_answers,
-                grid_size=self.grid_size,
-                max_nodes=self.max_nodes,
-                output_format=OutputFormat.ARCHENGINE,
-                config_overrides=self.config_overrides
-            )
-
-            # Restore stdout
-            sys.stdout = old_stdout
-
-            if result.get("success"):
-                self.progress.emit("Generation complete!")
-                self.finished.emit(result)
-            else:
-                error_msg = result.get("error", "Unknown error")
-                self.error.emit(error_msg)
-
-        except Exception as e:
-            sys.stdout = old_stdout  # Restore stdout
-            import traceback
-            error_text = f"Generation error: {str(e)}\n\n{traceback.format_exc()}"
-            self.error.emit(error_text)
 
 
 class ArchEngineApplication(QMainWindow):
@@ -223,15 +107,6 @@ class ArchEngineApplication(QMainWindow):
             if is_api_enabled() and not HAS_API_BACKEND:
                 print("[App] API backend requested but client module not available")
 
-        # Initialize unified Selection Manager
-        self.selection_manager = SelectionManager(self)
-        self._updating_from_selection_manager = False  # Prevent signal loops
-
-        # QBD generation state
-        self._qbd_answers = None  # Store for regeneration with new parameters
-        self._qbd_worker = None  # Background generation worker
-        self._site_data = None  # Store site definition
-
         # Initialize LiveSync server for UE5 connection
         self._livesync_server = None
         if HAS_LIVESYNC:
@@ -268,9 +143,6 @@ class ArchEngineApplication(QMainWindow):
             self
         )
 
-        # Global LOD state (Shift+scroll works everywhere)
-        self._global_lod_level = 2
-
         self._setup_window()
         self._create_actions()
         self._create_menus()
@@ -280,15 +152,97 @@ class ArchEngineApplication(QMainWindow):
         self._create_central_widget()
         self._connect_signals()
         self._restore_state()
-
-        # Install global event filter for Shift+scroll LOD control
-        QApplication.instance().installEventFilter(self)
+        # Don't show onboarding on startup - will show after new/load document
 
     def _setup_window(self):
         """Configure main window properties."""
         self.setWindowTitle("ArchEngine CAD")
         self.setMinimumSize(1200, 800)
         self.setDockNestingEnabled(True)
+
+    def _show_onboarding_if_needed(self):
+        """
+        Show onboarding overlay if the current document hasn't completed it.
+
+        Called after creating a new document or loading an existing one.
+        """
+        # Check if this document has completed onboarding
+        if self.document.onboarding_completed:
+            # Already completed onboarding for this document
+            return
+
+        # Create onboarding overlay with the chat panel
+        if hasattr(self, 'onboarding_overlay') and self.onboarding_overlay:
+            # Clean up any existing overlay
+            self.onboarding_overlay.deleteLater()
+
+        self.onboarding_overlay = OnboardingOverlay(self.chat_panel, self)
+
+        # Connect signals
+        # Disconnect any existing connections to avoid duplicates
+        try:
+            self.chat_panel.message_sent.disconnect(self.onboarding_overlay.increment_question)
+        except TypeError:
+            pass  # No existing connection
+
+        self.chat_panel.message_sent.connect(self.onboarding_overlay.increment_question)
+        self.onboarding_overlay.onboarding_complete.connect(self._on_onboarding_complete)
+
+        # Hide the chat dock during onboarding
+        self.chat_dock.hide()
+
+        # Show the overlay after a short delay to ensure window is ready
+        QTimer.singleShot(500, self.onboarding_overlay.show_overlay)
+
+    def _on_onboarding_complete(self):
+        """Handle onboarding completion."""
+        # Mark onboarding as completed for this document
+        self.document.complete_onboarding()
+
+        # Show the chat dock in its normal position
+        self.chat_dock.show()
+        self.chat_dock.raise_()  # Bring to front in tabbed dock
+
+        # Update status bar
+        self.status_bar.showMessage("Onboarding complete! Design workspace ready.", 3000)
+
+        # Clean up overlay
+        if hasattr(self, 'onboarding_overlay') and self.onboarding_overlay:
+            self.onboarding_overlay.deleteLater()
+            self.onboarding_overlay = None
+
+        # Note: Document will need to be saved to persist the onboarding completion flag
+        if not self.document.file_path:
+            # New document - prompt user to save to keep onboarding progress
+            self.status_bar.showMessage(
+                "Onboarding complete! Save your file to keep your progress.", 5000
+            )
+
+    def _on_reset_onboarding(self):
+        """Reset onboarding for the current document."""
+        if self.document.onboarding_completed:
+            reply = QMessageBox.question(
+                self,
+                "Reset Onboarding",
+                "This will reset the onboarding experience for this document. "
+                "The welcome screen with 3 questions will show again.\n\nContinue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply == QMessageBox.StandardButton.Yes:
+                self.document.reset_onboarding()
+                self._show_onboarding_if_needed()
+                self.status_bar.showMessage(
+                    "Onboarding reset for this document.",
+                    3000
+                )
+        else:
+            # Already in onboarding mode
+            self.status_bar.showMessage(
+                "Onboarding is already active for this document.",
+                3000
+            )
 
     def _create_actions(self):
         """Create all actions."""
@@ -336,6 +290,9 @@ class ArchEngineApplication(QMainWindow):
         self.action_zoom_fit = QAction("&Home (Zoom to Fit)", self)
         self.action_zoom_fit.setShortcut(QKeySequence("H"))
 
+        self.action_reset_onboarding = QAction("Reset Onboarding...", self)
+        self.action_reset_onboarding.triggered.connect(self._on_reset_onboarding)
+
         # Tool actions
         self.action_select = QAction("&Select", self)
         self.action_select.setCheckable(True)
@@ -362,11 +319,6 @@ class ArchEngineApplication(QMainWindow):
         self.action_regenerate_sheets = QAction("Regenerate Sheets", self)
         self.action_regenerate_sheets.setShortcut(QKeySequence("F4"))
         self.action_regenerate_sheets.triggered.connect(lambda: self._on_regenerate_sheet(""))
-
-        # Wall sync action
-        self.action_sync_walls = QAction("Sync Walls to &Connections", self)
-        self.action_sync_walls.setShortcut(QKeySequence("Ctrl+Shift+W"))
-        self.action_sync_walls.triggered.connect(self._on_sync_walls_to_connections)
 
         # Toggle actions
         self.action_ortho = QAction("&Ortho", self)
@@ -496,14 +448,16 @@ class ArchEngineApplication(QMainWindow):
         edit_menu.addAction(self.action_delete)
 
         # View menu
-        self.view_menu = menubar.addMenu("&View")
-        self.view_menu.addAction(self.action_zoom_in)
-        self.view_menu.addAction(self.action_zoom_out)
-        self.view_menu.addAction(self.action_zoom_fit)
-        self.view_menu.addSeparator()
-        self.view_menu.addAction(self.action_grid)
-        self.view_menu.addSeparator()
-        self.view_menu.addAction(self.action_regenerate_sheets)
+        view_menu = menubar.addMenu("&View")
+        view_menu.addAction(self.action_zoom_in)
+        view_menu.addAction(self.action_zoom_out)
+        view_menu.addAction(self.action_zoom_fit)
+        view_menu.addSeparator()
+        view_menu.addAction(self.action_grid)
+        view_menu.addSeparator()
+        view_menu.addAction(self.action_regenerate_sheets)
+        view_menu.addSeparator()
+        view_menu.addAction(self.action_reset_onboarding)
 
         # Draw menu
         draw_menu = menubar.addMenu("&Draw")
@@ -515,8 +469,6 @@ class ArchEngineApplication(QMainWindow):
         # Tools menu
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction(self.action_select)
-        tools_menu.addSeparator()
-        tools_menu.addAction(self.action_sync_walls)
 
         # Snap menu
         snap_menu = menubar.addMenu("&Snap")
@@ -666,10 +618,10 @@ class ArchEngineApplication(QMainWindow):
         event_bus.status_message.connect(self._show_status_message)
 
     def _create_dock_widgets(self):
-        """Create dock widgets - Navigation, Chat, and Smart Panels."""
+        """Create dockable panels."""
+        from panels.version_history import VersionHistoryPanel
+        from panels.properties_panel import PropertiesPanel
         from panels.viewport_panel import ViewportPanel
-        from panels.smart_panel_container import SmartPanelContainer
-        from panels.panel_registry import DesignChatPanel
 
         # Project Browser dock (left side)
         self.project_dock = QDockWidget("Project Browser", self)
@@ -716,7 +668,7 @@ class ArchEngineApplication(QMainWindow):
         self.sheets_dock.raise_()  # Show sheets dock by default
         self.window_menu.addAction(self.sheets_dock.toggleViewAction())
 
-        # Connect generator service signals (for sheet generation feedback)
+        # Connect generator service signals
         self._generator_service.generation_started.connect(
             lambda sid: self.status_bar.showMessage(f"Generating {sid}...")
         )
@@ -726,6 +678,8 @@ class ArchEngineApplication(QMainWindow):
         self._generator_service.generation_failed.connect(
             lambda sid, err: self.status_bar.showMessage(f"Generation failed: {err}", 5000)
         )
+        self._generator_service.progress_updated.connect(self.sheet_manager.show_progress)
+        self._generator_service.all_generation_completed.connect(self.sheet_manager.hide_progress)
 
         # 3D Viewport setup (actual widget created in _create_central_widget)
         if HAS_VIEWPORT:
@@ -765,61 +719,83 @@ class ArchEngineApplication(QMainWindow):
             self.window_menu.addAction(self.materials_dock.toggleViewAction())
 
         # =================================================================
-        # Chat Dock - Design conversation (always visible)
+        # Version History Dock
         # ==================================================================
-        self.chat_dock = QDockWidget("Chat", self)
-        self.chat_dock.setObjectName("chat_dock")
-        self.chat_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.chat_dock.setFeatures(
+        self.history_dock = QDockWidget("Version History", self)
+        self.history_dock.setObjectName("history_dock")
+        self.history_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.history_dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable |
             QDockWidget.DockWidgetFeature.DockWidgetFloatable
         )
-        self.chat_panel = DesignChatPanel()
+        self.history_panel = VersionHistoryPanel(self.document)
+        self.history_panel.setMinimumWidth(250)
+        self.history_dock.setWidget(self.history_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.history_dock)
+        # Tab it with properties dock
+        self.tabifyDockWidget(self.properties_dock, self.history_dock)
+        self.window_menu.addAction(self.history_dock.toggleViewAction())
+
+        # =================================================================
+        # Chat Dock - Design conversation (always visible)
+        # ==================================================================
+        # Chat panel dock (right side, tabbed with properties)
+        self.chat_dock = QDockWidget("Design Chat", self)
+        self.chat_dock.setObjectName("chat_dock")
+        self.chat_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea |
+            Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.chat_panel = ChatPanel(self.document)
+        self.chat_panel.setMinimumWidth(280)
+        self.chat_panel.message_sent.connect(self._on_chat_message)
+        self.chat_panel.schema_updated.connect(self._on_schema_updated)
         self.chat_dock.setWidget(self.chat_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
+        # Tab it with properties dock
         self.tabifyDockWidget(self.properties_dock, self.chat_dock)
         self.window_menu.addAction(self.chat_dock.toggleViewAction())
 
-        # =================================================================
-        # Solver Parameters Dock - QBD algorithm tuning
-        # ==================================================================
-        self.solver_params_dock = QDockWidget("Solver Parameters", self)
-        self.solver_params_dock.setObjectName("solver_params_dock")
-        self.solver_params_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.solver_params_dock.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetMovable |
-            QDockWidget.DockWidgetFeature.DockWidgetFloatable |
-            QDockWidget.DockWidgetFeature.DockWidgetClosable
-        )
-        self.solver_params_panel = SolverParamsPanel()
-        self.solver_params_panel.setMinimumWidth(280)
-        self.solver_params_dock.setWidget(self.solver_params_panel)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.solver_params_dock)
-        self.tabifyDockWidget(self.chat_dock, self.solver_params_dock)
-        self.window_menu.addAction(self.solver_params_dock.toggleViewAction())
-        # Connect parameter changes to regenerate
-        self.solver_params_panel.params_changed.connect(self._on_solver_params_changed)
+        # 3D Viewport dock (Vulkan renderer)
+        if HAS_VIEWPORT:
+            self.viewport_dock = QDockWidget("3D Viewport", self)
+            self.viewport_dock.setObjectName("viewport_dock")
+            self.viewport_dock.setAllowedAreas(
+                Qt.DockWidgetArea.LeftDockWidgetArea |
+                Qt.DockWidgetArea.RightDockWidgetArea |
+                Qt.DockWidgetArea.BottomDockWidgetArea
+            )
+            # Create the Vulkan viewport widget
+            self.viewport_3d = VulkanViewportWidget()
+            self.viewport_3d.setMinimumSize(400, 300)
+            self.viewport_3d.initialized.connect(self._on_viewport_initialized)
+            self.viewport_3d.load_complete.connect(self._on_viewport_load_complete)
+            self.viewport_3d.error_occurred.connect(self._on_viewport_error)
+            self.viewport_dock.setWidget(self.viewport_3d)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.viewport_dock)
+            self.viewport_dock.show()  # Show 3D viewport by default
+            self.window_menu.addAction(self.viewport_dock.toggleViewAction())
 
-        # =================================================================
-        # Smart Panels Dock - Context-aware tool panels
-        # =================================================================
-        self.smart_panels_dock = QDockWidget("Tools", self)
-        self.smart_panels_dock.setObjectName("smart_panels_dock")
-        self.smart_panels_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.smart_panels_dock.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetMovable |
-            QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        )
-        self.smart_panel_container = SmartPanelContainer()
-        self.smart_panel_container.setMinimumWidth(250)
-        self.smart_panels_dock.setWidget(self.smart_panel_container)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.smart_panels_dock)
-        self.window_menu.addAction(self.smart_panels_dock.toggleViewAction())
+            # Connect document changes to viewport
+            self.document.document_changed.connect(self._on_document_changed_viewport)
 
-        # Navigation control is now a floating overlay in the 3D viewport.
+            # 3D Controls dock (tabbed with properties)
+            self.viewport_controls_dock = QDockWidget("3D Controls", self)
+            self.viewport_controls_dock.setObjectName("viewport_controls_dock")
+            self.viewport_controls_dock.setAllowedAreas(
+                Qt.DockWidgetArea.LeftDockWidgetArea |
+                Qt.DockWidgetArea.RightDockWidgetArea
+            )
+            self.viewport_panel = ViewportPanel()
+            self.viewport_panel.setMinimumWidth(250)
+            self.viewport_controls_dock.setWidget(self.viewport_panel)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.viewport_controls_dock)
+            # Tab it with properties dock
+            self.tabifyDockWidget(self.properties_dock, self.viewport_controls_dock)
+            self.window_menu.addAction(self.viewport_controls_dock.toggleViewAction())
 
     def _create_central_widget(self):
-        """Create dockable 2D and 3D views that can be tabbed together."""
+        """Create the central tabbed widget with plan view and sheet views."""
         from views.plan_view import PlanView
         from tools.tool_manager import ToolManager
         from tools.base_tool import ToolType
@@ -828,53 +804,26 @@ class ArchEngineApplication(QMainWindow):
         from tools.window_tool import WindowTool
         from tools.room_tool import RoomTool
 
-        # Legacy flags
-        self._split_mode = False
-        self._split_viewport = None
+        # Create central tab widget
+        self.central_tabs = QTabWidget(self)
+        self.central_tabs.setTabsClosable(True)
+        self.central_tabs.setMovable(True)
+        self.central_tabs.tabCloseRequested.connect(self._on_tab_close_requested)
 
-        # Create central widget with tabbed viewports
-        # This is the main content area - viewports live here
-        self._viewport_tabs = QTabWidget(self)
-        self._viewport_tabs.setTabsClosable(False)
-        self._viewport_tabs.setMovable(True)
-        self._viewport_tabs.setDocumentMode(True)  # Cleaner look
-        self.setCentralWidget(self._viewport_tabs)
-
-        # Create 2D Editor (in central tabs)
+        # Create the main plan view
         self.plan_view = PlanView(self.document, self.config, self)
-        self._viewport_tabs.addTab(self.plan_view, "2D Editor")
 
-        # Create 3D Viewport (in central tabs)
-        if HAS_VIEWPORT:
-            self.viewport_3d = VulkanViewportWidget(self)
-            self.viewport_3d.setMinimumSize(400, 300)
-            self.viewport_3d.initialized.connect(self._on_viewport_initialized)
-            self.viewport_3d.load_complete.connect(self._on_viewport_load_complete)
-            self.viewport_3d.rooms_loaded.connect(self._on_rooms_loaded)
-            self.viewport_3d.error_occurred.connect(self._on_viewport_error)
-            self._viewport_tabs.addTab(self.viewport_3d, "3D Viewport")
-            # Default to 3D viewport
-            self._viewport_tabs.setCurrentIndex(1)
+        # Create split view container (for 2D | 3D side-by-side mode)
+        self._split_mode = False
+        self._split_viewport: Optional[VulkanViewportWidget] = None
 
-        # TEMPORARILY DISABLED: Unified Selection Manager (causing crashes)
-        # self._connect_selection_manager()
+        # Disable split viewport for now to simplify (use dock viewport only)
+        self.central_tabs.addTab(self.plan_view, "Editor")
 
-        # Add view menu actions for viewports
-        self.action_show_2d = QAction("Show &2D Editor", self)
-        self.action_show_2d.setShortcut(QKeySequence("F2"))
-        self.action_show_2d.triggered.connect(lambda: self._viewport_tabs.setCurrentIndex(0))
-        self.view_menu.addAction(self.action_show_2d)
+        # Don't allow closing the Editor tab
+        self.central_tabs.tabBar().setTabButton(0, self.central_tabs.tabBar().ButtonPosition.RightSide, None)
 
-        self.action_show_3d = QAction("Show &3D Viewport", self)
-        self.action_show_3d.setShortcut(QKeySequence("F3"))
-        self.action_show_3d.triggered.connect(lambda: self._viewport_tabs.setCurrentIndex(1) if HAS_VIEWPORT else None)
-        self.view_menu.addAction(self.action_show_3d)
-
-        self.action_split_view = QAction("&Split View", self)
-        self.action_split_view.setShortcut(QKeySequence("F4"))
-        self.action_split_view.setCheckable(True)
-        self.action_split_view.triggered.connect(self._toggle_split_view)
-        self.view_menu.addAction(self.action_split_view)
+        self.setCentralWidget(self.central_tabs)
 
         # Track open sheet tabs
         self._sheet_tabs: dict = {}  # sheet_id -> tab index
@@ -924,327 +873,23 @@ class ArchEngineApplication(QMainWindow):
         self.action_window.setChecked(tool_name == "WindowTool")
         self.action_room.setChecked(tool_name == "RoomTool")
 
-    def _toggle_split_view(self, checked: bool):
-        """Toggle between tabbed and split view for viewports."""
-        if not HAS_VIEWPORT:
-            return
-
-        if checked:
-            # Switch to split view
-            self._split_mode = True
-
-            # Create splitter
-            splitter = QSplitter(Qt.Orientation.Horizontal, self)
-
-            # Remove widgets from tabs
-            self._viewport_tabs.removeTab(1)  # Remove 3D
-            self._viewport_tabs.removeTab(0)  # Remove 2D
-
-            # Add to splitter
-            splitter.addWidget(self.plan_view)
-            splitter.addWidget(self.viewport_3d)
-            splitter.setSizes([500, 500])
-
-            # Replace central widget
-            self.setCentralWidget(splitter)
-            self._viewport_splitter = splitter
-        else:
-            # Switch back to tabbed view
-            self._split_mode = False
-
-            # Remove from splitter
-            self.plan_view.setParent(None)
-            self.viewport_3d.setParent(None)
-
-            # Recreate tabs
-            self._viewport_tabs = QTabWidget(self)
-            self._viewport_tabs.setTabsClosable(False)
-            self._viewport_tabs.setMovable(True)
-            self._viewport_tabs.setDocumentMode(True)
-            self._viewport_tabs.addTab(self.plan_view, "2D Editor")
-            self._viewport_tabs.addTab(self.viewport_3d, "3D Viewport")
-
-            # Replace central widget
-            self.setCentralWidget(self._viewport_tabs)
-
     def _connect_signals(self):
         """Connect document and event signals."""
         self.document.document_changed.connect(self._update_title)
         event_bus.document_loaded.connect(self._on_document_loaded)
         event_bus.document_modified.connect(self._on_document_modified)
         event_bus.selection_changed.connect(self._on_selection_changed)
-        event_bus.tool_changed.connect(self._on_tool_changed)
 
         # Connect generator service to document changes (disabled by default to avoid blocking)
         # Users can enable auto-regenerate in the sheets panel
         self._sheet_registry.auto_regenerate = False
         self._generator_service.connect_to_document(self.document)
 
-    def _connect_selection_manager(self):
-        """Connect unified SelectionManager to 2D and 3D views."""
-        # Connect SelectionManager signals to update 3D viewport
-        self.selection_manager.element_selected.connect(self._on_selection_manager_selected)
-        self.selection_manager.element_deselected.connect(self._on_selection_manager_deselected)
-        self.selection_manager.selection_cleared.connect(self._on_selection_manager_cleared)
-
-        # Connect 2D plan view selection to Selection Manager
-        if hasattr(self.plan_view, 'selectionChanged'):
-            self.plan_view.selectionChanged.connect(self._on_2d_selection_changed)
-
-        # Connect 3D viewport selection to Selection Manager
-        if HAS_VIEWPORT and hasattr(self, 'viewport_3d'):
-            self.viewport_3d.element_selected.connect(self._on_3d_selection_changed)
-
-    def _on_selection_manager_selected(self, element_type: str, element_id: str):
-        """Handle selection from SelectionManager - update 3D viewport and 2D view."""
-        # Set flag to prevent loop back to SelectionManager
-        self._updating_from_selection_manager = True
-
-        try:
-            # Update 3D viewport
-            if HAS_VIEWPORT and hasattr(self, 'viewport_3d'):
-                index = self._element_to_3d_index(element_type, element_id)
-                if index >= 0 and self.viewport_3d.is_initialized:
-                    self.viewport_3d.select_element(index)
-
-            # Update 2D plan view
-            if hasattr(self, 'plan_view') and hasattr(self.plan_view, 'scene'):
-                # Find and select the graphics item
-                item = self._find_graphics_item(element_type, element_id)
-                if item and not item.isSelected():
-                    # Clear other selection if not additive
-                    if not self.selection_manager.get_last_selected() == (element_type, element_id):
-                        self.plan_view.scene.clearSelection()
-                    item.setSelected(True)
-        except Exception as e:
-            import traceback
-            print(f"[App] Error in selection manager selected: {e}")
-            traceback.print_exc()
-        finally:
-            self._updating_from_selection_manager = False
-
-    def _find_graphics_item(self, element_type: str, element_id: str):
-        """Find a QGraphicsItem by element type and ID."""
-        try:
-            if not hasattr(self, 'plan_view') or not hasattr(self.plan_view, 'scene'):
-                return None
-
-            scene = self.plan_view.scene
-
-            if element_type == 'wall':
-                try:
-                    wall_idx = int(element_id)
-                    for item in scene.items():
-                        if type(item).__name__ == 'WallItem' and hasattr(item, 'wall'):
-                            if item.wall.index == wall_idx:
-                                return item
-                except ValueError:
-                    pass
-            elif element_type == 'room':
-                for item in scene.items():
-                    if type(item).__name__ == 'RoomItem' and hasattr(item, 'room'):
-                        if item.room.id == element_id:
-                            return item
-            elif element_type == 'door':
-                try:
-                    door_idx = int(element_id)
-                    for item in scene.items():
-                        if type(item).__name__ == 'DoorItem' and hasattr(item, 'door'):
-                            if item.door.index == door_idx:
-                                return item
-                except ValueError:
-                    pass
-            elif element_type == 'window':
-                try:
-                    window_idx = int(element_id)
-                    for item in scene.items():
-                        if type(item).__name__ == 'WindowItem' and hasattr(item, 'window'):
-                            if item.window.index == window_idx:
-                                return item
-                except ValueError:
-                    pass
-        except Exception as e:
-            print(f"[App] Error finding graphics item: {e}")
-
-        return None
-
-    def _on_selection_manager_deselected(self, element_type: str, element_id: str):
-        """Handle deselection from SelectionManager - update 2D and 3D views."""
-        # Update 2D plan view
-        item = self._find_graphics_item(element_type, element_id)
-        if item and item.isSelected():
-            item.setSelected(False)
-
-        # 3D viewport doesn't track individual deselections the same way
-        # Clear and reselect remaining items
-        if not HAS_VIEWPORT or not hasattr(self, 'viewport_3d'):
-            return
-
-        if self.selection_manager.is_empty():
-            if self.viewport_3d.is_initialized:
-                self.viewport_3d.select_element(-1)
-        else:
-            # Reselect remaining items
-            for elem_type, elem_id in self.selection_manager.get_selected():
-                index = self._element_to_3d_index(elem_type, elem_id)
-                if index >= 0 and self.viewport_3d.is_initialized:
-                    self.viewport_3d.select_element(index)
-
-    def _on_selection_manager_cleared(self):
-        """Handle selection cleared from SelectionManager - update 2D and 3D views."""
-        # Clear 2D selection
-        if hasattr(self, 'plan_view') and hasattr(self.plan_view, 'scene'):
-            self.plan_view.scene.clearSelection()
-
-        # Clear 3D selection
-        if HAS_VIEWPORT and hasattr(self, 'viewport_3d') and self.viewport_3d.is_initialized:
-            self.viewport_3d.select_element(-1)
-
-    def _on_2d_selection_changed(self):
-        """Handle selection change from 2D plan view - update SelectionManager."""
-        # Skip if we're just syncing from SelectionManager (prevent loop)
-        if self._updating_from_selection_manager:
-            return
-
-        if not hasattr(self.plan_view, 'scene'):
-            return
-
-        selected_items = self.plan_view.scene.selectedItems()
-        if not selected_items:
-            self.selection_manager.clear()
-            return
-
-        # Get the last selected item (most recent click)
-        last_item = selected_items[-1] if selected_items else None
-
-        # Update SelectionManager with current selection
-        for item in selected_items:
-            elem_type, elem_id = self._graphics_item_to_selection(item)
-            if elem_type and elem_id:
-                # Use additive mode for all but the last item
-                is_last = (item == last_item)
-                if not self.selection_manager.is_selected(elem_type, elem_id):
-                    self.selection_manager.select(elem_type, elem_id, additive=(not is_last), notify=False)
-
-        # Emit one signal for all changes
-        self.selection_manager.selection_changed.emit()
-
-    def _on_3d_selection_changed(self, element_index: int):
-        """Handle selection change from 3D viewport - update SelectionManager."""
-        try:
-            if element_index < 0:
-                self.selection_manager.clear()
-                return
-
-            # Convert 3D element index to element_type and element_id
-            elem_type, elem_id = self._3d_index_to_element(element_index)
-            if elem_type and elem_id:
-                self.selection_manager.select(elem_type, elem_id, additive=False)
-        except Exception as e:
-            import traceback
-            print(f"[App] Error in 3D selection changed: {e}")
-            traceback.print_exc()
-
-    def _element_to_3d_index(self, element_type: str, element_id: str) -> int:
-        """Convert element type/id to 3D element index."""
-        walls = self.document.walls
-        rooms = list(self.document._rooms.values())
-        doors = self.document.doors
-        windows = self.document.windows
-
-        offset = 0
-
-        if element_type == 'wall':
-            try:
-                wall_idx = int(element_id)
-                if 0 <= wall_idx < len(walls):
-                    return offset + wall_idx
-            except ValueError:
-                pass
-        elif element_type == 'room':
-            if element_id in rooms:
-                room_idx = rooms.index(rooms[element_id])
-                return offset + len(walls) + room_idx
-        elif element_type == 'door':
-            try:
-                door_idx = int(element_id)
-                if 0 <= door_idx < len(doors):
-                    return offset + len(walls) + len(rooms) + door_idx
-            except ValueError:
-                pass
-        elif element_type == 'window':
-            try:
-                window_idx = int(element_id)
-                if 0 <= window_idx < len(windows):
-                    return offset + len(walls) + len(rooms) + len(doors) + window_idx
-            except ValueError:
-                pass
-
-        return -1
-
-    def _3d_index_to_element(self, element_index: int) -> tuple:
-        """Convert 3D element index to (element_type, element_id)."""
-        walls = self.document.walls
-        rooms = list(self.document._rooms.values())
-        doors = self.document.doors
-        windows = self.document.windows
-
-        offset = 0
-
-        # Check if wall
-        if element_index < offset + len(walls):
-            wall_idx = element_index - offset
-            if 0 <= wall_idx < len(walls):
-                return ('wall', str(wall_idx))
-
-        offset += len(walls)
-
-        # Check if room
-        if element_index < offset + len(rooms):
-            room_idx = element_index - offset
-            if 0 <= room_idx < len(rooms):
-                room = rooms[room_idx]
-                return ('room', room.id)
-
-        offset += len(rooms)
-
-        # Check if door
-        if element_index < offset + len(doors):
-            door_idx = element_index - offset
-            if 0 <= door_idx < len(doors):
-                return ('door', str(door_idx))
-
-        offset += len(doors)
-
-        # Check if window
-        if element_index < offset + len(windows):
-            window_idx = element_index - offset
-            if 0 <= window_idx < len(windows):
-                return ('window', str(window_idx))
-
-        return (None, None)
-
-    def _graphics_item_to_selection(self, item) -> tuple:
-        """Convert QGraphicsItem to (element_type, element_id)."""
-        item_type = type(item).__name__
-
-        if item_type == 'WallItem' and hasattr(item, 'wall'):
-            return ('wall', str(item.wall.index))
-        elif item_type == 'RoomItem' and hasattr(item, 'room'):
-            return ('room', item.room.id)
-        elif item_type == 'DoorItem' and hasattr(item, 'door'):
-            return ('door', str(item.door.index))
-        elif item_type == 'WindowItem' and hasattr(item, 'window'):
-            return ('window', str(item.window.index))
-
-        return (None, None)
-
     def _on_selection_changed(self, selected_items):
         """Handle selection change - update pin button state, smart panels, and 3D viewport."""
-        # Sync to 3D viewport (if available and not already syncing from 3D)
-        # Use separate flag to prevent conflict with 3D→2D sync
-        if HAS_VIEWPORT and hasattr(self, 'viewport_3d') and not getattr(self, '_syncing_3d_to_2d', False):
-            self._syncing_2d_to_3d = True
+        # Sync to 3D viewport (if available and not already syncing)
+        if HAS_VIEWPORT and hasattr(self, 'viewport_3d') and not getattr(self, '_syncing_selection', False):
+            self._syncing_selection = True
             try:
                 if selected_items:
                     # Get first selected item and sync to 3D
@@ -1266,7 +911,7 @@ class ArchEngineApplication(QMainWindow):
                     if self.viewport_3d.is_initialized:
                         self.viewport_3d.select_element(-1)
             finally:
-                self._syncing_2d_to_3d = False
+                self._syncing_selection = False
 
         # Update smart panel container with selection info
         if hasattr(self, 'smart_panel_container'):
@@ -1320,10 +965,13 @@ class ArchEngineApplication(QMainWindow):
 
     def _on_3d_element_selected(self, element_index: int):
         """Handle selection from 3D viewport - sync to 2D plan view."""
+        if getattr(self, '_syncing_selection', False):
+            return  # Prevent infinite loop
+
         if not hasattr(self, 'plan_view'):
             return
 
-        self._syncing_3d_to_2d = True
+        self._syncing_selection = True
         try:
             # Clear 2D selection first
             self.plan_view.scene.clearSelection()
@@ -1347,6 +995,8 @@ class ArchEngineApplication(QMainWindow):
                 for wall_item in self.plan_view._wall_items:
                     if hasattr(wall_item, 'wall') and wall_item.wall.index == wall_idx:
                         wall_item.setSelected(True)
+                        # Scroll to show selected item
+                        self.plan_view.centerOn(wall_item)
                         break
                 return
 
@@ -1361,6 +1011,7 @@ class ArchEngineApplication(QMainWindow):
                     for room_item in self.plan_view._room_items:
                         if hasattr(room_item, 'room') and room_item.room.id == room.id:
                             room_item.setSelected(True)
+                            self.plan_view.centerOn(room_item)
                             break
                 return
 
@@ -1373,6 +1024,7 @@ class ArchEngineApplication(QMainWindow):
                 for door_item in self.plan_view._door_items:
                     if hasattr(door_item, 'door') and door_item.door.index == door_idx:
                         door_item.setSelected(True)
+                        self.plan_view.centerOn(door_item)
                         break
                 return
 
@@ -1385,50 +1037,41 @@ class ArchEngineApplication(QMainWindow):
                 for window_item in self.plan_view._window_items:
                     if hasattr(window_item, 'window') and window_item.window.index == window_idx:
                         window_item.setSelected(True)
+                        self.plan_view.centerOn(window_item)
                         break
 
         finally:
-            self._syncing_3d_to_2d = False
+            self._syncing_selection = False
 
     def _on_material_assigned(self, element_type: str, material_id: str):
         """Handle material assignment from materials panel."""
-        try:
-            print(f"[App] Applying material '{material_id}' to {element_type}")
+        print(f"[App] Applying material '{material_id}' to {element_type}")
 
-            if element_type == "selection":
-                # Apply to currently selected walls
-                selected_walls = []
-                if hasattr(self, 'plan_view') and self.plan_view and self.plan_view.scene:
-                    for item in self.plan_view.scene.selectedItems():
-                        if hasattr(item, 'wall'):
-                            selected_walls.append(item.wall.index)
+        if element_type == "selection":
+            # Apply to currently selected walls
+            selected_walls = []
+            for item in self.plan_view.scene().selectedItems():
+                if hasattr(item, 'wall'):
+                    selected_walls.append(item.wall.index)
 
-                if selected_walls:
-                    for wall_idx in selected_walls:
-                        self.document.set_wall_material(wall_idx, material_id)
-                    print(f"[App] Applied material to {len(selected_walls)} selected walls")
-                else:
-                    print("[App] No walls selected")
+            if selected_walls:
+                for wall_idx in selected_walls:
+                    self.document.set_wall_material(wall_idx, material_id)
+                print(f"[App] Applied material to {len(selected_walls)} selected walls")
+            else:
+                print("[App] No walls selected")
 
-            elif element_type == "exterior_wall":
-                self.document.set_walls_material_by_category("exterior", material_id)
-                print("[App] Applied material to all exterior walls")
+        elif element_type == "exterior_wall":
+            self.document.set_walls_material_by_category("exterior", material_id)
+            print("[App] Applied material to all exterior walls")
 
-            elif element_type == "interior_wall":
-                self.document.set_walls_material_by_category("interior", material_id)
-                print("[App] Applied material to all interior walls")
+        elif element_type == "interior_wall":
+            self.document.set_walls_material_by_category("interior", material_id)
+            print("[App] Applied material to all interior walls")
 
-            # Refresh 3D viewport
-            if hasattr(self, 'viewport_3d') and self.viewport_3d:
-                try:
-                    self._on_document_changed_vulkan()
-                except Exception as e:
-                    print(f"[App] Warning: Could not refresh 3D viewport: {e}")
-
-        except Exception as e:
-            import traceback
-            print(f"[App] ERROR in material assignment: {e}")
-            traceback.print_exc()
+        # Refresh 3D viewport
+        if hasattr(self, 'viewport_3d'):
+            self._on_document_changed_vulkan()
 
     def _on_tool_changed(self, tool_name: str):
         """Handle tool change - update smart panels task state."""
@@ -1472,250 +1115,8 @@ class ArchEngineApplication(QMainWindow):
         if not self._check_save():
             return
         self.document.new()
-
-        # Show questionnaire for new building
-        QTimer.singleShot(100, self._show_new_building_questionnaire)
-
-    def _show_new_building_questionnaire(self):
-        """Show site dialog first, then QBD questionnaire for new buildings."""
-        # Step 1: Define site (or load existing)
-        site_data = show_site_dialog(self)
-
-        if not site_data:
-            # User cancelled site dialog
-            print("[App] Site definition cancelled - starting with blank document")
-            return
-
-        # Store site data for this design
-        self._site_data = site_data
-        print(f"[App] Site defined: {site_data.get('property_width_ft')}x{site_data.get('property_depth_ft')} ft")
-        print(f"[App]   Buildable area: {site_data.get('buildable_area_sqft'):.0f} sq ft")
-        print(f"[App]   Road location: {site_data.get('road_location')}")
-
-        # Step 2: Show building questionnaire
-        answers = show_questionnaire(self)
-
-        if answers:
-            # User clicked Generate - process the answers with site context
-            print(f"[App] QBD Answers: {answers}")
-            self._process_qbd_answers(answers)
-        else:
-            # User clicked Skip or closed - start with blank document
-            print("[App] Starting with blank document")
-
-    def _process_qbd_answers(self, answers: dict, config_overrides=None):
-        """Process QBD questionnaire answers and generate building."""
-        # Store answers for regeneration with modified parameters
-        self._qbd_answers = answers
-
-        import json
-
-        # Format answers for display
-        msg = f"New building design request:\n"
-        msg += f"  Type: {answers.get('building_type', 'N/A')}\n"
-        msg += f"  Residence: {answers.get('residence_type', 'N/A')}\n"
-        msg += f"  Size: {answers.get('bedrooms', 0)} bed, {answers.get('bathrooms', 0)} bath\n"
-        msg += f"  Area: {answers.get('sqft', 0)} sq ft\n"
-        msg += f"  Garage: {answers.get('garage', 'N/A')}\n"
-
-        special = answers.get('special_rooms', [])
-        if special:
-            msg += f"  Special rooms: {', '.join(special)}\n"
-
-        msg += f"  Style: {answers.get('style', 'N/A')}"
-
-        # Show status
-        self.status_bar.showMessage("Generating building layout...", 0)
-
-        # Try to generate building
-        if QBD_GENERATOR_AVAILABLE:
-            # Convert questionnaire answers to QBD format
-            qbd_answers = {
-                "start": answers.get('building_type', 'residential'),
-                "res_type": answers.get('residence_type', 'single_family'),
-                "bedrooms": str(answers.get('bedrooms', 2)),
-                "bathrooms": str(answers.get('bathrooms', 1)),
-                "sqft": str(answers.get('sqft', 1200)),
-                "garage": answers.get('garage', 'none'),
-                "special_rooms": answers.get('special_rooms', []),
-                "style": answers.get('style', 'modern')
-            }
-
-            print(f"[App] Generating building with QBD: {qbd_answers}")
-
-            # Create progress dialog
-            progress_dialog = QProgressDialog(
-                "Generating floor plan...\n\nStep 1: Creating room graph...",
-                "Cancel",
-                0, 0, self
-            )
-            progress_dialog.setWindowTitle("Generating Layout")
-            progress_dialog.setWindowModality(Qt.WindowModality.NonModal)
-            progress_dialog.setMinimumDuration(0)  # Show immediately
-            progress_dialog.show()
-
-            # Store reference to worker so we can cancel it
-            # Increase max_nodes for more rooms (10000 per room)
-            num_bedrooms = int(answers.get('bedrooms', 2))
-            num_rooms = num_bedrooms * 4 + 8  # Rough estimate
-            max_nodes = max(10000, num_rooms * 800)  # 800 nodes per room
-
-            self._qbd_worker = QBDGenerationWorker(
-                qbd_answers,
-                grid_size=2.0,
-                max_nodes=max_nodes,
-                config_overrides=config_overrides
-            )
-
-            # Connect signals
-            self._qbd_worker.progress.connect(lambda msg: progress_dialog.setLabelText(msg))
-            self._qbd_worker.finished.connect(lambda result: self._on_qbd_finished(result, progress_dialog))
-            self._qbd_worker.error.connect(lambda error: self._on_qbd_error(error, progress_dialog))
-
-            # Handle cancellation
-            progress_dialog.canceled.connect(self._qbd_worker.terminate)
-
-            # Start generation in background
-            self._qbd_worker.start()
-
-            # Update status bar
-            self.status_bar.showMessage("Generating floor plan in background...")
-        else:
-            print(f"[App] QBD Generator not available")
-            self.status_bar.showMessage("QBD generator not available", 5000)
-
-            # Just show the requirements
-            if hasattr(self.chat_panel, '_chat_display'):
-                self.chat_panel._chat_display.setText(
-                    f"Design requirements:\n\n{msg}\n\n(QBD Generator not found - install ArchEngine_kernel)"
-                )
-
-    def _on_qbd_finished(self, result, progress_dialog):
-        """Called when QBD generation completes successfully."""
-        progress_dialog.close()
-
-        print(f"[App] QBD generation successful!")
-        print(f"[App]   Dimensions: {result['width']:.0f}x{result['depth']:.0f} mm")
-        print(f"[App]   Walls: {result['summary']['total_walls']}")
-        print(f"[App]   Doors: {result['summary']['doors']}")
-        print(f"[App]   Windows: {result['summary']['windows']}")
-        print(f"[App]   Rooms: {result['summary']['rooms_placed']}/{result['summary']['rooms_requested']}")
-
-        # Check if all rooms were placed
-        rooms_placed = result['summary']['rooms_placed']
-        rooms_requested = result['summary']['rooms_requested']
-        unplaced_rooms = result.get('unplaced_rooms', [])
-
-        if unplaced_rooms:
-            print(f"[App]   WARNING: {len(unplaced_rooms)} rooms could not be placed: {unplaced_rooms}")
-
-        # Include terrain mesh if available from site definition
-        if hasattr(self, '_site_data') and self._site_data.get('terrain_mesh'):
-            result['terrain_mesh'] = self._site_data['terrain_mesh']
-            print("[App] Including terrain mesh in building data")
-
-        # Block signals to prevent multiple 3D updates during load
-        self.document.blockSignals(True)
-
-        # Load into document
-        self.document.load_from_dict(result)
-
-        # Re-enable signals
-        self.document.blockSignals(False)
-
-        # Manually trigger single 3D viewport update
-        self.status_bar.showMessage("Regenerating 3D view...")
-        QApplication.processEvents()
-
-        if hasattr(self, '_do_viewport_update'):
-            self._do_viewport_update()
-
-        # Show success message
-        self.status_bar.showMessage(
-            f"Generated: {rooms_placed}/{rooms_requested} rooms, "
-            f"{result['summary']['total_walls']} walls, "
-            f"{result['summary']['doors']} doors",
-            5000
-        )
-
-        # Update chat with success
-        if hasattr(self.chat_panel, '_chat_display'):
-            success_msg = f"✓ Building generated!\n\n"
-            success_msg += f"Rooms: {rooms_placed}/{rooms_requested} placed\n"
-            success_msg += f"Walls: {result['summary']['total_walls']}\n"
-            success_msg += f"Doors: {result['summary']['doors']}\n"
-            success_msg += f"Windows: {result['summary']['windows']}"
-
-            if unplaced_rooms:
-                success_msg += f"\n\n⚠ Could not place {len(unplaced_rooms)} room(s):\n"
-                for room in unplaced_rooms:
-                    # Format room name nicely
-                    room_name = room.replace('_', ' ').title()
-                    success_msg += f"  • {room_name}\n"
-                success_msg += f"\nTry increasing building size or reducing number of rooms."
-
-            self.chat_panel._chat_display.setText(success_msg)
-
-        # Show warning dialog if rooms were not placed
-        if unplaced_rooms:
-            warning_title = "Some Rooms Could Not Be Placed"
-            warning_msg = (
-                f"The solver could only place {rooms_placed} out of {rooms_requested} rooms.\n\n"
-                f"Rooms not placed:\n"
-            )
-            for room in unplaced_rooms:
-                room_name = room.replace('_', ' ').title()
-                warning_msg += f"  • {room_name}\n"
-
-            warning_msg += "\nPossible solutions:\n"
-            warning_msg += "  • Try a larger building size\n"
-            warning_msg += "  • Reduce the number of rooms\n"
-            warning_msg += "  • Remove some optional rooms (garage, office, etc.)"
-
-            QMessageBox.warning(self, warning_title, warning_msg)
-
-        # Clean up worker reference
-        self._qbd_worker = None
-
-    def _on_qbd_error(self, error_msg, progress_dialog):
-        """Called when QBD generation fails."""
-        progress_dialog.close()
-        print(f"[App] QBD generation failed: {error_msg}")
-        self.status_bar.showMessage(f"Generation failed", 5000)
-
-        QMessageBox.warning(
-            self,
-            "Generation Failed",
-            f"Could not generate building:\n{error_msg}"
-        )
-
-        # Clean up worker reference
-        self._qbd_worker = None
-
-    def _on_solver_params_changed(self, config_overrides: dict):
-        """Called when solver parameters are changed - regenerates layout with new parameters."""
-        if not self._qbd_answers:
-            QMessageBox.information(
-                self,
-                "No Building to Regenerate",
-                "Generate a building first (File > New), then adjust parameters to regenerate."
-            )
-            return
-
-        print(f"[App] Regenerating with parameter overrides: {config_overrides}")
-
-        # Confirm with user since this replaces current document
-        reply = QMessageBox.question(
-            self,
-            "Regenerate Layout?",
-            "This will replace your current layout with a new one using the adjusted parameters.\n\nContinue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            # Regenerate with stored answers and new parameter overrides
-            self._process_qbd_answers(self._qbd_answers, config_overrides=config_overrides)
+        # Show onboarding for new documents
+        QTimer.singleShot(100, self._show_onboarding_if_needed)
 
     def _on_open(self):
         """Open existing document."""
@@ -1734,15 +1135,12 @@ class ArchEngineApplication(QMainWindow):
 
     def open_project(self, file_path: Path):
         """Open a project file."""
-        print(f"[App] Opening project: {file_path}")
-        print(f"[App] File exists: {file_path.exists()}")
-
         if self.document.load(file_path):
             self.config.add_recent_file(file_path)
             self.status_bar.showMessage(f"Loaded: {file_path.name}", 5000)
-            print(f"[App] Successfully loaded: {file_path.name}")
+            # Show onboarding if this document hasn't completed it yet
+            QTimer.singleShot(100, self._show_onboarding_if_needed)
         else:
-            print(f"[App] Failed to load: {file_path}")
             QMessageBox.warning(
                 self,
                 "Error",
@@ -1807,10 +1205,6 @@ class ArchEngineApplication(QMainWindow):
 
     def _on_delete(self):
         """Delete selected elements."""
-        # Clear 3D viewport selection first to prevent crashes with stale indices
-        if HAS_VIEWPORT and hasattr(self, 'viewport_3d') and self.viewport_3d.is_initialized:
-            self.viewport_3d.select_element(-1)
-
         if self.tool_manager:
             tool = self.tool_manager.active_tool
             if tool and hasattr(tool, '_delete_selected'):
@@ -2036,30 +1430,6 @@ class ArchEngineApplication(QMainWindow):
         if hasattr(self, 'plan_view'):
             self.plan_view.refresh()
 
-        # Assign default materials to walls that don't have materials
-        self._assign_default_materials()
-
-    def _assign_default_materials(self):
-        """Assign default materials to walls based on their category."""
-        # Default materials from material_map.json
-        default_materials = {
-            "exterior": "brick_red_01",
-            "interior": "paint_offwhite_matte",
-            "wet_wall": "paint_gray_eggshell"
-        }
-
-        # Count how many walls need materials
-        walls_updated = 0
-        for wall in self.document.walls:
-            # Only assign if no material override exists
-            if not wall.material_override:
-                if wall.category in default_materials:
-                    self.document.set_wall_material(wall.index, default_materials[wall.category])
-                    walls_updated += 1
-
-        if walls_updated > 0:
-            print(f"[App] Assigned default materials to {walls_updated} walls")
-
     def _on_document_modified(self):
         """Handle document modified event."""
         self._update_title()
@@ -2163,13 +1533,6 @@ class ArchEngineApplication(QMainWindow):
 
             # Connect to smart panel container if available
             if hasattr(self, 'smart_panel_container'):
-                # Initialize material picker panel with document and viewport
-                self.smart_panel_container.initialize_panel(
-                    'material_picker',
-                    document=self.document,
-                    viewport=self.viewport_3d
-                )
-
                 # Connect gravity changes
                 self.viewport_panel.gravity_changed.connect(
                     self.smart_panel_container.update_gravity
@@ -2187,11 +1550,6 @@ class ArchEngineApplication(QMainWindow):
                 # Connect hover-to-LOD: switch to the LOD the panel needs
                 self.smart_panel_container.request_lod_change.connect(
                     self._on_request_lod_change
-                )
-
-                # Connect material assignment from smart panels
-                self.smart_panel_container.material_assigned.connect(
-                    self._on_material_assigned
                 )
 
             # Connect floating navigation overlay (tetrahedron) to viewport + panels
@@ -2386,41 +1744,6 @@ class ArchEngineApplication(QMainWindow):
         """Show message in status bar."""
         self.status_bar.showMessage(message, timeout)
 
-    def eventFilter(self, obj, event):
-        """Global event filter - captures Shift+scroll for LOD control everywhere."""
-        from PyQt6.QtCore import QEvent
-        from PyQt6.QtGui import QWheelEvent
-
-        if event.type() == QEvent.Type.Wheel:
-            wheel_event = event
-            if wheel_event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                # Shift+scroll = LOD change (works everywhere)
-                delta = wheel_event.angleDelta().y()
-                if delta > 0:
-                    self._global_lod_level = max(1, self._global_lod_level - 1)
-                else:
-                    self._global_lod_level = min(5, self._global_lod_level + 1)
-
-                # Update viewport panel if available
-                if hasattr(self, 'viewport_panel'):
-                    self.viewport_panel.set_lod_level(self._global_lod_level)
-                    if hasattr(self, 'viewport_3d') and hasattr(self.viewport_3d, 'set_nav_lod'):
-                        self.viewport_3d.set_nav_lod(self._global_lod_level)
-
-                # Update plan view LOD (controls wall/room visibility)
-                if hasattr(self, 'plan_view'):
-                    self.plan_view.set_lod_level(self._global_lod_level)
-
-                # Show feedback in status bar
-                lod_names = {1: "Topology", 2: "Walls", 3: "Fixtures", 4: "Viewports", 5: "Documentation"}
-                self.status_bar.showMessage(
-                    f"LOD {self._global_lod_level}: {lod_names.get(self._global_lod_level, '')}",
-                    1500
-                )
-
-                return True  # Event handled, don't propagate
-
-        return super().eventFilter(obj, event)
     def _update_api_status(self, connected: bool = None):
         """Update API connection status indicator."""
         if not hasattr(self, '_api_status_label'):
@@ -2598,31 +1921,55 @@ class ArchEngineApplication(QMainWindow):
             self.status_bar.showMessage("Camera reset to fit building", 2000)
 
     def _toggle_3d_view(self, checked: bool):
-        """Toggle 3D viewport visibility (switch to 3D tab)."""
+        """Toggle 3D viewport dock visibility."""
         if not HAS_VIEWPORT:
             return
 
-        if hasattr(self, '_viewport_tabs') and hasattr(self, 'viewport_3d'):
+        if hasattr(self, 'viewport_dock'):
+            self.viewport_dock.setVisible(checked)
             if checked:
-                self._viewport_tabs.setCurrentWidget(self.viewport_3d)
                 self.status_bar.showMessage("3D Viewport visible", 2000)
                 # Load document data if viewport just became visible
                 if self.viewport_3d.is_initialized and self.document._data:
                     self.viewport_3d.load_json(self.document._data)
+
+    def _toggle_split_view(self, checked: bool):
+        """Toggle split view mode (2D | 3D side-by-side)."""
+        if not HAS_VIEWPORT or not self._split_viewport:
+            return
+
+        self._split_mode = checked
+        if checked:
+            self._split_viewport.show()
+            # Set equal split
+            total_width = self.central_splitter.width()
+            self.central_splitter.setSizes([total_width // 2, total_width // 2])
+            self.status_bar.showMessage("Split view enabled (2D | 3D)", 3000)
+            # Load current document into split viewport
+            if self._split_viewport.is_initialized and self.document._data:
+                self._split_viewport.load_json(self.document._data)
+        else:
+            self._split_viewport.hide()
+            self.central_splitter.setSizes([1, 0])
+            self.status_bar.showMessage("Split view disabled", 3000)
 
     def _get_active_viewport(self) -> Optional['VulkanViewportWidget']:
         """Get the currently active/visible viewport."""
         if not HAS_VIEWPORT:
             return None
 
-        # In split mode, the viewport is always visible
-        if self._split_mode and hasattr(self, 'viewport_3d'):
-            return self.viewport_3d
+        # Prefer split viewport if in split mode
+        if self._split_mode and self._split_viewport and self._split_viewport.isVisible():
+            return self._split_viewport
 
-        # In tab mode, check if 3D tab is active
-        if hasattr(self, '_viewport_tabs') and hasattr(self, 'viewport_3d'):
-            if self._viewport_tabs.currentWidget() == self.viewport_3d:
+        # Otherwise use dock viewport if visible
+        if hasattr(self, 'viewport_3d') and hasattr(self, 'viewport_dock'):
+            if self.viewport_dock.isVisible():
                 return self.viewport_3d
+
+        # Fallback to split viewport even if not visible
+        if self._split_viewport:
+            return self._split_viewport
 
         return getattr(self, 'viewport_3d', None)
 

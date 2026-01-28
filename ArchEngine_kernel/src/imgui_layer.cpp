@@ -6,6 +6,8 @@
 #include <chrono>
 #include <ctime>
 #include <filesystem>
+#include <iostream>
+#include <map>
 #include <stdexcept>
 
 namespace arch {
@@ -47,6 +49,12 @@ ImGuiLayer::ImGuiLayer(VulkanContext& context, GLFWwindow* window, VkRenderPass 
 
     // Upload fonts
     uploadFonts();
+
+    // Initialize render output path to absolute path
+    namespace fs = std::filesystem;
+    fs::path renderDir = fs::current_path() / "renders";
+    fs::path defaultRenderPath = renderDir / "render.png";
+    snprintf(m_renderOutputPath, sizeof(m_renderOutputPath), "%s", defaultRenderPath.string().c_str());
 
     m_initialized = true;
 }
@@ -125,6 +133,9 @@ void ImGuiLayer::drawMainMenuBar(VisualizationMode& mode, bool& showDemo, bool& 
         if (ImGui::BeginMenu("Tools")) {
             ImGui::MenuItem("Show Demo", nullptr, &showDemo);
             ImGui::MenuItem("Show Metrics", nullptr, &showMetrics);
+            ImGui::MenuItem("Material Library", nullptr, &m_showMaterialLibrary);
+            ImGui::MenuItem("Material Inspector", nullptr, &m_showMaterialInspector);
+            ImGui::MenuItem("Render Preview", nullptr, &m_showRenderPreviewPanel);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -313,14 +324,17 @@ void ImGuiLayer::drawHelpPanel(bool& show) {
     ImGui::End();
 }
 
-void ImGuiLayer::drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles) {
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 160, 30), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(150, 100), ImGuiCond_FirstUseEver);
+void ImGuiLayer::drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles, u32 culledElements) {
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 170, 30), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(160, 115), ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin("Performance", nullptr, ImGuiWindowFlags_NoResize)) {
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Text("Draw Calls: %u", drawCalls);
         ImGui::Text("Triangles: %u", triangles);
+        if (culledElements > 0) {
+            ImGui::Text("Culled: %u", culledElements);
+        }
     }
     ImGui::End();
 }
@@ -929,6 +943,68 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
             }
         }
 
+        // Parallax Occlusion Mapping (alternative to tessellation)
+        if (ImGui::CollapsingHeader("Parallax Occlusion Mapping (POM)")) {
+            bool pomEnabled = renderer.getPOMEnabled();
+            if (ImGui::Checkbox("Enable POM", &pomEnabled)) {
+                renderer.setPOMEnabled(pomEnabled);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Parallax Occlusion Mapping simulates depth using ray marching in fragment shader.\nLower performance cost than tessellation but view-dependent.");
+            }
+
+            if (pomEnabled) {
+                float heightScale = renderer.getPOMHeightScale();
+                if (ImGui::SliderFloat("Height Scale", &heightScale, 0.001f, 0.2f, "%.3f")) {
+                    renderer.setPOMHeightScale(heightScale);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Controls apparent depth of parallax effect. Higher = deeper displacement.");
+                }
+
+                float minLayers = renderer.getPOMMinLayers();
+                float maxLayers = renderer.getPOMMaxLayers();
+                if (ImGui::SliderFloat("Min Layers", &minLayers, 4.0f, 32.0f, "%.0f")) {
+                    renderer.setPOMLayers(minLayers, maxLayers);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Minimum ray marching steps (used when viewing straight-on).");
+                }
+                if (ImGui::SliderFloat("Max Layers", &maxLayers, 16.0f, 128.0f, "%.0f")) {
+                    renderer.setPOMLayers(minLayers, maxLayers);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Maximum ray marching steps (used at grazing angles). Higher = better quality but slower.");
+                }
+
+                // POM presets
+                ImGui::Text("Presets:");
+                if (ImGui::Button("Subtle##pom")) {
+                    renderer.setPOMEnabled(true);
+                    renderer.setPOMHeightScale(0.02f);
+                    renderer.setPOMLayers(8.0f, 32.0f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Medium##pom")) {
+                    renderer.setPOMEnabled(true);
+                    renderer.setPOMHeightScale(0.05f);
+                    renderer.setPOMLayers(8.0f, 48.0f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Strong##pom")) {
+                    renderer.setPOMEnabled(true);
+                    renderer.setPOMHeightScale(0.1f);
+                    renderer.setPOMLayers(12.0f, 64.0f);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Off##pom")) {
+                    renderer.setPOMEnabled(false);
+                }
+
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Note: POM works best with tessellation disabled.");
+            }
+        }
+
         ImGui::Separator();
 
         // Material Library
@@ -1170,7 +1246,9 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
             if (ImGui::TreeNode("Texture Settings")) {
                 float uvScale = renderer.getMaterialUVScale();
                 if (ImGui::SliderFloat("UV Scale", &uvScale, 0.01f, 500.0f, "%.2f")) {
+                    std::cout << "[ImGui] UV Scale slider changed to " << uvScale << std::endl;
                     renderer.setMaterialUVScale(uvScale);
+                    std::cout << "[ImGui] Called setMaterialUVScale, new value = " << renderer.getMaterialUVScale() << std::endl;
                 }
 
                 float normalStrength = renderer.getNormalStrength();
@@ -1420,9 +1498,49 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
             const char* formatItems[] = { "PNG (8-bit)", "EXR (HDR 32-bit)" };
             ImGui::Combo("Format", &m_renderFormat, formatItems, 2);
 
-            // Brightness compensation (for matching HDR viewport with bloom)
-            ImGui::SliderFloat("Brightness", &m_renderBrightness, 0.5f, 3.0f, "%.1fx");
-            ImGui::SetItemTooltip("Increase to match HDR viewport with bloom enabled (default 1.3x)");
+            // Brightness adjustment (no bloom/SSAO in high-res - use <1.0 to avoid washing out)
+            ImGui::SliderFloat("Brightness", &m_renderBrightness, 0.5f, 2.0f, "%.2fx");
+            ImGui::SetItemTooltip("1.0 = use viewport exposure. Try 0.7-0.8 to match viewport with bloom.");
+
+            // Post-processing preset
+            const char* postProcessItems[] = { "None", "Subtle", "Vivid", "Warm", "Architectural", "Golden Hour", "Print Ready" };
+            ImGui::Combo("Post-Process", &m_renderPostProcess, postProcessItems, 7);
+            ImGui::SetItemTooltip("Apply color grading. Use 'Print Ready' for boosted saturation that survives printing.");
+
+            // Advanced post-process controls
+            ImGui::Checkbox("Advanced Post-Process", &m_showPostProcessAdvanced);
+            ImGui::SetItemTooltip("Fine-tune post-processing parameters. Leave at default to use preset values.");
+
+            if (m_showPostProcessAdvanced) {
+                ImGui::Indent();
+                ImGui::TextDisabled("Adjust post-processing parameters (default uses preset):");
+
+                // Saturation
+                ImGui::SliderFloat("Saturation", &m_postSaturation, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Higher = more color vibrancy.");
+
+                // Vibrance
+                ImGui::SliderFloat("Vibrance", &m_postVibrance, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Boosts less-saturated colors more.");
+
+                // Contrast
+                ImGui::SliderFloat("Contrast", &m_postContrast, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Higher = more contrast.");
+
+                // Sharpness
+                ImGui::SliderFloat("Sharpness", &m_postSharpness, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Higher = sharper edges.");
+
+                // Exposure
+                ImGui::SliderFloat("Post Exposure", &m_postExposure, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Positive = brighter, negative = darker.");
+
+                // Vignette
+                ImGui::SliderFloat("Vignette", &m_postVignette, -1.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip("-1 = preset default. Higher = darker edges.");
+
+                ImGui::Unindent();
+            }
 
             ImGui::Separator();
 
@@ -1496,12 +1614,14 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
 
             if (ImGui::Button("Render Image", ImVec2(-1, 30))) {
                 // Auto-generate unique filename if using default or file exists
-                std::string currentPath(m_renderOutputPath);
-                bool isDefault = (currentPath == "renders/render.png" || currentPath == "renders/render.exr");
-                bool fileExists = std::filesystem::exists(currentPath);
+                namespace fs = std::filesystem;
+                fs::path currentPath(m_renderOutputPath);
+                std::string filename = currentPath.filename().string();
+                bool isDefault = (filename == "render.png" || filename == "render.exr");
+                bool fileExists = fs::exists(currentPath);
 
                 if (isDefault || fileExists) {
-                    // Generate timestamped filename
+                    // Generate timestamped filename in the same directory
                     auto now = std::chrono::system_clock::now();
                     auto time = std::chrono::system_clock::to_time_t(now);
                     std::tm tm = *std::localtime(&time);
@@ -1513,10 +1633,14 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                     std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm);
 
                     const char* ext = (m_renderFormat == 0) ? "png" : "exr";
-                    snprintf(m_renderOutputPath, sizeof(m_renderOutputPath),
-                        "renders/render_%s_%s_%dspp.%s",
+                    char newFilename[128];
+                    snprintf(newFilename, sizeof(newFilename),
+                        "render_%s_%s_%dspp.%s",
                         timestamp, resNamesAuto[m_renderResolution],
                         sampleCountsAuto[m_renderSamples], ext);
+
+                    fs::path newPath = currentPath.parent_path() / newFilename;
+                    snprintf(m_renderOutputPath, sizeof(m_renderOutputPath), "%s", newPath.string().c_str());
                 }
 
                 // Build the request
@@ -1531,6 +1655,13 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                 m_highResRenderRequest.upscale = m_renderUpscale && m_renderResolution > 0;
                 m_highResRenderRequest.upscaleMethod = m_renderUpscaleMethod;
                 m_highResRenderRequest.brightness = m_renderBrightness;
+                m_highResRenderRequest.postProcessPreset = m_renderPostProcess;
+                m_highResRenderRequest.postExposure = m_postExposure;
+                m_highResRenderRequest.postContrast = m_postContrast;
+                m_highResRenderRequest.postSaturation = m_postSaturation;
+                m_highResRenderRequest.postVibrance = m_postVibrance;
+                m_highResRenderRequest.postSharpness = m_postSharpness;
+                m_highResRenderRequest.postVignette = m_postVignette;
 
                 m_highResRenderRequested = true;
             }
@@ -1538,6 +1669,18 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
             if (!canRender) {
                 ImGui::EndDisabled();
             }
+
+            // Quick preview button for post-process tuning
+            if (ImGui::Button("Preview Post-Process (1080p Fast)", ImVec2(-1, 25))) {
+                m_previewRequested = true;
+                // Generate temp preview filename
+                namespace fs = std::filesystem;
+                fs::path renderPath(m_renderOutputPath);
+                fs::path previewDir = renderPath.parent_path() / "previews";
+                fs::create_directories(previewDir);
+                m_previewImagePath = (previewDir / "preview.png").string();
+            }
+            ImGui::SetItemTooltip("Quick render at 1080p to test post-processing settings (much faster than full render)");
 
             // Progress and status
             if (m_highResRenderInFlight) {
@@ -1624,6 +1767,780 @@ void ImGuiLayer::setHighResRenderState(bool inFlight, const std::string& status,
     m_highResRenderInFlight = inFlight;
     m_highResRenderStatus = status;
     m_highResRenderProgress = progress;
+}
+
+void ImGuiLayer::drawPreviewWindow() {
+    if (!m_showPreviewWindow) return;
+
+    ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Print Preview", &m_showPreviewWindow)) {
+        ImGui::TextDisabled("Post-Process Preview (1080p Fast Render)");
+
+        ImGui::Spacing();
+
+        if (!m_previewImagePath.empty()) {
+            ImGui::Text("Preview saved to:");
+            ImGui::TextWrapped("%s", m_previewImagePath.c_str());
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            ImGui::Text("Instructions:");
+            ImGui::BulletText("Open the preview image in an image viewer to see results");
+            ImGui::BulletText("Adjust post-processing sliders above");
+            ImGui::BulletText("Click 'Preview Post-Process' again to re-render with new settings");
+            ImGui::BulletText("When satisfied, do a full high-res render");
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // Current settings display
+            ImGui::Text("Current Post-Process Settings:");
+            const char* presetNames[] = { "None", "Subtle", "Vivid", "Warm", "Architectural", "Golden Hour", "Print Ready" };
+            ImGui::Text("Preset: %s", presetNames[m_renderPostProcess]);
+
+            if (m_showPostProcessAdvanced) {
+                if (m_postSaturation >= 0.0f) ImGui::Text("Saturation: %.2f", m_postSaturation);
+                if (m_postVibrance >= 0.0f) ImGui::Text("Vibrance: %.2f", m_postVibrance);
+                if (m_postContrast >= 0.0f) ImGui::Text("Contrast: %.2f", m_postContrast);
+                if (m_postSharpness >= 0.0f) ImGui::Text("Sharpness: %.2f", m_postSharpness);
+                if (m_postExposure >= 0.0f) ImGui::Text("Exposure: %.2f", m_postExposure);
+                if (m_postVignette >= 0.0f) ImGui::Text("Vignette: %.2f", m_postVignette);
+            } else {
+                ImGui::TextDisabled("(using preset defaults)");
+            }
+
+            ImGui::Spacing();
+
+            // Quick actions
+            if (ImGui::Button("Open in File Explorer")) {
+                std::string cmd = "explorer /select,\"" + m_previewImagePath + "\"";
+                std::system(cmd.c_str());
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Close")) {
+                m_showPreviewWindow = false;
+            }
+        } else {
+            ImGui::Text("No preview available.");
+            ImGui::Text("Click 'Preview Post-Process' in Render Settings to generate one.");
+        }
+    }
+    ImGui::End();
+}
+
+// ============================================================================
+// Live Render Preview Panel (GPU-Direct Inline Preview)
+// ============================================================================
+
+void ImGuiLayer::drawRenderPreviewPanel(Renderer& renderer) {
+    if (!m_showRenderPreviewPanel) return;
+
+    ImGui::SetNextWindowSize(ImVec2(680, 440), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Render Preview", &m_showRenderPreviewPanel)) {
+        // Refresh button
+        if (ImGui::Button("Refresh Preview")) {
+            m_renderPreviewRefreshRequested = true;
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::Text("Renders the current view at 640x360 directly to GPU.");
+            ImGui::Text("Fast (~50ms) for quick iteration on materials and lighting.");
+            ImGui::Text("Material overrides will appear in the preview.");
+            ImGui::EndTooltip();
+        }
+
+        ImGui::Separator();
+
+        // Display preview info
+        ImGui::Text("Resolution: %u x %u", renderer.getPreviewWidth(), renderer.getPreviewHeight());
+        ImGui::SameLine();
+        ImGui::TextDisabled("| Single sample | GPU-direct");
+
+        ImGui::Spacing();
+
+        // Get the preview texture descriptor
+        VkDescriptorSet tex = renderer.getPreviewDescriptor();
+
+        if (tex != VK_NULL_HANDLE && renderer.hasPreviewResources()) {
+            // Calculate display size maintaining 16:9 aspect ratio
+            ImVec2 availSize = ImGui::GetContentRegionAvail();
+            float previewAspect = static_cast<float>(renderer.getPreviewWidth()) /
+                                  static_cast<float>(renderer.getPreviewHeight());
+
+            ImVec2 displaySize;
+            if (availSize.x / availSize.y > previewAspect) {
+                // Window is wider than preview - fit to height
+                displaySize.y = availSize.y - 10.0f;  // Small margin
+                displaySize.x = displaySize.y * previewAspect;
+            } else {
+                // Window is taller than preview - fit to width
+                displaySize.x = availSize.x - 10.0f;  // Small margin
+                displaySize.y = displaySize.x / previewAspect;
+            }
+
+            // Ensure minimum size
+            displaySize.x = std::max(displaySize.x, 320.0f);
+            displaySize.y = std::max(displaySize.y, 180.0f);
+
+            // Center the image
+            float offsetX = (availSize.x - displaySize.x) * 0.5f;
+            if (offsetX > 0) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
+            }
+
+            // Display the preview image
+            ImGui::Image((ImTextureID)tex, displaySize);
+
+            // Show status
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f), "Preview ready");
+        } else {
+            // No preview yet
+            ImVec2 placeholderSize(640.0f, 360.0f);
+            ImVec2 availSize = ImGui::GetContentRegionAvail();
+
+            // Scale down if needed
+            if (placeholderSize.x > availSize.x - 10.0f) {
+                float scale = (availSize.x - 10.0f) / placeholderSize.x;
+                placeholderSize.x *= scale;
+                placeholderSize.y *= scale;
+            }
+
+            // Draw placeholder box
+            ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+            float offsetX = (availSize.x - placeholderSize.x) * 0.5f;
+            if (offsetX > 0) {
+                cursorPos.x += offsetX;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
+            }
+
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            drawList->AddRectFilled(
+                cursorPos,
+                ImVec2(cursorPos.x + placeholderSize.x, cursorPos.y + placeholderSize.y),
+                IM_COL32(40, 40, 50, 255)
+            );
+            drawList->AddRect(
+                cursorPos,
+                ImVec2(cursorPos.x + placeholderSize.x, cursorPos.y + placeholderSize.y),
+                IM_COL32(80, 80, 100, 255)
+            );
+
+            // Center text in placeholder
+            const char* text = "Click 'Refresh Preview' to render";
+            ImVec2 textSize = ImGui::CalcTextSize(text);
+            ImVec2 textPos(
+                cursorPos.x + (placeholderSize.x - textSize.x) * 0.5f,
+                cursorPos.y + (placeholderSize.y - textSize.y) * 0.5f
+            );
+            drawList->AddText(textPos, IM_COL32(150, 150, 150, 255), text);
+
+            // Advance cursor past placeholder
+            ImGui::Dummy(placeholderSize);
+
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No preview rendered yet");
+        }
+    }
+    ImGui::End();
+}
+
+// ============================================================================
+// Material Library Panel (Improved with categories and grid view)
+// ============================================================================
+
+void ImGuiLayer::drawMaterialLibraryPanel(Renderer& renderer) {
+    if (!m_showMaterialLibrary) return;
+
+    // Auto-generate material previews on first open
+    static bool previewsGenerated = false;
+    if (!previewsGenerated) {
+        renderer.generateMaterialPreviews();
+        previewsGenerated = true;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(450, 600), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Material Library", &m_showMaterialLibrary)) {
+        // Header with filter and view options
+        ImGui::TextDisabled("Browse and Apply Materials");
+        ImGui::Separator();
+
+        // Filter input
+        ImGui::PushItemWidth(-1);
+        if (ImGui::InputText("##Filter", m_materialLibraryFilter, sizeof(m_materialLibraryFilter),
+                            ImGuiInputTextFlags_EnterReturnsTrue)) {
+            // Filter updated
+        }
+        ImGui::PopItemWidth();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Filter materials by name");
+        }
+
+        // View mode toggle and thumbnail size
+        ImGui::Spacing();
+        const char* viewModes[] = { "Grid", "List" };
+        ImGui::SetNextItemWidth(100);
+        ImGui::Combo("View", &m_materialLibraryViewMode, viewModes, 2);
+
+        if (m_materialLibraryViewMode == 0) {  // Grid view
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(150);
+            if (ImGui::SliderFloat("Size", &m_materialThumbnailSize, 80.0f, 250.0f, "%.0f")) {
+                // Clamp to reasonable range
+                m_materialThumbnailSize = std::max(80.0f, std::min(250.0f, m_materialThumbnailSize));
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Get materials from renderer using the C API
+        auto materials = renderer.getMaterialNames();
+        std::string filter = m_materialLibraryFilter;
+
+        // Group materials by category based on name patterns
+        std::map<std::string, std::vector<std::string>> categorizedMaterials;
+        std::vector<std::string> uncategorizedMaterials;
+
+        // Helper to determine category from material name
+        auto getCategoryFromName = [](const std::string& name) -> std::string {
+            std::string lowerName = name;
+            std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+
+            // Check for roof materials
+            if (lowerName.find("roof") == 0 || lowerName.find("shingle") != std::string::npos ||
+                lowerName.find("tile_") == 0) {
+                return "Roofs";
+            }
+
+            // Check for floor materials
+            if (lowerName.find("floor") == 0 || lowerName.find("wood_") == 0 ||
+                lowerName.find("tile") != std::string::npos || lowerName.find("marble") != std::string::npos ||
+                lowerName.find("stone_") == 0) {
+                return "Floors";
+            }
+
+            // Check for wall materials
+            if (lowerName.find("brick") == 0 || lowerName.find("siding") == 0 ||
+                lowerName.find("paint") == 0 || lowerName.find("concrete") == 0 ||
+                lowerName.find("stucco") == 0 || lowerName.find("drywall") != std::string::npos ||
+                lowerName.find("plaster") != std::string::npos) {
+                return "Walls";
+            }
+
+            // Check for metal materials
+            if (lowerName.find("metal") == 0 || lowerName.find("steel") != std::string::npos ||
+                lowerName.find("aluminum") != std::string::npos || lowerName.find("copper") != std::string::npos) {
+                return "Metals";
+            }
+
+            // Check for glass
+            if (lowerName.find("glass") != std::string::npos || lowerName.find("window") != std::string::npos) {
+                return "Glass";
+            }
+
+            return "";
+        };
+
+        for (const auto& material : materials) {
+            // Apply filter
+            if (!filter.empty()) {
+                std::string lowerMaterial = material;
+                std::string lowerFilter = filter;
+                std::transform(lowerMaterial.begin(), lowerMaterial.end(), lowerMaterial.begin(), ::tolower);
+                std::transform(lowerFilter.begin(), lowerFilter.end(), lowerFilter.begin(), ::tolower);
+                if (lowerMaterial.find(lowerFilter) == std::string::npos) {
+                    continue;
+                }
+            }
+
+            // Categorize based on name patterns
+            std::string category = getCategoryFromName(material);
+            if (!category.empty()) {
+                categorizedMaterials[category].push_back(material);
+            } else {
+                uncategorizedMaterials.push_back(material);
+            }
+        }
+
+        // Display materials by category
+        float windowWidth = ImGui::GetContentRegionAvail().x;
+        int itemsPerRow = std::max(1, static_cast<int>(windowWidth / (m_materialThumbnailSize + 10)));
+
+        // Helper to draw material item
+        auto drawMaterialItem = [&](const std::string& materialName) {
+            // Extract just the name part (after last slash)
+            std::string displayName = materialName;
+            size_t lastSlash = materialName.find_last_of('/');
+            if (lastSlash != std::string::npos) {
+                displayName = materialName.substr(lastSlash + 1);
+            }
+
+            bool isSelected = (m_selectedMaterialName == materialName);
+
+            if (m_materialLibraryViewMode == 0) {  // Grid view
+                ImGui::PushID(materialName.c_str());
+
+                // Thumbnail button
+                ImVec2 thumbSize(m_materialThumbnailSize, m_materialThumbnailSize * 0.75f);
+
+                // Try to get material preview texture
+                VkDescriptorSet previewTex = renderer.getMaterialPreviewDescriptor(materialName);
+                bool hasPreview = (previewTex != VK_NULL_HANDLE);
+
+                if (hasPreview) {
+                    // Render actual material preview
+                    if (ImGui::ImageButton((ImTextureID)previewTex, thumbSize, ImVec2(0, 0),
+                        ImVec2(1, 1), -1, ImVec4(0, 0, 0, 0),
+                        isSelected ? ImVec4(1.0f, 0.8f, 0.3f, 1.0f) : ImVec4(0, 0, 0, 0))) {
+                        m_selectedMaterialName = materialName;
+                    }
+                } else {
+                    // Fallback: Generate a consistent color based on material name hash
+                    size_t hash = std::hash<std::string>{}(materialName);
+                    float hue = (hash % 360) / 360.0f;
+                    float sat = 0.3f + ((hash / 360) % 100) / 200.0f;  // 0.3 - 0.8
+                    float val = 0.6f + ((hash / 36000) % 100) / 250.0f;  // 0.6 - 1.0
+                    float r, g, b;
+                    ImGui::ColorConvertHSVtoRGB(hue, sat, val, r, g, b);
+                    ImVec4 thumbColor(r, g, b, 1.0f);
+
+                    // Draw colored rectangle as placeholder thumbnail
+                    ImGui::PushStyleColor(ImGuiCol_Button, thumbColor);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, thumbColor);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, thumbColor);
+
+                    if (ImGui::Button("", thumbSize)) {
+                        m_selectedMaterialName = materialName;
+                    }
+
+                    ImGui::PopStyleColor(3);
+                }
+
+                // Drag and drop source
+                if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                    ImGui::SetDragDropPayload("ARCH_MATERIAL", materialName.c_str(), materialName.size() + 1);
+                    ImGui::Text("Apply %s", displayName.c_str());
+                    m_materialDragActive = true;
+                    m_materialDragName = materialName;
+                    ImGui::EndDragDropSource();
+                }
+
+                // Hover tooltip
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::Text("%s", displayName.c_str());
+                    ImGui::TextDisabled("Click to select, drag to apply");
+                    ImGui::EndTooltip();
+                }
+
+                // Selection indicator (only for fallback buttons, ImageButton has built-in border)
+                if (isSelected && !hasPreview) {
+                    ImDrawList* drawList = ImGui::GetWindowDrawList();
+                    ImVec2 min = ImGui::GetItemRectMin();
+                    ImVec2 max = ImGui::GetItemRectMax();
+                    float thickness = 2.0f;
+                    ImU32 color = ImGui::GetColorU32(ImVec4(1.0f, 0.8f, 0.3f, 1.0f));
+                    drawList->AddRect(min, max, color, 0.0f, 0, thickness);
+                }
+
+                // Display name below thumbnail
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + thumbSize.x);
+                ImGui::Text("%s", displayName.c_str());
+                ImGui::PopTextWrapPos();
+
+                ImGui::PopID();
+
+                // Move to next item in row
+                ImGui::SameLine();
+            } else {  // List view
+                if (ImGui::Selectable(displayName.c_str(), isSelected)) {
+                    m_selectedMaterialName = materialName;
+                }
+
+                // Drag and drop source
+                if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                    ImGui::SetDragDropPayload("ARCH_MATERIAL", materialName.c_str(), materialName.size() + 1);
+                    ImGui::Text("Apply %s", displayName.c_str());
+                    m_materialDragActive = true;
+                    m_materialDragName = materialName;
+                    ImGui::EndDragDropSource();
+                }
+            }
+        };
+
+        // Draw categorized materials
+        for (const auto& [category, categoryMaterials] : categorizedMaterials) {
+            if (ImGui::TreeNode(category.c_str())) {
+                ImGui::Spacing();
+
+                if (m_materialLibraryViewMode == 0) {  // Grid view
+                    int col = 0;
+                    for (const auto& material : categoryMaterials) {
+                        drawMaterialItem(material);
+                        col++;
+                        if (col >= itemsPerRow) {
+                            ImGui::NewLine();
+                            col = 0;
+                        }
+                    }
+                    if (col > 0) {
+                        ImGui::NewLine();
+                    }
+                } else {  // List view
+                    for (const auto& material : categoryMaterials) {
+                        drawMaterialItem(material);
+                    }
+                }
+
+                ImGui::TreePop();
+            }
+            ImGui::Separator();
+        }
+
+        // Draw uncategorized materials
+        if (!uncategorizedMaterials.empty()) {
+            if (ImGui::TreeNode("Other")) {
+                ImGui::Spacing();
+
+                if (m_materialLibraryViewMode == 0) {  // Grid view
+                    int col = 0;
+                    for (const auto& material : uncategorizedMaterials) {
+                        drawMaterialItem(material);
+                        col++;
+                        if (col >= itemsPerRow) {
+                            ImGui::NewLine();
+                            col = 0;
+                        }
+                    }
+                    if (col > 0) {
+                        ImGui::NewLine();
+                    }
+                } else {  // List view
+                    for (const auto& material : uncategorizedMaterials) {
+                        drawMaterialItem(material);
+                    }
+                }
+
+                ImGui::TreePop();
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Selected material info and actions
+        if (!m_selectedMaterialName.empty()) {
+            std::string displaySelected = m_selectedMaterialName;
+            size_t lastSlash = displaySelected.find_last_of('/');
+            if (lastSlash != std::string::npos) {
+                displaySelected = displaySelected.substr(lastSlash + 1);
+            }
+
+            ImGui::Text("Selected: %s", displaySelected.c_str());
+
+            if (ImGui::Button("Apply to Selection", ImVec2(-1, 0))) {
+                m_applyMaterialName = m_selectedMaterialName;
+                m_applyMaterialRequested = true;
+            }
+
+            ImGui::Spacing();
+        } else {
+            ImGui::TextDisabled("No material selected");
+        }
+
+        // Help text
+        ImGui::Separator();
+        ImGui::TextWrapped("Tip: Drag materials from this panel onto the 3D viewport to apply them to elements.");
+
+        // Handle drag drop end
+        if (m_materialDragActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
+                m_materialDropRequested = true;
+                m_materialDropName = m_materialDragName;
+            }
+            m_materialDragActive = false;
+        }
+    }
+
+    ImGui::End();
+}
+
+// ============================================================================
+// Material Inspector (Per-Element Material Overrides)
+// ============================================================================
+
+ImGuiLayer::MaterialOverrideRequest ImGuiLayer::takeMaterialOverrideRequest() {
+    m_materialOverrideRequested = false;
+    return m_materialOverrideRequest;
+}
+
+void ImGuiLayer::drawMaterialInspector(const Renderer& renderer) {
+    if (!m_showMaterialInspector) return;
+
+    ImGui::SetNextWindowSize(ImVec2(350, 500), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Material Inspector", &m_showMaterialInspector)) {
+        ImGui::TextDisabled("Per-Element Material Overrides");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Show selected element count
+        const auto& selectedElements = getSelectedElements();
+        size_t selectedCount = selectedElements.size();
+
+        if (selectedCount == 0) {
+            ImGui::TextWrapped("No elements selected. Select one or more elements in the viewport to edit their materials.");
+            ImGui::TextDisabled("(Click on elements in the 3D view to select them)");
+            ImGui::Spacing();
+            if (ImGui::Button("Close")) {
+                m_showMaterialInspector = false;
+            }
+            ImGui::End();
+            return;
+        }
+
+        ImGui::Text("Selected Elements: %zu", selectedCount);
+        ImGui::TextDisabled("Overrides add to global material values");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Clear flags when selection changes (track previous selection count)
+        static size_t previousSelectedCount = 0;
+        static std::vector<int> previousSelectedIndices;
+        if (selectedCount != previousSelectedCount) {
+            // Selection changed - clear flags
+            m_modifiedUVScale = m_modifiedUVRotation = m_modifiedNormalStrength = m_modifiedBrightness = false;
+            m_modifiedContrast = m_modifiedSaturation = m_modifiedRoughness = false;
+            m_modifiedMetallic = m_modifiedAOStrength = m_modifiedTint = false;
+
+            // Initialize sliders to show current effective values for the first selected element
+            if (selectedCount > 0) {
+                int firstElementId = *selectedElements.begin();
+                const auto* override = renderer.getElementOverride(firstElementId);
+
+                if (override) {
+                    // Element has override - show override values
+                    m_inspectorUVScale = override->uvScale;
+                    m_inspectorUVRotation = override->uvRotation;
+                    m_inspectorNormalStrength = override->normalStrength;
+                    m_inspectorBrightness = override->brightness;
+                    m_inspectorContrast = override->contrast;
+                    m_inspectorSaturation = override->saturation;
+                    m_inspectorRoughness = override->roughness;
+                    m_inspectorMetallic = override->metallic;
+                    m_inspectorAOStrength = override->aoStrength;
+                } else {
+                    // Element has no override - show global values as reference
+                    m_inspectorUVScale = renderer.getMaterialUVScale();
+                    m_inspectorUVRotation = 0.0f;  // No global rotation
+                    m_inspectorNormalStrength = renderer.getNormalStrength();
+                    m_inspectorBrightness = renderer.getMaterialBrightness();
+                    m_inspectorContrast = renderer.getMaterialContrast();
+                    m_inspectorSaturation = renderer.getMaterialSaturation();
+                    m_inspectorRoughness = renderer.getMaterialRoughnessOffset();
+                    m_inspectorMetallic = renderer.getMaterialMetallicOffset();
+                    m_inspectorAOStrength = renderer.getMaterialAOStrength();
+                }
+            }
+
+            previousSelectedCount = selectedCount;
+        }
+
+        // Parameter sliders
+        if (ImGui::CollapsingHeader("Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Indent();
+
+            // UV Scale - shows current value (global or override), adjusts create override for this element
+            ImGui::Text("UV Scale");
+            if (ImGui::SliderFloat("##uvScale", &m_inspectorUVScale, 0.01f, 500.0f, "%.2f")) {
+                m_modifiedUVScale = true;
+            }
+            ImGui::SetItemTooltip("Texture tiling density for selected element (overrides global value)");
+
+            // UV Rotation (0 to 360 degrees)
+            ImGui::Text("Pattern Rotation");
+            if (ImGui::SliderFloat("##uvRotation", &m_inspectorUVRotation, 0.0f, 360.0f, "%.1f deg")) {
+                m_modifiedUVRotation = true;
+            }
+            ImGui::SetItemTooltip("Rotate texture pattern (0-360 degrees)");
+
+            // Normal Strength (0 to 5)
+            ImGui::Text("Normal Strength");
+            if (ImGui::SliderFloat("##normalStrength", &m_inspectorNormalStrength, 0.0f, 5.0f, "%.2f")) {
+                m_modifiedNormalStrength = true;
+            }
+            ImGui::SetItemTooltip("Set normal map intensity (leave at 1.0 to use global value)");
+
+            // Brightness (-1 to 1)
+            ImGui::Text("Brightness");
+            if (ImGui::SliderFloat("##brightness", &m_inspectorBrightness, -1.0f, 1.0f, "%.2f")) {
+                m_modifiedBrightness = true;
+            }
+            ImGui::SetItemTooltip("Set brightness adjustment (leave at 0.0 to use global value)");
+
+            // Contrast (0 to 2)
+            ImGui::Text("Contrast");
+            if (ImGui::SliderFloat("##contrast", &m_inspectorContrast, 0.0f, 2.0f, "%.2f")) {
+                m_modifiedContrast = true;
+            }
+            ImGui::SetItemTooltip("Set contrast (leave at 1.0 to use global value)");
+
+            // Saturation (0 to 2)
+            ImGui::Text("Saturation");
+            if (ImGui::SliderFloat("##saturation", &m_inspectorSaturation, 0.0f, 2.0f, "%.2f")) {
+                m_modifiedSaturation = true;
+            }
+            ImGui::SetItemTooltip("Set color saturation (leave at 1.0 to use global value)");
+
+            // Roughness (-0.5 to 0.5, additive offset)
+            ImGui::Text("Roughness");
+            if (ImGui::SliderFloat("##roughness", &m_inspectorRoughness, -0.5f, 0.5f, "%.2f")) {
+                m_modifiedRoughness = true;
+            }
+            ImGui::SetItemTooltip("Adjust roughness offset (leave at 0.0 to use global value)");
+
+            // Metallic (-0.5 to 0.5, additive offset)
+            ImGui::Text("Metallic");
+            if (ImGui::SliderFloat("##metallic", &m_inspectorMetallic, -0.5f, 0.5f, "%.2f")) {
+                m_modifiedMetallic = true;
+            }
+            ImGui::SetItemTooltip("Adjust metallic offset (leave at 0.0 to use global value)");
+
+            // AO Strength (0 to 2)
+            ImGui::Text("AO Strength");
+            if (ImGui::SliderFloat("##aoStrength", &m_inspectorAOStrength, 0.0f, 2.0f, "%.2f")) {
+                m_modifiedAOStrength = true;
+            }
+            ImGui::SetItemTooltip("Set ambient occlusion intensity (leave at 1.0 to use global value)");
+
+            // Tint (-1 to 1, additive color)
+            ImGui::Text("Tint (RGB)");
+            if (ImGui::SliderFloat3("##tint", m_inspectorTint, -0.5f, 0.5f, "%.2f")) {
+                m_modifiedTint = true;
+            }
+            ImGui::SetItemTooltip("Add RGB color tint (leave at 0,0,0 to use global value)");
+
+            ImGui::Unindent();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Action buttons
+        // Apply to selected elements
+        bool hasAnyModified = m_modifiedUVScale || m_modifiedUVRotation || m_modifiedNormalStrength || m_modifiedBrightness ||
+                             m_modifiedContrast || m_modifiedSaturation || m_modifiedRoughness ||
+                             m_modifiedMetallic || m_modifiedAOStrength || m_modifiedTint;
+
+        if (!hasAnyModified) {
+            ImGui::BeginDisabled();
+        }
+
+        if (ImGui::Button("Apply to Selected", ImVec2(-1, 0))) {
+            if (hasAnyModified) {
+                m_materialOverrideRequest.elementIndices.assign(selectedElements.begin(), selectedElements.end());
+
+                // Set all values
+                m_materialOverrideRequest.uvScale = m_inspectorUVScale;
+                m_materialOverrideRequest.uvRotation = m_inspectorUVRotation;
+                m_materialOverrideRequest.normalStrength = m_inspectorNormalStrength;
+                m_materialOverrideRequest.brightness = m_inspectorBrightness;
+                m_materialOverrideRequest.contrast = m_inspectorContrast;
+                m_materialOverrideRequest.saturation = m_inspectorSaturation;
+                m_materialOverrideRequest.roughness = m_inspectorRoughness;
+                m_materialOverrideRequest.metallic = m_inspectorMetallic;
+                m_materialOverrideRequest.aoStrength = m_inspectorAOStrength;
+                m_materialOverrideRequest.tint[0] = m_inspectorTint[0];
+                m_materialOverrideRequest.tint[1] = m_inspectorTint[1];
+                m_materialOverrideRequest.tint[2] = m_inspectorTint[2];
+
+                // Only set flags for parameters that user actually modified
+                m_materialOverrideRequest.hasUVScale = m_modifiedUVScale;
+                m_materialOverrideRequest.hasUVRotation = m_modifiedUVRotation;
+                m_materialOverrideRequest.hasNormalStrength = m_modifiedNormalStrength;
+                m_materialOverrideRequest.hasBrightness = m_modifiedBrightness;
+                m_materialOverrideRequest.hasContrast = m_modifiedContrast;
+                m_materialOverrideRequest.hasSaturation = m_modifiedSaturation;
+                m_materialOverrideRequest.hasRoughness = m_modifiedRoughness;
+                m_materialOverrideRequest.hasMetallic = m_modifiedMetallic;
+                m_materialOverrideRequest.hasAOStrength = m_modifiedAOStrength;
+                m_materialOverrideRequest.hasTint = m_modifiedTint;
+
+                m_materialOverrideRequest.resetSelected = false;
+                m_materialOverrideRequest.resetAll = false;
+                m_materialOverrideRequested = true;
+
+                // NOTE: Don't clear flags here! User might want to apply the same overrides to more elements
+                // Flags are only cleared when user clicks Reset or selects new elements
+            }
+        }
+
+        if (!hasAnyModified) {
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Adjust at least one parameter above to enable");
+            }
+        }
+
+        // Reset selected elements
+        ImGui::SameLine();
+        if (ImGui::Button("Reset Selected", ImVec2(-1, 0))) {
+            m_materialOverrideRequest.elementIndices.assign(selectedElements.begin(), selectedElements.end());
+            m_materialOverrideRequest.resetSelected = true;
+            m_materialOverrideRequest.resetAll = false;
+            m_materialOverrideRequested = true;
+            // Clear modified flags after reset
+            m_modifiedUVScale = m_modifiedUVRotation = m_modifiedNormalStrength = m_modifiedBrightness = false;
+            m_modifiedContrast = m_modifiedSaturation = m_modifiedRoughness = false;
+            m_modifiedMetallic = m_modifiedAOStrength = m_modifiedTint = false;
+        }
+
+        // Reset all overrides
+        if (ImGui::Button("Reset All Overrides", ImVec2(-1, 0))) {
+            m_materialOverrideRequest.elementIndices.clear();
+            m_materialOverrideRequest.resetSelected = false;
+            m_materialOverrideRequest.resetAll = true;
+            m_materialOverrideRequested = true;
+            // Clear modified flags after reset
+            m_modifiedUVScale = m_modifiedUVRotation = m_modifiedNormalStrength = m_modifiedBrightness = false;
+            m_modifiedContrast = m_modifiedSaturation = m_modifiedRoughness = false;
+            m_modifiedMetallic = m_modifiedAOStrength = m_modifiedTint = false;
+            // Reset slider values to defaults
+            m_inspectorUVScale = 1.0f;
+            m_inspectorUVRotation = 0.0f;
+            m_inspectorNormalStrength = 1.0f;
+            m_inspectorBrightness = 0.0f;
+            m_inspectorContrast = 1.0f;
+            m_inspectorSaturation = 1.0f;
+            m_inspectorRoughness = 0.0f;
+            m_inspectorMetallic = 0.0f;
+            m_inspectorAOStrength = 1.0f;
+        }
+
+        ImGui::Spacing();
+
+        // Show override statistics
+        size_t overrideCount = renderer.getOverrideCount();
+        ImGui::TextDisabled("Total active overrides: %zu elements", overrideCount);
+        if (overrideCount > 0 && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Elements with custom material adjustments");
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button("Close Inspector")) {
+            m_showMaterialInspector = false;
+        }
+    }
+    ImGui::End();
 }
 
 } // namespace arch

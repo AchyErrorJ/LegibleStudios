@@ -3,12 +3,16 @@
 #include <cstring>
 #include <array>
 #include <iostream>
+#include <fstream>
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+
+// ImGui Vulkan backend for preview texture registration
+#include <imgui_impl_vulkan.h>
 
 namespace arch {
 
@@ -50,11 +54,11 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
         allocInfo.pSetLayouts = &shadowHeightLayout;
 
         if (vkAllocateDescriptorSets(m_context.getDevice(), &allocInfo, &m_shadowHeightMapDescriptorSet) == VK_SUCCESS) {
-            // Bind default black texture (no displacement)
+            // Bind default grey texture (0.5 = no displacement)
             VkDescriptorImageInfo heightMapInfo{};
             heightMapInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            heightMapInfo.imageView = Texture::getBlack()->getImageView();
-            heightMapInfo.sampler = Texture::getBlack()->getSampler();
+            heightMapInfo.imageView = Texture::getGrey()->getImageView();
+            heightMapInfo.sampler = Texture::getGrey()->getSampler();
 
             VkWriteDescriptorSet write{};
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -70,7 +74,6 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
     }
 
     createPipeline();
-    initTerrainPipeline();
 
     // Create grid mesh
     auto [gridVerts, gridIndices] = Geometry::createGrid(100.0f, 5.0f);
@@ -82,6 +85,9 @@ Renderer::~Renderer() {
 
     // Cleanup high-resolution resources (for high-res rendering/screenshots)
     cleanupHighResResources();
+
+    // Cleanup material preview thumbnails
+    cleanupMaterialPreviewResources();
 
 #if 0  // Ray tracing disabled - incomplete implementation
     // Cleanup ray tracing resources
@@ -107,18 +113,6 @@ Renderer::~Renderer() {
     m_tessWireframePipeline.reset();
     m_hdrTessPipeline.reset();
     m_hdrTessWireframePipeline.reset();
-    m_terrainPipeline.reset();
-
-    // Cleanup terrain buffers
-    if (m_terrainVertexBuffer) {
-        vkDestroyBuffer(m_context.getDevice(), m_terrainVertexBuffer, nullptr);
-    }
-    if (m_terrainIndexBuffer) {
-        vkDestroyBuffer(m_context.getDevice(), m_terrainIndexBuffer, nullptr);
-    }
-    if (m_terrainPipelineLayout) {
-        vkDestroyPipelineLayout(m_context.getDevice(), m_terrainPipelineLayout, nullptr);
-    }
 
     for (size_t i = 0; i < m_context.getSwapchainImageCount(); ++i) {
         vkDestroyBuffer(m_context.getDevice(), m_uniformBuffers[i], nullptr);
@@ -173,6 +167,10 @@ void Renderer::clearMeshCache() {
 
     // Clear the custom mesh key cache (maps mesh pointers to cache keys)
     m_customMeshKeyCache.clear();
+
+    // Clear terrain mesh cache
+    m_terrainMesh.reset();
+    m_lastTerrainData = nullptr;
 }
 
 void Renderer::createRenderPass() {
@@ -415,12 +413,26 @@ void Renderer::createDescriptorPool() {
 void Renderer::createUniformBuffers() {
     VkDeviceSize bufferSize = sizeof(UniformBufferObject);
 
+    // Debug: Write UBO layout to a log file to verify std140 alignment
+    {
+        std::ofstream logFile("ubo_debug.log");
+        if (logFile.is_open()) {
+            logFile << "[UBO Debug] Size: " << bufferSize << " bytes" << std::endl;
+            logFile << "[UBO Debug] overrideMask offset: " << offsetof(UniformBufferObject, overrideMask) << " (expected: 304)" << std::endl;
+            logFile << "[UBO Debug] elementOverride1 offset: " << offsetof(UniformBufferObject, elementOverride1) << " (expected: 320)" << std::endl;
+            logFile << "[UBO Debug] elementOverride2 offset: " << offsetof(UniformBufferObject, elementOverride2) << " (expected: 336)" << std::endl;
+            logFile << "[UBO Debug] elementOverride3 offset: " << offsetof(UniformBufferObject, elementOverride3) << " (expected: 352)" << std::endl;
+            logFile.close();
+        }
+    }
+
     m_uniformBuffers.resize(m_context.getSwapchainImageCount());
     m_uniformBuffersMemory.resize(m_context.getSwapchainImageCount());
     m_uniformBuffersMapped.resize(m_context.getSwapchainImageCount());
 
     for (size_t i = 0; i < m_context.getSwapchainImageCount(); ++i) {
-        m_context.createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        // Include TRANSFER_DST for vkCmdUpdateBuffer support (mid-frame UBO updates)
+        m_context.createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                m_uniformBuffers[i], m_uniformBuffersMemory[i]);
 
@@ -571,7 +583,7 @@ void Renderer::createDefaultMaterialDescriptorSet() {
     Texture* ao = Texture::getWhite();
     Texture* emissive = Texture::getBlack();
     Texture* opacity = Texture::getWhite();
-    Texture* height = Texture::getBlack();  // No displacement by default
+    Texture* height = Texture::getGrey();  // Grey (0.5) = no displacement
 
     // Write descriptor set
     std::array<VkDescriptorImageInfo, 8> imageInfos{};
@@ -652,21 +664,23 @@ void Renderer::createPipeline() {
     m_pipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                              "shaders/structural.frag.spv", config);
 
-    // Wireframe pipeline
-    PipelineConfig wireframeConfig = PipelineConfig::defaultConfig();
-    wireframeConfig.renderPass = m_renderPass;
-    wireframeConfig.pipelineLayout = m_pipelineLayout;
-    wireframeConfig.multisample.rasterizationSamples = msaaSamples;
-    if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
-        wireframeConfig.multisample.sampleShadingEnable = VK_TRUE;
-        wireframeConfig.multisample.minSampleShading = 0.2f;
-    }
-    wireframeConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
-    wireframeConfig.rasterization.lineWidth = 1.5f;
-    wireframeConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+    // Wireframe pipeline (only if GPU supports fillModeNonSolid)
+    if (m_context.supportsFillModeNonSolid()) {
+        PipelineConfig wireframeConfig = PipelineConfig::defaultConfig();
+        wireframeConfig.renderPass = m_renderPass;
+        wireframeConfig.pipelineLayout = m_pipelineLayout;
+        wireframeConfig.multisample.rasterizationSamples = msaaSamples;
+        if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+            wireframeConfig.multisample.sampleShadingEnable = VK_TRUE;
+            wireframeConfig.multisample.minSampleShading = 0.2f;
+        }
+        wireframeConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+        wireframeConfig.rasterization.lineWidth = 1.5f;
+        wireframeConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
 
-    m_wireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
-                                                      "shaders/structural.frag.spv", wireframeConfig);
+        m_wireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                          "shaders/structural.frag.spv", wireframeConfig);
+    }
 
     // Transparent pipeline for glass/windows (alpha blending enabled)
     PipelineConfig transparentConfig = PipelineConfig::transparentConfig();
@@ -691,17 +705,19 @@ void Renderer::createPipeline() {
         m_hdrPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                                    "shaders/structural.frag.spv", hdrConfig);
 
-        // HDR wireframe pipeline
-        PipelineConfig hdrWireframeConfig = PipelineConfig::defaultConfig();
-        hdrWireframeConfig.renderPass = m_postProcess->getHDRRenderPass();
-        hdrWireframeConfig.pipelineLayout = m_pipelineLayout;
-        hdrWireframeConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-        hdrWireframeConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
-        hdrWireframeConfig.rasterization.lineWidth = 1.5f;
-        hdrWireframeConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+        // HDR wireframe pipeline (only if GPU supports fillModeNonSolid)
+        if (m_context.supportsFillModeNonSolid()) {
+            PipelineConfig hdrWireframeConfig = PipelineConfig::defaultConfig();
+            hdrWireframeConfig.renderPass = m_postProcess->getHDRRenderPass();
+            hdrWireframeConfig.pipelineLayout = m_pipelineLayout;
+            hdrWireframeConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            hdrWireframeConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+            hdrWireframeConfig.rasterization.lineWidth = 1.5f;
+            hdrWireframeConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
 
-        m_hdrWireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
-                                                            "shaders/structural.frag.spv", hdrWireframeConfig);
+            m_hdrWireframePipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                                "shaders/structural.frag.spv", hdrWireframeConfig);
+        }
 
         // HDR transparent pipeline for glass/windows
         PipelineConfig hdrTransparentConfig = PipelineConfig::transparentConfig();
@@ -713,8 +729,8 @@ void Renderer::createPipeline() {
                                                                "shaders/structural.frag.spv", hdrTransparentConfig);
     }
 
-    // Create tessellation pipelines for displacement mapping
-    {
+    // Create tessellation pipelines for displacement mapping (only if GPU supports tessellation)
+    if (m_context.supportsTessellation()) {
         PipelineConfig tessConfig = PipelineConfig::tessellationConfig();
         tessConfig.renderPass = m_renderPass;
         tessConfig.pipelineLayout = m_pipelineLayout;
@@ -731,25 +747,27 @@ void Renderer::createPipeline() {
             "shaders/structural.frag.spv",
             tessConfig);
 
-        // Tessellation wireframe
-        PipelineConfig tessWireConfig = PipelineConfig::tessellationConfig();
-        tessWireConfig.renderPass = m_renderPass;
-        tessWireConfig.pipelineLayout = m_pipelineLayout;
-        tessWireConfig.multisample.rasterizationSamples = msaaSamples;
-        if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
-            tessWireConfig.multisample.sampleShadingEnable = VK_TRUE;
-            tessWireConfig.multisample.minSampleShading = 0.2f;
-        }
-        tessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
-        tessWireConfig.rasterization.lineWidth = 1.5f;
-        tessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+        // Tessellation wireframe (only if GPU supports fillModeNonSolid)
+        if (m_context.supportsFillModeNonSolid()) {
+            PipelineConfig tessWireConfig = PipelineConfig::tessellationConfig();
+            tessWireConfig.renderPass = m_renderPass;
+            tessWireConfig.pipelineLayout = m_pipelineLayout;
+            tessWireConfig.multisample.rasterizationSamples = msaaSamples;
+            if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+                tessWireConfig.multisample.sampleShadingEnable = VK_TRUE;
+                tessWireConfig.multisample.minSampleShading = 0.2f;
+            }
+            tessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+            tessWireConfig.rasterization.lineWidth = 1.5f;
+            tessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
 
-        m_tessWireframePipeline = std::make_unique<Pipeline>(m_context,
-            "shaders/structural.vert.spv",
-            "shaders/structural.tesc.spv",
-            "shaders/structural.tese.spv",
-            "shaders/structural.frag.spv",
-            tessWireConfig);
+            m_tessWireframePipeline = std::make_unique<Pipeline>(m_context,
+                "shaders/structural.vert.spv",
+                "shaders/structural.tesc.spv",
+                "shaders/structural.tese.spv",
+                "shaders/structural.frag.spv",
+                tessWireConfig);
+        }
 
         // HDR tessellation pipelines
         if (m_postProcess) {
@@ -765,20 +783,22 @@ void Renderer::createPipeline() {
                 "shaders/structural.frag.spv",
                 hdrTessConfig);
 
-            PipelineConfig hdrTessWireConfig = PipelineConfig::tessellationConfig();
-            hdrTessWireConfig.renderPass = m_postProcess->getHDRRenderPass();
-            hdrTessWireConfig.pipelineLayout = m_pipelineLayout;
-            hdrTessWireConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-            hdrTessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
-            hdrTessWireConfig.rasterization.lineWidth = 1.5f;
-            hdrTessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+            if (m_context.supportsFillModeNonSolid()) {
+                PipelineConfig hdrTessWireConfig = PipelineConfig::tessellationConfig();
+                hdrTessWireConfig.renderPass = m_postProcess->getHDRRenderPass();
+                hdrTessWireConfig.pipelineLayout = m_pipelineLayout;
+                hdrTessWireConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+                hdrTessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
+                hdrTessWireConfig.rasterization.lineWidth = 1.5f;
+                hdrTessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
 
-            m_hdrTessWireframePipeline = std::make_unique<Pipeline>(m_context,
-                "shaders/structural.vert.spv",
-                "shaders/structural.tesc.spv",
-                "shaders/structural.tese.spv",
-                "shaders/structural.frag.spv",
-                hdrTessWireConfig);
+                m_hdrTessWireframePipeline = std::make_unique<Pipeline>(m_context,
+                    "shaders/structural.vert.spv",
+                    "shaders/structural.tesc.spv",
+                    "shaders/structural.tese.spv",
+                    "shaders/structural.frag.spv",
+                    hdrTessWireConfig);
+            }
         }
     }
 
@@ -1160,7 +1180,8 @@ void Renderer::endFrame() {
 void Renderer::beginRenderPass(vec4 clearColor) {
     // Direct rendering - apply tonemapping in shader
     m_outputLinearHDR = false;
-    updateUniformBuffer(m_currentFrame);
+    // NOTE: updateUniformBuffer() already called in beginFrame(), don't call again here
+    // or it will reset elementOverride fields to identity values!
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1249,7 +1270,8 @@ void Renderer::beginHDRRenderPass(vec4 clearColor) {
 
     // Enable linear HDR output (composite pass will do tonemapping)
     m_outputLinearHDR = true;
-    updateUniformBuffer(m_currentFrame);
+    // NOTE: updateUniformBuffer() already called in beginFrame(), don't call again here
+    // or it will reset elementOverride fields to identity values!
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1573,6 +1595,14 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
 
 void Renderer::setCamera(const Camera& camera) {
     m_camera = camera;
+
+    // Update frustum for culling
+    auto extent = m_context.getSwapchainExtent();
+    f32 aspectRatio = static_cast<f32>(extent.width) / static_cast<f32>(extent.height);
+    mat4 view = m_camera.getViewMatrix();
+    mat4 proj = m_camera.getProjectionMatrix(aspectRatio);
+    proj[1][1] *= -1;  // Vulkan Y-flip
+    m_frustum = Frustum::fromViewProjection(proj * view);
 }
 
 void Renderer::updateUniformBuffer(u32 frameIndex) {
@@ -1613,10 +1643,39 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
 
     // Material params: uvScale, normalStrength, brightness, contrast
     ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, m_materialBrightness, m_materialContrast);
+
     // Material params2: saturation, roughnessOffset, metallicOffset, aoStrength
     ubo.materialParams2 = vec4(m_materialSaturation, m_materialRoughnessOffset, m_materialMetallicOffset, m_materialAOStrength);
     // Material tint
     ubo.materialTint = vec4(m_materialTint, 1.0f);
+    // POM parameters: enabled, heightScale, minLayers, maxLayers
+    ubo.pomParams = vec4(m_pomEnabled ? 1.0f : 0.0f, m_pomHeightScale, m_pomMinLayers, m_pomMaxLayers);
+
+    // Debug visualization mode
+    ubo.materialDebugMode = static_cast<u32>(m_materialDebugMode);
+
+    // Element overrides - initialize with safe defaults (identity values that don't change rendering)
+    // These values are used for elements without overrides, and as base values for elements with partial overrides
+    // DO NOT use zeros - that would make textures disappear!
+    ubo.overrideMask = 0;  // No overrides by default
+    ubo._pad1 = 0.0f;
+    ubo._pad2 = 0.0f;
+    ubo.elementOverride1 = vec4(1.0f, 1.0f, 0.0f, 1.0f);  // uvScale=1, normal=1, brightness=0, contrast=1
+    ubo.elementOverride2 = vec4(1.0f, 0.0f, 0.0f, 1.0f);  // saturation=1, roughness=0, metallic=0, ao=1
+    ubo.elementOverride3 = vec4(0.0f, 0.0f, 0.0f, 0.0f);  // tint=(0,0,0)
+
+    // Multiple light sources
+    ubo.numLights = static_cast<u32>(std::min(m_lights.size(), static_cast<size_t>(MAX_LIGHTS)));
+    ubo._pad3 = 0.0f;
+    ubo._pad4 = 0.0f;
+    ubo._pad5 = 0.0f;
+    for (u32 i = 0; i < ubo.numLights; ++i) {
+        ubo.lights[i] = m_lights[i];  // GPULight and Light are compatible (inheritance)
+    }
+    // Zero out unused light slots for safety
+    for (u32 i = ubo.numLights; i < MAX_LIGHTS; ++i) {
+        ubo.lights[i] = GPULight{};
+    }
 
     std::memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
 }
@@ -1833,10 +1892,74 @@ void Renderer::drawMesh(Mesh& mesh, const mat4& transform, vec3 color, f32 stres
 }
 
 void Renderer::drawMeshWithMaterial(Mesh& mesh, const mat4& transform, vec3 color, f32 stress, vec4 material) {
+    // Use m_currentDrawElementId for per-element overrides (set before calling draw functions)
+    drawMeshWithMaterialAndOverride(mesh, transform, color, stress, material, m_currentDrawElementId);
+}
+
+void Renderer::drawMeshWithMaterialAndOverride(Mesh& mesh, const mat4& transform, vec3 color, f32 stress, vec4 material, int elementId) {
     PushConstants push{};
     push.model = transform;
     push.color = vec4(color, stress);  // stress in alpha controls shader behavior
-    push.material = material;
+    push.material = material;  // x = metallic, y = roughness, z = ao, w = emission
+
+    // Set override data from element if present
+    push.overrideMask = 0;
+    push._pad1 = push._pad2 = push._pad3 = 0.0f;
+    push.overrides1 = vec4(1.0f, 1.0f, 0.0f, 1.0f);  // Default: uvScale=1, normal=1, brightness=0, contrast=1
+    push.overrides2 = vec4(1.0f, 0.0f, 0.0f, 1.0f);  // Default: saturation=1, roughness=0, metallic=0, ao=1
+    push.overrides3 = vec4(1.0f, 1.0f, 1.0f, 0.0f);  // Default: tint=white, unused=0
+
+    if (elementId >= 0) {
+        const ElementMaterialOverride* override = getElementOverride(elementId);
+        if (override && override->active) {
+            // Build the mask and override values for overrides1
+            if (override->hasUVScale) {
+                push.overrideMask |= MaterialOverrideBits::UVScale;
+                push.overrides1.x = override->uvScale;
+            }
+            if (override->hasNormalStrength) {
+                push.overrideMask |= MaterialOverrideBits::NormalStrength;
+                push.overrides1.y = override->normalStrength;
+            }
+            if (override->hasBrightness) {
+                push.overrideMask |= MaterialOverrideBits::Brightness;
+                push.overrides1.z = override->brightness;
+            }
+            if (override->hasContrast) {
+                push.overrideMask |= MaterialOverrideBits::Contrast;
+                push.overrides1.w = override->contrast;
+            }
+            // Build the mask and override values for overrides2
+            if (override->hasSaturation) {
+                push.overrideMask |= MaterialOverrideBits::Saturation;
+                push.overrides2.x = override->saturation;
+            }
+            if (override->hasRoughness) {
+                push.overrideMask |= MaterialOverrideBits::Roughness;
+                push.overrides2.y = override->roughness;
+            }
+            if (override->hasMetallic) {
+                push.overrideMask |= MaterialOverrideBits::Metallic;
+                push.overrides2.z = override->metallic;
+            }
+            if (override->hasAOStrength) {
+                push.overrideMask |= MaterialOverrideBits::AOStrength;
+                push.overrides2.w = override->aoStrength;
+            }
+            // Build the mask and override values for overrides3
+            if (override->hasTint) {
+                push.overrideMask |= MaterialOverrideBits::Tint;
+                push.overrides3.x = override->tint[0];
+                push.overrides3.y = override->tint[1];
+                push.overrides3.z = override->tint[2];
+            }
+            // UV rotation (stored in overrides3.w, convert degrees to radians)
+            if (override->hasUVRotation) {
+                push.overrideMask |= MaterialOverrideBits::UVRotation;
+                push.overrides3.w = glm::radians(override->uvRotation);
+            }
+        }
+    }
 
     vkCmdPushConstants(m_currentCommandBuffer, m_pipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
@@ -2111,7 +2234,12 @@ VkDescriptorSet Renderer::createMaterialDescriptorSetForMaterial(const Material&
     Texture* ao = material.aoMap ? material.aoMap : Texture::getWhite();
     Texture* emissive = material.emissiveMap ? material.emissiveMap : Texture::getBlack();
     Texture* opacity = material.opacityMap ? material.opacityMap : Texture::getWhite();
-    Texture* height = material.heightMap ? material.heightMap : Texture::getBlack();
+    Texture* height = material.heightMap ? material.heightMap : Texture::getGrey();
+
+    // Debug: Check if we're using fallback textures
+    if (!material.albedoMap) {
+        std::cerr << "[Renderer] WARNING: Material " << material.name << " has no albedo map, using white fallback" << std::endl;
+    }
 
     std::array<VkDescriptorImageInfo, 8> imageInfos{};
     imageInfos[0] = {albedo->getSampler(), albedo->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -2307,6 +2435,7 @@ void Renderer::drawGrid(f32 size, f32 spacing) {
     PushConstants push{};
     push.model = transform;
     push.color = vec4(0.3f, 0.3f, 0.3f, 1.0f);
+    push.material = vec4(0.0f, 0.5f, 1.0f, 0.0f);  // metallic=0, roughness=0.5, ao=1, emission=0
 
     vkCmdPushConstants(m_currentCommandBuffer, m_pipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
@@ -2345,16 +2474,31 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             else if (e.type == ElementType::Wall) walls++;
         }
         std::cout << "[Renderer] Building: " << building.name << " - " << walls << " walls, " << doors << " doors, " << windows << " windows\n";
-        std::cout << "[Renderer] Terrain check: " << building.terrainMesh.vertices.size() << " vertices, "
-                  << building.terrainMesh.indices.size() << " indices, hasData=" << building.terrainMesh.hasData() << "\n";
     }
 
-    std::cout << "[Renderer] Starting elements loop, count=" << elements.size() << std::endl;
+    m_culledCount = 0;  // Reset culled counter
     size_t index = 0;
-    /* TEMPORARILY DISABLED FOR TERRAIN DEBUG
     for (const auto& element : elements) {
+        // Frustum culling - skip elements outside view
+        vec3 aabbMin, aabbMax;
+        getElementAABB(element, aabbMin, aabbMax);
+        if (!m_frustum.testAABB(aabbMin, aabbMax)) {
+            m_culledCount++;
+            index++;
+            continue;  // Skip this element
+        }
+
         vec3 color = getElementColor(element, building, index);
 
+        // Set current element for per-element material overrides (used by draw functions)
+        m_currentDrawElementId = static_cast<int>(index);
+
+        // Highlight selected elements - blend with base color for better material visibility
+        bool isSelected = selectedIndices.count(static_cast<int>(index)) > 0;
+        if (isSelected) {
+            vec3 highlightColor = vec3(1.0f, 0.8f, 0.2f);  // Yellow-orange
+            color = mix(color, highlightColor, 0.3f);  // 30% highlight, 70% material color
+        }
         // Bind material textures for this element (set 1)
         bindMaterialDescriptorSet(resolveMaterialName(element));
 
@@ -2401,12 +2545,8 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                     // Check if this is a diagonal wall (both X and Z extents significant)
                     bool isDiagonal = std::abs(xExtent) > 0.1f && std::abs(zExtent) > 0.1f;
 
-                    // Wall material - add emissive glow when selected
-                    bool isSelected = selectedIndices.count(static_cast<int>(index)) > 0;
-                    // Format: vec4(metallic, roughness, ao, emission)
-                    // Selected elements glow with emission (1.5 = strong glow)
-                    float emission = isSelected ? 1.5f : m_wallEmission;
-                    vec4 wallMat = vec4(m_wallMetallic, m_wallRoughness, m_wallAO, emission);
+                    // Wall material
+                    vec4 wallMat = vec4(m_wallMetallic, m_wallRoughness, m_wallAO, m_wallEmission);
 
                     if (isDiagonal) {
                         // Diagonal wall - use beam geometry
@@ -2430,7 +2570,7 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                             m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
                         }
 
-                        // Draw with wall material (includes emissive glow if selected)
+                        // Draw with wall material
                         drawMeshWithMaterial(*m_meshCache[key], mat4(1.0f), color, stressForShader, wallMat);
                     } else {
                         // Axis-aligned wall - use column geometry with wall material
@@ -2547,29 +2687,24 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
         }
         index++;
     }
-    */
 
-    std::cout << "[Renderer] After first loop (opaque elements)" << std::endl;
-
-    /* TEMPORARILY DISABLED FOR TERRAIN DEBUG
     // Second pass: Render transparent windows with alpha blending
     Pipeline* transparentPipeline = m_outputLinearHDR ? m_hdrTransparentPipeline.get() : m_transparentPipeline.get();
-    std::cout << "[Renderer] Transparent pipeline: " << (transparentPipeline ? "valid" : "NULL") << std::endl;
-
     if (transparentPipeline) {
-        std::cout << "[Renderer] Entering transparent windows loop" << std::endl;
         m_context.beginDebugLabel(m_currentCommandBuffer, "Transparent Windows", {0.4f, 0.7f, 0.9f, 1.0f});
         transparentPipeline->bind(m_currentCommandBuffer);
 
         index = 0;
         for (const auto& element : elements) {
-            if (index == 0) std::cout << "[Renderer] Inside transparent loop, element count=" << elements.size() << std::endl;
             if (element.type != ElementType::Window) {
                 index++;
                 continue;
             }
 
             bindMaterialDescriptorSet(resolveMaterialName(element));
+
+            // Set current element for per-element material overrides (used by draw functions)
+            m_currentDrawElementId = static_cast<int>(index);
 
             vec3 color = getElementColor(element, building, index);
             bool isSelected = selectedIndices.count(static_cast<int>(index)) > 0;
@@ -2643,321 +2778,43 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
         }
 
         m_context.endDebugLabel(m_currentCommandBuffer);
-        std::cout << "[Renderer] After transparent windows loop" << std::endl;
     }
-    */
 
-    std::cout << "[Renderer] Before terrain check, hasData=" << building.terrainMesh.hasData() << std::endl;
-
-    // Draw terrain mesh AFTER building elements (at the end)
-    if (building.terrainMesh.hasData()) {
-        std::cout << "[Renderer] Drawing terrain: " << building.terrainMesh.vertices.size()
-                  << " vertices, indices: " << building.terrainMesh.indices.size() << std::endl;
-        if (!building.terrainMesh.vertices.empty()) {
-            const auto& v = building.terrainMesh.vertices[0];
-            std::cout << "[Renderer] First vertex position: ("
-                      << v.position.x << ", " << v.position.y << ", " << v.position.z << ")" << std::endl;
-        }
-        m_context.beginDebugLabel(m_currentCommandBuffer, "Terrain", {0.3f, 0.5f, 0.3f, 1.0f});
-        drawTerrain(building.terrainMesh);
-        m_context.endDebugLabel(m_currentCommandBuffer);
-    }
+    // Update stats with culled count
+    m_stats.culledElements = m_culledCount;
 
     m_context.endDebugLabel(m_currentCommandBuffer);
 }
 
-void Renderer::drawSelectedElements(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices) {
-    if (selectedIndices.empty()) return;
-
-    m_context.beginDebugLabel(m_currentCommandBuffer, "Selection Highlights", {1.0f, 0.8f, 0.2f, 1.0f});
-
-    // Bright yellow-orange highlight color
-    vec3 highlightColor = vec3(1.0f, 0.8f, 0.2f);
-
-    size_t index = 0;
-    for (const auto& element : elements) {
-        // Only render selected elements
-        if (selectedIndices.count(static_cast<int>(index)) == 0) {
-            index++;
-            continue;
-        }
-
-        // Render selected elements slightly larger to make them visible
-        float scale = 1.02f;  // 2% larger to show through
-
-        // Generate geometry and render with highlight color (no materials)
-        switch (element.type) {
-            case ElementType::Wall: {
-                float xExtent = element.end.x - element.start.x;
-                float zExtent = element.end.z - element.start.z;
-                float height = element.end.y - element.start.y;
-                float thickness = element.depth > 0.01f ? element.depth : 0.5f;
-
-                glm::vec3 center = (element.start + element.end) * 0.5f;
-                center.y = element.start.y;
-
-                // Create scaled transform
-                mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
-                mat4 transMat = glm::translate(mat4(1.0f), center);
-                mat4 transform = transMat * scaleMat * glm::inverse(transMat);
-
-                // Render column geometry for wall (no materials)
-                if (std::abs(xExtent) > std::abs(zExtent)) {
-                    std::string key = "col_" + std::to_string(std::abs(xExtent)) + "_" + std::to_string(thickness) + "_" + std::to_string(height);
-                    if (m_meshCache.find(key) != m_meshCache.end()) {
-                        drawMesh(*m_meshCache[key], transform, highlightColor, 0.0f);
-                    }
-                } else {
-                    std::string key = "col_" + std::to_string(thickness) + "_" + std::to_string(std::abs(zExtent)) + "_" + std::to_string(height);
-                    if (m_meshCache.find(key) != m_meshCache.end()) {
-                        drawMesh(*m_meshCache[key], transform, highlightColor, 0.0f);
-                    }
-                }
-                break;
-            }
-
-            case ElementType::Floor: {
-                glm::vec3 center = (element.start + element.end) * 0.5f;
-                center.y = element.start.y;
-                std::string key = "floor_" + std::to_string(element.end.x - element.start.x) + "_" +
-                                 std::to_string(element.end.z - element.start.z) + "_" + std::to_string(element.end.y - element.start.y);
-                if (m_meshCache.find(key) != m_meshCache.end()) {
-                    mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
-                    mat4 transMat = glm::translate(mat4(1.0f), center);
-                    mat4 transform = transMat * scaleMat * glm::inverse(transMat);
-                    drawMesh(*m_meshCache[key], transform, highlightColor, 0.0f);
-                }
-                break;
-            }
-
-            case ElementType::Column: {
-                std::string key = "col_" + std::to_string(element.width) + "_" + std::to_string(element.depth) + "_" +
-                                 std::to_string(element.end.y - element.start.y);
-                if (m_meshCache.find(key) != m_meshCache.end()) {
-                    glm::vec3 center = element.start;
-                    center.y += (element.end.y - element.start.y) * 0.5f;
-                    mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
-                    mat4 transMat = glm::translate(mat4(1.0f), center);
-                    mat4 transform = transMat * scaleMat * glm::inverse(transMat);
-                    drawMesh(*m_meshCache[key], transform, highlightColor, 0.0f);
-                }
-                break;
-            }
-
-            default:
-                // Skip other element types for now
-                break;
-        }
-
-        index++;
+void Renderer::drawTerrain(const TerrainMesh& terrain) {
+    if (!terrain.hasData()) {
+        return;
     }
 
-    m_context.endDebugLabel(m_currentCommandBuffer);
-}
+    m_context.beginDebugLabel(m_currentCommandBuffer, "Terrain", {0.4f, 0.7f, 0.3f, 1.0f});
 
-void Renderer::drawHoveredElements(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& hoveredIndices) {
-    if (hoveredIndices.empty()) return;
+    // Check if terrain data has changed and we need to rebuild the mesh
+    if (&terrain != m_lastTerrainData || !m_terrainMesh) {
+        m_lastTerrainData = &terrain;
 
-    m_context.beginDebugLabel(m_currentCommandBuffer, "Hover Highlights", {1.0f, 1.0f, 0.0f, 1.0f});
+        // Create mesh from terrain vertices and indices
+        m_terrainMesh = std::make_unique<Mesh>(m_context, terrain.vertices, terrain.indices);
 
-    // Semi-transparent yellow highlight for hover
-    vec3 hoverColor = vec3(1.0f, 1.0f, 0.0f);  // Bright yellow
-
-    size_t index = 0;
-    for (const auto& element : elements) {
-        // Only render hovered elements
-        if (hoveredIndices.count(static_cast<int>(index)) == 0) {
-            index++;
-            continue;
-        }
-
-        // Render hovered elements slightly larger to make them visible
-        float scale = 1.015f;  // 1.5% larger for hover (smaller than selection)
-
-        // Generate geometry and render with hover color
-        switch (element.type) {
-            case ElementType::Wall: {
-                float xExtent = element.end.x - element.start.x;
-                float zExtent = element.end.z - element.start.z;
-                float height = element.end.y - element.start.y;
-                float thickness = element.depth > 0.01f ? element.depth : 0.5f;
-
-                glm::vec3 center = (element.start + element.end) * 0.5f;
-                center.y = element.start.y;
-
-                // Create scaled transform
-                mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
-                mat4 transMat = glm::translate(mat4(1.0f), center);
-                mat4 transform = transMat * scaleMat * glm::inverse(transMat);
-
-                // Render column geometry for wall
-                if (std::abs(xExtent) > std::abs(zExtent)) {
-                    std::string key = "col_" + std::to_string(std::abs(xExtent)) + "_" + std::to_string(thickness) + "_" + std::to_string(height);
-                    if (m_meshCache.find(key) != m_meshCache.end()) {
-                        drawMesh(*m_meshCache[key], transform, hoverColor, 0.0f);
-                    }
-                } else {
-                    std::string key = "col_" + std::to_string(thickness) + "_" + std::to_string(std::abs(zExtent)) + "_" + std::to_string(height);
-                    if (m_meshCache.find(key) != m_meshCache.end()) {
-                        drawMesh(*m_meshCache[key], transform, hoverColor, 0.0f);
-                    }
-                }
-                break;
-            }
-
-            case ElementType::Floor: {
-                glm::vec3 center = (element.start + element.end) * 0.5f;
-                center.y = element.start.y;
-                std::string key = "floor_" + std::to_string(element.end.x - element.start.x) + "_" +
-                                 std::to_string(element.end.z - element.start.z) + "_" + std::to_string(element.end.y - element.start.y);
-                if (m_meshCache.find(key) != m_meshCache.end()) {
-                    mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
-                    mat4 transMat = glm::translate(mat4(1.0f), center);
-                    mat4 transform = transMat * scaleMat * glm::inverse(transMat);
-                    drawMesh(*m_meshCache[key], transform, hoverColor, 0.0f);
-                }
-                break;
-            }
-
-            case ElementType::Door: {
-                float xExtent = element.end.x - element.start.x;
-                float zExtent = element.end.z - element.start.z;
-                float doorWidth = std::sqrt(xExtent*xExtent + zExtent*zExtent);
-                float doorHeight = element.end.y - element.start.y;
-                float doorDepth = element.depth > 0.01f ? element.depth : 0.2f;
-
-                glm::vec3 center = (element.start + element.end) * 0.5f;
-                center.y = element.start.y;
-
-                std::string key = "col_" + std::to_string(doorWidth) + "_" + std::to_string(doorDepth) + "_" + std::to_string(doorHeight);
-                if (m_meshCache.find(key) != m_meshCache.end()) {
-                    mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
-                    mat4 transMat = glm::translate(mat4(1.0f), center);
-                    mat4 transform = transMat * scaleMat * glm::inverse(transMat);
-                    drawMesh(*m_meshCache[key], transform, hoverColor, 0.0f);
-                }
-                break;
-            }
-
-            case ElementType::Window: {
-                float xExtent = element.end.x - element.start.x;
-                float zExtent = element.end.z - element.start.z;
-                float windowWidth = std::sqrt(xExtent*xExtent + zExtent*zExtent);
-                float windowHeight = element.end.y - element.start.y;
-                float windowDepth = element.depth > 0.01f ? element.depth : 0.1f;
-
-                glm::vec3 center = (element.start + element.end) * 0.5f;
-                center.y = element.start.y;
-
-                std::string key = "col_" + std::to_string(windowWidth) + "_" + std::to_string(windowDepth) + "_" + std::to_string(windowHeight);
-                if (m_meshCache.find(key) != m_meshCache.end()) {
-                    mat4 scaleMat = glm::scale(mat4(1.0f), vec3(scale));
-                    mat4 transMat = glm::translate(mat4(1.0f), center);
-                    mat4 transform = transMat * scaleMat * glm::inverse(transMat);
-                    drawMesh(*m_meshCache[key], transform, hoverColor, 0.0f);
-                }
-                break;
-            }
-
-            default:
-                // Skip other element types for now
-                break;
-        }
-
-        index++;
+        std::cout << "[Terrain] Created GPU mesh: " << terrain.vertices.size()
+                  << " vertices, " << (terrain.indices.size() / 3) << " triangles\n";
     }
 
-    m_context.endDebugLabel(m_currentCommandBuffer);
-}
+    // Use default material descriptor set (no texture, just vertex colors)
+    bindMaterialDescriptorSet("");
 
-void Renderer::drawWireframeOutlines(const std::vector<StructuralElement>& elements, const Building& building,
-                                    const std::set<int>& selectedIndices, int hoveredIndex) {
-    if (selectedIndices.empty() && hoveredIndex < 0) return;
+    // Clear per-element override (terrain has no element ID)
+    m_currentDrawElementId = -1;
 
-    m_context.beginDebugLabel(m_currentCommandBuffer, "Wireframe Outlines", {1.0f, 1.0f, 0.0f, 1.0f});
+    // Terrain material: rough, non-metallic surface
+    vec4 terrainMaterial = vec4(0.0f, 0.85f, 1.0f, 0.0f);  // metallic=0, roughness=0.85, ao=1, emission=0
 
-    // Bind wireframe pipeline
-    if (m_wireframePipeline) {
-        m_wireframePipeline->bind(m_currentCommandBuffer);
-
-        // Render selected elements in yellow-orange
-        vec3 selectedColor = vec3(1.0f, 0.8f, 0.2f);
-        vec3 hoverColor = vec3(1.0f, 1.0f, 0.0f);  // Yellow
-
-        size_t index = 0;
-        for (const auto& element : elements) {
-            bool isSelected = selectedIndices.count(static_cast<int>(index)) > 0;
-            bool isHovered = (index == hoveredIndex);
-
-            if (!isSelected && !isHovered) {
-                index++;
-                continue;
-            }
-
-            vec3 color = isSelected ? selectedColor : hoverColor;
-
-            // Render as wireframe
-            switch (element.type) {
-                case ElementType::Wall: {
-                    float xExtent = element.end.x - element.start.x;
-                    float zExtent = element.end.z - element.start.z;
-                    float height = element.end.y - element.start.y;
-                    float thickness = element.depth > 0.01f ? element.depth : 0.5f;
-
-                    glm::vec3 center = (element.start + element.end) * 0.5f;
-                    center.y = element.start.y;
-
-                    if (std::abs(xExtent) > std::abs(zExtent)) {
-                        drawColumn(center, std::abs(xExtent), thickness, height, color, 0.0f);
-                    } else {
-                        drawColumn(center, thickness, std::abs(zExtent), height, color, 0.0f);
-                    }
-                    break;
-                }
-
-                case ElementType::Floor: {
-                    glm::vec3 center = (element.start + element.end) * 0.5f;
-                    center.y = element.start.y;
-                    drawFloor(center,
-                             element.end.x - element.start.x,
-                             element.end.z - element.start.z,
-                             element.end.y - element.start.y, color, 0.0f);
-                    break;
-                }
-
-                case ElementType::Door: {
-                    float xExtent = element.end.x - element.start.x;
-                    float zExtent = element.end.z - element.start.z;
-                    float doorWidth = std::sqrt(xExtent*xExtent + zExtent*zExtent);
-                    float doorHeight = element.end.y - element.start.y;
-                    float doorDepth = element.depth > 0.01f ? element.depth : 0.2f;
-
-                    glm::vec3 center = (element.start + element.end) * 0.5f;
-                    center.y = element.start.y;
-                    drawColumn(center, doorWidth, doorDepth, doorHeight, color, 0.0f);
-                    break;
-                }
-
-                case ElementType::Window: {
-                    float xExtent = element.end.x - element.start.x;
-                    float zExtent = element.end.z - element.start.z;
-                    float windowWidth = std::sqrt(xExtent*xExtent + zExtent*zExtent);
-                    float windowHeight = element.end.y - element.start.y;
-                    float windowDepth = element.depth > 0.01f ? element.depth : 0.1f;
-
-                    glm::vec3 center = (element.start + element.end) * 0.5f;
-                    center.y = element.start.y;
-                    drawColumn(center, windowWidth, windowDepth, windowHeight, color, 0.0f);
-                    break;
-                }
-
-                default:
-                    break;
-            }
-
-            index++;
-        }
-    }
+    // Draw with identity transform (terrain is pre-positioned in world space)
+    drawMeshWithMaterial(*m_terrainMesh, mat4(1.0f), vec3(1.0f), 0.0f, terrainMaterial);
 
     m_context.endDebugLabel(m_currentCommandBuffer);
 }
@@ -3105,6 +2962,132 @@ void Renderer::setTonemapMode(u32 mode) {
 
 u32 Renderer::getTonemapMode() const {
     return m_postProcess ? m_postProcess->getCompositeConfig().tonemapMode : 1;
+}
+
+// Debug visualization modes
+void Renderer::setPostProcessDebugMode(PostProcessDebugMode mode) {
+    if (m_postProcess) {
+        m_postProcess->setDebugMode(mode);
+    }
+}
+
+PostProcessDebugMode Renderer::getPostProcessDebugMode() const {
+    if (m_postProcess) {
+        return m_postProcess->getDebugMode();
+    }
+    return PostProcessDebugMode::None;
+}
+
+// Project settings - batch get/set for project save/load
+RenderSettings Renderer::getRenderSettings() const {
+    RenderSettings settings;
+
+    // Shadows
+    settings.shadowsEnabled = m_shadowsEnabled;
+    settings.shadowBias = m_shadowBias;
+    settings.lightDirection = m_lightDirection;
+
+    // Post-processing
+    if (m_postProcess) {
+        settings.ssao = m_postProcess->getSSAOConfig();
+        settings.bloom = m_postProcess->getBloomConfig();
+        settings.composite = m_postProcess->getCompositeConfig();
+    }
+    settings.ssaoEnabled = m_ssaoEnabled;
+    settings.bloomEnabled = m_bloomEnabled;
+    settings.postProcessingEnabled = m_postProcessingEnabled;
+
+    // Material defaults
+    settings.defaultMetallic = m_defaultMetallic;
+    settings.defaultRoughness = m_defaultRoughness;
+    settings.defaultAO = m_defaultAO;
+    settings.defaultEmission = m_defaultEmission;
+
+    // Material adjustments
+    settings.materialUVScale = m_materialUVScale;
+    settings.normalStrength = m_normalStrength;
+    settings.materialBrightness = m_materialBrightness;
+    settings.materialContrast = m_materialContrast;
+    settings.materialSaturation = m_materialSaturation;
+    settings.materialRoughnessOffset = m_materialRoughnessOffset;
+    settings.materialMetallicOffset = m_materialMetallicOffset;
+    settings.materialAOStrength = m_materialAOStrength;
+    settings.materialTint = m_materialTint;
+
+    // Tessellation & POM
+    settings.tessellationEnabled = m_tessellationEnabled;
+    settings.pomEnabled = m_pomEnabled;
+    settings.tessellationLevel = m_tessellationLevel;
+    settings.displacementScale = m_displacementScale;
+    settings.pomHeightScale = m_pomHeightScale;
+    settings.pomMinLayers = m_pomMinLayers;
+    settings.pomMaxLayers = m_pomMaxLayers;
+
+    // Clipping
+    settings.clippingEnabled = m_clippingEnabled;
+    settings.clipFlipped = m_clipFlipped;
+    settings.clipAxis = m_clipAxis;
+    settings.clipHeight = m_clipHeight;
+
+    // Style
+    settings.vizMode = m_vizMode;
+    settings.materialStyle = m_materialStyle;
+
+    return settings;
+}
+
+void Renderer::setRenderSettings(const RenderSettings& settings) {
+    // Shadows
+    m_shadowsEnabled = settings.shadowsEnabled;
+    m_shadowBias = settings.shadowBias;
+    m_lightDirection = settings.lightDirection;
+
+    // Post-processing
+    if (m_postProcess) {
+        m_postProcess->setSSAOConfig(settings.ssao);
+        m_postProcess->setBloomConfig(settings.bloom);
+        m_postProcess->setCompositeConfig(settings.composite);
+    }
+    m_ssaoEnabled = settings.ssaoEnabled;
+    m_bloomEnabled = settings.bloomEnabled;
+    m_postProcessingEnabled = settings.postProcessingEnabled;
+
+    // Material defaults
+    m_defaultMetallic = settings.defaultMetallic;
+    m_defaultRoughness = settings.defaultRoughness;
+    m_defaultAO = settings.defaultAO;
+    m_defaultEmission = settings.defaultEmission;
+
+    // Material adjustments
+    m_materialUVScale = settings.materialUVScale;
+    m_normalStrength = settings.normalStrength;
+    m_materialBrightness = settings.materialBrightness;
+    m_materialContrast = settings.materialContrast;
+    m_materialSaturation = settings.materialSaturation;
+    m_materialRoughnessOffset = settings.materialRoughnessOffset;
+    m_materialMetallicOffset = settings.materialMetallicOffset;
+    m_materialAOStrength = settings.materialAOStrength;
+    m_materialTint = settings.materialTint;
+
+    // Tessellation & POM
+    m_tessellationEnabled = settings.tessellationEnabled;
+    m_pomEnabled = settings.pomEnabled;
+    m_tessellationLevel = settings.tessellationLevel;
+    m_displacementScale = settings.displacementScale;
+    m_pomHeightScale = settings.pomHeightScale;
+    m_pomMinLayers = settings.pomMinLayers;
+    m_pomMaxLayers = settings.pomMaxLayers;
+
+    // Clipping
+    m_clippingEnabled = settings.clippingEnabled;
+    m_clipFlipped = settings.clipFlipped;
+    m_clipAxis = settings.clipAxis;
+    m_clipHeight = settings.clipHeight;
+    updateClipPlane();  // Recompute clip plane from axis/height
+
+    // Style
+    m_vizMode = settings.vizMode;
+    m_materialStyle = settings.materialStyle;
 }
 
 #if 0  // Ray tracing disabled - incomplete implementation (missing header declarations)
@@ -3566,6 +3549,12 @@ void Renderer::createHighResResources(u32 width, u32 height) {
 void Renderer::cleanupHighResResources() {
     VkDevice device = m_context.getDevice();
 
+    // Free CPU-side pixel buffer to reclaim memory
+    m_highResPixels.clear();
+    m_highResPixels.shrink_to_fit();
+    m_highResWidth = 0;
+    m_highResHeight = 0;
+
     // Destroy pipelines first (uses render pass)
     m_highResPipeline.reset();
     m_highResTransparentPipeline.reset();
@@ -3803,6 +3792,7 @@ bool Renderer::renderHighRes(
             ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, m_materialBrightness + (brightness - 1.0f) * 0.1f, m_materialContrast);
             ubo.materialParams2 = vec4(m_materialSaturation, m_materialRoughnessOffset, m_materialMetallicOffset, m_materialAOStrength);
             ubo.materialTint = vec4(m_materialTint, 1.0f);
+            ubo.pomParams = vec4(m_pomEnabled ? 1.0f : 0.0f, m_pomHeightScale, m_pomMinLayers, m_pomMaxLayers);
 
             memcpy(m_uniformBuffersMapped[0], &ubo, sizeof(ubo));
 
@@ -3818,6 +3808,9 @@ bool Renderer::renderHighRes(
             for (size_t i = 0; i < elements.size(); ++i) {
                 const auto& elem = elements[i];
                 vec3 color = getElementColor(elem, building, i);
+
+                // Set current element for per-element material overrides (used by draw functions)
+                m_currentDrawElementId = static_cast<int>(i);
 
                 // Bind material
                 std::string matName = resolveMaterialName(elem);
@@ -3968,6 +3961,9 @@ bool Renderer::renderHighRes(
                     vec3 color = getElementColor(elem, building, i);
                     f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? elem.stress : 0.0f;
 
+                    // Set current element for per-element material overrides (used by draw functions)
+                    m_currentDrawElementId = static_cast<int>(i);
+
                     // Bind material
                     std::string matName = resolveMaterialName(elem);
                     bindMaterialDescriptorSet(matName);
@@ -4035,10 +4031,6 @@ bool Renderer::renderHighRes(
 
         // Ensure all GPU work is complete before returning to normal rendering
         m_context.waitIdle();
-
-        // Reset frame tracking to avoid stale fence references
-        m_currentFrame = 0;
-        m_imagesInFlight.assign(m_context.getSwapchainImageCount(), VK_NULL_HANDLE);
 
         // Average the accumulated samples and convert back to 8-bit
         float invSamples = 1.0f / static_cast<float>(samples);
@@ -4112,152 +4104,1501 @@ bool Renderer::saveHighResEXR(const std::string& filepath) {
     return saveHighResPNG(pngPath);
 }
 
-// ============================================================================
-// TERRAIN RENDERING
-// ============================================================================
+bool Renderer::renderPreview(const std::vector<StructuralElement>& elements,
+                            const Building& building,
+                            const std::string& filepath,
+                            float brightness) {
+    // Quick preview render at 1080p with 1 sample (fast!)
+    if (renderHighRes(elements, building, 1920, 1080, 1, brightness, nullptr)) {
+        // Save the rendered preview to the specified path
+        return saveHighResPNG(filepath);
+    }
+    return false;
+}
 
-void Renderer::initTerrainPipeline() {
-    // Create pipeline layout with push constants for elevation data
-    // Push constants: minElevation, maxElevation, elevationRange, padding
-    m_terrainPipelineLayout = PipelineLayoutBuilder(m_context)
-        .addDescriptorSetLayout(m_descriptorSetLayout)  // Set 0: UBO (camera, etc.)
-        .addPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(f32) * 4)
-        .build();
+// =============================================================================
+// Live Preview Rendering Implementation (GPU-Direct for ImGui)
+// =============================================================================
 
-    // Create terrain pipeline configuration
-    VkSampleCountFlagBits msaaSamples = m_context.getMsaaSamples();
+void Renderer::createPreviewResources() {
+    if (m_previewResourcesCreated) return;
 
-    PipelineConfig terrainConfig = PipelineConfig::defaultConfig();
-    terrainConfig.renderPass = m_renderPass;
-    terrainConfig.pipelineLayout = m_terrainPipelineLayout;
-    terrainConfig.multisample.rasterizationSamples = msaaSamples;
-    terrainConfig.rasterization.cullMode = VK_CULL_MODE_NONE;  // Disable culling for terrain
+    std::cout << "[Renderer] Creating live preview resources: " << kPreviewWidth << "x" << kPreviewHeight << std::endl;
 
-    if (msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
-        terrainConfig.multisample.sampleShadingEnable = VK_TRUE;
-        terrainConfig.multisample.minSampleShading = 0.2f;
+    VkDevice device = m_context.getDevice();
+
+    // Create color image with SAMPLED bit for ImGui texture display
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.extent = { kPreviewWidth, kPreviewHeight, 1 };
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(device, &imageInfo, nullptr, &m_previewImage) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview image");
     }
 
-    // Create the terrain pipeline
-    m_terrainPipeline = std::make_unique<Pipeline>(m_context,
-        "shaders/terrain.vert.spv",
-        "shaders/terrain.frag.spv",
-        terrainConfig);
+    // Allocate memory
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(device, m_previewImage, &memReqs);
 
-    std::cout << "[Renderer] Terrain pipeline initialized" << std::endl;
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &m_previewMemory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate preview image memory");
+    }
+
+    vkBindImageMemory(device, m_previewImage, m_previewMemory, 0);
+
+    // Create image view
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_previewImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &m_previewImageView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview image view");
+    }
+
+    // Create depth image
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+    VkImageCreateInfo depthImageInfo = imageInfo;
+    depthImageInfo.format = depthFormat;
+    depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+    if (vkCreateImage(device, &depthImageInfo, nullptr, &m_previewDepthImage) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview depth image");
+    }
+
+    vkGetImageMemoryRequirements(device, m_previewDepthImage, &memReqs);
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &m_previewDepthMemory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate preview depth memory");
+    }
+
+    vkBindImageMemory(device, m_previewDepthImage, m_previewDepthMemory, 0);
+
+    viewInfo.image = m_previewDepthImage;
+    viewInfo.format = depthFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &m_previewDepthView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview depth view");
+    }
+
+    // Create render pass with finalLayout = SHADER_READ_ONLY_OPTIMAL for ImGui sampling
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = depthFormat;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = 1;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    // Dependencies for proper layout transitions
+    std::array<VkSubpassDependency, 2> dependencies{};
+
+    // Transition from whatever to color attachment
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    // Transition from color attachment to shader read
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    std::array<VkAttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = static_cast<u32>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = static_cast<u32>(dependencies.size());
+    renderPassInfo.pDependencies = dependencies.data();
+
+    if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &m_previewRenderPass) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview render pass");
+    }
+
+    // Create framebuffer
+    std::array<VkImageView, 2> fbAttachments = { m_previewImageView, m_previewDepthView };
+
+    VkFramebufferCreateInfo fbInfo{};
+    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbInfo.renderPass = m_previewRenderPass;
+    fbInfo.attachmentCount = static_cast<u32>(fbAttachments.size());
+    fbInfo.pAttachments = fbAttachments.data();
+    fbInfo.width = kPreviewWidth;
+    fbInfo.height = kPreviewHeight;
+    fbInfo.layers = 1;
+
+    if (vkCreateFramebuffer(device, &fbInfo, nullptr, &m_previewFramebuffer) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview framebuffer");
+    }
+
+    // Create sampler for ImGui
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.mipLodBias = 0.0f;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 0.0f;
+
+    if (vkCreateSampler(device, &samplerInfo, nullptr, &m_previewSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create preview sampler");
+    }
+
+    // Create single-sample pipeline for preview rendering
+    PipelineConfig previewConfig = PipelineConfig::defaultConfig();
+    previewConfig.renderPass = m_previewRenderPass;
+    previewConfig.pipelineLayout = m_pipelineLayout;
+    previewConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    previewConfig.multisample.sampleShadingEnable = VK_FALSE;
+
+    m_previewPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                    "shaders/structural.frag.spv", previewConfig);
+
+    // Create transparent pipeline for windows
+    PipelineConfig previewTransparentConfig = PipelineConfig::transparentConfig();
+    previewTransparentConfig.renderPass = m_previewRenderPass;
+    previewTransparentConfig.pipelineLayout = m_pipelineLayout;
+    previewTransparentConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    m_previewTransparentPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
+                                                               "shaders/structural.frag.spv", previewTransparentConfig);
+
+    // Register texture with ImGui
+    m_previewImGuiDescriptor = ImGui_ImplVulkan_AddTexture(
+        m_previewSampler,
+        m_previewImageView,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    );
+
+    m_previewResourcesCreated = true;
+    std::cout << "[Renderer] Live preview resources created successfully" << std::endl;
 }
 
-void Renderer::uploadTerrainBuffers(const TerrainMesh& terrain) {
-    if (!terrain.hasData()) return;
+void Renderer::cleanupPreviewResources() {
+    if (!m_previewResourcesCreated) return;
 
-    u32 vertexCount = static_cast<u32>(terrain.vertices.size());
-    u32 indexCount = static_cast<u32>(terrain.indices.size());
+    std::cout << "[Renderer] Cleaning up live preview resources" << std::endl;
 
-    VkDeviceSize vertexBufferSize = sizeof(Vertex) * vertexCount;
-    VkDeviceSize indexBufferSize = sizeof(u32) * indexCount;
+    VkDevice device = m_context.getDevice();
 
-    // Create vertex buffer with staging
-    VkBuffer stagingVertexBuffer;
-    VkDeviceMemory stagingVertexMemory;
-    m_context.createBuffer(vertexBufferSize,
-                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          stagingVertexBuffer, stagingVertexMemory);
+    // Wait for GPU to be idle
+    m_context.waitIdle();
 
-    // Copy vertex data to staging buffer
-    void* data;
-    vkMapMemory(m_context.getDevice(), stagingVertexMemory, 0, vertexBufferSize, 0, &data);
-    memcpy(data, terrain.vertices.data(), vertexBufferSize);
-    vkUnmapMemory(m_context.getDevice(), stagingVertexMemory);
+    // Remove ImGui texture first
+    if (m_previewImGuiDescriptor != VK_NULL_HANDLE) {
+        ImGui_ImplVulkan_RemoveTexture(m_previewImGuiDescriptor);
+        m_previewImGuiDescriptor = VK_NULL_HANDLE;
+    }
 
-    // Create device-local vertex buffer
-    m_context.createBuffer(vertexBufferSize,
-                          VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                          m_terrainVertexBuffer, m_terrainVertexMemory);
+    // Destroy pipelines
+    m_previewPipeline.reset();
+    m_previewTransparentPipeline.reset();
 
-    // Copy from staging to device buffer
-    m_context.copyBuffer(stagingVertexBuffer, m_terrainVertexBuffer, vertexBufferSize);
+    // Destroy framebuffer
+    if (m_previewFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(device, m_previewFramebuffer, nullptr);
+        m_previewFramebuffer = VK_NULL_HANDLE;
+    }
 
-    // Cleanup staging buffer
-    vkDestroyBuffer(m_context.getDevice(), stagingVertexBuffer, nullptr);
-    vkFreeMemory(m_context.getDevice(), stagingVertexMemory, nullptr);
+    // Destroy render pass
+    if (m_previewRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_previewRenderPass, nullptr);
+        m_previewRenderPass = VK_NULL_HANDLE;
+    }
 
-    // Create index buffer with staging
-    VkBuffer stagingIndexBuffer;
-    VkDeviceMemory stagingIndexMemory;
-    m_context.createBuffer(indexBufferSize,
-                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          stagingIndexBuffer, stagingIndexMemory);
+    // Destroy sampler
+    if (m_previewSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_previewSampler, nullptr);
+        m_previewSampler = VK_NULL_HANDLE;
+    }
 
-    // Copy index data to staging buffer
-    vkMapMemory(m_context.getDevice(), stagingIndexMemory, 0, indexBufferSize, 0, &data);
-    memcpy(data, terrain.indices.data(), indexBufferSize);
-    vkUnmapMemory(m_context.getDevice(), stagingIndexMemory);
+    // Destroy depth resources
+    if (m_previewDepthView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_previewDepthView, nullptr);
+        m_previewDepthView = VK_NULL_HANDLE;
+    }
+    if (m_previewDepthImage != VK_NULL_HANDLE) {
+        vkDestroyImage(device, m_previewDepthImage, nullptr);
+        m_previewDepthImage = VK_NULL_HANDLE;
+    }
+    if (m_previewDepthMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_previewDepthMemory, nullptr);
+        m_previewDepthMemory = VK_NULL_HANDLE;
+    }
 
-    // Create device-local index buffer
-    m_context.createBuffer(indexBufferSize,
-                          VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                          m_terrainIndexBuffer, m_terrainIndexMemory);
+    // Destroy color resources
+    if (m_previewImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_previewImageView, nullptr);
+        m_previewImageView = VK_NULL_HANDLE;
+    }
+    if (m_previewImage != VK_NULL_HANDLE) {
+        vkDestroyImage(device, m_previewImage, nullptr);
+        m_previewImage = VK_NULL_HANDLE;
+    }
+    if (m_previewMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_previewMemory, nullptr);
+        m_previewMemory = VK_NULL_HANDLE;
+    }
 
-    // Copy from staging to device buffer
-    m_context.copyBuffer(stagingIndexBuffer, m_terrainIndexBuffer, indexBufferSize);
-
-    // Cleanup staging buffer
-    vkDestroyBuffer(m_context.getDevice(), stagingIndexBuffer, nullptr);
-    vkFreeMemory(m_context.getDevice(), stagingIndexMemory, nullptr);
-
-    m_terrainIndexCount = indexCount;
-
-    std::cout << "[Renderer] Uploaded terrain: " << vertexCount
-              << " vertices, " << indexCount << " indices" << std::endl;
+    m_previewResourcesCreated = false;
+    std::cout << "[Renderer] Live preview resources cleaned up" << std::endl;
 }
 
-void Renderer::drawTerrain(const TerrainMesh& terrainMesh) {
-    if (!terrainMesh.hasData()) return;
+// ============================================================================
+// Material Preview Thumbnails
+// ============================================================================
 
-    // DEBUG: Try using the standard pipeline instead of terrain pipeline
-    if (!m_pipeline) return;
+void Renderer::createMaterialPreviewResources() {
+    if (m_materialPreviewResourcesCreated) return;
 
-    // Upload buffers if needed
-    if (!m_terrainVertexBuffer || m_terrainIndexCount != static_cast<u32>(terrainMesh.indices.size())) {
-        uploadTerrainBuffers(terrainMesh);
+    std::cout << "[Renderer] Creating material preview resources" << std::endl;
 
-        // DEBUG: Print all vertex positions
-        std::cout << "[Renderer] Terrain vertices (" << terrainMesh.vertices.size() << "):" << std::endl;
-        for (size_t i = 0; i < std::min(size_t(8), terrainMesh.vertices.size()); i++) {
-            const auto& v = terrainMesh.vertices[i];
-            std::cout << "  [" << i << "] pos=(" << v.position.x << ", " << v.position.y << ", " << v.position.z << ")" << std::endl;
+    VkDevice device = m_context.getDevice();
+
+    // Create sampler for preview textures
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.mipLodBias = 0.0f;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 0.0f;
+
+    if (vkCreateSampler(device, &samplerInfo, nullptr, &m_materialPreviewSampler) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to create material preview sampler" << std::endl;
+        return;
+    }
+
+    // Create sphere mesh for preview rendering
+    createMaterialPreviewSphereMesh();
+
+    // Create dedicated UBO for preview rendering
+    createMaterialPreviewUBO();
+
+    m_materialPreviewResourcesCreated = true;
+    std::cout << "[Renderer] Material preview resources created" << std::endl;
+}
+
+void Renderer::cleanupMaterialPreviewResources() {
+    if (!m_materialPreviewResourcesCreated) return;
+
+    std::cout << "[Renderer] Cleaning up material preview resources" << std::endl;
+
+    VkDevice device = m_context.getDevice();
+    m_context.waitIdle();
+
+    // Clean up all preview textures
+    for (auto& [name, preview] : m_materialPreviews) {
+        if (preview.imGuiDescriptor != VK_NULL_HANDLE) {
+            ImGui_ImplVulkan_RemoveTexture(preview.imGuiDescriptor);
+        }
+        if (preview.imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, preview.imageView, nullptr);
+        }
+        if (preview.image != VK_NULL_HANDLE) {
+            vkDestroyImage(device, preview.image, nullptr);
+        }
+        if (preview.memory != VK_NULL_HANDLE) {
+            vkFreeMemory(device, preview.memory, nullptr);
+        }
+    }
+    m_materialPreviews.clear();
+
+    // Clean up sphere mesh
+    cleanupMaterialPreviewSphereMesh();
+
+    // Clean up preview UBO
+    cleanupMaterialPreviewUBO();
+
+    // Destroy sampler
+    if (m_materialPreviewSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_materialPreviewSampler, nullptr);
+        m_materialPreviewSampler = VK_NULL_HANDLE;
+    }
+
+    // Destroy render pass
+    if (m_materialPreviewRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_materialPreviewRenderPass, nullptr);
+        m_materialPreviewRenderPass = VK_NULL_HANDLE;
+    }
+
+    m_materialPreviewResourcesCreated = false;
+    std::cout << "[Renderer] Material preview resources cleaned up" << std::endl;
+}
+
+Renderer::MaterialPreview Renderer::createMaterialPreviewTexture() {
+    MaterialPreview preview;
+    VkDevice device = m_context.getDevice();
+
+    // Create image
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = kMaterialPreviewSize;
+    imageInfo.extent.height = kMaterialPreviewSize;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = VK_FORMAT_B8G8R8A8_UNORM;  // Linear format - shader does gamma
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+
+    if (vkCreateImage(device, &imageInfo, nullptr, &preview.image) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to create material preview image" << std::endl;
+        return preview;
+    }
+
+    // Allocate memory
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(device, preview.image, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memRequirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &preview.memory) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to allocate material preview memory" << std::endl;
+        vkDestroyImage(device, preview.image, nullptr);
+        preview.image = VK_NULL_HANDLE;
+        return preview;
+    }
+
+    vkBindImageMemory(device, preview.image, preview.memory, 0);
+
+    // Create image view
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = preview.image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_B8G8R8A8_UNORM;  // Match image format
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &preview.imageView) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to create material preview image view" << std::endl;
+        return preview;
+    }
+
+    // Register with ImGui (will be rendered to first, then used for sampling)
+    preview.imGuiDescriptor = ImGui_ImplVulkan_AddTexture(m_materialPreviewSampler,
+        preview.imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    return preview;
+}
+
+bool Renderer::renderMaterialPreview(const std::string& materialName) {
+    if (!m_materialLibrary) return false;
+
+    Material* material = m_materialLibrary->getMaterial(materialName);
+    if (!material) return false;
+
+    // Create preview resources if needed
+    if (!m_materialPreviewResourcesCreated) {
+        createMaterialPreviewResources();
+    }
+
+    // Create preview texture for this material
+    MaterialPreview preview = createMaterialPreviewTexture();
+    if (preview.imageView == VK_NULL_HANDLE) {
+        return false;
+    }
+
+    VkDevice device = m_context.getDevice();
+
+    // Create a simple render pass for preview rendering
+    if (m_materialPreviewRenderPass == VK_NULL_HANDLE) {
+        // Color attachment
+        VkAttachmentDescription colorAttachment{};
+        colorAttachment.format = VK_FORMAT_B8G8R8A8_UNORM;  // Linear format - shader does gamma
+        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;  // Single sample for preview
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        // Depth attachment
+        VkAttachmentDescription depthAttachment{};
+        depthAttachment.format = VK_FORMAT_D32_SFLOAT;  // Depth format
+        depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;  // Single sample for preview
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference colorRef{};
+        colorRef.attachment = 0;
+        colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference depthRef{};
+        depthRef.attachment = 1;
+        depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorRef;
+        subpass.pDepthStencilAttachment = &depthRef;
+
+        VkSubpassDependency dependency{};
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass = 0;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+        VkRenderPassCreateInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        renderPassInfo.attachmentCount = static_cast<u32>(attachments.size());
+        renderPassInfo.pAttachments = attachments.data();
+        renderPassInfo.subpassCount = 1;
+        renderPassInfo.pSubpasses = &subpass;
+        renderPassInfo.dependencyCount = 1;
+        renderPassInfo.pDependencies = &dependency;
+
+        if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &m_materialPreviewRenderPass) != VK_SUCCESS) {
+            std::cerr << "[Renderer] Failed to create material preview render pass" << std::endl;
+            return false;
+        }
+
+        // Create simple pipeline for material preview (vertex + fragment only, no tessellation)
+        PipelineConfig previewPipelineConfig = PipelineConfig::defaultConfig();
+        previewPipelineConfig.renderPass = m_materialPreviewRenderPass;
+        previewPipelineConfig.pipelineLayout = m_pipelineLayout;
+        previewPipelineConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        m_materialPreviewPipeline = std::make_unique<Pipeline>(m_context,
+            "shaders/structural.vert.spv", "shaders/structural.frag.spv", previewPipelineConfig);
+    }
+
+    // Create depth image for preview
+    VkImage depthImage = VK_NULL_HANDLE;
+    VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+    VkImageView depthView = VK_NULL_HANDLE;
+
+    VkImageCreateInfo depthImageInfo{};
+    depthImageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    depthImageInfo.imageType = VK_IMAGE_TYPE_2D;
+    depthImageInfo.extent.width = kMaterialPreviewSize;
+    depthImageInfo.extent.height = kMaterialPreviewSize;
+    depthImageInfo.extent.depth = 1;
+    depthImageInfo.mipLevels = 1;
+    depthImageInfo.arrayLayers = 1;
+    depthImageInfo.format = VK_FORMAT_D32_SFLOAT;
+    depthImageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    depthImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    depthImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    depthImageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+
+    if (vkCreateImage(device, &depthImageInfo, nullptr, &depthImage) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to create depth image for preview" << std::endl;
+        return false;
+    }
+
+    VkMemoryRequirements depthMemReqs;
+    vkGetImageMemoryRequirements(device, depthImage, &depthMemReqs);
+
+    VkMemoryAllocateInfo depthAllocInfo{};
+    depthAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    depthAllocInfo.allocationSize = depthMemReqs.size;
+    depthAllocInfo.memoryTypeIndex = m_context.findMemoryType(depthMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &depthAllocInfo, nullptr, &depthMemory) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to allocate depth image memory for preview" << std::endl;
+        vkDestroyImage(device, depthImage, nullptr);
+        return false;
+    }
+
+    vkBindImageMemory(device, depthImage, depthMemory, 0);
+
+    VkImageViewCreateInfo depthViewInfo{};
+    depthViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    depthViewInfo.image = depthImage;
+    depthViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    depthViewInfo.format = VK_FORMAT_D32_SFLOAT;
+    depthViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    depthViewInfo.subresourceRange.baseMipLevel = 0;
+    depthViewInfo.subresourceRange.levelCount = 1;
+    depthViewInfo.subresourceRange.baseArrayLayer = 0;
+    depthViewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device, &depthViewInfo, nullptr, &depthView) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to create depth image view for preview" << std::endl;
+        vkFreeMemory(device, depthMemory, nullptr);
+        vkDestroyImage(device, depthImage, nullptr);
+        return false;
+    }
+
+    // Create framebuffer with color and depth attachments
+    VkFramebuffer framebuffer;
+    std::array<VkImageView, 2> fbAttachments = {preview.imageView, depthView};
+    VkFramebufferCreateInfo fbInfo{};
+    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbInfo.renderPass = m_materialPreviewRenderPass;
+    fbInfo.attachmentCount = static_cast<u32>(fbAttachments.size());
+    fbInfo.pAttachments = fbAttachments.data();
+    fbInfo.width = kMaterialPreviewSize;
+    fbInfo.height = kMaterialPreviewSize;
+    fbInfo.layers = 1;
+
+    if (vkCreateFramebuffer(device, &fbInfo, nullptr, &framebuffer) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to create material preview framebuffer" << std::endl;
+        vkDestroyImageView(device, depthView, nullptr);
+        vkDestroyImage(device, depthImage, nullptr);
+        vkFreeMemory(device, depthMemory, nullptr);
+        return false;
+    }
+
+    // Render sphere with material
+    VkCommandBuffer cmd = m_context.beginSingleTimeCommands();
+
+    // Begin render pass
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = m_materialPreviewRenderPass;
+    renderPassInfo.framebuffer = framebuffer;
+    renderPassInfo.renderArea.offset = {0, 0};
+    renderPassInfo.renderArea.extent = {kMaterialPreviewSize, kMaterialPreviewSize};
+
+    // Magenta background to test color channels
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{1.0f, 0.0f, 1.0f, 1.0f}};  // Magenta
+    clearValues[1].depthStencil = {1.0f, 0};
+    renderPassInfo.clearValueCount = static_cast<u32>(clearValues.size());
+    renderPassInfo.pClearValues = clearValues.data();
+
+    vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    // Set viewport and scissor
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<f32>(kMaterialPreviewSize);
+    viewport.height = static_cast<f32>(kMaterialPreviewSize);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = {kMaterialPreviewSize, kMaterialPreviewSize};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // Get material descriptor set
+    VkDescriptorSet materialDescriptor = VK_NULL_HANDLE;
+    auto it = m_materialDescriptorSets.find(materialName);
+    if (it == m_materialDescriptorSets.end()) {
+        // Create descriptor set for this material
+        try {
+            materialDescriptor = createMaterialDescriptorSetForMaterial(*material);
+            if (materialDescriptor != VK_NULL_HANDLE) {
+                m_materialDescriptorSets[materialName] = materialDescriptor;
+            } else {
+                std::cerr << "[Renderer] Failed to create material descriptor set for: " << materialName << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[Renderer] Exception creating material descriptor set: " << e.what() << std::endl;
+        }
+    } else {
+        materialDescriptor = it->second;
+    }
+
+    // Validate all required resources
+    if (materialDescriptor == VK_NULL_HANDLE) {
+        std::cerr << "[Renderer] Material descriptor is null for: " << materialName << std::endl;
+        // Fall through - will clear to background color
+    } else if (m_pipeline == nullptr) {
+        std::cerr << "[Renderer] Pipeline is null" << std::endl;
+    } else if (m_materialPreviewSphereVertexBuffer == VK_NULL_HANDLE) {
+        std::cerr << "[Renderer] Sphere vertex buffer is null" << std::endl;
+    } else if (m_pipelineLayout == VK_NULL_HANDLE) {
+        std::cerr << "[Renderer] Pipeline layout is null" << std::endl;
+    } else if (m_materialPreviewDescriptorSet == VK_NULL_HANDLE) {
+        std::cerr << "[Renderer] Material preview UBO descriptor set is null" << std::endl;
+    } else if (m_materialPreviewUBO == VK_NULL_HANDLE) {
+        std::cerr << "[Renderer] Material preview UBO is null" << std::endl;
+    } else {
+        std::cout << "[Renderer] Rendering material preview for: " << materialName << std::endl;
+        // Set up preview camera and lighting
+        // Camera: looking at sphere from front-right-top
+        vec3 camPos(3.0f, 2.0f, 3.0f);
+        vec3 camTarget(0.0f, 0.0f, 0.0f);
+        vec3 camUp(0.0f, 1.0f, 0.0f);
+
+        mat4 view = glm::lookAt(camPos, camTarget, camUp);
+        mat4 proj = glm::perspective(glm::radians(45.0f), 1.0f, 0.1f, 100.0f);
+        proj[1][1] *= -1.0f;  // Vulkan Y flip
+
+        // Light direction (sunlight from top-right)
+        vec3 lightDir = glm::normalize(vec3(1.0f, 1.0f, 0.5f));
+
+        // Update preview UBO
+        void* uboData;
+        vkMapMemory(device, m_materialPreviewUBOMemory, 0, sizeof(UniformBufferObject), 0, &uboData);
+
+        UniformBufferObject ubo{};
+        ubo.view = view;
+        ubo.proj = proj;
+        ubo.lightViewProj = mat4(0.0f);  // No shadows for preview
+        ubo.lightDirection = vec4(lightDir, 0.0f);
+        ubo.clipPlane = vec4(0.0f);  // No clipping
+        ubo.time = 0.0f;
+        ubo.shadowBias = 0.0f;  // Disable shadows
+        ubo.enableClipping = 0;  // No clipping
+        ubo.enableShadows = 0;  // Disable shadows
+        ubo.outputLinearHDR = 0;  // Apply tonemapping
+        ubo.exposure = 0.5f;  // Lower exposure to prevent washout
+        ubo.tessellationLevel = 1.0f;  // Minimal tessellation
+        ubo.displacementScale = 0.0f;  // Disable displacement for preview
+        ubo.materialParams = vec4(1.0f, 1.0f, 0.0f, 1.0f);  // uvScale, normalStrength, brightness, contrast
+        ubo.materialParams2 = vec4(1.0f, material->roughness, material->metallic, 1.0f);  // saturation, roughness, metallic, ao
+        ubo.materialTint = vec4(1.0f, 1.0f, 1.0f, 1.0f);  // White tint
+        ubo.pomParams = vec4(0.0f, 0.0f, 0.0f, 0.0f);  // Disable POM for preview
+        ubo.overrideMask = 0;  // No overrides
+
+        memcpy(uboData, &ubo, sizeof(UniformBufferObject));
+        vkUnmapMemory(device, m_materialPreviewUBOMemory);
+
+        // Bind pipeline - use dedicated material preview pipeline
+        if (!m_materialPreviewPipeline || !m_materialPreviewPipeline->getHandle()) {
+            std::cerr << "[Renderer] Preview pipeline is null!" << std::endl;
+            return false;
+        }
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_materialPreviewPipeline->getHandle());
+
+        // Bind both UBO descriptor set (set 0) and material descriptor set (set 1)
+        VkDescriptorSet descriptorSets[] = {m_materialPreviewDescriptorSet, materialDescriptor};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_pipelineLayout, 0, 2, descriptorSets, 0, nullptr);
+
+        // Set push constants (required by shaders)
+        PushConstants pushConstants{};
+        pushConstants.model = mat4(1.0f);
+        pushConstants.color = vec4(1.0f, 1.0f, 1.0f, 1.0f);  // Pure white
+        pushConstants.material = vec4(0.0f, 0.5f, 0.0f, 1.0f);  // PBR values
+        pushConstants.overrideMask = 0;  // Use actual material textures
+        pushConstants.overrides1 = vec4(1.0f, 1.0f, 1.0f, 1.0f);  // uvScale, normalStrength, brightness, contrast
+        pushConstants.overrides2 = vec4(1.0f, material->roughness, material->metallic, 1.0f);  // saturation, roughness, metallic, aoStrength
+        pushConstants.overrides3 = vec4(1.0f, 1.0f, 1.0f, 1.0f);  // White tint - let textures provide true color
+
+        vkCmdPushConstants(cmd, m_pipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
+            0, sizeof(pushConstants), &pushConstants);
+
+        // Bind vertex and index buffers
+        VkBuffer vertexBuffers[] = {m_materialPreviewSphereVertexBuffer};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(cmd, m_materialPreviewSphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+        // Draw sphere
+        vkCmdDrawIndexed(cmd, m_materialPreviewSphereIndexCount, 1, 0, 0, 0);
+    }
+
+    vkCmdEndRenderPass(cmd);
+
+    m_context.endSingleTimeCommands(cmd);
+
+    vkDestroyFramebuffer(device, framebuffer, nullptr);
+    vkDestroyImageView(device, depthView, nullptr);
+    vkDestroyImage(device, depthImage, nullptr);
+    vkFreeMemory(device, depthMemory, nullptr);
+
+    // Store the preview
+    m_materialPreviews[materialName] = preview;
+
+    return true;
+}
+
+void Renderer::generateMaterialPreviews() {
+    if (!m_materialLibrary) return;
+
+    std::cout << "[Renderer] Generating material previews..." << std::endl;
+
+    // Wait for device to be idle before destroying resources
+    m_context.waitIdle();
+
+    // Clear old previews and destroy render pass to force recreation with new format
+    for (auto& [name, preview] : m_materialPreviews) {
+        if (preview.imGuiDescriptor != VK_NULL_HANDLE) {
+            ImGui_ImplVulkan_RemoveTexture(preview.imGuiDescriptor);
+        }
+        if (preview.imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(m_context.getDevice(), preview.imageView, nullptr);
+        }
+        if (preview.image != VK_NULL_HANDLE) {
+            vkDestroyImage(m_context.getDevice(), preview.image, nullptr);
+        }
+        if (preview.memory != VK_NULL_HANDLE) {
+            vkFreeMemory(m_context.getDevice(), preview.memory, nullptr);
+        }
+    }
+    m_materialPreviews.clear();
+
+    // Destroy and recreate render pass to ensure correct format
+    if (m_materialPreviewRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(m_context.getDevice(), m_materialPreviewRenderPass, nullptr);
+        m_materialPreviewRenderPass = VK_NULL_HANDLE;
+    }
+
+    // Destroy and recreate pipeline to ensure correct format
+    m_materialPreviewPipeline.reset();
+
+    auto materialNames = getMaterialNames();
+    size_t count = 0;
+
+    for (const auto& name : materialNames) {
+        if (renderMaterialPreview(name)) {
+            count++;
         }
     }
 
-    // DEBUG: Use standard structural pipeline (same as grid) instead of terrain pipeline
-    m_pipeline->bind(m_currentCommandBuffer);
+    std::cout << "[Renderer] Generated " << count << " material previews" << std::endl;
+}
 
-    // Bind descriptor set (uniform buffers for camera)
-    vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                           m_pipelineLayout, 0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
+VkDescriptorSet Renderer::getMaterialPreviewDescriptor(const std::string& materialName) {
+    // Generate on first access (lazy initialization)
+    if (m_materialPreviews.find(materialName) == m_materialPreviews.end()) {
+        renderMaterialPreview(materialName);
+    }
 
-    // Push identity matrix and red color
-    PushConstants push{};
-    push.model = mat4(1.0f);
-    push.color = vec4(1.0f, 0.0f, 0.0f, 1.0f);  // Bright red
-    vkCmdPushConstants(m_currentCommandBuffer, m_pipelineLayout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(PushConstants), &push);
+    auto it = m_materialPreviews.find(materialName);
+    if (it != m_materialPreviews.end()) {
+        return it->second.imGuiDescriptor;
+    }
+    return VK_NULL_HANDLE;
+}
 
-    // Bind vertex and index buffers
-    VkBuffer vertexBuffers[] = {m_terrainVertexBuffer};
-    VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(m_currentCommandBuffer, 0, 1, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(m_currentCommandBuffer, m_terrainIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+bool Renderer::hasMaterialPreview(const std::string& materialName) const {
+    return m_materialPreviews.find(materialName) != m_materialPreviews.end();
+}
 
-    // Draw terrain
-    vkCmdDrawIndexed(m_currentCommandBuffer, m_terrainIndexCount, 1, 0, 0, 0);
+void Renderer::createMaterialPreviewSphereMesh() {
+    if (m_materialPreviewSphere) return;  // Already created
 
-    std::cout << "[Renderer] Drew terrain using standard pipeline" << std::endl;
+    // Create sphere geometry
+    auto [vertices, indices] = Geometry::createSphere(1.0f, 24, 48, vec3(1.0f));
+    m_materialPreviewSphereIndexCount = static_cast<u32>(indices.size());
+
+    // Create vertex buffer
+    VkDeviceSize bufferSize = sizeof(Vertex) * vertices.size();
+
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = bufferSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+    if (vkCreateBuffer(m_context.getDevice(), &bufferInfo, nullptr, &m_materialPreviewSphereVertexBuffer) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to create material preview sphere vertex buffer" << std::endl;
+        return;
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(m_context.getDevice(), m_materialPreviewSphereVertexBuffer, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memRequirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(m_context.getDevice(), &allocInfo, nullptr, &m_materialPreviewSphereVertexMemory) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to allocate material preview sphere vertex memory" << std::endl;
+        return;
+    }
+
+    vkBindBufferMemory(m_context.getDevice(), m_materialPreviewSphereVertexBuffer, m_materialPreviewSphereVertexMemory, 0);
+
+    // Upload vertex data
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingMemory;
+    m_context.createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        stagingBuffer, stagingMemory);
+
+    void* data;
+    vkMapMemory(m_context.getDevice(), stagingMemory, 0, bufferSize, 0, &data);
+    memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
+    vkUnmapMemory(m_context.getDevice(), stagingMemory);
+
+    m_context.copyBuffer(stagingBuffer, m_materialPreviewSphereVertexBuffer, bufferSize);
+    vkDestroyBuffer(m_context.getDevice(), stagingBuffer, nullptr);
+    vkFreeMemory(m_context.getDevice(), stagingMemory, nullptr);
+
+    // Create index buffer
+    bufferSize = sizeof(u32) * indices.size();
+    bufferInfo.size = bufferSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;  // FIX: Added INDEX_BUFFER_BIT
+
+    if (vkCreateBuffer(m_context.getDevice(), &bufferInfo, nullptr, &m_materialPreviewSphereIndexBuffer) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to create material preview sphere index buffer" << std::endl;
+        return;
+    }
+
+    vkGetBufferMemoryRequirements(m_context.getDevice(), m_materialPreviewSphereIndexBuffer, &memRequirements);
+
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memRequirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(m_context.getDevice(), &allocInfo, nullptr, &m_materialPreviewSphereIndexMemory) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to allocate material preview sphere index memory" << std::endl;
+        return;
+    }
+
+    vkBindBufferMemory(m_context.getDevice(), m_materialPreviewSphereIndexBuffer, m_materialPreviewSphereIndexMemory, 0);
+
+    // Upload index data
+    m_context.createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        stagingBuffer, stagingMemory);
+
+    vkMapMemory(m_context.getDevice(), stagingMemory, 0, bufferSize, 0, &data);
+    memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
+    vkUnmapMemory(m_context.getDevice(), stagingMemory);
+
+    m_context.copyBuffer(stagingBuffer, m_materialPreviewSphereIndexBuffer, bufferSize);
+    vkDestroyBuffer(m_context.getDevice(), stagingBuffer, nullptr);
+    vkFreeMemory(m_context.getDevice(), stagingMemory, nullptr);
+
+    std::cout << "[Renderer] Material preview sphere mesh created (" << vertices.size()
+              << " vertices, " << indices.size() << " indices)" << std::endl;
+}
+
+void Renderer::cleanupMaterialPreviewSphereMesh() {
+    VkDevice device = m_context.getDevice();
+
+    if (m_materialPreviewSphereIndexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, m_materialPreviewSphereIndexBuffer, nullptr);
+        m_materialPreviewSphereIndexBuffer = VK_NULL_HANDLE;
+    }
+    if (m_materialPreviewSphereIndexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_materialPreviewSphereIndexMemory, nullptr);
+        m_materialPreviewSphereIndexMemory = VK_NULL_HANDLE;
+    }
+    if (m_materialPreviewSphereVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, m_materialPreviewSphereVertexBuffer, nullptr);
+        m_materialPreviewSphereVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (m_materialPreviewSphereVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_materialPreviewSphereVertexMemory, nullptr);
+        m_materialPreviewSphereVertexMemory = VK_NULL_HANDLE;
+    }
+
+    m_materialPreviewSphere.reset();
+    m_materialPreviewSphereIndexCount = 0;
+}
+
+void Renderer::createMaterialPreviewUBO() {
+    VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+    // Create UBO buffer
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = bufferSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+
+    if (vkCreateBuffer(m_context.getDevice(), &bufferInfo, nullptr, &m_materialPreviewUBO) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to create material preview UBO buffer" << std::endl;
+        return;
+    }
+
+    // Allocate memory
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(m_context.getDevice(), m_materialPreviewUBO, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memRequirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    if (vkAllocateMemory(m_context.getDevice(), &allocInfo, nullptr, &m_materialPreviewUBOMemory) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to allocate material preview UBO memory" << std::endl;
+        vkDestroyBuffer(m_context.getDevice(), m_materialPreviewUBO, nullptr);
+        m_materialPreviewUBO = VK_NULL_HANDLE;
+        return;
+    }
+
+    vkBindBufferMemory(m_context.getDevice(), m_materialPreviewUBO, m_materialPreviewUBOMemory, 0);
+
+    // Create descriptor set for the UBO
+    VkDescriptorSetAllocateInfo allocInfo2{};
+    allocInfo2.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo2.descriptorPool = m_descriptorPool;
+    allocInfo2.descriptorSetCount = 1;
+    allocInfo2.pSetLayouts = &m_descriptorSetLayout;
+
+    if (vkAllocateDescriptorSets(m_context.getDevice(), &allocInfo2, &m_materialPreviewDescriptorSet) != VK_SUCCESS) {
+        std::cerr << "[Renderer] Failed to allocate material preview descriptor set" << std::endl;
+    } else {
+        // Bind UBO to descriptor set (binding 0)
+        VkDescriptorBufferInfo bufferInfo2{};
+        bufferInfo2.buffer = m_materialPreviewUBO;
+        bufferInfo2.offset = 0;
+        bufferInfo2.range = sizeof(UniformBufferObject);
+
+        // Bind shadow map to descriptor set (binding 1) - use default shadow map
+        // Note: Shadow map is in SHADER_READ_ONLY_OPTIMAL layout from main renderer
+        VkDescriptorImageInfo shadowInfo{};
+        shadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // Match actual image layout
+        shadowInfo.imageView = m_shadowMap->getImageView();
+        shadowInfo.sampler = m_shadowMap->getSampler();
+
+        std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+        // UBO at binding 0
+        descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[0].dstSet = m_materialPreviewDescriptorSet;
+        descriptorWrites[0].dstBinding = 0;
+        descriptorWrites[0].dstArrayElement = 0;
+        descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrites[0].descriptorCount = 1;
+        descriptorWrites[0].pBufferInfo = &bufferInfo2;
+        // Shadow map at binding 1
+        descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[1].dstSet = m_materialPreviewDescriptorSet;
+        descriptorWrites[1].dstBinding = 1;
+        descriptorWrites[1].dstArrayElement = 0;
+        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrites[1].descriptorCount = 1;
+        descriptorWrites[1].pImageInfo = &shadowInfo;
+
+        vkUpdateDescriptorSets(m_context.getDevice(), static_cast<u32>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+    }
+
+    std::cout << "[Renderer] Material preview UBO created" << std::endl;
+}
+
+void Renderer::cleanupMaterialPreviewUBO() {
+    VkDevice device = m_context.getDevice();
+
+    if (m_materialPreviewDescriptorSet != VK_NULL_HANDLE) {
+        // Note: Not freeing descriptor set here as it's allocated from pool
+        // The pool will be destroyed during renderer cleanup
+        m_materialPreviewDescriptorSet = VK_NULL_HANDLE;
+    }
+
+    if (m_materialPreviewUBO != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, m_materialPreviewUBO, nullptr);
+        m_materialPreviewUBO = VK_NULL_HANDLE;
+    }
+    if (m_materialPreviewUBOMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_materialPreviewUBOMemory, nullptr);
+        m_materialPreviewUBOMemory = VK_NULL_HANDLE;
+    }
+}
+
+bool Renderer::renderPreviewToTexture(const std::vector<StructuralElement>& elements,
+                                       const Building& building) {
+    // Create resources on first use (lazy initialization)
+    if (!m_previewResourcesCreated) {
+        createPreviewResources();
+    }
+
+    try {
+        // Wait for any pending operations
+        m_context.waitIdle();
+
+        float aspect = static_cast<float>(kPreviewWidth) / static_cast<float>(kPreviewHeight);
+        mat4 proj = m_camera.getProjectionMatrix(aspect);
+        proj[1][1] *= -1; // Vulkan Y flip
+
+        // Create fence for synchronization
+        VkFence fence;
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        vkCreateFence(m_context.getDevice(), &fenceInfo, nullptr, &fence);
+
+        // Allocate command buffer
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool = m_context.getCommandPool();
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer cmd;
+        vkAllocateCommandBuffers(m_context.getDevice(), &allocInfo, &cmd);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &beginInfo);
+
+        // Begin render pass
+        VkRenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassInfo.renderPass = m_previewRenderPass;
+        renderPassInfo.framebuffer = m_previewFramebuffer;
+        renderPassInfo.renderArea.offset = { 0, 0 };
+        renderPassInfo.renderArea.extent = { kPreviewWidth, kPreviewHeight };
+
+        std::array<VkClearValue, 2> clearValues{};
+        clearValues[0].color = { { 0.529f, 0.808f, 0.922f, 1.0f } };  // Sky blue background
+        clearValues[1].depthStencil = { 1.0f, 0 };
+
+        renderPassInfo.clearValueCount = static_cast<u32>(clearValues.size());
+        renderPassInfo.pClearValues = clearValues.data();
+
+        vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        // Set viewport and scissor
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = static_cast<float>(kPreviewWidth);
+        viewport.height = static_cast<float>(kPreviewHeight);
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = { 0, 0 };
+        scissor.extent = { kPreviewWidth, kPreviewHeight };
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        // Update uniform buffer
+        UniformBufferObject ubo{};
+        ubo.view = m_camera.getViewMatrix();
+        ubo.proj = proj;
+        ubo.lightViewProj = m_shadowMap ? m_shadowMap->getLightViewProj() : mat4(1.0f);
+        ubo.lightDirection = vec4(m_lightDirection, 0.0f);
+        ubo.clipPlane = m_clippingEnabled ? m_clipPlane : vec4(0.0f);
+        ubo.time = m_time;
+        ubo.shadowBias = m_shadowBias;
+        ubo.enableClipping = m_clippingEnabled ? 1 : 0;
+        ubo.enableShadows = m_shadowsEnabled ? 1 : 0;
+        ubo.outputLinearHDR = 0;
+        ubo.exposure = getExposure();
+        ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, m_materialBrightness, m_materialContrast);
+        ubo.materialParams2 = vec4(m_materialSaturation, m_materialRoughnessOffset, m_materialMetallicOffset, m_materialAOStrength);
+        ubo.materialTint = vec4(m_materialTint, 1.0f);
+        ubo.pomParams = vec4(m_pomEnabled ? 1.0f : 0.0f, m_pomHeightScale, m_pomMinLayers, m_pomMaxLayers);
+
+        memcpy(m_uniformBuffersMapped[0], &ubo, sizeof(ubo));
+
+        // Save and set current command buffer
+        VkCommandBuffer oldCmd = m_currentCommandBuffer;
+        m_currentCommandBuffer = cmd;
+
+        // Bind preview pipeline and descriptor sets
+        m_previewPipeline->bind(cmd);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[0], 0, nullptr);
+
+        // Draw all opaque elements
+        for (size_t i = 0; i < elements.size(); ++i) {
+            const auto& elem = elements[i];
+            if (elem.type == ElementType::Window) continue;  // Windows rendered in transparent pass
+
+            vec3 color = getElementColor(elem, building, i);
+            m_currentDrawElementId = static_cast<int>(i);
+
+            std::string matName = resolveMaterialName(elem);
+            bindMaterialDescriptorSet(matName);
+
+            auto preset = getMaterialForElement(elem.type);
+            vec4 material(preset.metallic, preset.roughness, preset.ao, preset.emission);
+            f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? elem.stress : 0.0f;
+
+            switch (elem.type) {
+                case ElementType::Beam:
+                    drawBeam(elem.start, elem.end, elem.width, elem.depth, color, stressForShader, elem.deflection);
+                    break;
+                case ElementType::Column: {
+                    float colHeight = elem.end.y - elem.start.y;
+                    drawColumnWithMaterial(elem.start, elem.width, elem.depth, colHeight, color, stressForShader, material);
+                    break;
+                }
+                case ElementType::Floor:
+                    if (elem.mesh.hasData()) {
+                        drawCustomMesh(elem.mesh, color, stressForShader);
+                    } else {
+                        vec3 center = (elem.start + elem.end) * 0.5f;
+                        center.y = elem.start.y;
+                        float thickness = elem.end.y - elem.start.y;
+                        drawFloor(center, elem.end.x - elem.start.x, elem.end.z - elem.start.z, thickness, color, stressForShader);
+                    }
+                    break;
+                case ElementType::Wall: {
+                    if (elem.mesh.hasData()) {
+                        drawCustomMesh(elem.mesh, color, stressForShader);
+                    } else {
+                        float xExtent = elem.end.x - elem.start.x;
+                        float zExtent = elem.end.z - elem.start.z;
+                        float wallHeight = elem.end.y - elem.start.y;
+                        bool isDiagonal = std::abs(xExtent) > 0.1f && std::abs(zExtent) > 0.1f;
+                        vec4 wallMat = vec4(m_wallMetallic, m_wallRoughness, m_wallAO, m_wallEmission);
+
+                        if (isDiagonal) {
+                            float midHeight = elem.start.y + wallHeight * 0.5f;
+                            vec3 wallStart = vec3(elem.start.x, midHeight, elem.start.z);
+                            vec3 wallEnd = vec3(elem.end.x, midHeight, elem.end.z);
+                            float thickness = elem.depth > 0.01f ? elem.depth : 0.5f;
+
+                            std::string key = "diagwall_" + std::to_string(xExtent) + "_" +
+                                             std::to_string(zExtent) + "_" + std::to_string(wallHeight) + "_" +
+                                             std::to_string(thickness);
+                            if (m_meshCache.find(key) == m_meshCache.end()) {
+                                auto [verts, indices] = Geometry::createBeam(wallStart, wallEnd, thickness, wallHeight, vec3(1.0f));
+                                m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                            }
+                            drawMeshWithMaterial(*m_meshCache[key], mat4(1.0f), color, stressForShader, wallMat);
+                        } else {
+                            vec3 center = (elem.start + elem.end) * 0.5f;
+                            center.y = elem.start.y;
+                            float wallThickness = elem.depth > 0.01f ? elem.depth : 0.5f;
+
+                            if (std::abs(xExtent) > std::abs(zExtent)) {
+                                drawColumnWithMaterial(center, std::abs(xExtent), wallThickness, wallHeight, color, stressForShader, wallMat);
+                            } else {
+                                drawColumnWithMaterial(center, wallThickness, std::abs(zExtent), wallHeight, color, stressForShader, wallMat);
+                            }
+                        }
+                    }
+                    break;
+                }
+                case ElementType::Door: {
+                    if (elem.mesh.hasData()) {
+                        drawCustomMeshWithMaterial(elem.mesh, color, stressForShader, material);
+                    } else {
+                        float xExtent = elem.end.x - elem.start.x;
+                        float zExtent = elem.end.z - elem.start.z;
+                        float doorHeight = elem.end.y - elem.start.y;
+                        float doorDepth = elem.depth > 0.1f ? elem.depth : 0.5f;
+
+                        if (doorHeight > 0.01f) {
+                            float doorWidth = glm::length(vec2(xExtent, zExtent));
+                            if (doorWidth <= 0.01f) doorWidth = elem.width > 0.01f ? elem.width : 3.0f;
+
+                            vec3 doorPos = vec3((elem.start.x + elem.end.x) * 0.5f, elem.start.y,
+                                                (elem.start.z + elem.end.z) * 0.5f);
+                            float angle = -std::atan2(zExtent, xExtent);
+                            mat4 transform = glm::translate(mat4(1.0f), doorPos);
+                            transform = glm::rotate(transform, angle, vec3(0, 1, 0));
+
+                            vec4 doorMat = vec4(0.0f, 0.75f, 1.0f, 0.0f);
+                            std::string key = "door_proper_" + std::to_string(static_cast<int>(doorWidth * 100)) + "_" +
+                                             std::to_string(static_cast<int>(doorHeight * 100)) + "_" +
+                                             std::to_string(static_cast<int>(doorDepth * 100));
+                            if (m_meshCache.find(key) == m_meshCache.end()) {
+                                auto [verts, indices] = Geometry::createDoor(vec3(0), doorWidth, doorHeight, doorDepth, vec3(0.55f, 0.35f, 0.2f));
+                                m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                            }
+                            drawMeshWithMaterial(*m_meshCache[key], transform, color, stressForShader, doorMat);
+                        }
+                    }
+                    break;
+                }
+                case ElementType::Roof: {
+                    vec4 roofMat = vec4(m_roofMetallic, m_roofRoughness, m_roofAO, m_roofEmission);
+                    if (elem.mesh.hasData()) {
+                        drawCustomMeshWithMaterial(elem.mesh, color, stressForShader, roofMat);
+                    } else {
+                        float roofWidth = std::abs(elem.end.x - elem.start.x);
+                        float roofDepthZ = std::abs(elem.end.z - elem.start.z);
+                        float roofThickness = elem.end.y - elem.start.y;
+                        if (roofThickness < 0.1f) roofThickness = 0.5f;
+
+                        vec3 center = (elem.start + elem.end) * 0.5f;
+                        center.y = elem.start.y;
+
+                        std::string key = "roof_" + std::to_string(roofWidth) + "_" + std::to_string(roofDepthZ) + "_" + std::to_string(roofThickness);
+                        if (m_meshCache.find(key) == m_meshCache.end()) {
+                            auto [verts, indices] = Geometry::createFloorSlab(vec3(0), roofWidth, roofDepthZ, roofThickness);
+                            m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                        }
+                        mat4 roofTransform = glm::translate(mat4(1.0f), center);
+                        drawMeshWithMaterial(*m_meshCache[key], roofTransform, color, stressForShader, roofMat);
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        // Second pass: Render transparent windows
+        if (m_previewTransparentPipeline) {
+            m_previewTransparentPipeline->bind(cmd);
+
+            for (size_t i = 0; i < elements.size(); ++i) {
+                const auto& elem = elements[i];
+                if (elem.type != ElementType::Window) continue;
+
+                vec3 color = getElementColor(elem, building, i);
+                f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? elem.stress : 0.0f;
+                m_currentDrawElementId = static_cast<int>(i);
+
+                std::string matName = resolveMaterialName(elem);
+                bindMaterialDescriptorSet(matName);
+
+                float xExtent = elem.end.x - elem.start.x;
+                float zExtent = elem.end.z - elem.start.z;
+                float winHeight = elem.end.y - elem.start.y;
+                float winDepth = elem.depth > 0.01f ? elem.depth : 0.15f;
+
+                if (winHeight > 0.01f) {
+                    float winWidth = glm::length(vec2(xExtent, zExtent));
+                    if (winWidth <= 0.01f) winWidth = elem.width > 0.01f ? elem.width : 1.2f;
+
+                    vec3 winPos = vec3((elem.start.x + elem.end.x) * 0.5f, elem.start.y,
+                                       (elem.start.z + elem.end.z) * 0.5f);
+                    float angle = -std::atan2(zExtent, xExtent);
+                    mat4 transform = glm::translate(mat4(1.0f), winPos);
+                    transform = glm::rotate(transform, angle, vec3(0, 1, 0));
+
+                    vec4 glassMat = vec4(0.0f, 0.1f, 1.0f, 0.0f);
+                    std::string key = "window_proper_" + std::to_string(static_cast<int>(winWidth * 100)) + "_" +
+                                     std::to_string(static_cast<int>(winHeight * 100)) + "_" +
+                                     std::to_string(static_cast<int>(winDepth * 100));
+                    if (m_meshCache.find(key) == m_meshCache.end()) {
+                        auto [verts, indices] = Geometry::createWindow(vec3(0), winWidth, winHeight, winDepth, vec3(0.8f, 0.9f, 0.95f));
+                        m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+                    }
+                    drawMeshWithMaterial(*m_meshCache[key], transform, color, stressForShader, glassMat);
+                }
+            }
+        }
+
+        vkCmdEndRenderPass(cmd);
+        vkEndCommandBuffer(cmd);
+
+        // Restore original command buffer
+        m_currentCommandBuffer = oldCmd;
+
+        // Submit and wait
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &cmd;
+
+        vkResetFences(m_context.getDevice(), 1, &fence);
+        vkQueueSubmit(m_context.getGraphicsQueue(), 1, &submitInfo, fence);
+        vkWaitForFences(m_context.getDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
+
+        vkFreeCommandBuffers(m_context.getDevice(), m_context.getCommandPool(), 1, &cmd);
+        vkDestroyFence(m_context.getDevice(), fence, nullptr);
+
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "[Renderer] Preview render failed: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+// ============================================================================
+// Per-Element Material Override Methods
+// ============================================================================
+
+void Renderer::setElementOverride(int elementId, const ElementMaterialOverride& override) {
+    m_elementMaterialOverrides[elementId] = override;
+    m_elementMaterialOverrides[elementId].active = true;
+}
+
+const ElementMaterialOverride* Renderer::getElementOverride(int elementId) const {
+    auto it = m_elementMaterialOverrides.find(elementId);
+    if (it != m_elementMaterialOverrides.end() && it->second.active) {
+        return &(it->second);
+    }
+    return nullptr;
+}
+
+void Renderer::clearElementOverride(int elementId) {
+    m_elementMaterialOverrides.erase(elementId);
+}
+
+void Renderer::clearAllElementOverrides() {
+    m_elementMaterialOverrides.clear();
+}
+
+// Overload: Set element override with individual parameters
+void Renderer::setElementOverride(int elementId, u32 mask, float uvScale, float normalStrength, float brightness, float contrast) {
+    ElementMaterialOverride override;
+    override.active = true;
+
+    // Set flags based on mask
+    override.hasUVScale = (mask & (1u << 0)) != 0;
+    override.hasNormalStrength = (mask & (1u << 1)) != 0;
+    override.hasBrightness = (mask & (1u << 2)) != 0;
+    override.hasContrast = (mask & (1u << 3)) != 0;
+
+    // Set values
+    override.uvScale = uvScale;
+    override.normalStrength = normalStrength;
+    override.brightness = brightness;
+    override.contrast = contrast;
+
+    m_elementMaterialOverrides[elementId] = override;
+}
+
+bool Renderer::hasElementOverride(int elementId) const {
+    auto it = m_elementMaterialOverrides.find(elementId);
+    return it != m_elementMaterialOverrides.end() && it->second.active;
+}
+
+size_t Renderer::getElementOverrideIndices(int* outIndices, size_t maxIndices) const {
+    if (!outIndices || maxIndices == 0) return 0;
+
+    size_t count = 0;
+    for (const auto& [elementId, override] : m_elementMaterialOverrides) {
+        if (override.active && count < maxIndices) {
+            outIndices[count++] = elementId;
+        }
+    }
+    return count;
+}
+
+// Helper function - deprecated, overrides now handled via push constants
+// Kept for API compatibility, returns 0 (no overrides via UBO)
+u32 Renderer::applyElementOverrideToUBO(int elementId) {
+    // Overrides are now applied via push constants in drawMeshWithMaterialAndOverride()
+    // Use m_currentDrawElementId = elementId; before calling draw functions instead
+    (void)elementId;  // Suppress unused parameter warning
+    return 0;
+}
+
+// ============================================================================
+// Multi-Light System Implementation
+// ============================================================================
+
+i32 Renderer::addLight(const Light& light) {
+    if (m_lights.size() >= MAX_LIGHTS) {
+        std::cerr << "[Renderer] Cannot add light: max lights (" << MAX_LIGHTS << ") reached" << std::endl;
+        return -1;
+    }
+    m_lights.push_back(light);
+    return static_cast<i32>(m_lights.size() - 1);
+}
+
+void Renderer::removeLight(u32 index) {
+    if (index >= m_lights.size()) {
+        std::cerr << "[Renderer] Cannot remove light: invalid index " << index << std::endl;
+        return;
+    }
+    m_lights.erase(m_lights.begin() + index);
+}
+
+void Renderer::clearLights() {
+    m_lights.clear();
+}
+
+Light* Renderer::getLight(u32 index) {
+    if (index >= m_lights.size()) {
+        return nullptr;
+    }
+    return &m_lights[index];
+}
+
+const Light* Renderer::getLight(u32 index) const {
+    if (index >= m_lights.size()) {
+        return nullptr;
+    }
+    return &m_lights[index];
+}
+
+void Renderer::setLights(const std::vector<Light>& lights) {
+    m_lights.clear();
+    size_t count = std::min(lights.size(), static_cast<size_t>(MAX_LIGHTS));
+    m_lights.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        m_lights.push_back(lights[i]);
+    }
+    if (lights.size() > MAX_LIGHTS) {
+        std::cerr << "[Renderer] Warning: " << (lights.size() - MAX_LIGHTS)
+                  << " lights were dropped (max " << MAX_LIGHTS << ")" << std::endl;
+    }
 }
 
 } // namespace arch

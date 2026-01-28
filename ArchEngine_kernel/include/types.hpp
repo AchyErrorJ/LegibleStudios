@@ -23,6 +23,9 @@
 
 namespace arch {
 
+// Forward declaration for Light (full definition in lights.hpp)
+struct Light;
+
 // Type aliases
 using u8  = uint8_t;
 using u16 = uint16_t;
@@ -124,15 +127,15 @@ struct MeshData {
     bool hasData() const { return !vertices.empty() && !faces.empty(); }
 };
 
-// Terrain mesh from elevation data
+// Terrain mesh data (from elevation API)
 struct TerrainMesh {
-    std::vector<Vertex> vertices;  // Position, normal, color, UV, stress (unused)
-    std::vector<u32> indices;      // Triangle indices
+    std::vector<Vertex> vertices;  // Pre-colored vertices (elevation gradient in color)
+    std::vector<u32> indices;
 
-    f32 width_ft;                  // Property width in feet
-    f32 depth_ft;                  // Property depth in feet
-    f32 min_elevation;             // Minimum elevation in feet
-    f32 max_elevation;             // Maximum elevation in feet
+    f32 width_ft = 0.0f;           // Original width in feet
+    f32 depth_ft = 0.0f;           // Original depth in feet
+    f32 min_elevation = 0.0f;      // Minimum elevation (feet)
+    f32 max_elevation = 0.0f;      // Maximum elevation (feet)
 
     bool hasData() const { return !vertices.empty() && !indices.empty(); }
 };
@@ -190,11 +193,85 @@ struct Camera {
     }
 };
 
-// Push constants for shaders
+// Serializable camera state for project save/load
+struct CameraState {
+    vec3 position = {0.0f, 5.0f, 20.0f};
+    vec3 target = {0.0f, 0.0f, 0.0f};
+    vec3 up = {0.0f, 1.0f, 0.0f};
+    f32 fov = 45.0f;
+    f32 nearPlane = 0.1f;
+    f32 farPlane = 1000.0f;
+    f32 speed = 10.0f;
+    f32 sensitivity = 0.1f;
+    bool isOrthographic = false;
+    f32 orthoSize = 50.0f;
+    CameraView view = CameraView::Perspective;
+
+    // Convert to Camera for rendering
+    Camera toCamera() const {
+        Camera cam;
+        cam.position = position;
+        cam.target = target;
+        cam.up = up;
+        cam.fov = fov;
+        cam.nearPlane = nearPlane;
+        cam.farPlane = farPlane;
+        cam.speed = speed;
+        cam.sensitivity = sensitivity;
+        cam.isOrthographic = isOrthographic;
+        cam.orthoSize = orthoSize;
+        cam.view = view;
+        return cam;
+    }
+
+    // Create from Camera
+    static CameraState fromCamera(const Camera& cam) {
+        CameraState state;
+        state.position = cam.position;
+        state.target = cam.target;
+        state.up = cam.up;
+        state.fov = cam.fov;
+        state.nearPlane = cam.nearPlane;
+        state.farPlane = cam.farPlane;
+        state.speed = cam.speed;
+        state.sensitivity = cam.sensitivity;
+        state.isOrthographic = cam.isOrthographic;
+        state.orthoSize = cam.orthoSize;
+        state.view = cam.view;
+        return state;
+    }
+};
+
+// Maximum number of lights supported in a single frame
+constexpr u32 MAX_LIGHTS = 16;
+
+// Light types for the multi-light system
+enum class LightType : u32 {
+    Directional = 0,  // Sun/moon light - parallel rays, no falloff
+    Point = 1,        // Omnidirectional light with distance falloff
+    Spot = 2          // Cone-shaped light with direction and falloff
+};
+
+// GPU-friendly light structure for UBO (matches GLSL layout exactly)
+struct GPULight {
+    vec4 positionType;      // xyz = world position, w = type (cast to LightType)
+    vec4 directionRange;    // xyz = direction (for spot/directional), w = range (for point/spot)
+    vec4 colorIntensity;    // rgb = color, a = intensity
+    vec4 spotParams;        // x = innerAngle (cos), y = outerAngle (cos), z = shadowIndex (-1 = none), w = reserved
+};
+
+// Push constants for shaders (per-draw data including element overrides)
 struct PushConstants {
-    mat4 model;
-    vec4 color;      // RGB = albedo, A = stress (for visualization)
-    vec4 material;   // x = metallic, y = roughness, z = ao, w = emission
+    mat4 model;              // 64 bytes
+    vec4 color;              // 16 bytes - RGB = albedo, A = stress
+    vec4 material;           // 16 bytes - x = metallic, y = roughness, z = ao, w = emission
+    // Per-element overrides (set per draw call for proper GPU sync)
+    u32 overrideMask;        // 4 bytes - which overrides are active
+    f32 _pad1, _pad2, _pad3; // 12 bytes padding for vec4 alignment
+    vec4 overrides1;         // 16 bytes - x=uvScale, y=normalStrength, z=brightness, w=contrast
+    vec4 overrides2;         // 16 bytes - x=saturation, y=roughness, z=metallic, w=aoStrength
+    vec4 overrides3;         // 16 bytes - rgb=tint, w=unused
+    // Total: 160 bytes (most GPUs support 256+)
 };
 
 // Uniform buffer object
@@ -202,7 +279,7 @@ struct UniformBufferObject {
     mat4 view;
     mat4 proj;
     mat4 lightViewProj;     // Shadow mapping (Phase 4)
-    vec4 lightDirection;    // Directional light direction
+    vec4 lightDirection;    // Directional light direction (sun)
     vec4 clipPlane;         // Section clipping plane (Phase 5)
     f32 time;
     f32 shadowBias;         // Shadow mapping bias
@@ -215,7 +292,34 @@ struct UniformBufferObject {
     vec4 materialParams;    // x = UV scale, y = normal strength, z = brightness, w = contrast
     vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
     vec4 materialTint;      // RGB tint multiplier, w = unused
+    vec4 pomParams;         // x = enabled (0/1), y = heightScale, z = minLayers, w = maxLayers
+    // Debug visualization
+    u32 materialDebugMode;  // 0=None, 1=Displacement, 2=POMDepth, 3=Normals, 4=UVs, 5=AO
+    // Per-element material overrides (added to global values when override mask bit is set)
+    u32 overrideMask;       // Bitfield for which element overrides are active
+    f32 _pad1, _pad2;       // Padding to maintain 16-byte alignment for next vec4
+    vec4 elementOverride1;  // x = uvScale, y = normalStrength, z = brightness, w = contrast
+    vec4 elementOverride2;  // x = saturation, y = roughness, z = metallic, w = aoStrength
+    vec4 elementOverride3;  // RGB = tint, w = unused
+    // Multiple light sources
+    u32 numLights;          // Number of active lights (0-16)
+    f32 _pad3, _pad4, _pad5;  // Padding for alignment
+    GPULight lights[MAX_LIGHTS];  // Array of lights
 };
+
+// Material override mask bits (for PushConstants::overrideMask)
+namespace MaterialOverrideBits {
+    constexpr u32 UVScale       = (1u << 0);  // Bit 0: UV scale override
+    constexpr u32 UVRotation    = (1u << 1);  // Bit 1: UV rotation override
+    constexpr u32 NormalStrength = (1u << 2);  // Bit 2: Normal strength override
+    constexpr u32 Brightness    = (1u << 3);  // Bit 3: Brightness override
+    constexpr u32 Contrast      = (1u << 4);  // Bit 4: Contrast override
+    constexpr u32 Saturation    = (1u << 5);  // Bit 5: Saturation override
+    constexpr u32 Roughness     = (1u << 6);  // Bit 6: Roughness override
+    constexpr u32 Metallic      = (1u << 7);  // Bit 7: Metallic override
+    constexpr u32 AOStrength    = (1u << 8);  // Bit 8: AO strength override
+    constexpr u32 Tint          = (1u << 9);  // Bit 9: Tint override
+}
 
 // Visualization modes
 enum class VisualizationMode : u32 {
@@ -563,6 +667,119 @@ struct ParametricWall {
     }
 };
 
+// ============================================================================
+// FRUSTUM CULLING
+// ============================================================================
+
+// Frustum plane (ax + by + cz + d = 0)
+struct Plane {
+    vec3 normal;
+    f32 distance;
+
+    // Signed distance from point to plane (positive = in front)
+    f32 distanceToPoint(const vec3& point) const {
+        return glm::dot(normal, point) + distance;
+    }
+};
+
+// View frustum for culling (6 planes)
+struct Frustum {
+    enum { Left = 0, Right, Bottom, Top, Near, Far, Count };
+    Plane planes[Count];
+
+    // Extract frustum planes from view-projection matrix
+    static Frustum fromViewProjection(const mat4& vp) {
+        Frustum f;
+
+        // Left plane
+        f.planes[Left].normal.x = vp[0][3] + vp[0][0];
+        f.planes[Left].normal.y = vp[1][3] + vp[1][0];
+        f.planes[Left].normal.z = vp[2][3] + vp[2][0];
+        f.planes[Left].distance = vp[3][3] + vp[3][0];
+
+        // Right plane
+        f.planes[Right].normal.x = vp[0][3] - vp[0][0];
+        f.planes[Right].normal.y = vp[1][3] - vp[1][0];
+        f.planes[Right].normal.z = vp[2][3] - vp[2][0];
+        f.planes[Right].distance = vp[3][3] - vp[3][0];
+
+        // Bottom plane
+        f.planes[Bottom].normal.x = vp[0][3] + vp[0][1];
+        f.planes[Bottom].normal.y = vp[1][3] + vp[1][1];
+        f.planes[Bottom].normal.z = vp[2][3] + vp[2][1];
+        f.planes[Bottom].distance = vp[3][3] + vp[3][1];
+
+        // Top plane
+        f.planes[Top].normal.x = vp[0][3] - vp[0][1];
+        f.planes[Top].normal.y = vp[1][3] - vp[1][1];
+        f.planes[Top].normal.z = vp[2][3] - vp[2][1];
+        f.planes[Top].distance = vp[3][3] - vp[3][1];
+
+        // Near plane
+        f.planes[Near].normal.x = vp[0][3] + vp[0][2];
+        f.planes[Near].normal.y = vp[1][3] + vp[1][2];
+        f.planes[Near].normal.z = vp[2][3] + vp[2][2];
+        f.planes[Near].distance = vp[3][3] + vp[3][2];
+
+        // Far plane
+        f.planes[Far].normal.x = vp[0][3] - vp[0][2];
+        f.planes[Far].normal.y = vp[1][3] - vp[1][2];
+        f.planes[Far].normal.z = vp[2][3] - vp[2][2];
+        f.planes[Far].distance = vp[3][3] - vp[3][2];
+
+        // Normalize all planes
+        for (int i = 0; i < Count; i++) {
+            f32 len = glm::length(f.planes[i].normal);
+            if (len > 0.0001f) {
+                f.planes[i].normal /= len;
+                f.planes[i].distance /= len;
+            }
+        }
+
+        return f;
+    }
+
+    // Test if AABB is inside or intersects frustum
+    // Returns true if visible (fully or partially inside)
+    bool testAABB(const vec3& minPt, const vec3& maxPt) const {
+        for (int i = 0; i < Count; i++) {
+            // Find the positive vertex (furthest along plane normal)
+            vec3 pVertex;
+            pVertex.x = (planes[i].normal.x >= 0) ? maxPt.x : minPt.x;
+            pVertex.y = (planes[i].normal.y >= 0) ? maxPt.y : minPt.y;
+            pVertex.z = (planes[i].normal.z >= 0) ? maxPt.z : minPt.z;
+
+            // If positive vertex is outside, AABB is fully outside
+            if (planes[i].distanceToPoint(pVertex) < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Quick test for a point (useful for small objects)
+    bool testPoint(const vec3& point) const {
+        for (int i = 0; i < Count; i++) {
+            if (planes[i].distanceToPoint(point) < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
+// Helper to compute AABB from StructuralElement
+inline void getElementAABB(const StructuralElement& elem, vec3& outMin, vec3& outMax) {
+    // Use start/end as basis, expand by width/depth
+    vec3 halfExtent(elem.width * 0.5f, 0.0f, elem.depth * 0.5f);
+
+    outMin = glm::min(elem.start, elem.end) - halfExtent;
+    outMax = glm::max(elem.start, elem.end) + halfExtent;
+
+    // Ensure Y bounds are correct (height)
+    if (outMin.y > outMax.y) std::swap(outMin.y, outMax.y);
+}
+
 // Building/Scene structure for loading
 struct Building {
     std::string name;
@@ -576,7 +793,7 @@ struct Building {
     std::vector<ParametricWall> parametricWalls;
     std::vector<WallCorner> wallCorners;
 
-    // Terrain mesh from elevation data
+    // Terrain mesh (from elevation API)
     TerrainMesh terrainMesh;
 };
 

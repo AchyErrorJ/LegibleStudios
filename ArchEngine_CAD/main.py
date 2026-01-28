@@ -11,17 +11,6 @@ _package_dir = Path(__file__).parent
 if str(_package_dir) not in sys.path:
     sys.path.insert(0, str(_package_dir))
 
-# CRITICAL: Initialize Qt WebEngine BEFORE QApplication
-# Importing QtWebEngineWidgets triggers initialization (must happen before QApplication)
-try:
-    from PyQt6.QtWebEngineWidgets import QWebEngineView
-    print("[Main] Qt WebEngine available and initialized")
-    HAS_WEBENGINE = True
-except ImportError as e:
-    print(f"[Main] PyQt6-WebEngine not available: {e}")
-    HAS_WEBENGINE = False
-
-# Now import QApplication and other Qt modules
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -58,12 +47,15 @@ def main():
     arch_app = ArchEngineApplication(config)
     arch_app.show()
 
-    # Load project from command line or last opened
+    # Load project from command line or last opened, otherwise create new document
     if len(sys.argv) > 1:
         arch_app.open_project(Path(sys.argv[1]))
-    # TEMPORARILY DISABLED - don't auto-open last project
-    # elif config.last_project and Path(config.last_project).exists():
-    #     arch_app.open_project(Path(config.last_project))
+    elif config.last_project and Path(config.last_project).exists():
+        arch_app.open_project(Path(config.last_project))
+    else:
+        # No file to open, create new document (triggers onboarding)
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(100, arch_app._on_new)
 
     # Run event loop
     sys.exit(app.exec())

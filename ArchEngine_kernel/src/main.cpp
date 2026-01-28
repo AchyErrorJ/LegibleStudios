@@ -400,6 +400,7 @@ int main(int argc, char* argv[]) {
             auto& qbd = qbd::getQBDInterface();
             // Try multiple paths - works from build/, build/Release/, or build/Debug/
             std::vector<std::string> jsonPaths = {
+                "samples/QBD_Generated_House.json",                      // Installed location (next to exe)
                 "../../Shared/TestData/output/generated_building.json",  // From build/Release/ or build/Debug/
                 "../Shared/TestData/output/generated_building.json",     // From build/
                 "X:/ARCH/Software/ArchEngine_Suite/Shared/TestData/output/generated_building.json"  // Absolute path
@@ -953,6 +954,7 @@ int main(int argc, char* argv[]) {
 
                     renderer.drawSky();
                     renderer.drawGrid(150.0f, 5.0f);
+                    renderer.drawTerrain(buildings[currentBuilding].terrainMesh);
                     renderer.drawStructuralFrame(buildings[currentBuilding].elements, buildings[currentBuilding], imgui.getSelectedElements());
 
                     renderer.endHDRRenderPass();
@@ -971,6 +973,9 @@ int main(int argc, char* argv[]) {
 
                     // Draw reference grid
                     renderer.drawGrid(150.0f, 5.0f);
+
+                    // Draw terrain (if present)
+                    renderer.drawTerrain(buildings[currentBuilding].terrainMesh);
 
                     // Draw current building with visualization mode coloring
                     // Highlight all selected elements
@@ -995,6 +1000,12 @@ int main(int argc, char* argv[]) {
                     imgui.setHighResRenderState(highResRenderInFlight.load(), highResRenderStatus, highResRenderProgress);
                 }
                 imgui.drawRenderSettingsPanel(renderer, showRenderSettings);
+
+                // Material Library (improved browser with categories)
+                imgui.drawMaterialLibraryPanel(renderer);
+
+                // Material Inspector (per-element material overrides)
+                imgui.drawMaterialInspector(renderer);
 
                 // Parametric Wall Test Panel
                 static bool showWallSystem = false;
@@ -1116,7 +1127,9 @@ int main(int argc, char* argv[]) {
                 static bool wallMenuAdded = false;
                 imgui.drawWallEditor(buildings[currentBuilding], showGeometryEditor);
                 imgui.drawHelpPanel(showHelp);
-                imgui.drawPerformancePanel(currentFps, renderer.getStats().drawCalls, renderer.getStats().triangles);
+                imgui.drawPerformancePanel(currentFps, renderer.getStats().drawCalls, renderer.getStats().triangles, renderer.getStats().culledElements);
+                imgui.drawPreviewWindow();
+                imgui.drawRenderPreviewPanel(renderer);
 
                 // Apply material to selection (button)
                 if (imgui.wasApplyMaterialRequested()) {
@@ -1332,6 +1345,92 @@ int main(int argc, char* argv[]) {
                     }
                 }
 
+                // Handle preview requests (quick 1080p render for post-process tuning)
+                if (imgui.wasPreviewRequested()) {
+                    auto previewPath = imgui.getPreviewImagePath();
+                    auto& previewElements = buildings[currentBuilding].elements;
+                    auto& previewBuilding = buildings[currentBuilding];
+
+                    // Render preview
+                    highResRenderStatus = "Rendering preview...";
+                    imgui.setHighResRenderState(true, highResRenderStatus, 0.5f);
+
+                    context.waitIdle();
+
+                    bool previewSuccess = renderer.renderPreview(
+                        previewElements, previewBuilding, previewPath, imgui.getRenderBrightness());
+
+                    if (previewSuccess) {
+                        highResRenderStatus = "Preview ready";
+                        imgui.showPreviewWindow(true);
+                    } else {
+                        highResRenderStatus = "Preview failed";
+                    }
+
+                    imgui.setHighResRenderState(false, highResRenderStatus, 1.0f);
+                    imgui.clearPreviewRequest();
+                }
+
+                // Handle live render preview refresh requests (GPU-direct inline preview)
+                if (imgui.wasRenderPreviewRefreshRequested()) {
+                    imgui.clearRenderPreviewRefreshRequest();
+                    auto& previewElements = buildings[currentBuilding].elements;
+                    auto& previewBuilding = buildings[currentBuilding];
+                    renderer.renderPreviewToTexture(previewElements, previewBuilding);
+                }
+
+                // Handle material override requests (apply per-element material adjustments)
+                if (imgui.wasMaterialOverrideRequested()) {
+                    auto request = imgui.takeMaterialOverrideRequest();
+
+                    if (request.resetAll) {
+                        // Clear all overrides - iterate through all elements
+                        auto& building = buildings[currentBuilding];
+                        for (size_t i = 0; i < building.elements.size(); i++) {
+                            renderer.clearElementOverride(static_cast<int>(i));
+                        }
+                    } else if (request.resetSelected && !request.elementIndices.empty()) {
+                        // Clear overrides for selected elements
+                        for (int idx : request.elementIndices) {
+                            renderer.clearElementOverride(idx);
+                        }
+                    } else if (!request.elementIndices.empty()) {
+                        // Apply override to selected elements
+                        ElementMaterialOverride override;
+                        override.active = true;
+
+                        // Set per-parameter flags and values
+                        override.hasUVScale = request.hasUVScale;
+                        override.hasUVRotation = request.hasUVRotation;
+                        override.hasNormalStrength = request.hasNormalStrength;
+                        override.hasBrightness = request.hasBrightness;
+                        override.hasContrast = request.hasContrast;
+                        override.hasSaturation = request.hasSaturation;
+                        override.hasRoughness = request.hasRoughness;
+                        override.hasMetallic = request.hasMetallic;
+                        override.hasAOStrength = request.hasAOStrength;
+                        override.hasTint = request.hasTint;
+
+                        // Set direct replacement values
+                        override.uvScale = request.uvScale;
+                        override.uvRotation = request.uvRotation;
+                        override.normalStrength = request.normalStrength;
+                        override.brightness = request.brightness;
+                        override.contrast = request.contrast;
+                        override.saturation = request.saturation;
+                        override.roughness = request.roughness;
+                        override.metallic = request.metallic;
+                        override.aoStrength = request.aoStrength;
+                        override.tint[0] = request.tint[0];
+                        override.tint[1] = request.tint[1];
+                        override.tint[2] = request.tint[2];
+
+                        for (int idx : request.elementIndices) {
+                            renderer.setElementOverride(idx, override);
+                        }
+                    }
+                }
+
                 // Handle high-res render requests (runs synchronously to avoid Vulkan threading issues)
                 if (imgui.wasHighResRenderRequested()) {
                     auto request = imgui.takeHighResRenderRequest();
@@ -1408,11 +1507,69 @@ int main(int argc, char* argv[]) {
                             int upscaleResult = std::system(upscaleCmd.c_str());
                             std::filesystem::remove(savePath);
 
-                            highResRenderStatus = (upscaleResult == 0) ?
-                                "Saved: " + outputPath : "Upscale failed";
-                        } else if (saved) {
+                            if (upscaleResult != 0) {
+                                highResRenderStatus = "Upscale failed";
+                            } else {
+                                saved = true; // Continue to post-processing
+                            }
+                        }
+
+                        // Apply post-processing or just fix color profile
+                        if (saved) {
+                            if (request.postProcessPreset > 0) {
+                                // Full post-processing (includes ICC profile embedding)
+                                highResRenderStatus = "Post-processing...";
+                                imgui.setHighResRenderState(true, highResRenderStatus, 0.95f);
+
+                                const char* presetNames[] = { "none", "subtle", "vivid", "warm", "architectural", "golden_hour", "print_ready" };
+                                std::string preset = presetNames[request.postProcessPreset];
+
+                                // Build post-process command with manual overrides
+                                std::string postCmd = "python ../../render_server/postprocess_cli.py "
+                                            "--input \"" + outputPath + "\" "
+                                            "--output \"" + outputPath + "\" "
+                                            "--preset " + preset;
+
+                                // Add manual parameter overrides (if set, i.e., >= 0)
+                                if (request.postExposure >= 0.0f) {
+                                    postCmd += " --exposure " + std::to_string(request.postExposure);
+                                }
+                                if (request.postContrast >= 0.0f) {
+                                    postCmd += " --contrast " + std::to_string(request.postContrast);
+                                }
+                                if (request.postSaturation >= 0.0f) {
+                                    postCmd += " --saturation " + std::to_string(request.postSaturation);
+                                }
+                                if (request.postVibrance >= 0.0f) {
+                                    postCmd += " --vibrance " + std::to_string(request.postVibrance);
+                                }
+                                if (request.postSharpness >= 0.0f) {
+                                    postCmd += " --sharpness " + std::to_string(request.postSharpness);
+                                }
+                                if (request.postVignette >= 0.0f) {
+                                    postCmd += " --vignette " + std::to_string(request.postVignette);
+                                }
+
+                                int postResult = std::system(postCmd.c_str());
+                                if (postResult != 0) {
+                                    std::cout << "[Renderer] Post-processing failed, keeping original" << std::endl;
+                                }
+                            } else {
+                                // Just embed sRGB ICC profile for correct print colors
+                                highResRenderStatus = "Fixing color profile...";
+                                imgui.setHighResRenderState(true, highResRenderStatus, 0.95f);
+
+                                std::string fixCmd = "python ../../render_server/fix_color_profile.py \"" + outputPath + "\"";
+                                int fixResult = std::system(fixCmd.c_str());
+                                if (fixResult != 0) {
+                                    std::cout << "[Renderer] Color profile fix failed (colors may print incorrectly)" << std::endl;
+                                }
+                            }
+                        }
+
+                        if (saved) {
                             highResRenderStatus = "Saved: " + outputPath;
-                        } else {
+                        } else if (highResRenderStatus.find("failed") == std::string::npos) {
                             highResRenderStatus = "Save failed";
                         }
                     } else {
@@ -1442,6 +1599,9 @@ int main(int argc, char* argv[]) {
                             currentBuilding = buildings.size() - 1;
                             resetCamera();
                             std::cout << "Loaded building: " << newBuilding.name << "\n";
+
+                            // Load material overrides if present
+                            GeometryLoader::loadMaterialOverrides(path, renderer);
                         }
                     }
                 }
@@ -1489,7 +1649,7 @@ int main(int argc, char* argv[]) {
                     imgui.clearSaveRequest();
                     std::string path = imgui.getFilePath();
                     if (!path.empty()) {
-                        GeometryLoader::saveToJSON(path, buildings[currentBuilding]);
+                        GeometryLoader::saveToJSON(path, buildings[currentBuilding], renderer);
                         std::cout << "Saved to: " << path << "\n";
                     }
                 }
@@ -1834,6 +1994,9 @@ int main(int argc, char* argv[]) {
                 renderer.endFrame();
             }
         }
+
+        // Clean up preview resources before ImGui shutdown
+        renderer.cleanupPreviewResources();
 
         context.waitIdle();
         std::cout << "ArchEngine shutdown complete\n";

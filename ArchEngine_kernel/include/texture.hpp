@@ -24,10 +24,11 @@ public:
     // Create solid color texture (1x1 pixel)
     void createSolidColor(vec4 color, bool sRGB = true);
 
-    // Create default textures (white, normal, black)
+    // Create default textures (white, normal, black, grey)
     static void createDefaultTextures(VulkanContext& context);
     static Texture* getWhite();
     static Texture* getBlack();
+    static Texture* getGrey();           // Mid-grey (0.5) for height maps - no displacement
     static Texture* getNormalDefault();  // Flat normal (0.5, 0.5, 1.0)
 
     VkImageView getImageView() const { return m_imageView; }
@@ -55,6 +56,7 @@ private:
     // Static default textures
     static std::unique_ptr<Texture> s_white;
     static std::unique_ptr<Texture> s_black;
+    static std::unique_ptr<Texture> s_grey;
     static std::unique_ptr<Texture> s_normalDefault;
 };
 

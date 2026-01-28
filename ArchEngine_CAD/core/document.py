@@ -229,20 +229,12 @@ class ArchDocument(QObject):
         self._room_connections: List[RoomConnection] = []  # Room adjacencies
         self._furniture: List[Any] = []  # FurniturePlacement objects
         self._reference_planes: List[ReferencePlane] = []  # Building grid lines
-        self._terrain_mesh: Optional[Dict[str, Any]] = None  # Terrain mesh from elevation data
-
-        # Reality layer analysis (physics, economics, psychology)
-        self._reality_analysis: Dict[str, Any] = {}
 
         # Furniture catalog reference
         self._furniture_catalog = get_default_catalog() if _FURNITURE_AVAILABLE else None
 
         # Version control (git-based)
         self._version_control: Optional[VersionControl] = None
-
-        # Constraint system
-        from core.constraints import ConstraintSystem
-        self.constraints = ConstraintSystem(self)
 
     @property
     def file_path(self) -> Optional[Path]:
@@ -311,50 +303,6 @@ class ArchDocument(QObject):
         """Get building reference planes (grid lines)."""
         return self._reference_planes
 
-    @property
-    def terrain_mesh(self) -> Optional[Dict[str, Any]]:
-        """Get terrain mesh data (from Google Maps elevation)."""
-        return self._terrain_mesh
-
-    @property
-    def reality_analysis(self) -> Dict[str, Any]:
-        """Get reality layer analysis data (physics, economics, psychology)."""
-        return self._reality_analysis
-
-    def get_environment_data(self) -> Dict[str, Any]:
-        """Get environment/physics analysis data."""
-        return self._reality_analysis.get('environment', {})
-
-    def get_materiality_data(self) -> Dict[str, Any]:
-        """Get materiality/economics analysis data."""
-        return self._reality_analysis.get('materiality', {})
-
-    def get_perception_data(self) -> Dict[str, Any]:
-        """Get perception/psychology analysis data."""
-        return self._reality_analysis.get('perception', {})
-
-    def get_room_daylight_factor(self, room_id: str) -> Optional[float]:
-        """Get daylight factor for a specific room."""
-        env = self.get_environment_data()
-        daylight_factors = env.get('daylight_factors', {})
-        return daylight_factors.get(room_id)
-
-    def get_room_comfort_score(self, room_id: str) -> Optional[float]:
-        """Get comfort score for a specific room."""
-        perception = self.get_perception_data()
-        comfort_scores = perception.get('comfort_scores', {})
-        return comfort_scores.get(room_id)
-
-    def get_total_cost(self) -> Optional[float]:
-        """Get total construction cost."""
-        materiality = self.get_materiality_data()
-        return materiality.get('total_cost')
-
-    def get_cost_per_sqft(self) -> Optional[float]:
-        """Get cost per square foot."""
-        materiality = self.get_materiality_data()
-        return materiality.get('cost_per_sqft')
-
     def get_reference_plane(self, plane_id: str) -> Optional[ReferencePlane]:
         """Get reference plane by ID."""
         for plane in self._reference_planes:
@@ -370,6 +318,31 @@ class ArchDocument(QObject):
     def remove_reference_plane(self, plane_id: str):
         """Remove a reference plane by ID."""
         self._reference_planes = [p for p in self._reference_planes if p.id != plane_id]
+        self._modified = True
+
+    @property
+    def onboarding_completed(self) -> bool:
+        """Check if this document has completed the onboarding flow."""
+        return self._data.get('onboarding_completed', False)
+
+    def complete_onboarding(self):
+        """
+        Mark onboarding as completed for this document.
+
+        This flag is saved with the document, so each file remembers
+        its own onboarding state. New files start with onboarding not completed.
+        """
+        self._data['onboarding_completed'] = True
+        self._modified = True
+
+    def reset_onboarding(self):
+        """
+        Reset onboarding for this document.
+
+        Use this to re-run the onboarding flow for an existing document.
+        The change must be saved to persist.
+        """
+        self._data['onboarding_completed'] = False
         self._modified = True
 
     def generate_reference_planes_from_extents(self):
@@ -667,16 +640,6 @@ class ArchDocument(QObject):
         return self._wall_types.get(type_id)
 
     @property
-    def furniture(self) -> List[Any]:
-        """Get placed furniture items."""
-        return self._furniture
-
-    @property
-    def furniture_catalog(self):
-        """Get the furniture catalog."""
-        return self._furniture_catalog
-
-    @property
     def building_width(self) -> float:
         """Get building width."""
         return self._data.get('width', 10000)
@@ -703,7 +666,7 @@ class ArchDocument(QObject):
             'rooms': {},
             'roofs': [],
             'wall_types': [],
-            'furniture': []
+            'onboarding_completed': False  # Track if this file has completed onboarding
         }
         self._file_path = None
         self._modified = False
@@ -721,24 +684,9 @@ class ArchDocument(QObject):
         Returns:
             True if successful, False otherwise
         """
-        import traceback
         try:
-            print(f"[Document] Loading file: {file_path}")
-            print(f"[Document] File exists: {file_path.exists()}")
-            print(f"[Document] File absolute path: {file_path.absolute()}")
             with open(file_path, 'r', encoding='utf-8') as f:
                 self._data = json.load(f)
-
-            # DEBUG: Verify what was actually loaded
-            print(f"[Document] Actually loaded: {self._data.get('name', 'NO NAME')}")
-            print(f"[Document] Building ID: {self._data.get('building_id', 'NO ID')}")
-            walls_count = len(self._data.get('walls_batch', []))
-            print(f"[Document] Walls in loaded file: {walls_count}")
-            terrain_mesh = self._data.get('terrain_mesh', {})
-            terrain_vertices = len(terrain_mesh.get('vertices', []))
-            print(f"[Document] Terrain vertices in loaded file: {terrain_vertices}")
-            if terrain_vertices > 0:
-                print(f"[Document] Terrain triangle count: {terrain_mesh.get('triangle_count', 0)}")
 
             self._file_path = Path(file_path)
             self._modified = False
@@ -752,16 +700,10 @@ class ArchDocument(QObject):
             self.document_changed.emit()
             event_bus.document_loaded.emit(str(file_path))
 
-            print(f"[Document] Successfully loaded file")
             return True
 
         except (json.JSONDecodeError, IOError) as e:
-            print(f"[Document] Error loading file: {e}")
-            traceback.print_exc()
-            return False
-        except Exception as e:
-            print(f"[Document] Unexpected error loading file: {e}")
-            traceback.print_exc()
+            print(f"Error loading file: {e}")
             return False
 
     def save(self, file_path: Optional[Path] = None) -> bool:
@@ -847,8 +789,6 @@ class ArchDocument(QObject):
         self._windows.clear()
         self._rooms.clear()
         self._wall_types.clear()
-        self._room_connections.clear()
-        self._furniture.clear()
 
         # Parse wall types first (needed for wall thickness)
         for wt in self._data.get('wall_types', []):
@@ -920,36 +860,13 @@ class ArchDocument(QObject):
 
         # Parse rooms
         for room_id, r in self._data.get('rooms', {}).items():
-            bounds = r.get('bounds', {'x': 0, 'y': 0, 'width': 0, 'height': 0})
-            vertices = r.get('vertices')
-
-            # Generate vertices from bounds if not provided
-            if not vertices and bounds.get('width', 0) > 0 and bounds.get('height', 0) > 0:
-                x, y = bounds.get('x', 0), bounds.get('y', 0)
-                w, h = bounds.get('width', 0), bounds.get('height', 0)
-                # Create rectangular polygon from bounds (clockwise)
-                vertices = [
-                    [x, y],           # Top-left
-                    [x + w, y],       # Top-right
-                    [x + w, y + h],   # Bottom-right
-                    [x, y + h]        # Bottom-left
-                ]
-
-            # Calculate center if not provided
-            center = r.get('center')
-            if not center and vertices:
-                xs = [v[0] for v in vertices]
-                zs = [v[1] for v in vertices]
-                center = {'x': sum(xs) / len(xs), 'z': sum(zs) / len(zs)}
-
             room = Room(
                 id=room_id,
                 name=r.get('name', room_id),
                 room_type=r.get('room_type', 'room'),
-                bounds=bounds,
+                bounds=r.get('bounds', {'x': 0, 'y': 0, 'width': 0, 'height': 0}),
                 area=r.get('area', 0),
-                center=center,
-                vertices=vertices,
+                center=r.get('center'),
                 is_pinned=r.get('is_pinned', False),
                 locked_properties=r.get('locked_properties', [])
             )
@@ -973,23 +890,6 @@ class ArchDocument(QObject):
         print(f"[Document] Rooms loaded: {len(self._rooms)}, connections: {len(self._room_connections)}")
         if not self._room_connections and len(self._rooms) > 1:
             self.detect_room_adjacencies()
-
-        # Infer constraints from layout
-        self.constraints.infer_constraints_from_layout(self)
-
-        # Parse terrain mesh (from Google Maps elevation)
-        # Save it before _data gets rebuilt
-        terrain_mesh = self._data.get('terrain_mesh')
-        self._terrain_mesh = terrain_mesh
-        if self._terrain_mesh:
-            print(f"[Document] Loaded terrain mesh: {self._terrain_mesh.get('vertex_count', 0)} vertices, {self._terrain_mesh.get('triangle_count', 0)} triangles")
-            # Ensure it stays in _data after rebuilding
-            self._data['terrain_mesh'] = self._terrain_mesh
-
-        # Parse reality layer analysis (physics, economics, psychology)
-        self._reality_analysis = self._data.get('reality_analysis', {})
-        if self._reality_analysis:
-            print(f"[Document] Loaded reality analysis: environment, materiality, perception")
 
     def _auto_bind_walls_to_rooms(self):
         """
@@ -1609,42 +1509,11 @@ class ArchDocument(QObject):
                 'bounds': room.bounds,
                 'area': room.area,
                 'center': room.center,
-                'vertices': room.vertices,  # Include polygon vertices
                 # Constraint fields
                 'is_pinned': room.is_pinned,
                 'locked_properties': room.locked_properties
             }
         self._data['rooms'] = rooms
-
-        # Update room connections
-        connections = []
-        for conn in self._room_connections:
-            connections.append({
-                'room_a_id': conn.room_a_id,
-                'room_b_id': conn.room_b_id,
-                'connection_type': conn.connection_type,
-                'shared_edge': conn.shared_edge,
-                'wall_id': conn.wall_id
-            })
-        self._data['room_connections'] = connections
-
-        # Update furniture
-        if _FURNITURE_AVAILABLE:
-            furniture = []
-            for placement in self._furniture:
-                furniture.append(placement.to_dict())
-            self._data['furniture'] = furniture
-
-        # Update reality layer analysis
-        if self._reality_analysis:
-            self._data['reality_analysis'] = self._reality_analysis
-
-        # Update terrain mesh
-        if self._terrain_mesh:
-            self._data['terrain_mesh'] = self._terrain_mesh
-            print(f"[Document] _update_data: Adding terrain_mesh to _data ({len(self._terrain_mesh.get('vertices', []))} vertices)")
-        else:
-            print(f"[Document] _update_data: WARNING - self._terrain_mesh is None or empty!")
 
     def get_data(self) -> dict:
         """Get current document data as JSON-serializable dict.
@@ -1762,10 +1631,6 @@ class ArchDocument(QObject):
             for key, value in changes.items():
                 if hasattr(wall, key):
                     setattr(wall, key, value)
-
-            # If structural wall moved, update bound room
-            if ('start' in changes or 'end' in changes) and wall.is_structural:
-                self._sync_room_from_wall(wall)
 
             self.set_modified(True)
             self.element_modified.emit('wall', str(index))
@@ -1970,98 +1835,6 @@ class ArchDocument(QObject):
 
             cmd = ModifyWindowCommand(self, index, old_values, changes)
             self._undo_stack.push(cmd)
-
-    # =========================================================================
-    # Furniture Methods
-    # =========================================================================
-
-    def add_furniture(self, furniture_id: str, x: float, z: float,
-                      rotation: float = 0, room_id: Optional[str] = None) -> Optional[str]:
-        """
-        Add a furniture placement.
-
-        Args:
-            furniture_id: ID of furniture item from catalog
-            x: X position in mm
-            z: Z position in mm
-            rotation: Rotation in degrees
-            room_id: Optional room ID
-
-        Returns:
-            Placement ID or None if furniture not found in catalog
-        """
-        if not _FURNITURE_AVAILABLE or self._furniture_catalog is None:
-            return None
-
-        item = self._furniture_catalog.get(furniture_id)
-        if item is None:
-            return None
-
-        placement = FurniturePlacement.create(furniture_id, x, z, rotation, room_id)
-        self._furniture.append(placement)
-
-        self.set_modified(True)
-        self.element_added.emit('furniture', placement.id)
-        self.document_changed.emit()
-
-        return placement.id
-
-    def remove_furniture(self, placement_id: str) -> bool:
-        """
-        Remove a furniture placement by ID.
-
-        Args:
-            placement_id: Placement instance ID
-
-        Returns:
-            True if removed, False if not found
-        """
-        for i, placement in enumerate(self._furniture):
-            if placement.id == placement_id:
-                self._furniture.pop(i)
-                self.set_modified(True)
-                self.element_removed.emit('furniture', placement_id)
-                self.document_changed.emit()
-                return True
-        return False
-
-    def modify_furniture(self, placement_id: str, **changes) -> bool:
-        """
-        Modify a furniture placement.
-
-        Args:
-            placement_id: Placement instance ID
-            **changes: Properties to change (position_x, position_z, rotation, room_id)
-
-        Returns:
-            True if modified, False if not found
-        """
-        for placement in self._furniture:
-            if placement.id == placement_id:
-                for key, value in changes.items():
-                    if hasattr(placement, key):
-                        setattr(placement, key, value)
-                self.set_modified(True)
-                self.element_modified.emit('furniture', placement_id)
-                return True
-        return False
-
-    def get_furniture_in_room(self, room_id: str) -> List[Any]:
-        """Get all furniture placements in a room."""
-        return [p for p in self._furniture if p.room_id == room_id]
-
-    def get_furniture_by_id(self, placement_id: str) -> Optional[Any]:
-        """Get a furniture placement by ID."""
-        for placement in self._furniture:
-            if placement.id == placement_id:
-                return placement
-        return None
-
-    def get_furniture_item(self, furniture_id: str) -> Optional[Any]:
-        """Get a furniture item from the catalog."""
-        if self._furniture_catalog:
-            return self._furniture_catalog.get(furniture_id)
-        return None
 
     def get_wall_types(self) -> List[Dict]:
         """Get available wall types."""

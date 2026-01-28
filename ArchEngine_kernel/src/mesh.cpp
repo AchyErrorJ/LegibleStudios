@@ -447,6 +447,65 @@ createGrid(f32 size, f32 spacing, vec3 color) {
 }
 
 std::pair<std::vector<Vertex>, std::vector<u32>>
+createSphere(f32 radius, u32 rings, u32 sectors, vec3 color) {
+    std::vector<Vertex> vertices;
+    std::vector<u32> indices;
+
+    const f32 PI = 3.14159265359f;
+
+    // Generate vertices
+    for (u32 r = 0; r <= rings; ++r) {
+        f32 theta = static_cast<f32>(r) / static_cast<f32>(rings) * PI;  // 0 to PI
+        f32 sinTheta = std::sin(theta);
+        f32 cosTheta = std::cos(theta);
+
+        for (u32 s = 0; s <= sectors; ++s) {
+            f32 phi = static_cast<f32>(s) / static_cast<f32>(sectors) * 2.0f * PI;  // 0 to 2PI
+            f32 sinPhi = std::sin(phi);
+            f32 cosPhi = std::cos(phi);
+
+            // Sphere position
+            vec3 pos;
+            pos.x = radius * sinTheta * cosPhi;
+            pos.y = radius * cosTheta;
+            pos.z = radius * sinTheta * sinPhi;
+
+            // Normal is same as position (normalized) for a sphere centered at origin
+            vec3 normal = glm::normalize(pos);
+
+            // UV coordinates (equirectangular projection)
+            vec2 uv;
+            uv.x = static_cast<f32>(s) / static_cast<f32>(sectors);
+            uv.y = static_cast<f32>(r) / static_cast<f32>(rings);
+
+            vertices.push_back({pos, normal, color, uv});
+        }
+    }
+
+    // Generate indices for triangles
+    for (u32 r = 0; r < rings; ++r) {
+        for (u32 s = 0; s < sectors; ++s) {
+            u32 i0 = r * (sectors + 1) + s;
+            u32 i1 = i0 + 1;
+            u32 i2 = (r + 1) * (sectors + 1) + s;
+            u32 i3 = i2 + 1;
+
+            // First triangle
+            indices.push_back(i0);
+            indices.push_back(i2);
+            indices.push_back(i1);
+
+            // Second triangle
+            indices.push_back(i1);
+            indices.push_back(i2);
+            indices.push_back(i3);
+        }
+    }
+
+    return {vertices, indices};
+}
+
+std::pair<std::vector<Vertex>, std::vector<u32>>
 createArrow(vec3 start, vec3 end, f32 headSize, vec3 color) {
     std::vector<Vertex> vertices;
     std::vector<u32> indices;

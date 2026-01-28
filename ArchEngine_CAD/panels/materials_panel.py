@@ -14,8 +14,8 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QSplitter, QTabWidget,
     QSlider, QDoubleSpinBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QMimeData
-from PyQt6.QtGui import QPixmap, QIcon, QColor, QDrag
+from PyQt6.QtCore import Qt, pyqtSignal, QSize
+from PyQt6.QtGui import QPixmap, QIcon, QColor
 
 
 # Material categories
@@ -57,7 +57,6 @@ class MaterialPreviewWidget(QLabel):
         super().__init__(parent)
         self.material_id = material_id
         self.material_name = material_name
-        self._drag_start_pos = None
 
         self.setFixedSize(64, 64)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -101,44 +100,10 @@ class MaterialPreviewWidget(QLabel):
         self.setStyleSheet(self.styleSheet() + "color: #888; font-weight: bold;")
 
     def mousePressEvent(self, event):
-        """Handle click to select material and start drag."""
+        """Handle click to select material."""
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start_pos = event.pos()
             self.clicked.emit(self.material_id)
         super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        """Start drag if moved beyond threshold."""
-        if self._drag_start_pos is None:
-            return
-
-        # Check if moved enough to start drag
-        if (event.pos() - self._drag_start_pos).manhattanLength() < 10:
-            return
-
-        # Start drag
-        drag = QDrag(self)
-        mime_data = QMimeData()
-
-        # Store material data as text for simplicity
-        # Format: "material:<material_id>:<material_name>"
-        mime_data.setText(f"material:{self.material_id}:{self.material_name}")
-        drag.setMimeData(mime_data)
-
-        # Use the current pixmap as drag preview
-        if self.pixmap():
-            drag.setPixmap(self.pixmap())
-            drag.setHotSpot(event.pos())
-
-        # Execute drag
-        drag.exec(Qt.DropAction.CopyAction)
-
-        self._drag_start_pos = None
-
-    def mouseReleaseEvent(self, event):
-        """Clear drag start position on release."""
-        self._drag_start_pos = None
-        super().mouseReleaseEvent(event)
 
     def set_selected(self, selected: bool):
         """Update selection visual state."""

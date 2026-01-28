@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.hpp"
+#include "renderer.hpp"
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -16,6 +17,9 @@ public:
     // Save building to JSON file
     static void saveToJSON(const std::string& filepath, const Building& building);
 
+    // Save building with material overrides
+    static void saveToJSON(const std::string& filepath, const Building& building, const Renderer& renderer);
+
     // Create sample buildings for testing
     static Building createSimpleFrame(f32 width = 40.0f, f32 depth = 30.0f, f32 height = 12.0f);
     static Building createMultiStoryFrame(int stories = 3, f32 width = 60.0f, f32 depth = 40.0f, f32 storyHeight = 12.0f);
@@ -24,6 +28,9 @@ public:
 
     // Load from IFC (simplified - just extracts basic geometry)
     static Building loadFromIFC(const std::string& filepath);
+
+    // Load element material overrides from JSON file and apply to renderer
+    static void loadMaterialOverrides(const std::string& filepath, Renderer& renderer);
 
 private:
     static void addColumn(Building& building, vec3 position, f32 width, f32 depth, f32 height,
