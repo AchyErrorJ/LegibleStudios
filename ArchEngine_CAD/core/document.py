@@ -19,6 +19,7 @@ from PyQt6.QtGui import QUndoStack
 
 from core.events import event_bus
 from core.version_control import VersionControl
+from core.terrain import generate_test_terrain
 
 # Try to import furniture module
 _FURNITURE_AVAILABLE = False
@@ -668,6 +669,19 @@ class ArchDocument(QObject):
             'wall_types': [],
             'onboarding_completed': False  # Track if this file has completed onboarding
         }
+
+        # Add test terrain for development
+        try:
+            test_terrain = generate_test_terrain(width_ft=100, depth_ft=100, grid_size=15)
+            if test_terrain:
+                self._data['terrain_mesh'] = test_terrain.to_dict()
+                print(f"[Document] Added test terrain: {len(test_terrain.vertices)} vertices, {len(test_terrain.indices)//3} triangles")
+                print(f"[Document] Terrain elevation range: {test_terrain.min_elevation:.1f} to {test_terrain.max_elevation:.1f} ft")
+        except Exception as e:
+            print(f"[Document] Could not generate test terrain: {e}")
+            import traceback
+            traceback.print_exc()
+
         self._file_path = None
         self._modified = False
         self._parse_data()
@@ -860,13 +874,31 @@ class ArchDocument(QObject):
 
         # Parse rooms
         for room_id, r in self._data.get('rooms', {}).items():
+            bounds = r.get('bounds', {'x': 0, 'y': 0, 'width': 0, 'height': 0})
+
+            # Get vertices from data, or generate from bounds if not present
+            vertices = r.get('vertices')
+            if vertices is None and bounds.get('width', 0) > 0 and bounds.get('height', 0) > 0:
+                # Generate rectangular vertices from bounds
+                x = bounds['x']
+                y = bounds['y']  # This is actually z in world coords
+                w = bounds['width']
+                h = bounds['height']
+                vertices = [
+                    [x, y],           # Bottom-left
+                    [x + w, y],       # Bottom-right
+                    [x + w, y + h],   # Top-right
+                    [x, y + h]        # Top-left
+                ]
+
             room = Room(
                 id=room_id,
                 name=r.get('name', room_id),
                 room_type=r.get('room_type', 'room'),
-                bounds=r.get('bounds', {'x': 0, 'y': 0, 'width': 0, 'height': 0}),
+                bounds=bounds,
                 area=r.get('area', 0),
                 center=r.get('center'),
+                vertices=vertices,
                 is_pinned=r.get('is_pinned', False),
                 locked_properties=r.get('locked_properties', [])
             )
@@ -1503,7 +1535,7 @@ class ArchDocument(QObject):
         # Update rooms
         rooms = {}
         for room_id, room in self._rooms.items():
-            rooms[room_id] = {
+            room_data = {
                 'name': room.name,
                 'room_type': room.room_type,
                 'bounds': room.bounds,
@@ -1513,6 +1545,10 @@ class ArchDocument(QObject):
                 'is_pinned': room.is_pinned,
                 'locked_properties': room.locked_properties
             }
+            # Include vertices if present
+            if room.vertices:
+                room_data['vertices'] = room.vertices
+            rooms[room_id] = room_data
         self._data['rooms'] = rooms
 
     def get_data(self) -> dict:

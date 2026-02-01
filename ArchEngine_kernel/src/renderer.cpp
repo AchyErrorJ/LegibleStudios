@@ -28,9 +28,14 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
         m_shadowMap = std::make_unique<ShadowMap>(m_context, m_context.getConfig().shadowMapResolution);
     }
 
-    // Create environment map (procedural sky by default)
+    // Create environment map (procedural sky by default) and generate IBL
     m_envMap = std::make_unique<EnvironmentMap>(m_context);
     m_envMap->createProceduralSky();
+    // Generate IBL textures for the procedural sky
+    IBLConfig iblConfig;
+    if (m_envMap->generateIBLTextures(iblConfig)) {
+        // Note: IBL descriptor set will be updated after createIBLDescriptorSetLayout() is called
+    }
 
     // Create post-processing pipeline (SSAO, bloom, etc.)
     m_postProcess = std::make_unique<PostProcess>(m_context);
@@ -42,7 +47,14 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
     createUniformBuffers();
     createDescriptorSets();
     createMaterialDescriptorSetLayout();
+    // Create default material descriptor set first (creates default textures including black cubemap)
     createDefaultMaterialDescriptorSet();
+    // Now create IBL descriptor set (uses black cubemap for default fallback)
+    createIBLDescriptorSetLayout();
+    // Update IBL descriptor set with procedural sky IBL textures if available
+    if (m_envMap && m_envMap->hasIBLTextures()) {
+        updateIBLDescriptorSet();
+    }
 
     // Create shadow height map descriptor set for tessellated shadows
     if (m_shadowMap && m_shadowMap->getHeightMapDescriptorSetLayout() != VK_NULL_HANDLE) {
@@ -78,6 +90,10 @@ Renderer::Renderer(VulkanContext& context) : m_context(context) {
     // Create grid mesh
     auto [gridVerts, gridIndices] = Geometry::createGrid(100.0f, 5.0f);
     m_gridMesh = std::make_unique<Mesh>(m_context, gridVerts, gridIndices);
+
+    // Create test sphere mesh for material test scene (PBR validation)
+    auto [sphereVerts, sphereIndices] = Geometry::createSphere(3.0f, 32, 64);  // 3 unit radius sphere
+    m_testSphereMesh = std::make_unique<Mesh>(m_context, sphereVerts, sphereIndices);
 }
 
 Renderer::~Renderer() {
@@ -102,6 +118,7 @@ Renderer::~Renderer() {
     m_envMap.reset();
     m_shadowMap.reset();
     m_gridMesh.reset();
+    m_testSphereMesh.reset();
     m_meshCache.clear();
     m_pipeline.reset();
     m_wireframePipeline.reset();
@@ -558,6 +575,96 @@ void Renderer::createMaterialDescriptorSetLayout() {
     }
 }
 
+void Renderer::createIBLDescriptorSetLayout() {
+    // IBL descriptor set layout (set 2) - irradiance, prefiltered, BRDF LUT
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+
+    // Binding 0: Irradiance cubemap (diffuse IBL)
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 1: Prefiltered cubemap (specular IBL)
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 2: BRDF LUT
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<u32>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+
+    if (vkCreateDescriptorSetLayout(m_context.getDevice(), &layoutInfo, nullptr, &m_iblDescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create IBL descriptor set layout");
+    }
+
+    // Allocate IBL descriptor set
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_descriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_iblDescriptorSetLayout;
+
+    if (vkAllocateDescriptorSets(m_context.getDevice(), &allocInfo, &m_iblDescriptorSet) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate IBL descriptor set");
+    }
+
+    // Initialize with default black cubemap textures so descriptor set 2 is always valid
+    // This ensures the shader can always bind set 2 even without a loaded environment map
+    VkDescriptorImageInfo defaultCubeInfo{};
+    defaultCubeInfo.sampler = Texture::getBlackCubeSampler();
+    defaultCubeInfo.imageView = Texture::getBlackCubeImageView();
+    defaultCubeInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkDescriptorImageInfo defaultLutInfo{};
+    defaultLutInfo.sampler = Texture::getBlack()->getSampler();
+    defaultLutInfo.imageView = Texture::getBlack()->getImageView();
+    defaultLutInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    std::array<VkWriteDescriptorSet, 3> defaultWrites{};
+
+    // Binding 0: Irradiance (black cubemap)
+    defaultWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    defaultWrites[0].dstSet = m_iblDescriptorSet;
+    defaultWrites[0].dstBinding = 0;
+    defaultWrites[0].dstArrayElement = 0;
+    defaultWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    defaultWrites[0].descriptorCount = 1;
+    defaultWrites[0].pImageInfo = &defaultCubeInfo;
+
+    // Binding 1: Prefiltered (black cubemap)
+    defaultWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    defaultWrites[1].dstSet = m_iblDescriptorSet;
+    defaultWrites[1].dstBinding = 1;
+    defaultWrites[1].dstArrayElement = 0;
+    defaultWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    defaultWrites[1].descriptorCount = 1;
+    defaultWrites[1].pImageInfo = &defaultCubeInfo;
+
+    // Binding 2: BRDF LUT (black 2D texture)
+    defaultWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    defaultWrites[2].dstSet = m_iblDescriptorSet;
+    defaultWrites[2].dstBinding = 2;
+    defaultWrites[2].dstArrayElement = 0;
+    defaultWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    defaultWrites[2].descriptorCount = 1;
+    defaultWrites[2].pImageInfo = &defaultLutInfo;
+
+    vkUpdateDescriptorSets(m_context.getDevice(), static_cast<u32>(defaultWrites.size()), defaultWrites.data(), 0, nullptr);
+
+    // Mark IBL as valid since we have default textures
+    m_iblDescriptorSetValid = true;
+    std::cout << "[Renderer] IBL descriptor set initialized with default textures" << std::endl;
+}
+
 void Renderer::createDefaultMaterialDescriptorSet() {
     // Create material library and default textures
     m_materialLibrary = std::make_unique<MaterialLibrary>(m_context);
@@ -646,6 +753,7 @@ void Renderer::createPipeline() {
     m_pipelineLayout = PipelineLayoutBuilder(m_context)
         .addDescriptorSetLayout(m_descriptorSetLayout)           // Set 0: UBO + shadow map
         .addDescriptorSetLayout(m_materialDescriptorSetLayout)   // Set 1: Material textures
+        .addDescriptorSetLayout(m_iblDescriptorSetLayout)        // Set 2: IBL textures
         .addPushConstantRange(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, 0, sizeof(PushConstants))
         .build();
 
@@ -695,9 +803,10 @@ void Renderer::createPipeline() {
     m_transparentPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                                         "shaders/structural.frag.spv", transparentConfig);
 
-    // Create HDR pipelines (no MSAA, uses HDR render pass from PostProcess)
+    // Create HDR pipelines (no MSAA, uses HDR render pass from PostProcess with 2 color attachments)
     if (m_postProcess) {
-        PipelineConfig hdrConfig = PipelineConfig::defaultConfig();
+        // HDR render pass has 2 color attachments (color + normal/roughness for SSR)
+        PipelineConfig hdrConfig = PipelineConfig::mrtConfig(2);
         hdrConfig.renderPass = m_postProcess->getHDRRenderPass();
         hdrConfig.pipelineLayout = m_pipelineLayout;
         hdrConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;  // No MSAA for HDR
@@ -707,7 +816,7 @@ void Renderer::createPipeline() {
 
         // HDR wireframe pipeline (only if GPU supports fillModeNonSolid)
         if (m_context.supportsFillModeNonSolid()) {
-            PipelineConfig hdrWireframeConfig = PipelineConfig::defaultConfig();
+            PipelineConfig hdrWireframeConfig = PipelineConfig::mrtConfig(2);
             hdrWireframeConfig.renderPass = m_postProcess->getHDRRenderPass();
             hdrWireframeConfig.pipelineLayout = m_pipelineLayout;
             hdrWireframeConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -719,11 +828,20 @@ void Renderer::createPipeline() {
                                                                 "shaders/structural.frag.spv", hdrWireframeConfig);
         }
 
-        // HDR transparent pipeline for glass/windows
-        PipelineConfig hdrTransparentConfig = PipelineConfig::transparentConfig();
+        // HDR transparent pipeline for glass/windows (needs MRT too)
+        PipelineConfig hdrTransparentConfig = PipelineConfig::mrtConfig(2);
         hdrTransparentConfig.renderPass = m_postProcess->getHDRRenderPass();
         hdrTransparentConfig.pipelineLayout = m_pipelineLayout;
         hdrTransparentConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        // Enable alpha blending for first attachment only
+        hdrTransparentConfig.colorBlendAttachments[0].blendEnable = VK_TRUE;
+        hdrTransparentConfig.colorBlendAttachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        hdrTransparentConfig.colorBlendAttachments[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        hdrTransparentConfig.colorBlendAttachments[0].colorBlendOp = VK_BLEND_OP_ADD;
+        hdrTransparentConfig.colorBlendAttachments[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        hdrTransparentConfig.colorBlendAttachments[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        hdrTransparentConfig.colorBlendAttachments[0].alphaBlendOp = VK_BLEND_OP_ADD;
+        hdrTransparentConfig.depthStencil.depthWriteEnable = VK_FALSE;
 
         m_hdrTransparentPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                                                "shaders/structural.frag.spv", hdrTransparentConfig);
@@ -769,12 +887,20 @@ void Renderer::createPipeline() {
                 tessWireConfig);
         }
 
-        // HDR tessellation pipelines
+        // HDR tessellation pipelines (need 2 color attachments for MRT)
         if (m_postProcess) {
             PipelineConfig hdrTessConfig = PipelineConfig::tessellationConfig();
             hdrTessConfig.renderPass = m_postProcess->getHDRRenderPass();
             hdrTessConfig.pipelineLayout = m_pipelineLayout;
             hdrTessConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            // Add MRT support - 2 color attachments
+            hdrTessConfig.colorBlendAttachments.resize(2);
+            for (int i = 0; i < 2; i++) {
+                hdrTessConfig.colorBlendAttachments[i].colorWriteMask =
+                    VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+                hdrTessConfig.colorBlendAttachments[i].blendEnable = VK_FALSE;
+            }
 
             m_hdrTessPipeline = std::make_unique<Pipeline>(m_context,
                 "shaders/structural.vert.spv",
@@ -791,6 +917,14 @@ void Renderer::createPipeline() {
                 hdrTessWireConfig.rasterization.polygonMode = VK_POLYGON_MODE_LINE;
                 hdrTessWireConfig.rasterization.lineWidth = 1.5f;
                 hdrTessWireConfig.rasterization.cullMode = VK_CULL_MODE_NONE;
+                // Add MRT support - 2 color attachments
+                hdrTessWireConfig.colorBlendAttachments.resize(2);
+                for (int i = 0; i < 2; i++) {
+                    hdrTessWireConfig.colorBlendAttachments[i].colorWriteMask =
+                        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+                    hdrTessWireConfig.colorBlendAttachments[i].blendEnable = VK_FALSE;
+                }
 
                 m_hdrTessWireframePipeline = std::make_unique<Pipeline>(m_context,
                     "shaders/structural.vert.spv",
@@ -1048,7 +1182,7 @@ void Renderer::drawSky() {
         }
     }
 
-    // Rebind both descriptor sets
+    // Rebind all descriptor sets (0, 1, and IBL set 2)
     std::array<VkDescriptorSet, 2> descriptorSets = {
         m_descriptorSets[m_currentFrame],
         m_defaultMaterialDescriptorSet
@@ -1056,6 +1190,7 @@ void Renderer::drawSky() {
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             m_pipelineLayout, 0, static_cast<u32>(descriptorSets.size()),
                             descriptorSets.data(), 0, nullptr);
+    bindIBLDescriptorSet();  // Must also rebind IBL set 2
 }
 
 void Renderer::cleanupSwapchain() {
@@ -1251,7 +1386,7 @@ void Renderer::beginRenderPass(vec4 clearColor) {
         }
     }
 
-    // Bind both descriptor sets: set 0 (UBO + shadow) and set 1 (material textures)
+    // Bind all descriptor sets: set 0 (UBO + shadow), set 1 (material textures), set 2 (IBL)
     std::array<VkDescriptorSet, 2> descriptorSets = {
         m_descriptorSets[m_currentFrame],
         m_defaultMaterialDescriptorSet
@@ -1259,14 +1394,29 @@ void Renderer::beginRenderPass(vec4 clearColor) {
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             m_pipelineLayout, 0, static_cast<u32>(descriptorSets.size()),
                             descriptorSets.data(), 0, nullptr);
+    bindIBLDescriptorSet();  // Bind IBL set 2
 }
 
 void Renderer::endRenderPass() {
     vkCmdEndRenderPass(m_currentCommandBuffer);
 }
 
-void Renderer::beginHDRRenderPass(vec4 clearColor) {
-    if (!m_postProcess || !m_hdrPipeline) return;
+bool Renderer::beginHDRRenderPass(vec4 clearColor) {
+    if (!m_postProcess || !m_hdrPipeline) {
+        std::cerr << "[Renderer] HDR render pass skipped: postProcess=" << (m_postProcess ? "ok" : "null")
+                  << " hdrPipeline=" << (m_hdrPipeline ? "ok" : "null") << std::endl;
+        return false;
+    }
+
+    // Validate HDR resources exist
+    VkRenderPass hdrRenderPass = m_postProcess->getHDRRenderPass();
+    VkFramebuffer hdrFramebuffer = m_postProcess->getHDRFramebuffer();
+    if (hdrRenderPass == VK_NULL_HANDLE || hdrFramebuffer == VK_NULL_HANDLE) {
+        std::cerr << "[Renderer] HDR render pass skipped: renderPass=" << hdrRenderPass
+                  << " framebuffer=" << hdrFramebuffer << std::endl;
+        m_postProcessingEnabled = false;  // Disable to prevent repeated errors
+        return false;
+    }
 
     // Enable linear HDR output (composite pass will do tonemapping)
     m_outputLinearHDR = true;
@@ -1275,14 +1425,16 @@ void Renderer::beginHDRRenderPass(vec4 clearColor) {
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    renderPassInfo.renderPass = m_postProcess->getHDRRenderPass();
-    renderPassInfo.framebuffer = m_postProcess->getHDRFramebuffer();
+    renderPassInfo.renderPass = hdrRenderPass;
+    renderPassInfo.framebuffer = hdrFramebuffer;
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = m_context.getSwapchainExtent();
 
-    std::array<VkClearValue, 2> clearValues{};
-    clearValues[0].color = {{clearColor.r, clearColor.g, clearColor.b, clearColor.a}};
-    clearValues[1].depthStencil = {1.0f, 0};
+    // Clear values for 3 attachments: HDR color, normal/roughness, depth
+    std::array<VkClearValue, 3> clearValues{};
+    clearValues[0].color = {{clearColor.r, clearColor.g, clearColor.b, clearColor.a}};  // HDR color
+    clearValues[1].color = {{0.5f, 0.5f, 1.0f, 0.0f}};  // Normal (up) + roughness (0)
+    clearValues[2].depthStencil = {1.0f, 0};  // Depth
 
     renderPassInfo.clearValueCount = static_cast<u32>(clearValues.size());
     renderPassInfo.pClearValues = clearValues.data();
@@ -1319,7 +1471,7 @@ void Renderer::beginHDRRenderPass(vec4 clearColor) {
         }
     }
 
-    // Bind both descriptor sets: set 0 (UBO + shadow) and set 1 (material textures)
+    // Bind descriptor sets: set 0 (UBO + shadow), set 1 (material textures), set 2 (IBL)
     std::array<VkDescriptorSet, 2> descriptorSets = {
         m_descriptorSets[m_currentFrame],
         m_defaultMaterialDescriptorSet
@@ -1327,6 +1479,11 @@ void Renderer::beginHDRRenderPass(vec4 clearColor) {
     vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             m_pipelineLayout, 0, static_cast<u32>(descriptorSets.size()),
                             descriptorSets.data(), 0, nullptr);
+
+    // Bind IBL descriptor set (set 2) for environment-based lighting
+    bindIBLDescriptorSet();
+
+    return true;
 }
 
 void Renderer::endHDRRenderPass() {
@@ -1334,7 +1491,10 @@ void Renderer::endHDRRenderPass() {
 }
 
 void Renderer::runPostProcessing() {
-    if (!m_postProcess) return;
+    if (!m_postProcess) {
+        std::cerr << "[Renderer] runPostProcessing skipped: postProcess is null" << std::endl;
+        return;
+    }
 
     auto extent = m_context.getSwapchainExtent();
     f32 aspectRatio = static_cast<f32>(extent.width) / static_cast<f32>(extent.height);
@@ -1360,6 +1520,18 @@ void Renderer::runPostProcessing() {
     if (m_bloomEnabled) {
         m_postProcess->generateBloom(m_currentCommandBuffer, m_currentFrame);
     }
+
+    // Generate SSR (Screen Space Reflections)
+    if (m_ssrEnabled) {
+        mat4 invProj = glm::inverse(proj);
+        m_postProcess->generateSSR(
+            m_currentCommandBuffer,
+            proj,
+            invProj,
+            view,
+            m_currentFrame
+        );
+    }
 }
 
 void Renderer::beginCompositePass() {
@@ -1379,27 +1551,60 @@ void Renderer::beginCompositePass() {
     );
 }
 
-void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) {
+void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements, const vec3& buildingOffset) {
     if (!m_shadowMap || !m_shadowsEnabled || elements.empty()) {
         return;
     }
 
-    // Calculate scene bounds for light matrix
+    // Store building offset for shadow calculations
+    m_buildingOffset = buildingOffset;
+
+    // Calculate scene bounds for light matrices (including offset)
     vec3 minBounds(FLT_MAX);
     vec3 maxBounds(-FLT_MAX);
     for (const auto& elem : elements) {
-        minBounds = glm::min(minBounds, glm::min(elem.start, elem.end));
-        maxBounds = glm::max(maxBounds, glm::max(elem.start, elem.end));
+        vec3 offsetStart = elem.start + buildingOffset;
+        vec3 offsetEnd = elem.end + buildingOffset;
+        minBounds = glm::min(minBounds, glm::min(offsetStart, offsetEnd));
+        maxBounds = glm::max(maxBounds, glm::max(offsetStart, offsetEnd));
     }
     vec3 sceneCenter = (minBounds + maxBounds) * 0.5f;
     f32 sceneRadius = glm::length(maxBounds - minBounds) * 0.5f;
     sceneRadius = glm::max(sceneRadius, 10.0f);  // Minimum radius
 
-    // Update light matrices
-    m_shadowMap->updateLightMatrix(m_lightDirection, sceneCenter, sceneRadius);
+    // Collect shadow-casting lights (up to MAX_SHADOW_MAPS)
+    std::vector<vec3> shadowLightDirs;
+    for (const auto& light : m_lights) {
+        if (shadowLightDirs.size() >= MAX_SHADOW_MAPS) break;
 
-    // Begin shadow pass - beginShadowPass binds the non-tessellated pipeline by default
-    m_shadowMap->beginShadowPass(m_currentCommandBuffer);
+        if (!light.isEnabled() || !light.isCastingShadow()) continue;
+
+        int groupIdx = static_cast<int>(light.getGroup());
+        if (groupIdx >= 0 && groupIdx < 4 && !m_lightGroupEnabled[groupIdx]) continue;
+
+        LightType type = light.getType();
+        if (type == LightType::Directional || type == LightType::Spot) {
+            shadowLightDirs.push_back(light.getDirection());
+        }
+    }
+
+    // If no shadow-casting lights, use default sun direction for layer 0
+    if (shadowLightDirs.empty()) {
+        shadowLightDirs.push_back(m_lightDirection);
+    }
+
+    // Store the number of active shadow maps for UBO update
+    m_activeShadowMaps = static_cast<u32>(shadowLightDirs.size());
+
+    // Update light matrices for each shadow-casting light
+    for (u32 i = 0; i < shadowLightDirs.size(); i++) {
+        m_shadowMap->updateLightMatrix(i, shadowLightDirs[i], sceneCenter, sceneRadius);
+    }
+
+    // Render shadow pass for each layer
+    for (u32 layerIndex = 0; layerIndex < shadowLightDirs.size(); layerIndex++) {
+        // Begin shadow pass for this layer
+        m_shadowMap->beginShadowPass(m_currentCommandBuffer, layerIndex);
 
     // Check if we should use tessellated shadow pipeline
     bool useTessShadows = m_tessellationEnabled && m_shadowMap->getTessPipeline() != VK_NULL_HANDLE
@@ -1558,6 +1763,9 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
                 continue;  // Skip other types
         }
 
+        // Apply building offset to transform
+        transform = glm::translate(mat4(1.0f), m_buildingOffset) * transform;
+
         auto it = m_meshCache.find(key);
         if (it == m_meshCache.end()) {
             continue;  // Skip if mesh not cached
@@ -1566,7 +1774,7 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
         if (useTessShadows) {
             // Use tessellated push constants
             ShadowTessPushConstants tessPush;
-            tessPush.lightViewProj = m_shadowMap->getLightViewProj();
+            tessPush.lightViewProj = m_shadowMap->getLightViewProj(layerIndex);
             tessPush.model = transform;
             tessPush.tessLevel = m_tessellationLevel;
             tessPush.dispScale = m_displacementScale;
@@ -1579,7 +1787,7 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
         } else {
             // Use non-tessellated push constants
             ShadowPushConstants shadowPush;
-            shadowPush.lightViewProj = m_shadowMap->getLightViewProj();
+            shadowPush.lightViewProj = m_shadowMap->getLightViewProj(layerIndex);
             shadowPush.model = transform;
 
             vkCmdPushConstants(m_currentCommandBuffer, m_shadowMap->getPipelineLayout(),
@@ -1591,6 +1799,7 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) 
     }
 
     m_shadowMap->endShadowPass(m_currentCommandBuffer);
+    }  // End layer loop
 }
 
 void Renderer::setCamera(const Camera& camera) {
@@ -1616,17 +1825,27 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
     ubo.proj[1][1] *= -1;
     ubo.time = m_time;
 
-    // Shadow mapping data
+    // Shadow mapping data - copy all active lightViewProj matrices
     if (m_shadowMap && m_shadowsEnabled) {
-        ubo.lightViewProj = m_shadowMap->getLightViewProj();
+        for (u32 i = 0; i < MAX_SHADOW_MAPS; i++) {
+            if (i < m_activeShadowMaps) {
+                ubo.lightViewProj[i] = m_shadowMap->getLightViewProj(i);
+            } else {
+                ubo.lightViewProj[i] = mat4(1.0f);  // Identity for unused layers
+            }
+        }
         ubo.lightDirection = vec4(m_lightDirection, 0.0f);
         ubo.shadowBias = m_shadowBias;  // Use adjustable shadow bias
         ubo.enableShadows = 1;
+        ubo.numShadowMaps = m_activeShadowMaps;
     } else {
-        ubo.lightViewProj = mat4(1.0f);
+        for (u32 i = 0; i < MAX_SHADOW_MAPS; i++) {
+            ubo.lightViewProj[i] = mat4(1.0f);
+        }
         ubo.lightDirection = vec4(0.0f, -1.0f, 0.0f, 0.0f);
         ubo.shadowBias = 0.0f;
         ubo.enableShadows = 0;
+        ubo.numShadowMaps = 0;
     }
 
     // Section clipping data
@@ -1658,22 +1877,44 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
     // These values are used for elements without overrides, and as base values for elements with partial overrides
     // DO NOT use zeros - that would make textures disappear!
     ubo.overrideMask = 0;  // No overrides by default
+
+    // Effect flags - allow toggling individual shader effects for debugging
+    ubo.effectFlags = 0;
+    if (m_iblEnabled) ubo.effectFlags |= EffectFlags::IBL;
+    if (m_directLightEnabled) ubo.effectFlags |= EffectFlags::DirectLight;
+    if (m_normalMappingEnabled) ubo.effectFlags |= EffectFlags::NormalMapping;
     ubo._pad1 = 0.0f;
-    ubo._pad2 = 0.0f;
+
+    // IBL intensity parameters
+    ubo.iblParams = vec4(m_iblIntensity, m_iblDiffuseIntensity, m_iblSpecularIntensity, m_fresnelIntensity);
+
     ubo.elementOverride1 = vec4(1.0f, 1.0f, 0.0f, 1.0f);  // uvScale=1, normal=1, brightness=0, contrast=1
     ubo.elementOverride2 = vec4(1.0f, 0.0f, 0.0f, 1.0f);  // saturation=1, roughness=0, metallic=0, ao=1
     ubo.elementOverride3 = vec4(0.0f, 0.0f, 0.0f, 0.0f);  // tint=(0,0,0)
 
-    // Multiple light sources
-    ubo.numLights = static_cast<u32>(std::min(m_lights.size(), static_cast<size_t>(MAX_LIGHTS)));
+    // Multiple light sources - filter by group enabled and apply intensity multipliers
     ubo._pad3 = 0.0f;
     ubo._pad4 = 0.0f;
     ubo._pad5 = 0.0f;
-    for (u32 i = 0; i < ubo.numLights; ++i) {
-        ubo.lights[i] = m_lights[i];  // GPULight and Light are compatible (inheritance)
+    u32 activeCount = 0;
+    for (size_t i = 0; i < m_lights.size() && activeCount < MAX_LIGHTS; ++i) {
+        const Light& light = m_lights[i];
+        int groupIdx = static_cast<int>(light.getGroup());
+        // Skip disabled lights or disabled groups
+        if (!light.isEnabled() || (groupIdx >= 0 && groupIdx < 4 && !m_lightGroupEnabled[groupIdx])) {
+            continue;
+        }
+        // Copy light to UBO with intensity multiplier applied
+        ubo.lights[activeCount] = light;  // GPULight and Light are compatible (inheritance)
+        if (groupIdx >= 0 && groupIdx < 4) {
+            float multiplier = m_lightGroupIntensity[groupIdx];
+            ubo.lights[activeCount].colorIntensity.a *= multiplier;
+        }
+        activeCount++;
     }
+    ubo.numLights = activeCount;
     // Zero out unused light slots for safety
-    for (u32 i = ubo.numLights; i < MAX_LIGHTS; ++i) {
+    for (u32 i = activeCount; i < MAX_LIGHTS; ++i) {
         ubo.lights[i] = GPULight{};
     }
 
@@ -2079,7 +2320,7 @@ void Renderer::drawRoof(vec3 position, f32 width, f32 depth, f32 height, vec3 co
     drawMesh(*m_meshCache[key], transform, color, stress);
 }
 
-void Renderer::drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress) {
+void Renderer::drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress, const vec3& offset) {
     if (!meshData.hasData()) return;
 
     // Check cache first to avoid recalculating hash
@@ -2145,11 +2386,12 @@ void Renderer::drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress) 
         m_meshCache[key] = std::make_unique<Mesh>(m_context, vertices, indices);
     }
 
-    mat4 transform = mat4(1.0f);  // Identity - vertices are already in world space
+    // Apply offset as translation transform
+    mat4 transform = glm::translate(mat4(1.0f), offset);
     drawMesh(*m_meshCache[key], transform, color, stress);
 }
 
-void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, f32 stress, vec4 material) {
+void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, f32 stress, vec4 material, const vec3& offset) {
     if (!meshData.hasData()) return;
 
     // Check cache first to avoid recalculating hash
@@ -2210,7 +2452,8 @@ void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, 
         m_meshCache[key] = std::make_unique<Mesh>(m_context, vertices, indices);
     }
 
-    mat4 transform = mat4(1.0f);
+    // Apply offset as translation transform
+    mat4 transform = glm::translate(mat4(1.0f), offset);
     drawMeshWithMaterial(*m_meshCache[key], transform, color, stress, material);
 }
 
@@ -2280,10 +2523,17 @@ void Renderer::buildMaterialDescriptorSets() {
     }
 }
 
+void Renderer::bindIBLDescriptorSet() {
+    if (m_iblDescriptorSetValid && m_iblDescriptorSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_pipelineLayout, 2, 1, &m_iblDescriptorSet, 0, nullptr);
+    }
+}
+
 void Renderer::bindMaterialDescriptorSet(const std::string& materialName) {
     VkDescriptorSet set = m_defaultMaterialDescriptorSet;
     auto it = m_materialDescriptorSets.find(materialName);
-    if (it != m_materialDescriptorSets.end()) {
+    if (it != m_materialDescriptorSets.end() && it->second != VK_NULL_HANDLE) {
         set = it->second;
     } else if (!materialName.empty()) {
         std::string lowered = materialName;
@@ -2291,20 +2541,29 @@ void Renderer::bindMaterialDescriptorSet(const std::string& materialName) {
             return static_cast<char>(std::tolower(c));
         });
 
+        // Helper lambda to safely get material descriptor set (returns default if not found)
+        auto getMaterialSet = [this](const std::string& name) -> VkDescriptorSet {
+            auto matIt = m_materialDescriptorSets.find(name);
+            if (matIt != m_materialDescriptorSets.end() && matIt->second != VK_NULL_HANDLE) {
+                return matIt->second;
+            }
+            return m_defaultMaterialDescriptorSet;
+        };
+
         if (lowered.find("wall") != std::string::npos) {
-            set = m_materialDescriptorSets["drywall"];
+            set = getMaterialSet("drywall");
         } else if (lowered.find("roof") != std::string::npos) {
-            set = m_materialDescriptorSets["shingle"];
+            set = getMaterialSet("shingle");
         } else if (lowered.find("window") != std::string::npos || lowered.find("glass") != std::string::npos) {
-            set = m_materialDescriptorSets["glass"];
+            set = getMaterialSet("glass");
         } else if (lowered.find("door") != std::string::npos || lowered.find("wood") != std::string::npos) {
-            set = m_materialDescriptorSets["wood"];
+            set = getMaterialSet("wood");
         } else if (lowered.find("metal") != std::string::npos || lowered.find("steel") != std::string::npos) {
-            set = m_materialDescriptorSets["metal"];
+            set = getMaterialSet("metal");
         } else if (lowered.find("concrete") != std::string::npos) {
-            set = m_materialDescriptorSets["concrete"];
+            set = getMaterialSet("concrete");
         } else if (lowered.find("brick") != std::string::npos) {
-            set = m_materialDescriptorSets["brick"];
+            set = getMaterialSet("brick");
         }
     }
 
@@ -2460,8 +2719,199 @@ void Renderer::drawLoadArrow(vec3 start, vec3 end, f32 magnitude) {
     drawMesh(*m_meshCache[key], transform, vec3(1.0f, 0.0f, 0.0f));
 }
 
-void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices) {
+void Renderer::drawPlacementMarker(vec3 position, vec3 color, f32 size) {
+    // Safety check - don't draw if we don't have a valid command buffer
+    if (!m_currentCommandBuffer) return;
+
+    // Additional safety: ensure we're in a valid rendering state
+    // The marker requires a pipeline to be bound and active render pass
+    if (!m_pipeline && !m_hdrPipeline) return;
+
+    m_context.beginDebugLabel(m_currentCommandBuffer, "Placement Marker", {1.0f, 1.0f, 0.0f, 1.0f});
+
+    // Rebind the correct pipeline for the current render pass
+    // This is necessary because other draw calls may have changed the pipeline state
+    if (m_outputLinearHDR) {
+        if (m_hdrPipeline) {
+            m_hdrPipeline->bind(m_currentCommandBuffer);
+        }
+    } else {
+        if (m_pipeline) {
+            m_pipeline->bind(m_currentCommandBuffer);
+        }
+    }
+
+    // Ensure all required descriptor sets are bound
+    std::array<VkDescriptorSet, 2> descriptorSets = {
+        m_descriptorSets[m_currentFrame],
+        m_defaultMaterialDescriptorSet
+    };
+    vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_pipelineLayout, 0, static_cast<u32>(descriptorSets.size()),
+                            descriptorSets.data(), 0, nullptr);
+    bindIBLDescriptorSet();  // Required for HDR mode to have valid IBL textures
+
+    // Clear per-element override (marker has no element ID)
+    m_currentDrawElementId = -1;
+
+    // Draw a small crosshair/marker at the position
+    // Use a simple column mesh scaled down as a marker
+    std::string key = "marker_" + std::to_string(size);
+    if (m_meshCache.find(key) == m_meshCache.end()) {
+        // Create a small octahedron-like shape for the marker
+        auto [verts, indices] = Geometry::createColumn(vec3(0), size, size, size * 2.0f, color);
+        if (verts.empty() || indices.empty()) {
+            m_context.endDebugLabel(m_currentCommandBuffer);
+            return;
+        }
+        m_meshCache[key] = std::make_unique<Mesh>(m_context, verts, indices);
+    }
+
+    // Safety check
+    if (!m_meshCache[key]) {
+        m_context.endDebugLabel(m_currentCommandBuffer);
+        return;
+    }
+
+    // Offset so the marker is centered at the position
+    mat4 transform = glm::translate(mat4(1.0f), position - vec3(size * 0.5f, size, size * 0.5f));
+
+    // Draw with emissive material so it glows
+    vec4 emissiveMaterial = vec4(0.0f, 0.3f, 1.0f, 2.0f);  // Low roughness, high emission
+    drawMeshWithMaterial(*m_meshCache[key], transform, color, 0.0f, emissiveMaterial);
+
+    // Also draw a vertical line from ground to the marker
+    std::string lineKey = "marker_line";
+    if (m_meshCache.find(lineKey) == m_meshCache.end()) {
+        auto [verts, indices] = Geometry::createColumn(vec3(0), 0.05f, 0.05f, 1.0f, vec3(1.0f));
+        if (!verts.empty() && !indices.empty()) {
+            m_meshCache[lineKey] = std::make_unique<Mesh>(m_context, verts, indices);
+        }
+    }
+
+    // Scale and position the line from ground (Y=0) to marker
+    f32 lineHeight = position.y;
+    if (lineHeight > 0.1f && m_meshCache.find(lineKey) != m_meshCache.end() && m_meshCache[lineKey]) {
+        mat4 lineTransform = glm::translate(mat4(1.0f), vec3(position.x - 0.025f, 0.0f, position.z - 0.025f));
+        lineTransform = glm::scale(lineTransform, vec3(1.0f, lineHeight, 1.0f));
+        drawMeshWithMaterial(*m_meshCache[lineKey], lineTransform, color * 0.5f, 0.0f, emissiveMaterial);
+    }
+
+    m_context.endDebugLabel(m_currentCommandBuffer);
+}
+
+void Renderer::drawLightIndicators(int selectedIndex) {
+    // Safety check - don't draw if we don't have a valid command buffer or no lights
+    if (!m_currentCommandBuffer || m_lights.empty()) return;
+
+    m_context.beginDebugLabel(m_currentCommandBuffer, "Light Indicators", {1.0f, 0.9f, 0.3f, 1.0f});
+
+    // Rebind the correct pipeline for the current render pass
+    if (m_outputLinearHDR) {
+        if (m_hdrPipeline) {
+            m_hdrPipeline->bind(m_currentCommandBuffer);
+        }
+    } else {
+        if (m_pipeline) {
+            m_pipeline->bind(m_currentCommandBuffer);
+        }
+    }
+
+    // Ensure all required descriptor sets are bound
+    std::array<VkDescriptorSet, 2> descriptorSets = {
+        m_descriptorSets[m_currentFrame],
+        m_defaultMaterialDescriptorSet
+    };
+    vkCmdBindDescriptorSets(m_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_pipelineLayout, 0, static_cast<u32>(descriptorSets.size()),
+                            descriptorSets.data(), 0, nullptr);
+    bindIBLDescriptorSet();
+
+    // Clear per-element override
+    m_currentDrawElementId = -1;
+
+    // Create/get sphere mesh for light indicators
+    const f32 sphereSize = 0.3f;
+    std::string sphereKey = "light_indicator_sphere";
+    if (m_meshCache.find(sphereKey) == m_meshCache.end()) {
+        // Create a small sphere mesh using an icosphere approximation (octahedron for simplicity)
+        auto [verts, indices] = Geometry::createColumn(vec3(0), sphereSize, sphereSize, sphereSize, vec3(1.0f));
+        if (!verts.empty() && !indices.empty()) {
+            m_meshCache[sphereKey] = std::make_unique<Mesh>(m_context, verts, indices);
+        }
+    }
+
+    if (!m_meshCache[sphereKey]) {
+        m_context.endDebugLabel(m_currentCommandBuffer);
+        return;
+    }
+
+    // Draw indicator for each light
+    for (size_t i = 0; i < m_lights.size(); i++) {
+        const auto& light = m_lights[i];
+        vec3 lightPos = light.getPosition();
+        vec3 lightColor = light.getColor();
+        LightType lightType = light.getType();
+
+        // Skip directional lights (they don't have a position)
+        if (lightType == LightType::Directional) continue;
+
+        bool isSelected = (static_cast<int>(i) == selectedIndex);
+        bool castsShadow = light.isCastingShadow();
+
+        // Selected lights are larger and have a white/cyan highlight
+        // Shadow-casting lights have a golden/orange tint
+        f32 indicatorSize = isSelected ? sphereSize * 1.5f : sphereSize;
+        vec3 displayColor;
+        if (isSelected) {
+            displayColor = vec3(0.3f, 1.0f, 1.0f);  // Cyan for selected
+        } else if (castsShadow) {
+            displayColor = vec3(1.0f, 0.7f, 0.2f);  // Golden/orange for shadow-casting
+        } else {
+            displayColor = lightColor;
+        }
+        f32 emission = isSelected ? 5.0f : (castsShadow ? 4.0f : 3.0f);  // Brighter when selected or shadow-casting
+
+        // Position the indicator at the light position
+        mat4 transform = glm::translate(mat4(1.0f), lightPos - vec3(indicatorSize * 0.5f));
+        if (isSelected) {
+            transform = glm::scale(transform, vec3(1.5f));  // Scale up selected indicator
+        }
+
+        // Draw with strong emission so it glows
+        vec4 emissiveMaterial = vec4(0.0f, 0.2f, emission, emission);
+        drawMeshWithMaterial(*m_meshCache[sphereKey], transform, displayColor, 0.0f, emissiveMaterial);
+
+        // Draw a small vertical line from ground to light for spot lights
+        if (lightType == LightType::Spot && lightPos.y > 0.1f) {
+            std::string lineKey = "light_indicator_line";
+            if (m_meshCache.find(lineKey) == m_meshCache.end()) {
+                auto [verts, indices] = Geometry::createColumn(vec3(0), 0.02f, 0.02f, 1.0f, vec3(1.0f));
+                if (!verts.empty() && !indices.empty()) {
+                    m_meshCache[lineKey] = std::make_unique<Mesh>(m_context, verts, indices);
+                }
+            }
+            if (m_meshCache[lineKey]) {
+                mat4 lineTransform = glm::translate(mat4(1.0f), vec3(lightPos.x - 0.01f, 0.0f, lightPos.z - 0.01f));
+                lineTransform = glm::scale(lineTransform, vec3(1.0f, lightPos.y, 1.0f));
+                vec3 lineColor = isSelected ? displayColor * 0.5f : lightColor * 0.3f;
+                vec4 dimEmissive = vec4(0.0f, 0.2f, isSelected ? 2.0f : 1.0f, isSelected ? 2.0f : 1.0f);
+                drawMeshWithMaterial(*m_meshCache[lineKey], lineTransform, lineColor, 0.0f, dimEmissive);
+            }
+        }
+    }
+
+    m_context.endDebugLabel(m_currentCommandBuffer);
+}
+
+void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices, const vec3& buildingOffset) {
     m_context.beginDebugLabel(m_currentCommandBuffer, "Structural Frame", {0.2f, 0.6f, 0.9f, 1.0f});
+
+    // Store building offset for use by draw functions
+    m_buildingOffset = buildingOffset;
+
+    // Bind IBL descriptor set (set 2) - only needs to be done once per frame
+    bindIBLDescriptorSet();
 
     // Debug: count element types on first call per building change
     static std::string lastBuilding;
@@ -2479,14 +2929,15 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
     m_culledCount = 0;  // Reset culled counter
     size_t index = 0;
     for (const auto& element : elements) {
-        // Frustum culling - skip elements outside view
-        vec3 aabbMin, aabbMax;
-        getElementAABB(element, aabbMin, aabbMax);
-        if (!m_frustum.testAABB(aabbMin, aabbMax)) {
-            m_culledCount++;
-            index++;
-            continue;  // Skip this element
-        }
+        // Frustum culling DISABLED - was causing buildings to disappear when rotating
+        // The frustum test appears to be incorrect, keeping culling off for now
+        // vec3 aabbMin, aabbMax;
+        // getElementAABB(element, aabbMin, aabbMax);
+        // if (!m_frustum.testAABB(aabbMin, aabbMax)) {
+        //     m_culledCount++;
+        //     index++;
+        //     continue;  // Skip this element
+        // }
 
         vec3 color = getElementColor(element, building, index);
 
@@ -2504,30 +2955,34 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
 
         // Only pass stress to shader for Structural mode; otherwise pass 0 so shader uses RGB color
         f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? element.stress : 0.0f;
-        
+
+        // Apply building offset to element positions
+        vec3 offsetStart = element.start + m_buildingOffset;
+        vec3 offsetEnd = element.end + m_buildingOffset;
+
         switch (element.type) {
             case ElementType::Beam:
-                drawBeam(element.start, element.end, element.width, element.depth,
+                drawBeam(offsetStart, offsetEnd, element.width, element.depth,
                         color, stressForShader, element.deflection);
                 break;
 
             case ElementType::Column:
-                drawColumn(element.start, element.width, element.depth,
-                          element.end.y - element.start.y, color, stressForShader);
+                drawColumn(offsetStart, element.width, element.depth,
+                          offsetEnd.y - offsetStart.y, color, stressForShader);
                 break;
 
             case ElementType::Floor: {
                 // Use IFC mesh if available
                 if (element.mesh.hasData()) {
-                    drawCustomMesh(element.mesh, color, stressForShader);
+                    drawCustomMesh(element.mesh, color, stressForShader, m_buildingOffset);
                 } else {
                     // Fall back to generated geometry
-                    glm::vec3 center = (element.start + element.end) * 0.5f;
-                    center.y = element.start.y;
+                    glm::vec3 center = (offsetStart + offsetEnd) * 0.5f;
+                    center.y = offsetStart.y;
                     drawFloor(center,
-                             element.end.x - element.start.x,
-                             element.end.z - element.start.z,
-                             element.end.y - element.start.y, color, stressForShader);  // Use vertical extent as thickness
+                             offsetEnd.x - offsetStart.x,
+                             offsetEnd.z - offsetStart.z,
+                             offsetEnd.y - offsetStart.y, color, stressForShader);  // Use vertical extent as thickness
                 }
                 break;
             }
@@ -2535,12 +2990,12 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             case ElementType::Wall: {
                 // Use custom mesh if available (e.g., gable wall)
                 if (element.mesh.hasData()) {
-                    drawCustomMesh(element.mesh, color, stressForShader);
+                    drawCustomMesh(element.mesh, color, stressForShader, m_buildingOffset);
                 } else {
                     // Generate wall geometry - supports diagonal walls
-                    float xExtent = element.end.x - element.start.x;
-                    float zExtent = element.end.z - element.start.z;
-                    float height = element.end.y - element.start.y;
+                    float xExtent = offsetEnd.x - offsetStart.x;
+                    float zExtent = offsetEnd.z - offsetStart.z;
+                    float height = offsetEnd.y - offsetStart.y;
 
                     // Check if this is a diagonal wall (both X and Z extents significant)
                     bool isDiagonal = std::abs(xExtent) > 0.1f && std::abs(zExtent) > 0.1f;
@@ -2551,9 +3006,9 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                     if (isDiagonal) {
                         // Diagonal wall - use beam geometry
                         // Beam is centered on start-end line, so offset to wall mid-height
-                        float midHeight = element.start.y + height * 0.5f;
-                        vec3 wallStart = vec3(element.start.x, midHeight, element.start.z);
-                        vec3 wallEnd = vec3(element.end.x, midHeight, element.end.z);
+                        float midHeight = offsetStart.y + height * 0.5f;
+                        vec3 wallStart = vec3(offsetStart.x, midHeight, offsetStart.z);
+                        vec3 wallEnd = vec3(offsetEnd.x, midHeight, offsetEnd.z);
 
                         // Calculate wall thickness (use depth or a default)
                         float thickness = element.depth > 0.01f ? element.depth : 0.5f;
@@ -2574,8 +3029,8 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                         drawMeshWithMaterial(*m_meshCache[key], mat4(1.0f), color, stressForShader, wallMat);
                     } else {
                         // Axis-aligned wall - use column geometry with wall material
-                        glm::vec3 center = (element.start + element.end) * 0.5f;
-                        center.y = element.start.y;
+                        glm::vec3 center = (offsetStart + offsetEnd) * 0.5f;
+                        center.y = offsetStart.y;
 
                         // Use element.depth for wall thickness, not the extent (which would be 0 for axis-aligned walls)
                         float wallThickness = element.depth > 0.01f ? element.depth : 0.5f;
@@ -2596,14 +3051,14 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                 // If door has custom mesh, render it directly
                 if (element.mesh.hasData()) {
                     vec4 doorMat = vec4(0.0f, 0.75f, 1.0f, 0.0f);
-                    drawCustomMeshWithMaterial(element.mesh, color, stressForShader, doorMat);
+                    drawCustomMeshWithMaterial(element.mesh, color, stressForShader, doorMat, m_buildingOffset);
                     break;
                 }
 
                 // Generate door geometry
-                float xExtent = element.end.x - element.start.x;
-                float zExtent = element.end.z - element.start.z;
-                float doorHeight = element.end.y - element.start.y;
+                float xExtent = offsetEnd.x - offsetStart.x;
+                float zExtent = offsetEnd.z - offsetStart.z;
+                float doorHeight = offsetEnd.y - offsetStart.y;
                 float doorDepth = element.depth > 0.1f ? element.depth : 0.5f;
 
                 if (doorHeight <= 0.01f) break;
@@ -2616,9 +3071,9 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
 
                 // Calculate door position at bottom center of wall segment
                 vec3 doorPos = vec3(
-                    (element.start.x + element.end.x) * 0.5f,
-                    element.start.y,  // Bottom of door
-                    (element.start.z + element.end.z) * 0.5f
+                    (offsetStart.x + offsetEnd.x) * 0.5f,
+                    offsetStart.y,  // Bottom of door
+                    (offsetStart.z + offsetEnd.z) * 0.5f
                 );
 
                 // Calculate rotation from extents (which are set from host wall direction)
@@ -2659,16 +3114,16 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
 
                 // Use actual IFC mesh if available
                 if (element.mesh.hasData()) {
-                    drawCustomMeshWithMaterial(element.mesh, color, stressForShader, roofMat);
+                    drawCustomMeshWithMaterial(element.mesh, color, stressForShader, roofMat, m_buildingOffset);
                 } else {
                     // Fall back to generated geometry
-                    float roofWidth = std::abs(element.end.x - element.start.x);
-                    float roofDepthZ = std::abs(element.end.z - element.start.z);
-                    float roofThickness = element.end.y - element.start.y;
+                    float roofWidth = std::abs(offsetEnd.x - offsetStart.x);
+                    float roofDepthZ = std::abs(offsetEnd.z - offsetStart.z);
+                    float roofThickness = offsetEnd.y - offsetStart.y;
                     if (roofThickness < 0.1f) roofThickness = 0.5f;
 
-                    glm::vec3 center = (element.start + element.end) * 0.5f;
-                    center.y = element.start.y;
+                    glm::vec3 center = (offsetStart + offsetEnd) * 0.5f;
+                    center.y = offsetStart.y;
 
                     // Use roof material for generated roof geometry
                     std::string key = "roof_" + std::to_string(roofWidth) + "_" + std::to_string(roofDepthZ) + "_" + std::to_string(roofThickness);
@@ -2713,10 +3168,14 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             }
             f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? element.stress : 0.0f;
 
+            // Apply building offset to window positions
+            vec3 offsetStart = element.start + m_buildingOffset;
+            vec3 offsetEnd = element.end + m_buildingOffset;
+
             // Generate window geometry
-            float xExtent = element.end.x - element.start.x;
-            float zExtent = element.end.z - element.start.z;
-            float windowHeight = element.end.y - element.start.y;
+            float xExtent = offsetEnd.x - offsetStart.x;
+            float zExtent = offsetEnd.z - offsetStart.z;
+            float windowHeight = offsetEnd.y - offsetStart.y;
             float windowDepth = element.depth > 0.01f ? element.depth : 0.3f;
 
             if (windowHeight <= 0.01f) {
@@ -2732,9 +3191,9 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
 
             // Calculate window position at bottom center of wall segment
             vec3 windowPos = vec3(
-                (element.start.x + element.end.x) * 0.5f,
-                element.start.y,  // Bottom of window
-                (element.start.z + element.end.z) * 0.5f
+                (offsetStart.x + offsetEnd.x) * 0.5f,
+                offsetStart.y,  // Bottom of window
+                (offsetStart.z + offsetEnd.z) * 0.5f
             );
 
             // Calculate rotation from extents (negate for proper alignment)
@@ -2786,22 +3245,39 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
     m_context.endDebugLabel(m_currentCommandBuffer);
 }
 
-void Renderer::drawTerrain(const TerrainMesh& terrain) {
+void Renderer::drawTerrain(const TerrainMesh& terrain, const vec3& offset) {
     if (!terrain.hasData()) {
         return;
     }
 
     m_context.beginDebugLabel(m_currentCommandBuffer, "Terrain", {0.4f, 0.7f, 0.3f, 1.0f});
 
-    // Check if terrain data has changed and we need to rebuild the mesh
-    if (&terrain != m_lastTerrainData || !m_terrainMesh) {
+    // Check if terrain data has changed (using version counter) and we need to rebuild the mesh
+    if (&terrain != m_lastTerrainData || !m_terrainMesh || terrain.version != m_lastTerrainVersion) {
         m_lastTerrainData = &terrain;
+        m_lastTerrainVersion = terrain.version;
 
         // Create mesh from terrain vertices and indices
         m_terrainMesh = std::make_unique<Mesh>(m_context, terrain.vertices, terrain.indices);
 
         std::cout << "[Terrain] Created GPU mesh: " << terrain.vertices.size()
-                  << " vertices, " << (terrain.indices.size() / 3) << " triangles\n";
+                  << " vertices, " << (terrain.indices.size() / 3) << " triangles, version=" << terrain.version << "\n";
+    }
+
+    // ALWAYS bind the appropriate solid pipeline for terrain (override wireframe mode)
+    // Terrain should always render as solid filled triangles
+    if (m_outputLinearHDR) {
+        if (m_tessellationEnabled && m_hdrTessPipeline) {
+            m_hdrTessPipeline->bind(m_currentCommandBuffer);
+        } else if (m_hdrPipeline) {
+            m_hdrPipeline->bind(m_currentCommandBuffer);
+        }
+    } else {
+        if (m_tessellationEnabled && m_tessPipeline) {
+            m_tessPipeline->bind(m_currentCommandBuffer);
+        } else if (m_pipeline) {
+            m_pipeline->bind(m_currentCommandBuffer);
+        }
     }
 
     // Use default material descriptor set (no texture, just vertex colors)
@@ -2813,10 +3289,97 @@ void Renderer::drawTerrain(const TerrainMesh& terrain) {
     // Terrain material: rough, non-metallic surface
     vec4 terrainMaterial = vec4(0.0f, 0.85f, 1.0f, 0.0f);  // metallic=0, roughness=0.85, ao=1, emission=0
 
-    // Draw with identity transform (terrain is pre-positioned in world space)
-    drawMeshWithMaterial(*m_terrainMesh, mat4(1.0f), vec3(1.0f), 0.0f, terrainMaterial);
+    // Create translation matrix from offset
+    mat4 transform = glm::translate(mat4(1.0f), offset);
+
+    // Draw with offset transform
+    // Use vec3(0.0f) for color to let vertex colors (elevation gradient) show through
+    drawMeshWithMaterial(*m_terrainMesh, transform, vec3(0.0f), 0.0f, terrainMaterial);
 
     m_context.endDebugLabel(m_currentCommandBuffer);
+}
+
+void Renderer::drawMaterialTestScene() {
+    if (!m_showMaterialTestScene || !m_testSphereMesh) {
+        return;
+    }
+
+    m_context.beginDebugLabel(m_currentCommandBuffer, "Material Test Scene", {0.8f, 0.6f, 0.2f, 1.0f});
+
+    // Use default material descriptor set (no textures, pure material response)
+    bindMaterialDescriptorSet("");
+    m_currentDrawElementId = -1;
+
+    const int gridSize = m_materialTestGridSize;
+    const f32 sphereRadius = 3.0f;  // 3 unit radius sphere
+    const f32 spacing = sphereRadius * 2.5f;  // Space between sphere centers
+    const f32 gridOffset = (gridSize - 1) * spacing * 0.5f;  // Center the grid
+
+    // Base albedo color (neutral gray for accurate PBR evaluation)
+    vec3 baseAlbedo = vec3(0.8f, 0.8f, 0.8f);
+
+    // Preset filtering
+    // 0=Full Grid, 1=Dielectrics Only, 2=Metals Only, 3=Roughness Row, 4=Metallic Column
+    auto shouldDrawSphere = [this, gridSize](int x, int y) -> bool {
+        switch (m_materialTestPreset) {
+            case 1: return y == 0;  // Dielectrics: bottom row only (metallic=0)
+            case 2: return y == gridSize - 1;  // Metals: top row only (metallic=1)
+            case 3: return y == gridSize / 2;  // Middle roughness row
+            case 4: return x == gridSize / 2;  // Middle metallic column
+            default: return true;  // Full grid
+        }
+    };
+
+    // Draw grid of spheres: X = roughness (0 to 1), Y = metallic (0 to 1)
+    for (int y = 0; y < gridSize; ++y) {
+        for (int x = 0; x < gridSize; ++x) {
+            if (!shouldDrawSphere(x, y)) continue;
+
+            // Calculate material properties
+            f32 roughness = static_cast<f32>(x) / static_cast<f32>(gridSize - 1);
+            f32 metallic = static_cast<f32>(y) / static_cast<f32>(gridSize - 1);
+
+            // Clamp to avoid extreme values (0.05 min roughness prevents singularities)
+            roughness = std::max(0.05f, roughness);
+
+            // Position: center grid in XZ plane, Y is up
+            f32 posX = x * spacing - gridOffset;
+            f32 posY = y * spacing + sphereRadius;  // Lift above ground
+            f32 posZ = 0.0f;
+
+            mat4 transform = glm::translate(mat4(1.0f), vec3(posX, posY, posZ));
+
+            // Material: x=metallic, y=roughness, z=ao, w=emission
+            vec4 material = vec4(metallic, roughness, 1.0f, 0.0f);
+
+            drawMeshWithMaterial(*m_testSphereMesh, transform, baseAlbedo, 0.0f, material);
+        }
+    }
+
+    m_context.endDebugLabel(m_currentCommandBuffer);
+}
+
+vec3 Renderer::getMaterialTestSceneCameraPosition() const {
+    const int gridSize = m_materialTestGridSize;
+    const f32 sphereRadius = 3.0f;
+    const f32 spacing = sphereRadius * 2.5f;
+    const f32 gridExtent = (gridSize - 1) * spacing;
+
+    // Position camera to see the whole grid
+    f32 distance = gridExtent * 1.5f;
+    f32 height = gridExtent * 0.6f;
+
+    return vec3(0.0f, height, distance);
+}
+
+vec3 Renderer::getMaterialTestSceneCameraTarget() const {
+    const int gridSize = m_materialTestGridSize;
+    const f32 sphereRadius = 3.0f;
+    const f32 spacing = sphereRadius * 2.5f;
+    const f32 gridExtent = (gridSize - 1) * spacing;
+
+    // Look at center of grid
+    return vec3(0.0f, gridExtent * 0.4f, 0.0f);
 }
 
 void Renderer::updateClipPlane() {
@@ -2843,8 +3406,57 @@ bool Renderer::loadHdrEnvironment(const std::string& filepath) {
     bool success = m_envMap->loadFromFile(filepath);
     if (success) {
         m_useHdrEnvMap = true;
+
+        // Generate IBL textures
+        IBLConfig iblConfig;
+        if (m_envMap->generateIBLTextures(iblConfig)) {
+            updateIBLDescriptorSet();
+        }
     }
     return success;
+}
+
+void Renderer::updateIBLDescriptorSet() {
+    if (!m_envMap || !m_envMap->hasIBLTextures()) {
+        m_iblDescriptorSetValid = false;
+        return;
+    }
+
+    // Update IBL descriptor set with generated textures
+    VkDescriptorImageInfo irradianceInfo = m_envMap->getIrradianceDescriptorInfo();
+    VkDescriptorImageInfo prefilteredInfo = m_envMap->getPrefilteredDescriptorInfo();
+    VkDescriptorImageInfo brdfLutInfo = m_envMap->getBRDFLutDescriptorInfo();
+
+    std::array<VkWriteDescriptorSet, 3> writes{};
+
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = m_iblDescriptorSet;
+    writes[0].dstBinding = 0;
+    writes[0].dstArrayElement = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].descriptorCount = 1;
+    writes[0].pImageInfo = &irradianceInfo;
+
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = m_iblDescriptorSet;
+    writes[1].dstBinding = 1;
+    writes[1].dstArrayElement = 0;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &prefilteredInfo;
+
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = m_iblDescriptorSet;
+    writes[2].dstBinding = 2;
+    writes[2].dstArrayElement = 0;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].descriptorCount = 1;
+    writes[2].pImageInfo = &brdfLutInfo;
+
+    vkUpdateDescriptorSets(m_context.getDevice(), static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
+
+    m_iblDescriptorSetValid = true;
+    std::cout << "[Renderer] IBL descriptor set updated" << std::endl;
 }
 
 // SSAO settings
@@ -2937,6 +3549,27 @@ void Renderer::setBloomIterations(u32 iterations) {
 
 u32 Renderer::getBloomIterations() const {
     return m_postProcess ? m_postProcess->getBloomConfig().iterations : 5;
+}
+
+// SSR settings
+void Renderer::setSSREnabled(bool enabled) {
+    m_ssrEnabled = enabled;
+    if (m_postProcess) {
+        auto config = m_postProcess->getSSRConfig();
+        config.enabled = enabled;
+        m_postProcess->setSSRConfig(config);
+    }
+}
+
+void Renderer::setSSRConfig(const SSRConfig& config) {
+    if (m_postProcess) {
+        m_postProcess->setSSRConfig(config);
+    }
+    m_ssrEnabled = config.enabled;
+}
+
+SSRConfig Renderer::getSSRConfig() const {
+    return m_postProcess ? m_postProcess->getSSRConfig() : SSRConfig{};
 }
 
 // Tonemapping settings
@@ -3422,6 +4055,32 @@ void Renderer::createHighResResources(u32 width, u32 height) {
         throw std::runtime_error("Failed to create high-res image view");
     }
 
+    // Create normal/roughness image for MRT (RGBA16F to match shader output)
+    VkImageCreateInfo normalImageInfo = imageInfo;
+    normalImageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    normalImageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;  // Don't need transfer
+
+    if (vkCreateImage(device, &normalImageInfo, nullptr, &m_highResNormalImage) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res normal image");
+    }
+
+    vkGetImageMemoryRequirements(device, m_highResNormalImage, &memReqs);
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = m_context.findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &m_highResNormalMemory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate high-res normal memory");
+    }
+
+    vkBindImageMemory(device, m_highResNormalImage, m_highResNormalMemory, 0);
+
+    viewInfo.image = m_highResNormalImage;
+    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &m_highResNormalView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create high-res normal view");
+    }
+
     // Create depth image
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
     VkImageCreateInfo depthImageInfo = imageInfo;
@@ -3450,39 +4109,54 @@ void Renderer::createHighResResources(u32 width, u32 height) {
         throw std::runtime_error("Failed to create high-res depth view");
     }
 
-    // Create render pass for high-res rendering (simple, no MSAA)
-    VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    // Create render pass for high-res rendering with MRT (2 color attachments + depth)
+    std::array<VkAttachmentDescription, 3> attachments{};
 
-    VkAttachmentDescription depthAttachment{};
-    depthAttachment.format = depthFormat;
-    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    // Color attachment (location 0)
+    attachments[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+    attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[0].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 
-    VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
-    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    // Normal/roughness attachment (location 1) - not used but needed for MRT shader
+    attachments[1].format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[1].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    // Depth attachment
+    attachments[2].format = depthFormat;
+    attachments[2].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[2].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    // Color attachment references (2 color attachments for MRT)
+    std::array<VkAttachmentReference, 2> colorRefs{};
+    colorRefs[0].attachment = 0;
+    colorRefs[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorRefs[1].attachment = 1;
+    colorRefs[1].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference depthRef{};
-    depthRef.attachment = 1;
+    depthRef.attachment = 2;
     depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
+    subpass.colorAttachmentCount = static_cast<u32>(colorRefs.size());
+    subpass.pColorAttachments = colorRefs.data();
     subpass.pDepthStencilAttachment = &depthRef;
 
     VkSubpassDependency dependency{};
@@ -3492,8 +4166,6 @@ void Renderer::createHighResResources(u32 width, u32 height) {
     dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dependency.srcAccessMask = 0;
     dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-    std::array<VkAttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
 
     VkRenderPassCreateInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -3508,8 +4180,8 @@ void Renderer::createHighResResources(u32 width, u32 height) {
         throw std::runtime_error("Failed to create high-res render pass");
     }
 
-    // Create framebuffer
-    std::array<VkImageView, 2> fbAttachments = { m_highResView, m_highResDepthView };
+    // Create framebuffer with 3 attachments (color, normal, depth)
+    std::array<VkImageView, 3> fbAttachments = { m_highResView, m_highResNormalView, m_highResDepthView };
 
     VkFramebufferCreateInfo fbInfo{};
     fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -3524,8 +4196,8 @@ void Renderer::createHighResResources(u32 width, u32 height) {
         throw std::runtime_error("Failed to create high-res framebuffer");
     }
 
-    // Create single-sample pipeline for high-res rendering
-    PipelineConfig highResConfig = PipelineConfig::defaultConfig();
+    // Create single-sample MRT pipeline for high-res rendering
+    PipelineConfig highResConfig = PipelineConfig::mrtConfig(2);  // 2 color attachments
     highResConfig.renderPass = m_highResRenderPass;
     highResConfig.pipelineLayout = m_pipelineLayout;
     highResConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -3534,16 +4206,25 @@ void Renderer::createHighResResources(u32 width, u32 height) {
     m_highResPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                                     "shaders/structural.frag.spv", highResConfig);
 
-    // Create high-res transparent pipeline for glass/windows
-    PipelineConfig highResTransparentConfig = PipelineConfig::transparentConfig();
+    // Create high-res transparent MRT pipeline for glass/windows
+    PipelineConfig highResTransparentConfig = PipelineConfig::mrtConfig(2);
     highResTransparentConfig.renderPass = m_highResRenderPass;
     highResTransparentConfig.pipelineLayout = m_pipelineLayout;
     highResTransparentConfig.multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    // Enable alpha blending for first attachment only
+    highResTransparentConfig.colorBlendAttachments[0].blendEnable = VK_TRUE;
+    highResTransparentConfig.colorBlendAttachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    highResTransparentConfig.colorBlendAttachments[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    highResTransparentConfig.colorBlendAttachments[0].colorBlendOp = VK_BLEND_OP_ADD;
+    highResTransparentConfig.colorBlendAttachments[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    highResTransparentConfig.colorBlendAttachments[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    highResTransparentConfig.colorBlendAttachments[0].alphaBlendOp = VK_BLEND_OP_ADD;
+    highResTransparentConfig.depthStencil.depthWriteEnable = VK_FALSE;
 
     m_highResTransparentPipeline = std::make_unique<Pipeline>(m_context, "shaders/structural.vert.spv",
                                                                "shaders/structural.frag.spv", highResTransparentConfig);
 
-    std::cout << "[Renderer] High-res resources created: " << width << "x" << height << std::endl;
+    std::cout << "[Renderer] High-res resources created: " << width << "x" << height << " (MRT enabled)" << std::endl;
 }
 
 void Renderer::cleanupHighResResources() {
@@ -3578,6 +4259,19 @@ void Renderer::cleanupHighResResources() {
     if (m_highResDepthMemory != VK_NULL_HANDLE) {
         vkFreeMemory(device, m_highResDepthMemory, nullptr);
         m_highResDepthMemory = VK_NULL_HANDLE;
+    }
+    // Cleanup MRT normal buffer
+    if (m_highResNormalView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_highResNormalView, nullptr);
+        m_highResNormalView = VK_NULL_HANDLE;
+    }
+    if (m_highResNormalImage != VK_NULL_HANDLE) {
+        vkDestroyImage(device, m_highResNormalImage, nullptr);
+        m_highResNormalImage = VK_NULL_HANDLE;
+    }
+    if (m_highResNormalMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, m_highResNormalMemory, nullptr);
+        m_highResNormalMemory = VK_NULL_HANDLE;
     }
     if (m_highResView != VK_NULL_HANDLE) {
         vkDestroyImageView(device, m_highResView, nullptr);
@@ -3750,9 +4444,11 @@ bool Renderer::renderHighRes(
             renderPassInfo.renderArea.offset = { 0, 0 };
             renderPassInfo.renderArea.extent = { width, height };
 
-            std::array<VkClearValue, 2> clearValues{};
+            // 3 clear values for MRT: color, normal/roughness, depth
+            std::array<VkClearValue, 3> clearValues{};
             clearValues[0].color = { { 0.529f, 0.808f, 0.922f, 1.0f } };  // Sky blue background
-            clearValues[1].depthStencil = { 1.0f, 0 };
+            clearValues[1].color = { { 0.5f, 0.5f, 1.0f, 0.0f } };  // Normal (up) + roughness (0)
+            clearValues[2].depthStencil = { 1.0f, 0 };
 
             renderPassInfo.clearValueCount = static_cast<u32>(clearValues.size());
             renderPassInfo.pClearValues = clearValues.data();
@@ -3778,7 +4474,11 @@ bool Renderer::renderHighRes(
             UniformBufferObject ubo{};
             ubo.view = m_camera.getViewMatrix();
             ubo.proj = jitteredProj;
-            ubo.lightViewProj = m_shadowMap ? m_shadowMap->getLightViewProj() : mat4(1.0f);
+            for (u32 i = 0; i < MAX_SHADOW_MAPS; i++) {
+                ubo.lightViewProj[i] = (m_shadowMap && i < m_activeShadowMaps)
+                    ? m_shadowMap->getLightViewProj(i) : mat4(1.0f);
+            }
+            ubo.numShadowMaps = m_activeShadowMaps;
             ubo.lightDirection = vec4(m_lightDirection, 0.0f);
             ubo.clipPlane = m_clippingEnabled ? m_clipPlane : vec4(0.0f);
             ubo.time = m_time;
@@ -3800,9 +4500,15 @@ bool Renderer::renderHighRes(
             VkCommandBuffer oldCmd = m_currentCommandBuffer;
             m_currentCommandBuffer = cmd;
 
-            // Bind high-res pipeline (single-sample) and descriptor sets
+            // Bind high-res MRT pipeline and descriptor sets
             m_highResPipeline->bind(cmd);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[0], 0, nullptr);
+
+            // Bind IBL descriptor set (set 2) for environment-based lighting
+            if (m_iblDescriptorSetValid && m_iblDescriptorSet != VK_NULL_HANDLE) {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        m_pipelineLayout, 2, 1, &m_iblDescriptorSet, 0, nullptr);
+            }
 
             // Draw all elements
             for (size_t i = 0; i < elements.size(); ++i) {
@@ -4831,7 +5537,10 @@ bool Renderer::renderMaterialPreview(const std::string& materialName) {
         UniformBufferObject ubo{};
         ubo.view = view;
         ubo.proj = proj;
-        ubo.lightViewProj = mat4(0.0f);  // No shadows for preview
+        for (u32 i = 0; i < MAX_SHADOW_MAPS; i++) {
+            ubo.lightViewProj[i] = mat4(1.0f);  // No shadows for preview
+        }
+        ubo.numShadowMaps = 0;
         ubo.lightDirection = vec4(lightDir, 0.0f);
         ubo.clipPlane = vec4(0.0f);  // No clipping
         ubo.time = 0.0f;
@@ -4862,6 +5571,12 @@ bool Renderer::renderMaterialPreview(const std::string& materialName) {
         VkDescriptorSet descriptorSets[] = {m_materialPreviewDescriptorSet, materialDescriptor};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             m_pipelineLayout, 0, 2, descriptorSets, 0, nullptr);
+
+        // Bind IBL descriptor set (set 2)
+        if (m_iblDescriptorSetValid && m_iblDescriptorSet != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    m_pipelineLayout, 2, 1, &m_iblDescriptorSet, 0, nullptr);
+        }
 
         // Set push constants (required by shaders)
         PushConstants pushConstants{};
@@ -5252,7 +5967,11 @@ bool Renderer::renderPreviewToTexture(const std::vector<StructuralElement>& elem
         UniformBufferObject ubo{};
         ubo.view = m_camera.getViewMatrix();
         ubo.proj = proj;
-        ubo.lightViewProj = m_shadowMap ? m_shadowMap->getLightViewProj() : mat4(1.0f);
+        for (u32 i = 0; i < MAX_SHADOW_MAPS; i++) {
+            ubo.lightViewProj[i] = (m_shadowMap && i < m_activeShadowMaps)
+                ? m_shadowMap->getLightViewProj(i) : mat4(1.0f);
+        }
+        ubo.numShadowMaps = m_activeShadowMaps;
         ubo.lightDirection = vec4(m_lightDirection, 0.0f);
         ubo.clipPlane = m_clippingEnabled ? m_clipPlane : vec4(0.0f);
         ubo.time = m_time;
@@ -5275,6 +5994,12 @@ bool Renderer::renderPreviewToTexture(const std::vector<StructuralElement>& elem
         // Bind preview pipeline and descriptor sets
         m_previewPipeline->bind(cmd);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[0], 0, nullptr);
+
+        // Bind IBL descriptor set (set 2)
+        if (m_iblDescriptorSetValid && m_iblDescriptorSet != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    m_pipelineLayout, 2, 1, &m_iblDescriptorSet, 0, nullptr);
+        }
 
         // Draw all opaque elements
         for (size_t i = 0; i < elements.size(); ++i) {
@@ -5598,6 +6323,18 @@ void Renderer::setLights(const std::vector<Light>& lights) {
     if (lights.size() > MAX_LIGHTS) {
         std::cerr << "[Renderer] Warning: " << (lights.size() - MAX_LIGHTS)
                   << " lights were dropped (max " << MAX_LIGHTS << ")" << std::endl;
+    }
+}
+
+void Renderer::setLightGroupEnabled(int group, bool enabled) {
+    if (group >= 0 && group < 4) {
+        m_lightGroupEnabled[group] = enabled;
+    }
+}
+
+void Renderer::setLightGroupIntensity(int group, float intensity) {
+    if (group >= 0 && group < 4) {
+        m_lightGroupIntensity[group] = std::clamp(intensity, 0.0f, 10.0f);
     }
 }
 

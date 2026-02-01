@@ -162,17 +162,27 @@ class TerrainGenerator:
                 # Current quad vertex indices
                 idx = i * self.grid_cols + j
 
-                # Two triangles per quad
-                # Triangle 1: (i,j) -> (i,j+1) -> (i+1,j)
-                indices.extend([idx, idx + 1, idx + self.grid_cols])
+                # Two triangles per quad (clockwise winding for front faces)
+                # Triangle 1: (i,j) -> (i+1,j) -> (i,j+1)
+                indices.extend([idx, idx + self.grid_cols, idx + 1])
 
-                # Triangle 2: (i,j+1) -> (i+1,j+1) -> (i+1,j)
-                indices.extend([idx + 1, idx + self.grid_cols + 1, idx + self.grid_cols])
+                # Triangle 2: (i,j+1) -> (i+1,j) -> (i+1,j+1)
+                indices.extend([idx + 1, idx + self.grid_cols, idx + self.grid_cols + 1])
 
         mesh = TerrainMesh(vertices, indices, self.width_ft, self.depth_ft, min_elev, max_elev)
 
+        # Print scale information
+        width_mm = self.width_ft * 304.8
+        depth_mm = self.depth_ft * 304.8
         print(f"[Terrain] Generated mesh: {len(vertices)} vertices, {len(indices)//3} triangles")
-        print(f"[Terrain] Elevation range: {min_elev:.1f}' to {max_elev:.1f}'")
+        print(f"[Terrain] Property size: {self.width_ft:.1f}'x{self.depth_ft:.1f}' ({width_mm:.0f}x{depth_mm:.0f} mm)")
+        print(f"[Terrain] Original elevation (from Google): {min_elev:.1f}' to {max_elev:.1f}' above sea level")
+        if vertices:
+            x_range = (vertices[0].x, vertices[-1].x)
+            z_range = (vertices[0].z, vertices[-1].z)
+            y_range = (min(v.y for v in vertices), max(v.y for v in vertices))
+            print(f"[Terrain] After offset - vertex ranges: X=[{x_range[0]:.0f}, {x_range[1]:.0f}], Y=[{y_range[0]:.0f}, {y_range[1]:.0f}], Z=[{z_range[0]:.0f}, {z_range[1]:.0f}] mm")
+            print(f"[Terrain] Ground level (Y=0) is {(max_elev - min_elev):.1f}' ({(max_elev - min_elev) * 304.8:.0f} mm) above lowest terrain point")
 
         return mesh
 
@@ -248,3 +258,112 @@ def generate_terrain_from_site(site_data: dict) -> TerrainMesh:
     mesh = generator.generate_mesh()
 
     return mesh
+
+
+def generate_test_terrain(width_ft: float = 100, depth_ft: float = 100, grid_size: int = 15) -> TerrainMesh:
+    """
+    Generate a simple test terrain with gentle rolling hills.
+
+    Args:
+        width_ft: Terrain width in feet
+        depth_ft: Terrain depth in feet
+        grid_size: Number of grid points per axis
+
+    Returns:
+        TerrainMesh object for testing
+    """
+    vertices = []
+    indices = []
+
+    # Convert to mm (renderer uses mm internally with Y-up)
+    FT_TO_MM = 304.8
+    width_mm = width_ft * FT_TO_MM
+    depth_mm = depth_ft * FT_TO_MM
+
+    # Generate vertices with simple sine-wave hills
+    min_elev = 0.0
+    max_elev = 0.0
+
+    for z in range(grid_size):
+        for x in range(grid_size):
+            # Position in mm - terrain starts at origin and extends positive (like buildings)
+            px = (x / (grid_size - 1)) * width_mm
+            pz = (z / (grid_size - 1)) * depth_mm
+
+            # SIMPLE TEST: Tilted plane - should be VERY obvious
+            # X axis: 0 to 100ft, elevation goes from 0mm to 15000mm (50ft!)
+            # Z axis: constant 5000mm elevation
+            elev_mm = (x / (grid_size - 1)) * 15000.0  # 0 to 50ft ramp on X
+            if z == 0 and x == 0:
+                print(f"[Terrain] DEBUG: Vertex (0,0) elevation = {elev_mm:.1f} mm")
+            if z == 0 and x == grid_size - 1:
+                print(f"[Terrain] DEBUG: Vertex ({grid_size-1},0) elevation = {elev_mm:.1f} mm")
+
+            min_elev = min(min_elev, elev_mm)
+            max_elev = max(max_elev, elev_mm)
+
+            # UV coordinates
+            u = x / (grid_size - 1)
+            v = z / (grid_size - 1)
+
+            # Normal will be computed after
+            vertices.append(TerrainVertex(px, elev_mm, pz, 0, 1, 0, u, v))
+
+    # Compute proper normals using finite differences
+    for z in range(grid_size):
+        for x in range(grid_size):
+            idx = z * grid_size + x
+
+            # Get neighboring heights
+            h_left = vertices[idx - 1].y if x > 0 else vertices[idx].y
+            h_right = vertices[idx + 1].y if x < grid_size - 1 else vertices[idx].y
+            h_down = vertices[idx - grid_size].y if z > 0 else vertices[idx].y
+            h_up = vertices[idx + grid_size].y if z < grid_size - 1 else vertices[idx].y
+
+            # Compute normal from height differences
+            dx = width_mm / (grid_size - 1)
+            dz = depth_mm / (grid_size - 1)
+
+            nx = (h_left - h_right) / (2 * dx)
+            nz = (h_down - h_up) / (2 * dz)
+            ny = 1.0
+
+            # Normalize
+            length = math.sqrt(nx*nx + ny*ny + nz*nz)
+            if length > 0.0001:
+                vertices[idx].nx = nx / length
+                vertices[idx].ny = ny / length
+                vertices[idx].nz = nz / length
+
+    # Generate triangle indices
+    for z in range(grid_size - 1):
+        for x in range(grid_size - 1):
+            top_left = z * grid_size + x
+            top_right = top_left + 1
+            bottom_left = (z + 1) * grid_size + x
+            bottom_right = bottom_left + 1
+
+            # Two triangles per quad (clockwise winding for front faces)
+            indices.extend([top_left, top_right, bottom_left])
+            indices.extend([top_right, bottom_right, bottom_left])
+
+    # Print sample vertices to debug
+    print(f"[Terrain] Sample vertex positions:")
+    print(f"  (0,0): pos=[{vertices[0].x:.1f}, {vertices[0].y:.1f}, {vertices[0].z:.1f}]")
+    mid_idx = len(vertices) // 2
+    print(f"  (mid): pos=[{vertices[mid_idx].x:.1f}, {vertices[mid_idx].y:.1f}, {vertices[mid_idx].z:.1f}]")
+    last_idx = len(vertices) - 1
+    print(f"  (last): pos=[{vertices[last_idx].x:.1f}, {vertices[last_idx].y:.1f}, {vertices[last_idx].z:.1f}]")
+
+    print(f"[Terrain] Generated test terrain: {len(vertices)} vertices, {len(indices)//3} triangles")
+    print(f"[Terrain] Position range: X=[0, {width_mm:.0f}], Z=[0, {depth_mm:.0f}] mm")
+    print(f"[Terrain] Elevation range: Y=[{min_elev:.0f}, {max_elev:.0f}] mm")
+
+    return TerrainMesh(
+        vertices=vertices,
+        indices=indices,
+        width_ft=width_ft,
+        depth_ft=depth_ft,
+        min_elevation=min_elev / FT_TO_MM,
+        max_elevation=max_elev / FT_TO_MM
+    )

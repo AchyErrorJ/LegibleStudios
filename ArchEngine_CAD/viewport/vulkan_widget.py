@@ -122,6 +122,9 @@ class VulkanViewportWidget(QWidget):
         self._section_mode = False  # Press 'S' to toggle
         self._section_dragging = False
 
+        # Move House mode - click on terrain to relocate building
+        self._move_house_mode = False  # Press 'M' to toggle
+
         # Selection manager for Python-side picking + Tab cycling
         self._selection_manager: Optional[SelectionManager] = None
         self._document = None  # Set via set_document()
@@ -388,6 +391,62 @@ class VulkanViewportWidget(QWidget):
                 self._lib.arch_get_ao_strength.argtypes = []
                 self._lib.arch_get_ao_strength.restype = ctypes.c_float
 
+                # Terrain offset API
+                self._lib.arch_set_terrain_offset.argtypes = [ctypes.c_float, ctypes.c_float, ctypes.c_float]
+                self._lib.arch_set_terrain_offset.restype = None
+
+                self._lib.arch_get_terrain_offset.argtypes = [
+                    ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float)
+                ]
+                self._lib.arch_get_terrain_offset.restype = None
+
+                self._lib.arch_get_terrain_info.argtypes = [
+                    ctypes.POINTER(ctypes.c_float),  # width
+                    ctypes.POINTER(ctypes.c_float),  # depth
+                    ctypes.POINTER(ctypes.c_float),  # min_elev
+                    ctypes.POINTER(ctypes.c_float)   # max_elev
+                ]
+                self._lib.arch_get_terrain_info.restype = ctypes.c_int
+
+                self._lib.arch_has_terrain.argtypes = []
+                self._lib.arch_has_terrain.restype = ctypes.c_int
+
+                # Building placement API
+                self._lib.arch_set_building_position.argtypes = [ctypes.c_float, ctypes.c_float, ctypes.c_float]
+                self._lib.arch_set_building_position.restype = None
+
+                self._lib.arch_get_building_position.argtypes = [
+                    ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float)
+                ]
+                self._lib.arch_get_building_position.restype = None
+
+                self._lib.arch_get_terrain_elevation_at.argtypes = [
+                    ctypes.c_float, ctypes.c_float,
+                    ctypes.POINTER(ctypes.c_float)
+                ]
+                self._lib.arch_get_terrain_elevation_at.restype = ctypes.c_int
+
+                self._lib.arch_place_building_on_terrain.argtypes = [ctypes.c_float, ctypes.c_float]
+                self._lib.arch_place_building_on_terrain.restype = ctypes.c_int
+
+                self._lib.arch_screen_to_world_ray.argtypes = [
+                    ctypes.c_int, ctypes.c_int,  # screen coords
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),  # origin
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)   # direction
+                ]
+                self._lib.arch_screen_to_world_ray.restype = None
+
+                self._lib.arch_raycast_terrain.argtypes = [
+                    ctypes.c_float, ctypes.c_float, ctypes.c_float,  # origin
+                    ctypes.c_float, ctypes.c_float, ctypes.c_float,  # direction
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)  # hit point
+                ]
+                self._lib.arch_raycast_terrain.restype = ctypes.c_int
+
                 print("[VulkanWidget] Extended post-processing API loaded")
             except AttributeError as e:
                 print(f"[VulkanWidget] Extended API not available: {e}")
@@ -612,7 +671,11 @@ class VulkanViewportWidget(QWidget):
 
                     # Check if terrain was loaded
                     terrain_count = self._lib.arch_has_terrain()
-                    print(f"[VulkanWidget] Terrain loaded: {terrain_count}")
+                    print(f"[VulkanWidget] Terrain loaded: {terrain_count}", flush=True)
+
+                    # Place building on terrain (terrain is ground truth, building moves)
+                    if terrain_count > 0:
+                        self._place_building_on_terrain(data)
 
                     # Force a sync render to process new geometry before resuming render loop
                     # This helps prevent crashes from stale GPU state
@@ -679,6 +742,91 @@ class VulkanViewportWidget(QWidget):
                 print(f"[VulkanWidget] Load failed: {error}")
                 self.error_occurred.emit(error)
                 return False
+
+    def _place_building_on_terrain(self, data: dict):
+        """Place building on terrain - building stays at origin, we just update camera."""
+        try:
+            # For now, keep building at origin (0,0,0) - don't offset it
+            # This makes the building appear at its original position
+            # The terrain will be visible around it
+
+            # Get building bounds to set camera target
+            walls = data.get('walls_batch', data.get('walls', data.get('elements', [])))
+            if walls:
+                min_x = min_z = float('inf')
+                max_x = max_z = float('-inf')
+                for wall in walls:
+                    start = wall.get('start', [0, 0, 0])
+                    end = wall.get('end', [0, 0, 0])
+                    min_x = min(min_x, start[0], end[0])
+                    max_x = max(max_x, start[0], end[0])
+                    min_z = min(min_z, start[2], end[2])
+                    max_z = max(max_z, start[2], end[2])
+
+                # Building center in mm
+                building_center_x = (min_x + max_x) / 2
+                building_center_z = (min_z + max_z) / 2
+
+                # Convert to feet for camera
+                MM_TO_FT = 1 / 304.8
+                target_x_ft = building_center_x * MM_TO_FT
+                target_y_ft = 10.0  # ~3m above ground
+                target_z_ft = building_center_z * MM_TO_FT
+
+                self._camera_target = [target_x_ft, target_y_ft, target_z_ft]
+                self._lib.arch_set_camera_target(
+                    ctypes.c_float(target_x_ft),
+                    ctypes.c_float(target_y_ft),
+                    ctypes.c_float(target_z_ft)
+                )
+
+                print(f"[VulkanWidget] Building at origin, camera targeting:")
+                print(f"  Building center: ({building_center_x:.0f}, {building_center_z:.0f}) mm")
+                print(f"  Camera target: ({target_x_ft:.1f}, {target_y_ft:.1f}, {target_z_ft:.1f}) ft")
+
+            # Building position stays at (0,0,0) - no offset applied
+            self._lib.arch_set_building_position(
+                ctypes.c_float(0.0),
+                ctypes.c_float(0.0),
+                ctypes.c_float(0.0)
+            )
+            print("[VulkanWidget] Building position: (0, 0, 0) - at origin")
+
+        except Exception as e:
+            print(f"[VulkanWidget] Error in _place_building_on_terrain: {e}")
+
+    def move_building_to(self, screen_x: int, screen_y: int) -> bool:
+        """Move building to the terrain point under the screen coordinates."""
+        if not self._initialized or not self._lib:
+            return False
+
+        # Get ray from screen point
+        ox, oy, oz = ctypes.c_float(), ctypes.c_float(), ctypes.c_float()
+        dx, dy, dz = ctypes.c_float(), ctypes.c_float(), ctypes.c_float()
+
+        self._lib.arch_screen_to_world_ray(
+            ctypes.c_int(screen_x), ctypes.c_int(screen_y),
+            ctypes.byref(ox), ctypes.byref(oy), ctypes.byref(oz),
+            ctypes.byref(dx), ctypes.byref(dy), ctypes.byref(dz)
+        )
+
+        # Raycast against terrain
+        hx, hy, hz = ctypes.c_float(), ctypes.c_float(), ctypes.c_float()
+        if self._lib.arch_raycast_terrain(
+            ox.value, oy.value, oz.value,
+            dx.value, dy.value, dz.value,
+            ctypes.byref(hx), ctypes.byref(hy), ctypes.byref(hz)
+        ):
+            # Place building at hit point
+            self._lib.arch_set_building_position(
+                ctypes.c_float(hx.value),
+                ctypes.c_float(hy.value),
+                ctypes.c_float(hz.value)
+            )
+            print(f"[VulkanWidget] Building moved to: ({hx.value:.0f}, {hy.value:.0f}, {hz.value:.0f}) mm")
+            return True
+
+        return False
 
     def reset_camera(self):
         """Reset camera to fit the building - uses C++ calculated values."""
@@ -1624,6 +1772,17 @@ class VulkanViewportWidget(QWidget):
             self._free_look_cam_pos = None  # Clear free look state
             self.reset_camera()
             print("[Viewport] Camera reset to home view (H key)")
+            event.accept()
+            return
+        elif event.key() == Qt.Key.Key_M and not event.modifiers():
+            # 'M' key toggles Move House mode
+            self._move_house_mode = not self._move_house_mode
+            if self._move_house_mode:
+                print("[Viewport] MOVE HOUSE mode ON - click on terrain to relocate building")
+                self.setCursor(Qt.CursorShape.CrossCursor)
+            else:
+                print("[Viewport] MOVE HOUSE mode OFF")
+                self.setCursor(Qt.CursorShape.ArrowCursor)
             event.accept()
             return
         elif event.key() == Qt.Key.Key_Space and not event.modifiers():

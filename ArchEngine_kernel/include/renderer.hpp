@@ -222,11 +222,12 @@ public:
     /**
      * @brief Begin HDR render pass for post-processing path
      * @param clearColor Background clear color (RGBA)
+     * @return true if HDR pass started successfully, false to fallback to SDR
      *
      * Renders to an HDR float buffer instead of the swapchain.
      * Follow with endHDRRenderPass(), runPostProcessing(), beginCompositePass().
      */
-    void beginHDRRenderPass(vec4 clearColor = {0.1f, 0.1f, 0.15f, 1.0f});
+    bool beginHDRRenderPass(vec4 clearColor = {0.1f, 0.1f, 0.15f, 1.0f});
 
     /**
      * @brief End the HDR render pass
@@ -258,7 +259,7 @@ public:
      *
      * Call before beginRenderPass() or beginHDRRenderPass().
      */
-    void renderShadowPass(const std::vector<StructuralElement>& elements);
+    void renderShadowPass(const std::vector<StructuralElement>& elements, const vec3& buildingOffset = vec3(0.0f));
     /// @}
 
     /// @name Camera
@@ -368,7 +369,7 @@ public:
      * @param color RGB color
      * @param stress Stress ratio [0-1+]
      */
-    void drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress = 0.0f);
+    void drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress = 0.0f, const vec3& offset = vec3(0.0f));
 
     /**
      * @brief Draw custom mesh with explicit material parameters
@@ -377,7 +378,7 @@ public:
      * @param stress Stress ratio
      * @param material Vec4 with (metallic, roughness, ao, emission)
      */
-    void drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, f32 stress, vec4 material);
+    void drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, f32 stress, vec4 material, const vec3& offset = vec3(0.0f));
 
     /**
      * @brief Draw mesh with explicit material parameters
@@ -422,56 +423,64 @@ public:
      * @param elements Vector of structural elements to draw
      * @param building Building data containing thermal/acoustic info for visualization
      * @param selectedIndices Set of element indices that are selected (highlighted)
+     * @param buildingOffset Translation offset to apply to all elements (in mm)
      *
      * This is the main function for rendering a complete structural frame.
      * Elements are colored based on the current visualization mode.
      */
-    void drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices = {});
-
-    /**
-     * @brief Draw only selected elements with highlight color (for selection overlay)
-     * @param elements Vector of structural elements to draw
-     * @param building Building data
-     * @param selectedIndices Set of element indices to highlight
-     *
-     * This is called after the main render pass to draw selected elements
-     * with a bright yellow-orange color on top of everything else.
-     */
-    void drawSelectedElements(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices);
-
-    /**
-     * @brief Draw only hovered elements with semi-transparent highlight
-     * @param elements Vector of structural elements to draw
-     * @param building Building data
-     * @param hoveredIndices Set of element indices to highlight as hovered
-     *
-     * This renders hovered elements with a semi-transparent yellow color
-     * to provide visual feedback during mouse hover.
-     */
-    void drawHoveredElements(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& hoveredIndices);
-
-    /**
-     * @brief Draw selected and hovered elements as wireframe outlines
-     * @param elements Vector of structural elements
-     * @param building Building data
-     * @param selectedIndices Set of selected element indices
-     * @param hoveredIndex Single hovered element index (-1 if none)
-     *
-     * This renders selected and hovered elements in wireframe mode on top
-     * of the normal render pass, providing clear visual feedback.
-     */
-    void drawWireframeOutlines(const std::vector<StructuralElement>& elements, const Building& building,
-                              const std::set<int>& selectedIndices, int hoveredIndex);
+    void drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices = {}, const vec3& buildingOffset = vec3(0.0f));
 
     /**
      * @brief Draw terrain mesh with elevation-based coloring
      * @param terrain TerrainMesh data from building
      *
      * Renders the terrain mesh if it has data. Uses pre-computed vertex colors
-     * for elevation visualization. Terrain is rendered with identity transform
-     * (pre-positioned in world space).
+     * for elevation visualization.
+     *
+     * @param offset Translation offset to apply (in world units/feet)
      */
-    void drawTerrain(const TerrainMesh& terrain);
+    void drawTerrain(const TerrainMesh& terrain, const vec3& offset = vec3(0.0f));
+
+    /**
+     * @brief Invalidate terrain mesh cache
+     *
+     * Call this when terrain data has been modified externally (e.g., via API)
+     * to force the renderer to rebuild the GPU mesh on next draw.
+     */
+    void invalidateTerrainCache() { m_lastTerrainData = nullptr; m_terrainMesh.reset(); }
+
+    /**
+     * @brief Draw material test scene (PBR validation)
+     *
+     * Renders a grid of spheres with varying roughness (X-axis) and metallic (Y-axis).
+     * This is the standard way to validate PBR rendering and tune IBL parameters.
+     * Only renders if the material test scene is enabled.
+     */
+    void drawMaterialTestScene();
+
+    /** @brief Enable/disable material test scene */
+    void setShowMaterialTestScene(bool show) { m_showMaterialTestScene = show; }
+
+    /** @brief Check if material test scene is enabled */
+    bool getShowMaterialTestScene() const { return m_showMaterialTestScene; }
+
+    /** @brief Set material test grid size (NxN spheres) */
+    void setMaterialTestGridSize(int size) { m_materialTestGridSize = std::clamp(size, 3, 9); }
+
+    /** @brief Get material test grid size */
+    int getMaterialTestGridSize() const { return m_materialTestGridSize; }
+
+    /** @brief Set material test preset (0=Full, 1=Dielectrics, 2=Metals, 3=Roughness, 4=Metallic) */
+    void setMaterialTestPreset(int preset) { m_materialTestPreset = std::clamp(preset, 0, 4); }
+
+    /** @brief Get material test preset */
+    int getMaterialTestPreset() const { return m_materialTestPreset; }
+
+    /** @brief Get camera position to view material test scene */
+    vec3 getMaterialTestSceneCameraPosition() const;
+
+    /** @brief Get camera target to view material test scene */
+    vec3 getMaterialTestSceneCameraTarget() const;
     /// @}
 
     /// @name Visualization Settings
@@ -576,6 +585,35 @@ public:
      */
     void setLights(const std::vector<Light>& lights);
 
+    /**
+     * @brief Set light group enabled state
+     * @param group Group index (0-3 for Interior, Exterior, Accent, Custom)
+     * @param enabled Whether the group is enabled
+     */
+    void setLightGroupEnabled(int group, bool enabled);
+
+    /**
+     * @brief Set light group intensity multiplier
+     * @param group Group index (0-3)
+     * @param intensity Intensity multiplier (0.0-2.0)
+     */
+    void setLightGroupIntensity(int group, float intensity);
+
+    /**
+     * @brief Draw a placement marker at the given position
+     * @param position World position for the marker
+     * @param color Marker color
+     * @param size Size of the marker
+     */
+    void drawPlacementMarker(vec3 position, vec3 color = vec3(1.0f, 1.0f, 0.0f), f32 size = 0.5f);
+
+    /**
+     * @brief Draw visual indicators for all placed lights
+     * Shows small glowing spheres at each light position
+     * @param selectedIndex Index of the currently selected light (-1 for none)
+     */
+    void drawLightIndicators(int selectedIndex = -1);
+
     /// @}
 
     /// @name Environment Map Settings
@@ -673,6 +711,51 @@ public:
 
     /** @brief Get current bloom blur iterations */
     u32 getBloomIterations() const;
+    /// @}
+
+    /// @name SSR (Screen Space Reflections) Settings
+    /// @{
+
+    /** @brief Enable or disable screen space reflections */
+    void setSSREnabled(bool enabled);
+
+    /** @brief Check if SSR is enabled */
+    bool getSSREnabled() const { return m_ssrEnabled; }
+
+    /** @brief Set SSR configuration */
+    void setSSRConfig(const SSRConfig& config);
+
+    /** @brief Get current SSR configuration */
+    SSRConfig getSSRConfig() const;
+    /// @}
+
+    /// @name Shader Effect Toggles
+    /// @{
+
+    /** @brief Enable or disable IBL (Image-Based Lighting) */
+    void setIBLEnabled(bool enabled) { m_iblEnabled = enabled; }
+    bool getIBLEnabled() const { return m_iblEnabled; }
+
+    /** @brief IBL intensity controls */
+    void setIBLIntensity(f32 intensity) { m_iblIntensity = intensity; }
+    f32 getIBLIntensity() const { return m_iblIntensity; }
+
+    void setIBLDiffuseIntensity(f32 intensity) { m_iblDiffuseIntensity = intensity; }
+    f32 getIBLDiffuseIntensity() const { return m_iblDiffuseIntensity; }
+
+    void setIBLSpecularIntensity(f32 intensity) { m_iblSpecularIntensity = intensity; }
+    f32 getIBLSpecularIntensity() const { return m_iblSpecularIntensity; }
+
+    void setFresnelIntensity(f32 intensity) { m_fresnelIntensity = intensity; }
+    f32 getFresnelIntensity() const { return m_fresnelIntensity; }
+
+    /** @brief Enable or disable direct sun lighting */
+    void setDirectLightEnabled(bool enabled) { m_directLightEnabled = enabled; }
+    bool getDirectLightEnabled() const { return m_directLightEnabled; }
+
+    /** @brief Enable or disable normal mapping */
+    void setNormalMappingEnabled(bool enabled) { m_normalMappingEnabled = enabled; }
+    bool getNormalMappingEnabled() const { return m_normalMappingEnabled; }
     /// @}
 
     /// @name Tonemapping Settings
@@ -937,9 +1020,6 @@ public:
     /** @brief Get the root directory for material textures */
     const std::string& getMaterialRoot() const { return m_materialRoot; }
 
-    /** @brief Set the material root directory and reload materials */
-    void setMaterialRoot(const std::string& root) { reloadMaterialLibrary(root); }
-
     /**
      * @brief Reload materials from a directory
      * @param root Root directory containing material subdirectories
@@ -1099,6 +1179,7 @@ public:
 
     /** @brief Get the render pass handle for ImGui integration */
     VkRenderPass getRenderPass() const { return m_renderPass; }
+    VkPipelineLayout getPipelineLayout() const { return m_pipelineLayout; }
 
     /** @brief Get the current command buffer for custom draw commands */
     VkCommandBuffer getCurrentCommandBuffer() const { return m_currentCommandBuffer; }
@@ -1251,12 +1332,12 @@ private:
     void createDescriptorPool();
     void createDescriptorSets();
     void createMaterialDescriptorSetLayout();
+    void createIBLDescriptorSetLayout();
+    void updateIBLDescriptorSet();
     void createDefaultMaterialDescriptorSet();
     void createUniformBuffers();
     void createPipeline();
     void createSkyPipeline();
-    void initTerrainPipeline();
-    void uploadTerrainBuffers(const TerrainMesh& terrain);
 
     void cleanupSwapchain();
     void recreateSwapchain();
@@ -1265,6 +1346,7 @@ private:
 
     VkDescriptorSet createMaterialDescriptorSetForMaterial(const Material& material);
     void buildMaterialDescriptorSets();
+    void bindIBLDescriptorSet();
     void bindMaterialDescriptorSet(const std::string& materialName);
     std::string resolveMaterialName(const StructuralElement& element) const;
 
@@ -1302,6 +1384,11 @@ private:
     std::unique_ptr<MaterialLibrary> m_materialLibrary;
     std::string m_materialRoot = "materials";
 
+    // IBL descriptor set (set 2) - irradiance, prefiltered, BRDF LUT
+    VkDescriptorSetLayout m_iblDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet m_iblDescriptorSet = VK_NULL_HANDLE;
+    bool m_iblDescriptorSetValid = false;
+
     // Uniform buffers
     std::vector<VkBuffer> m_uniformBuffers;
     std::vector<VkDeviceMemory> m_uniformBuffersMemory;
@@ -1324,18 +1411,6 @@ private:
     std::unique_ptr<Pipeline> m_hdrTessPipeline;
     std::unique_ptr<Pipeline> m_hdrTessWireframePipeline;
 
-    // Terrain rendering pipeline
-    std::unique_ptr<Pipeline> m_terrainPipeline;
-    VkPipelineLayout m_terrainPipelineLayout = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_terrainDescriptorLayout = VK_NULL_HANDLE;
-
-    // Terrain vertex/index buffers
-    VkBuffer m_terrainVertexBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_terrainVertexMemory = VK_NULL_HANDLE;
-    VkBuffer m_terrainIndexBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_terrainIndexMemory = VK_NULL_HANDLE;
-    u32 m_terrainIndexCount = 0;
-
     // Sky pipeline
     VkPipelineLayout m_skyPipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_skyPipeline = VK_NULL_HANDLE;
@@ -1345,9 +1420,19 @@ private:
     std::unordered_map<const MeshData*, std::string> m_customMeshKeyCache;  // Maps custom mesh pointers to cache keys
     std::unique_ptr<Mesh> m_gridMesh;
 
+    // Material test scene (PBR validation grid of spheres)
+    std::unique_ptr<Mesh> m_testSphereMesh;
+    bool m_showMaterialTestScene = false;
+    int m_materialTestGridSize = 5;  // 5x5 grid of spheres
+    int m_materialTestPreset = 0;    // 0=Full, 1=Dielectrics, 2=Metals, 3=Roughness Row, 4=Metallic Column
+
     // Terrain mesh (separate from element meshes, recreated on terrain data change)
     std::unique_ptr<Mesh> m_terrainMesh;
     const TerrainMesh* m_lastTerrainData = nullptr;  // Track if terrain data changed
+    u64 m_lastTerrainVersion = 0;  // Track terrain version to detect changes
+
+    // Building placement offset (applied to all structural elements during drawing)
+    vec3 m_buildingOffset = vec3(0.0f);
 
     // Frame state
     u32 m_currentFrame = 0;
@@ -1378,6 +1463,9 @@ private:
 
     // Multiple light sources
     std::vector<Light> m_lights;  // Up to MAX_LIGHTS (16)
+    bool m_lightGroupEnabled[4] = {true, true, true, true};  // Per-group enabled flags
+    float m_lightGroupIntensity[4] = {1.0f, 1.0f, 1.0f, 1.0f};  // Per-group intensity multipliers
+    u32 m_activeShadowMaps = 0;  // Number of active shadow-casting lights
 
     // Environment mapping
     std::unique_ptr<EnvironmentMap> m_envMap;
@@ -1385,11 +1473,23 @@ private:
     std::vector<VkDescriptorSet> m_skyDescriptorSets;
     bool m_useHdrEnvMap = false;
 
-    // Post-processing (SSAO, bloom, etc.)
+    // Post-processing (SSAO, bloom, SSR, etc.)
     std::unique_ptr<PostProcess> m_postProcess;
     bool m_ssaoEnabled = true;
     bool m_bloomEnabled = true;
+    bool m_ssrEnabled = true;
     bool m_postProcessingEnabled = false;  // Master switch for HDR pipeline (TODO: need HDR-compatible sky pipeline)
+
+    // Shader effect toggles (for debugging)
+    bool m_iblEnabled = true;           // Image-Based Lighting (ambient)
+    bool m_directLightEnabled = true;   // Direct sun/light contribution
+    bool m_normalMappingEnabled = true; // Normal mapping from textures
+
+    // IBL intensity controls
+    f32 m_iblIntensity = 1.0f;          // Overall IBL intensity multiplier
+    f32 m_iblDiffuseIntensity = 1.0f;   // Diffuse IBL intensity
+    f32 m_iblSpecularIntensity = 0.4f;  // Specular IBL intensity (reduced to prevent white film)
+    f32 m_fresnelIntensity = 0.6f;      // Fresnel reflection intensity (reduced for less edge glare)
 
     // Debug visualization modes
     MaterialDebugMode m_materialDebugMode = MaterialDebugMode::None;
@@ -1455,6 +1555,9 @@ private:
     VkImage m_highResImage = VK_NULL_HANDLE;
     VkDeviceMemory m_highResMemory = VK_NULL_HANDLE;
     VkImageView m_highResView = VK_NULL_HANDLE;
+    VkImage m_highResNormalImage = VK_NULL_HANDLE;  // MRT: normal/roughness buffer
+    VkDeviceMemory m_highResNormalMemory = VK_NULL_HANDLE;
+    VkImageView m_highResNormalView = VK_NULL_HANDLE;
     VkImage m_highResDepthImage = VK_NULL_HANDLE;
     VkDeviceMemory m_highResDepthMemory = VK_NULL_HANDLE;
     VkImageView m_highResDepthView = VK_NULL_HANDLE;

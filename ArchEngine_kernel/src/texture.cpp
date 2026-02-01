@@ -18,6 +18,12 @@ std::unique_ptr<Texture> Texture::s_black;
 std::unique_ptr<Texture> Texture::s_grey;
 std::unique_ptr<Texture> Texture::s_normalDefault;
 
+// Static black cubemap for IBL fallback
+VkImage Texture::s_blackCubeImage = VK_NULL_HANDLE;
+VkDeviceMemory Texture::s_blackCubeMemory = VK_NULL_HANDLE;
+VkImageView Texture::s_blackCubeImageView = VK_NULL_HANDLE;
+VkSampler Texture::s_blackCubeSampler = VK_NULL_HANDLE;
+
 Texture::Texture(VulkanContext& context)
     : m_context(context) {
 }
@@ -166,6 +172,9 @@ void Texture::createDefaultTextures(VulkanContext& context) {
     s_normalDefault = std::make_unique<Texture>(context);
     s_normalDefault->createSolidColor(vec4(0.5f, 0.5f, 1.0f, 1.0f), false);
 
+    // Create default black cubemap for IBL fallback
+    createBlackCubemap(context);
+
     std::cout << "[Texture] Created default textures" << std::endl;
 }
 
@@ -173,6 +182,161 @@ Texture* Texture::getWhite() { return s_white.get(); }
 Texture* Texture::getBlack() { return s_black.get(); }
 Texture* Texture::getGrey() { return s_grey.get(); }
 Texture* Texture::getNormalDefault() { return s_normalDefault.get(); }
+
+VkImage Texture::getBlackCubeImage() { return s_blackCubeImage; }
+VkImageView Texture::getBlackCubeImageView() { return s_blackCubeImageView; }
+VkSampler Texture::getBlackCubeSampler() { return s_blackCubeSampler; }
+
+void Texture::createBlackCubemap(VulkanContext& context) {
+    // Create a 1x1 black cubemap for IBL fallback when no environment map is loaded
+    const u32 size = 1;
+    const u32 layers = 6;  // Cubemap faces
+    VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+
+    // Create cubemap image
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = size;
+    imageInfo.extent.height = size;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = layers;
+    imageInfo.format = format;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+
+    if (vkCreateImage(context.getDevice(), &imageInfo, nullptr, &s_blackCubeImage) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create black cubemap image");
+    }
+
+    // Allocate memory
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(context.getDevice(), s_blackCubeImage, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = context.findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(context.getDevice(), &allocInfo, nullptr, &s_blackCubeMemory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate black cubemap memory");
+    }
+
+    vkBindImageMemory(context.getDevice(), s_blackCubeImage, s_blackCubeMemory, 0);
+
+    // Create staging buffer with black pixels (all zeros)
+    VkDeviceSize imageSize = size * size * 4 * layers;
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingMemory;
+    context.createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                         stagingBuffer, stagingMemory);
+
+    void* data;
+    vkMapMemory(context.getDevice(), stagingMemory, 0, imageSize, 0, &data);
+    memset(data, 0, imageSize);  // Black pixels
+    vkUnmapMemory(context.getDevice(), stagingMemory);
+
+    // Transition to transfer destination
+    VkCommandBuffer cmd = context.beginSingleTimeCommands();
+
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = s_blackCubeImage;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = layers;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    // Copy buffer to all cubemap faces
+    std::array<VkBufferImageCopy, 6> regions{};
+    for (u32 face = 0; face < layers; face++) {
+        regions[face].bufferOffset = face * size * size * 4;
+        regions[face].bufferRowLength = 0;
+        regions[face].bufferImageHeight = 0;
+        regions[face].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        regions[face].imageSubresource.mipLevel = 0;
+        regions[face].imageSubresource.baseArrayLayer = face;
+        regions[face].imageSubresource.layerCount = 1;
+        regions[face].imageOffset = {0, 0, 0};
+        regions[face].imageExtent = {size, size, 1};
+    }
+
+    vkCmdCopyBufferToImage(cmd, stagingBuffer, s_blackCubeImage,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<u32>(regions.size()), regions.data());
+
+    // Transition to shader read
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    context.endSingleTimeCommands(cmd);
+
+    // Cleanup staging buffer
+    vkDestroyBuffer(context.getDevice(), stagingBuffer, nullptr);
+    vkFreeMemory(context.getDevice(), stagingMemory, nullptr);
+
+    // Create cubemap image view
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = s_blackCubeImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = layers;
+
+    if (vkCreateImageView(context.getDevice(), &viewInfo, nullptr, &s_blackCubeImageView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create black cubemap image view");
+    }
+
+    // Create sampler
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.mipLodBias = 0.0f;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 0.0f;
+
+    if (vkCreateSampler(context.getDevice(), &samplerInfo, nullptr, &s_blackCubeSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create black cubemap sampler");
+    }
+
+    std::cout << "[Texture] Created black cubemap for IBL fallback" << std::endl;
+}
 
 // ============================================================================
 // MaterialLibrary

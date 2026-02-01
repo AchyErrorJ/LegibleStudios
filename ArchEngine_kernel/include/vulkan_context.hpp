@@ -383,6 +383,19 @@ public:
      */
     void transitionImageLayout(VkImage image, VkFormat format,
                               VkImageLayout oldLayout, VkImageLayout newLayout);
+
+    /**
+     * @brief Transition image layout for multiple mip levels and array layers
+     * @param image Image to transition
+     * @param format Image format
+     * @param oldLayout Current layout
+     * @param newLayout Target layout
+     * @param mipLevels Number of mip levels to transition
+     * @param layerCount Number of array layers to transition
+     */
+    void transitionImageLayout(VkImage image, VkFormat format,
+                              VkImageLayout oldLayout, VkImageLayout newLayout,
+                              u32 mipLevels, u32 layerCount);
     /// @}
 
     /// @name Debug Markers

@@ -605,6 +605,15 @@ class ViewportPanel(QWidget):
         """Apply gravity blend to viewport rendering settings."""
         if not self._viewport:
             return
+        try:
+            self._apply_gravity_blend_impl(design, client, build)
+        except Exception as e:
+            print(f"[ViewportPanel] Error in gravity blend: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _apply_gravity_blend_impl(self, design: float, client: float, build: float):
+        """Implementation of gravity blend (wrapped for error handling)."""
 
         self._updating = True
 

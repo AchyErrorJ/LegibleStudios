@@ -17,7 +17,7 @@ struct ShadowTessPushConstants {
 };
 
 // ============================================================================
-// ShadowMap - Directional light shadow mapping with PCF
+// ShadowMap - Multi-layer shadow mapping with PCF (supports up to MAX_SHADOW_MAPS lights)
 // ============================================================================
 class ShadowMap {
 public:
@@ -28,20 +28,30 @@ public:
     ShadowMap(const ShadowMap&) = delete;
     ShadowMap& operator=(const ShadowMap&) = delete;
 
-    // Begin shadow pass rendering
-    void beginShadowPass(VkCommandBuffer cmd);
+    // Begin shadow pass rendering for a specific layer
+    void beginShadowPass(VkCommandBuffer cmd, u32 layerIndex = 0);
 
     // End shadow pass rendering
     void endShadowPass(VkCommandBuffer cmd);
 
-    // Update light matrices for shadow mapping
-    void updateLightMatrix(const vec3& lightDir, const vec3& sceneCenter, f32 sceneRadius);
+    // Update light matrices for a specific shadow map layer
+    void updateLightMatrix(u32 layerIndex, const vec3& lightDir, const vec3& sceneCenter, f32 sceneRadius);
 
-    // Get the light view-projection matrix for UBO
-    const mat4& getLightViewProj() const { return m_lightViewProj; }
+    // Legacy: Update first layer (for backward compatibility)
+    void updateLightMatrix(const vec3& lightDir, const vec3& sceneCenter, f32 sceneRadius) {
+        updateLightMatrix(0, lightDir, sceneCenter, sceneRadius);
+    }
 
-    // Get shadow map image view for binding to descriptor
-    VkImageView getImageView() const { return m_depthImageView; }
+    // Get the light view-projection matrix for a specific layer
+    const mat4& getLightViewProj(u32 layerIndex = 0) const {
+        return m_lightViewProj[layerIndex < MAX_SHADOW_MAPS ? layerIndex : 0];
+    }
+
+    // Get shadow map array image view for binding to descriptor (samples all layers)
+    VkImageView getArrayImageView() const { return m_depthArrayImageView; }
+
+    // Get shadow map image view for first layer (2D view for single shadow map sampling)
+    VkImageView getImageView() const { return m_depthLayerImageViews[0]; }
 
     // Get shadow map sampler
     VkSampler getSampler() const { return m_sampler; }
@@ -55,6 +65,9 @@ public:
     // Get resolution
     u32 getResolution() const { return m_resolution; }
 
+    // Get number of layers
+    u32 getLayerCount() const { return MAX_SHADOW_MAPS; }
+
     // Get descriptor set layout for shadow pass
     VkDescriptorSetLayout getDescriptorSetLayout() const { return m_descriptorSetLayout; }
 
@@ -66,7 +79,7 @@ public:
 private:
     void createDepthResources();
     void createRenderPass();
-    void createFramebuffer();
+    void createFramebuffers();
     void createSampler();
     void createPipeline();
     void createTessPipeline();
@@ -75,14 +88,15 @@ private:
     VulkanContext& m_context;
     u32 m_resolution;
 
-    // Depth texture
+    // Depth texture array (MAX_SHADOW_MAPS layers)
     VkImage m_depthImage = VK_NULL_HANDLE;
     VkDeviceMemory m_depthImageMemory = VK_NULL_HANDLE;
-    VkImageView m_depthImageView = VK_NULL_HANDLE;
+    VkImageView m_depthArrayImageView = VK_NULL_HANDLE;  // View for entire array (shader sampling)
+    VkImageView m_depthLayerImageViews[MAX_SHADOW_MAPS] = {};  // Per-layer views (framebuffer attachment)
 
-    // Render pass and framebuffer
+    // Render pass and per-layer framebuffers
     VkRenderPass m_renderPass = VK_NULL_HANDLE;
-    VkFramebuffer m_framebuffer = VK_NULL_HANDLE;
+    VkFramebuffer m_framebuffers[MAX_SHADOW_MAPS] = {};  // One per layer
 
     // Sampler with comparison for hardware PCF
     VkSampler m_sampler = VK_NULL_HANDLE;
@@ -97,10 +111,13 @@ private:
     VkPipeline m_tessPipeline = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_heightMapDescriptorSetLayout = VK_NULL_HANDLE;
 
-    // Light matrices
-    mat4 m_lightView = mat4(1.0f);
-    mat4 m_lightProj = mat4(1.0f);
-    mat4 m_lightViewProj = mat4(1.0f);
+    // Per-layer light matrices
+    mat4 m_lightView[MAX_SHADOW_MAPS] = {};
+    mat4 m_lightProj[MAX_SHADOW_MAPS] = {};
+    mat4 m_lightViewProj[MAX_SHADOW_MAPS] = {};
+
+    // Current layer being rendered
+    u32 m_currentLayer = 0;
 };
 
 } // namespace arch

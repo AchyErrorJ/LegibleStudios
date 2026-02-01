@@ -101,6 +101,7 @@ set(ENGINE_SOURCES
     src/ipc_server.cpp
     src/post_process.cpp
     src/texture.cpp
+    src/llm_assistant.cpp
 )
 
 # Header files
@@ -125,6 +126,7 @@ set(ENGINE_HEADERS
     include/ipc_server.hpp
     include/post_process.hpp
     include/texture.hpp
+    include/llm_assistant.hpp
 )
 
 # Library sources (excludes main.cpp, includes arch_api.cpp)
@@ -150,6 +152,7 @@ set(LIB_SOURCES
     src/post_process.cpp
     src/arch_api.cpp
     src/texture.cpp
+    src/llm_assistant.cpp
 )
 
 # Shared library (DLL) for embedding in Qt/Python

@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include "mesh.hpp"
 #include "geometry_loader.hpp"
+#include <glm/glm.hpp>
 
 // ArchGeometry - shared geometry library for unified schema interpretation
 // Provides QueryAPI for geometry queries, can optionally replace local parsing
@@ -17,6 +18,25 @@ using json = nlohmann::json;
 
 namespace arch {
 namespace qbd {
+
+// Terrain elevation color helper
+static vec3 getElevationColor(f32 normalizedElevation) {
+    f32 t = glm::clamp(normalizedElevation, 0.0f, 1.0f);
+    const vec3 lowGreen  = vec3(0.34f, 0.55f, 0.30f);
+    const vec3 midTan    = vec3(0.72f, 0.60f, 0.40f);
+    const vec3 highGray  = vec3(0.55f, 0.55f, 0.55f);
+    const vec3 peakWhite = vec3(0.95f, 0.95f, 0.95f);
+
+    if (t < 0.25f) {
+        return glm::mix(vec3(0.2f, 0.4f, 0.2f), lowGreen, t * 4.0f);
+    } else if (t < 0.50f) {
+        return glm::mix(lowGreen, midTan, (t - 0.25f) * 4.0f);
+    } else if (t < 0.75f) {
+        return glm::mix(midTan, highGray, (t - 0.50f) * 4.0f);
+    } else {
+        return glm::mix(highGray, peakWhite, (t - 0.75f) * 4.0f);
+    }
+}
 
 // ============================================================================
 // CONSTRUCTOR / DESTRUCTOR
@@ -179,7 +199,6 @@ std::optional<QBDLayout> QBDInterface::loadFromJSON(const std::string& jsonStrin
                 wall.wallType = wj.value("wall_type", "");
                 wall.levelName = wj.value("level_name", "Level 1");
                 wall.category = parseWallCategory(wj.value("category", "interior"));
-                wall.material = wj.value("material_override", "");  // Material assignment
 
                 if (wj.contains("rooms") && wj["rooms"].is_array() && wj["rooms"].size() >= 2) {
                     // Handle null room values
@@ -488,77 +507,6 @@ std::optional<QBDLayout> QBDInterface::loadFromJSON(const std::string& jsonStrin
             }
         }
 
-        std::cout << "[QBD] Checking for terrain_mesh in JSON..." << std::endl;
-
-        // Parse terrain mesh
-        if (j.contains("terrain_mesh")) {
-            std::cout << "[QBD] Found terrain_mesh in JSON" << std::endl;
-            const auto& tm = j["terrain_mesh"];
-
-            layout.terrain_mesh.width_ft = tm.value("width_ft", 100.0f);
-            layout.terrain_mesh.depth_ft = tm.value("depth_ft", 100.0f);
-            layout.terrain_mesh.min_elevation = tm.value("min_elevation", 0.0f);
-            layout.terrain_mesh.max_elevation = tm.value("max_elevation", 10.0f);
-
-            // Parse vertices
-            if (tm.contains("vertices") && tm["vertices"].is_array()) {
-                for (const auto& vj : tm["vertices"]) {
-                    Vertex v;
-                    if (vj.contains("position") && vj["position"].is_array() && vj["position"].size() >= 3) {
-                        v.position = vec3(
-                            static_cast<f32>(vj["position"][0]),
-                            static_cast<f32>(vj["position"][1]),
-                            static_cast<f32>(vj["position"][2])
-                        );
-                    }
-                    if (vj.contains("normal") && vj["normal"].is_array() && vj["normal"].size() >= 3) {
-                        v.normal = vec3(
-                            static_cast<f32>(vj["normal"][0]),
-                            static_cast<f32>(vj["normal"][1]),
-                            static_cast<f32>(vj["normal"][2])
-                        );
-                    }
-                    if (vj.contains("color") && vj["color"].is_array() && vj["color"].size() >= 3) {
-                        v.color = vec3(
-                            static_cast<f32>(vj["color"][0]),
-                            static_cast<f32>(vj["color"][1]),
-                            static_cast<f32>(vj["color"][2])
-                        );
-                    }
-                    // texCoord, stress are optional (use uv or texCoord from JSON)
-                    if (vj.contains("uv") && vj["uv"].is_array() && vj["uv"].size() >= 2) {
-                        v.texCoord = vec2(
-                            static_cast<f32>(vj["uv"][0]),
-                            static_cast<f32>(vj["uv"][1])
-                        );
-                    } else if (vj.contains("texCoord") && vj["texCoord"].is_array() && vj["texCoord"].size() >= 2) {
-                        v.texCoord = vec2(
-                            static_cast<f32>(vj["texCoord"][0]),
-                            static_cast<f32>(vj["texCoord"][1])
-                        );
-                    }
-                    if (vj.contains("stress")) {
-                        v.stress = vj["stress"];
-                    }
-                    // Note: elevation is stored in position.y, not as separate field
-                    layout.terrain_mesh.vertices.push_back(v);
-                }
-            }
-
-            // Parse indices
-            if (tm.contains("indices") && tm["indices"].is_array()) {
-                for (const auto& ij : tm["indices"]) {
-                    if (ij.is_number()) {
-                        layout.terrain_mesh.indices.push_back(ij.get<u32>());
-                    }
-                }
-            }
-
-            std::cout << "[QBD] Loaded terrain mesh: "
-                      << layout.terrain_mesh.vertices.size() << " vertices, "
-                      << layout.terrain_mesh.indices.size() << " indices" << std::endl;
-        }
-
         std::cout << "[QBD] Loaded layout: " << layout.width << "x" << layout.depth
                   << " with " << layout.walls.size() << " walls, "
                   << layout.floors.size() << " floors, "
@@ -566,6 +514,12 @@ std::optional<QBDLayout> QBDInterface::loadFromJSON(const std::string& jsonStrin
                   << layout.windows.size() << " windows, "
                   << layout.roofs.size() << " roofs, "
                   << layout.rooms.size() << " rooms" << std::endl;
+
+        // Parse terrain mesh (store raw JSON for deferred parsing)
+        if (j.contains("terrain_mesh")) {
+            layout.terrain_mesh_json = j["terrain_mesh"];
+            std::cout << "[QBD] Found terrain_mesh in JSON with " << layout.terrain_mesh_json.size() << " fields\n";
+        }
 
         return layout;
 
@@ -693,8 +647,7 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
             elem.end = vec3(wall.end.x, wall.start.y + wall.height, wall.end.z);
             elem.width = layerThickness;
             elem.depth = layerThickness;
-            // Use wall material override if set, otherwise use layer material
-            elem.material = !wall.material.empty() ? wall.material : (!layer.material.empty() ? layer.material : layer.name);
+            elem.material = !layer.material.empty() ? layer.material : layer.name;
             elem.stress = 0.0f;
             elem.deflection = 0.0f;
             elem.failed = false;
@@ -728,8 +681,7 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
                 elem.end = vec3(wall.end.x, wall.start.y + wall.height, wall.end.z);
                 elem.width = thickness;
                 elem.depth = thickness;
-                // Use wall material override if set, otherwise default to "wall"
-                elem.material = !wall.material.empty() ? wall.material : "wall";
+                elem.material = "wall";
                 elem.stress = 0.0f;
                 elem.deflection = 0.0f;
                 elem.failed = false;
@@ -876,11 +828,84 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
     // Convert to parametric walls
     building.parametricWalls = toParametricWalls(layout);
 
-    // Copy terrain mesh
-    building.terrainMesh = layout.terrain_mesh;
-    if (building.terrainMesh.hasData()) {
-        std::cout << "[QBD] Copied terrain mesh to building: "
-                  << building.terrainMesh.vertices.size() << " vertices" << std::endl;
+    // Parse terrain mesh if present
+    if (!layout.terrain_mesh_json.empty() && layout.terrain_mesh_json.contains("vertices")) {
+        const auto& tm = layout.terrain_mesh_json;
+
+        std::cout << "[QBD] Parsing terrain mesh: " << tm["vertices"].size() << " vertices\n";
+
+        // Get elevation range for color computation
+        f32 minElev = tm.value("min_elevation", 0.0f);
+        f32 maxElev = tm.value("max_elevation", 100.0f);
+        f32 elevRange = maxElev - minElev;
+        if (elevRange < 0.001f) elevRange = 1.0f;
+
+        building.terrainMesh.width_ft = tm.value("width_ft", 0.0f);
+        building.terrainMesh.depth_ft = tm.value("depth_ft", 0.0f);
+        building.terrainMesh.min_elevation = minElev;
+        building.terrainMesh.max_elevation = maxElev;
+
+        // Elevation range in mm for color computation
+        f32 elevRangeMM = elevRange * 304.8f;  // FT_TO_MM
+
+        int vertexCount = 0;
+        for (const auto& v : tm["vertices"]) {
+            Vertex vert;
+
+            // Position: already in mm from Python
+            if (v.contains("position") && v["position"].size() >= 3) {
+                f32 x = v["position"][0].get<f32>();
+                f32 y = v["position"][1].get<f32>();
+                f32 z = v["position"][2].get<f32>();
+
+                // Debug: Print first few vertices
+                if (vertexCount < 3) {
+                    std::cout << "[QBD] Vertex " << vertexCount << ": position=[" << x << ", " << y << ", " << z << "]\n";
+                }
+                vertexCount++;
+
+                vert.position = vec3(x, y, z);
+
+                // Compute color from elevation
+                f32 normalizedElev = std::clamp(y / elevRangeMM, 0.0f, 1.0f);
+                vert.color = getElevationColor(normalizedElev);
+            }
+
+            // Normal
+            if (v.contains("normal") && v["normal"].size() >= 3) {
+                f32 nx = v["normal"][0].get<f32>();
+                f32 ny = v["normal"][1].get<f32>();
+                f32 nz = v["normal"][2].get<f32>();
+                vert.normal = glm::normalize(vec3(nx, ny, nz));
+            } else {
+                vert.normal = vec3(0.0f, 1.0f, 0.0f);
+            }
+
+            // UV
+            if (v.contains("uv") && v["uv"].size() >= 2) {
+                vert.texCoord = vec2(v["uv"][0].get<f32>(), v["uv"][1].get<f32>());
+            } else {
+                vert.texCoord = vec2(0.0f, 0.0f);
+            }
+
+            vert.stress = 0.0f;
+            building.terrainMesh.vertices.push_back(vert);
+        }
+
+        // Parse indices
+        if (tm.contains("indices")) {
+            for (const auto& idx : tm["indices"]) {
+                building.terrainMesh.indices.push_back(idx.get<u32>());
+            }
+        }
+
+        building.terrainMesh.version++;  // Increment to trigger GPU rebuild
+
+        if (building.terrainMesh.hasData()) {
+            std::cout << "[QBD] Loaded terrain mesh: " << building.terrainMesh.vertices.size()
+                      << " vertices, " << (building.terrainMesh.indices.size() / 3)
+                      << " triangles, elevation " << minElev << "-" << maxElev << " ft\n";
+        }
     }
 
     return building;

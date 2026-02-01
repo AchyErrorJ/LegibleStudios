@@ -1,87 +1,7 @@
 #include "pipeline.hpp"
-#include <filesystem>
 #include <stdexcept>
-#include <vector>
-
-#ifdef _WIN32
-#include <windows.h>
-extern "C" IMAGE_DOS_HEADER __ImageBase;
-#endif
 
 namespace arch {
-
-namespace {
-
-std::filesystem::path getExecutableDir() {
-#ifdef _WIN32
-    wchar_t buffer[MAX_PATH] = {};
-    DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-    if (length == 0 || length == MAX_PATH) {
-        return {};
-    }
-    return std::filesystem::path(buffer).parent_path();
-#else
-    return {};
-#endif
-}
-
-std::filesystem::path getModuleDir() {
-#ifdef _WIN32
-    HMODULE module = reinterpret_cast<HMODULE>(&::__ImageBase);
-    wchar_t buffer[MAX_PATH] = {};
-    DWORD length = GetModuleFileNameW(module, buffer, MAX_PATH);
-    if (length == 0 || length == MAX_PATH) {
-        return {};
-    }
-    return std::filesystem::path(buffer).parent_path();
-#else
-    return {};
-#endif
-}
-
-void addSearchRoots(std::vector<std::filesystem::path>& roots, const std::filesystem::path& base) {
-    if (base.empty()) {
-        return;
-    }
-
-    std::filesystem::path root = base;
-    for (int i = 0; i < 6 && !root.empty(); ++i) {
-        roots.push_back(root);
-        roots.push_back(root / "ArchEngine_CAD");
-        roots.push_back(root / "ArchEngine_kernel");
-        root = root.parent_path();
-    }
-}
-
-std::filesystem::path resolveShaderPath(const std::string& filepath) {
-    std::filesystem::path path(filepath);
-    if (path.is_absolute() && std::filesystem::exists(path)) {
-        return path;
-    }
-
-    if (std::filesystem::exists(path)) {
-        return path;
-    }
-
-    std::vector<std::filesystem::path> roots;
-    auto moduleDir = getModuleDir();
-    auto exeDir = getExecutableDir();
-    addSearchRoots(roots, moduleDir);
-    if (exeDir != moduleDir) {
-        addSearchRoots(roots, exeDir);
-    }
-
-    for (const auto& root : roots) {
-        auto candidate = root / path;
-        if (std::filesystem::exists(candidate)) {
-            return candidate;
-        }
-    }
-
-    return path;
-}
-
-} // namespace
 
 // PipelineConfig default
 PipelineConfig PipelineConfig::defaultConfig() {
@@ -158,6 +78,22 @@ PipelineConfig PipelineConfig::tessellationConfig() {
     return config;
 }
 
+// PipelineConfig for multiple render targets (MRT)
+PipelineConfig PipelineConfig::mrtConfig(u32 colorAttachmentCount) {
+    PipelineConfig config = defaultConfig();
+
+    // Set up multiple color blend attachments (all with same settings as default)
+    config.colorBlendAttachments.resize(colorAttachmentCount);
+    for (u32 i = 0; i < colorAttachmentCount; i++) {
+        config.colorBlendAttachments[i].colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        config.colorBlendAttachments[i].blendEnable = VK_FALSE;
+    }
+
+    return config;
+}
+
 // Pipeline implementation
 Pipeline::Pipeline(VulkanContext& context, const std::string& vertPath,
                    const std::string& fragPath, const PipelineConfig& config)
@@ -200,12 +136,19 @@ Pipeline::Pipeline(VulkanContext& context, const std::string& vertPath,
     viewportState.viewportCount = 1;
     viewportState.scissorCount = 1;
 
-    // Color blending
+    // Color blending - support multiple attachments for MRT
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &config.colorBlendAttachment;
+
+    // Use colorBlendAttachments vector if provided, otherwise use single attachment
+    if (!config.colorBlendAttachments.empty()) {
+        colorBlending.attachmentCount = static_cast<u32>(config.colorBlendAttachments.size());
+        colorBlending.pAttachments = config.colorBlendAttachments.data();
+    } else {
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments = &config.colorBlendAttachment;
+    }
 
     // Dynamic state
     VkPipelineDynamicStateCreateInfo dynamicState{};
@@ -312,12 +255,19 @@ Pipeline::Pipeline(VulkanContext& context, const std::string& vertPath,
     viewportState.viewportCount = 1;
     viewportState.scissorCount = 1;
 
-    // Color blending
+    // Color blending - support multiple attachments for MRT
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &config.colorBlendAttachment;
+
+    // Use colorBlendAttachments vector if provided, otherwise use single attachment
+    if (!config.colorBlendAttachments.empty()) {
+        colorBlending.attachmentCount = static_cast<u32>(config.colorBlendAttachments.size());
+        colorBlending.pAttachments = config.colorBlendAttachments.data();
+    } else {
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments = &config.colorBlendAttachment;
+    }
 
     // Dynamic state
     VkPipelineDynamicStateCreateInfo dynamicState{};
@@ -376,11 +326,9 @@ void Pipeline::bind(VkCommandBuffer commandBuffer) {
 }
 
 std::vector<char> Pipeline::readFile(const std::string& filepath) {
-    auto resolvedPath = resolveShaderPath(filepath);
-    std::ifstream file(resolvedPath, std::ios::ate | std::ios::binary);
+    std::ifstream file(filepath, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        throw std::runtime_error(
-            "Failed to open shader file: " + filepath + " (resolved: " + resolvedPath.string() + ")");
+        throw std::runtime_error("Failed to open shader file: " + filepath);
     }
 
     size_t fileSize = static_cast<size_t>(file.tellg());

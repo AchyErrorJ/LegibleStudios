@@ -53,6 +53,12 @@ namespace {
     int g_selectedElement = -1;
     VisualizationMode g_vizMode = VisualizationMode::Material;
 
+    // Terrain settings (declared early for use in render loop)
+    vec3 g_terrainOffset = {0.0f, 0.0f, 0.0f};
+
+    // Building placement (position offset in mm)
+    vec3 g_buildingPosition = {0.0f, 0.0f, 0.0f};
+
     // Error handling
     std::string g_lastError;
     std::mutex g_mutex;
@@ -323,14 +329,14 @@ ARCH_API int arch_render_frame(void) {
         updateCamera();
 
         if (g_renderer->beginFrame()) {
-            // Render shadow pass
-            g_renderer->renderShadowPass(g_building.elements);
+            // Render shadow pass (with building offset for proper shadow positioning)
+            g_renderer->renderShadowPass(g_building.elements, g_buildingPosition);
 
-            // Main render pass
-            vec4 clearColor = {0.05f, 0.05f, 0.08f, 1.0f};
+            // Main render pass - neutral light gray background for terrain visibility
+            vec4 clearColor = {0.85f, 0.85f, 0.85f, 1.0f};
             g_renderer->beginRenderPass(clearColor);
 
-            g_renderer->drawSky();
+            // g_renderer->drawSky();  // Disabled for terrain development
             g_renderer->drawGrid(150.0f, 5.0f);
 
             // Draw building with selection
@@ -338,11 +344,11 @@ ARCH_API int arch_render_frame(void) {
             if (g_selectedElement >= 0) {
                 selected.insert(g_selectedElement);
             }
-            g_renderer->drawStructuralFrame(g_building.elements, g_building, selected);
+            g_renderer->drawStructuralFrame(g_building.elements, g_building, selected, g_buildingPosition);
 
-            // Draw terrain if available
+            // Draw terrain if available (no offset - terrain is the ground truth)
             if (g_building.terrainMesh.hasData()) {
-                g_renderer->drawTerrain(g_building.terrainMesh);
+                g_renderer->drawTerrain(g_building.terrainMesh, vec3(0.0f));
             }
 
             g_renderer->endRenderPass();
@@ -1317,7 +1323,7 @@ ARCH_API int arch_get_element_material_name(int element_index, char* out_name, i
 // Global terrain state (C++ namespace, not exported)
 namespace {
     bool g_terrainEnabled = true;
-    vec3 g_terrainOffset = {0.0f, 0.0f, 0.0f};
+    // g_terrainOffset declared at top of file with other globals
     float g_terrainRoughness = 0.8f;
     float g_terrainMetallic = 0.0f;
     int g_terrainColorMode = 0;  // 0=elevation gradient
@@ -1509,6 +1515,183 @@ ARCH_API void arch_set_terrain_material(float roughness, float metallic) {
 ARCH_API void arch_set_terrain_color_mode(int mode) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_terrainColorMode = mode;
+}
+
+// =============================================================================
+// Building Placement API Implementation
+// =============================================================================
+
+ARCH_API void arch_set_building_position(float x, float y, float z) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_buildingPosition = vec3(x, y, z);
+    std::cout << "[Building] Position set to: (" << x << ", " << y << ", " << z << ") mm\n";
+}
+
+ARCH_API void arch_get_building_position(float* out_x, float* out_y, float* out_z) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (out_x) *out_x = g_buildingPosition.x;
+    if (out_y) *out_y = g_buildingPosition.y;
+    if (out_z) *out_z = g_buildingPosition.z;
+}
+
+ARCH_API int arch_get_terrain_elevation_at(float x, float z, float* out_elevation) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_building.terrainMesh.hasData()) {
+        return 0;
+    }
+
+    const auto& terrain = g_building.terrainMesh;
+    const auto& verts = terrain.vertices;
+
+    // Terrain dimensions in mm
+    float width_mm = terrain.width_ft * 304.8f;
+    float depth_mm = terrain.depth_ft * 304.8f;
+
+    // Check bounds
+    if (x < 0 || x > width_mm || z < 0 || z > depth_mm) {
+        return 0;  // Outside terrain bounds
+    }
+
+    // Find the triangle containing this point by searching vertices
+    // Simple approach: find nearest vertex (could be improved with grid lookup)
+    float minDist = std::numeric_limits<float>::max();
+    float elevation = 0.0f;
+
+    for (const auto& v : verts) {
+        float dx = v.position.x - x;
+        float dz = v.position.z - z;
+        float dist = dx * dx + dz * dz;
+        if (dist < minDist) {
+            minDist = dist;
+            elevation = v.position.y;
+        }
+    }
+
+    if (out_elevation) *out_elevation = elevation;
+    return 1;
+}
+
+ARCH_API int arch_place_building_on_terrain(float x, float z) {
+    float elevation = 0.0f;
+    if (arch_get_terrain_elevation_at(x, z, &elevation)) {
+        // Note: Don't lock again since arch_get_terrain_elevation_at already locked
+        g_buildingPosition = vec3(x, elevation, z);
+        std::cout << "[Building] Placed on terrain at: (" << x << ", " << elevation << ", " << z << ") mm\n";
+        return 1;
+    }
+    return 0;
+}
+
+ARCH_API void arch_screen_to_world_ray(int screen_x, int screen_y,
+                                        float* out_origin_x, float* out_origin_y, float* out_origin_z,
+                                        float* out_dir_x, float* out_dir_y, float* out_dir_z) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_renderer) {
+        return;
+    }
+
+    // Get camera matrices from renderer
+    Camera camera = g_renderer->getCamera();
+
+    // Build view and projection matrices
+    mat4 view = glm::lookAt(camera.position, camera.target, camera.up);
+
+    float aspect = static_cast<float>(g_width) / static_cast<float>(g_height);
+    mat4 proj;
+    if (g_cameraOrthographic) {
+        float orthoSize = g_cameraDistance * 0.5f;
+        proj = glm::ortho(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, 0.1f, 10000.0f);
+    } else {
+        proj = glm::perspective(glm::radians(g_cameraFOV), aspect, 0.1f, 10000.0f);
+    }
+
+    // Convert screen coords to NDC (-1 to 1)
+    float ndc_x = (2.0f * screen_x) / g_width - 1.0f;
+    float ndc_y = 1.0f - (2.0f * screen_y) / g_height;  // Flip Y
+
+    // Unproject near and far points
+    mat4 invVP = glm::inverse(proj * view);
+    vec4 nearPoint = invVP * vec4(ndc_x, ndc_y, -1.0f, 1.0f);
+    vec4 farPoint = invVP * vec4(ndc_x, ndc_y, 1.0f, 1.0f);
+
+    nearPoint /= nearPoint.w;
+    farPoint /= farPoint.w;
+
+    vec3 rayOrigin = vec3(nearPoint);
+    vec3 rayDir = glm::normalize(vec3(farPoint) - vec3(nearPoint));
+
+    if (out_origin_x) *out_origin_x = rayOrigin.x;
+    if (out_origin_y) *out_origin_y = rayOrigin.y;
+    if (out_origin_z) *out_origin_z = rayOrigin.z;
+    if (out_dir_x) *out_dir_x = rayDir.x;
+    if (out_dir_y) *out_dir_y = rayDir.y;
+    if (out_dir_z) *out_dir_z = rayDir.z;
+}
+
+ARCH_API int arch_raycast_terrain(float origin_x, float origin_y, float origin_z,
+                                   float dir_x, float dir_y, float dir_z,
+                                   float* out_hit_x, float* out_hit_y, float* out_hit_z) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_building.terrainMesh.hasData()) {
+        return 0;
+    }
+
+    const auto& terrain = g_building.terrainMesh;
+    const auto& verts = terrain.vertices;
+    const auto& indices = terrain.indices;
+
+    vec3 origin(origin_x, origin_y, origin_z);
+    vec3 dir = glm::normalize(vec3(dir_x, dir_y, dir_z));
+
+    float closestT = std::numeric_limits<float>::max();
+    bool hit = false;
+    vec3 hitPoint;
+
+    // Test ray against each triangle
+    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+        const vec3& v0 = verts[indices[i]].position;
+        const vec3& v1 = verts[indices[i + 1]].position;
+        const vec3& v2 = verts[indices[i + 2]].position;
+
+        // Möller–Trumbore intersection algorithm
+        vec3 edge1 = v1 - v0;
+        vec3 edge2 = v2 - v0;
+        vec3 h = glm::cross(dir, edge2);
+        float a = glm::dot(edge1, h);
+
+        if (std::abs(a) < 1e-6f) continue;  // Ray parallel to triangle
+
+        float f = 1.0f / a;
+        vec3 s = origin - v0;
+        float u = f * glm::dot(s, h);
+
+        if (u < 0.0f || u > 1.0f) continue;
+
+        vec3 q = glm::cross(s, edge1);
+        float v = f * glm::dot(dir, q);
+
+        if (v < 0.0f || u + v > 1.0f) continue;
+
+        float t = f * glm::dot(edge2, q);
+
+        if (t > 0.001f && t < closestT) {
+            closestT = t;
+            hitPoint = origin + dir * t;
+            hit = true;
+        }
+    }
+
+    if (hit) {
+        if (out_hit_x) *out_hit_x = hitPoint.x;
+        if (out_hit_y) *out_hit_y = hitPoint.y;
+        if (out_hit_z) *out_hit_z = hitPoint.z;
+        return 1;
+    }
+
+    return 0;
 }
 
 } // extern "C"

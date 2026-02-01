@@ -26,6 +26,7 @@ layout(push_constant) uniform TerrainConstants {
 layout(location = 0) out vec3 fragPosition;
 layout(location = 1) out vec3 fragNormal;
 layout(location = 2) out float fragElevation;  // Normalized 0-1
+layout(location = 3) out vec2 fragUV;
 
 void main() {
     vec4 worldPos = vec4(inPosition, 1.0);
@@ -33,6 +34,7 @@ void main() {
 
     fragPosition = worldPos.xyz;
     fragNormal = inNormal;
+    fragUV = inTexCoord;
 
     // Normalize elevation to 0-1 for coloring
     // Position is already in feet (scaled by C++ code)

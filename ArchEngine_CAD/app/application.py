@@ -43,7 +43,10 @@ from panels.sheet_manager import SheetManagerPanel
 from panels.chat_panel import ChatPanel
 from panels.materials_panel import MaterialsPanel
 from panels.onboarding_overlay import OnboardingOverlay
+from panels.smart_panel_container import SmartPanelContainer
 from generators.generator_service import GeneratorService
+from dialogs.qbd_questionnaire import QBDQuestionnaireDialog
+from dialogs.site_dialog import SiteDialog
 
 # Optional viewport imports
 try:
@@ -166,6 +169,9 @@ class ArchEngineApplication(QMainWindow):
 
         Called after creating a new document or loading an existing one.
         """
+        # TODO: Temporarily disabled - re-enable after fixing crashes
+        return
+
         # Check if this document has completed onboarding
         if self.document.onboarding_completed:
             # Already completed onboarding for this document
@@ -262,6 +268,10 @@ class ArchEngineApplication(QMainWindow):
         self.action_save_as = QAction("Save &As...", self)
         self.action_save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
         self.action_save_as.triggered.connect(self._on_save_as)
+
+        self.action_define_site = QAction("&Define Site...", self)
+        self.action_define_site.setStatusTip("Define site characteristics and fetch terrain elevation data")
+        self.action_define_site.triggered.connect(self._on_define_site)
 
         self.action_exit = QAction("E&xit", self)
         self.action_exit.setShortcut(QKeySequence.StandardKey.Quit)
@@ -437,6 +447,8 @@ class ArchEngineApplication(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self.action_save)
         file_menu.addAction(self.action_save_as)
+        file_menu.addSeparator()
+        file_menu.addAction(self.action_define_site)
         file_menu.addSeparator()
         file_menu.addAction(self.action_exit)
 
@@ -755,6 +767,21 @@ class ArchEngineApplication(QMainWindow):
         # Tab it with properties dock
         self.tabifyDockWidget(self.properties_dock, self.chat_dock)
         self.window_menu.addAction(self.chat_dock.toggleViewAction())
+
+        # Smart Panel Container (context-aware panels that show/hide based on workflow/LOD)
+        self.smart_panel_dock = QDockWidget("Smart Panels", self)
+        self.smart_panel_dock.setObjectName("smart_panel_dock")
+        self.smart_panel_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea |
+            Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.smart_panel_container = SmartPanelContainer(self)
+        self.smart_panel_container.setMinimumWidth(280)
+        self.smart_panel_dock.setWidget(self.smart_panel_container)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.smart_panel_dock)
+        # Tab it with chat dock
+        self.tabifyDockWidget(self.chat_dock, self.smart_panel_dock)
+        self.window_menu.addAction(self.smart_panel_dock.toggleViewAction())
 
         # 3D Viewport dock (Vulkan renderer)
         if HAS_VIEWPORT:
@@ -1111,12 +1138,102 @@ class ArchEngineApplication(QMainWindow):
     # =========================================================================
 
     def _on_new(self):
-        """Create new document."""
+        """Create new document with site definition."""
         if not self._check_save():
             return
+
+        # Show site dialog first to get location and terrain data
+        from dialogs.site_dialog import show_site_dialog
+
+        site_data = show_site_dialog(self)
+
+        if site_data:
+            # User completed site dialog - create document with terrain
+            self.document.new()
+
+            # Add site data including terrain mesh
+            self.document._data['site'] = site_data
+            if 'terrain_mesh' in site_data:
+                self.document._data['terrain_mesh'] = site_data['terrain_mesh']
+                print(f"[App] New document with site terrain: {site_data['terrain_mesh']['vertex_count']} vertices")
+
+            # Update 3D viewport with the new document
+            if HAS_VIEWPORT and self.viewport_3d:
+                self.viewport_3d.load_json(self.document._data)
+                # Reset camera to see the terrain better
+                self.viewport_3d.reset_camera()
+                print("[App] Camera reset to view terrain")
+        else:
+            # User cancelled - still create document with test terrain
+            self.document.new()
+
+    def _on_qbd_generate(self, answers: dict, site_data: dict = None):
+        """Handle QBD questionnaire answers and generate building."""
+        print(f"[App] QBD answers: {answers}")
+        if site_data:
+            print(f"[App] Site data: {site_data.get('address', 'No address')}")
+
+        # Create new document first
         self.document.new()
-        # Show onboarding for new documents
-        QTimer.singleShot(100, self._show_onboarding_if_needed)
+
+        # Store site data if provided
+        if site_data:
+            self.document._data['site'] = site_data
+
+            # If site has terrain mesh, replace the test terrain
+            if 'terrain_mesh' in site_data:
+                self.document._data['terrain_mesh'] = site_data['terrain_mesh']
+                print(f"[App] Using site terrain mesh from elevation data")
+
+        # Generate building layout from answers using the generator service
+        try:
+            self._generate_from_qbd(answers)
+        except Exception as e:
+            print(f"[App] Error generating building: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _generate_from_qbd(self, answers: dict):
+        """Generate building layout from QBD answers."""
+        # Build a room list based on answers
+        rooms = []
+
+        # Add bedrooms
+        for i in range(answers.get('bedrooms', 3)):
+            rooms.append({'type': 'bedroom', 'name': f'Bedroom {i+1}'})
+
+        # Add bathrooms
+        bath_count = int(answers.get('bathrooms', 2))
+        for i in range(bath_count):
+            rooms.append({'type': 'bathroom', 'name': f'Bathroom {i+1}'})
+
+        # Add standard rooms
+        rooms.extend([
+            {'type': 'living_room', 'name': 'Living Room'},
+            {'type': 'kitchen', 'name': 'Kitchen'},
+            {'type': 'dining_room', 'name': 'Dining Room'},
+        ])
+
+        # Add garage if requested
+        garage = answers.get('garage', 'no garage')
+        if 'car' in garage:
+            rooms.append({'type': 'garage', 'name': 'Garage'})
+
+        # Add special rooms
+        for special in answers.get('special_rooms', []):
+            room_name = special.replace('_', ' ').title()
+            rooms.append({'type': special, 'name': room_name})
+
+        # Store answers in document for reference
+        self.document._data['qbd_answers'] = answers
+        self.document._data['building_type'] = answers.get('building_type', 'residential')
+        self.document._data['style'] = answers.get('style', 'modern')
+        self.document._data['target_sqft'] = answers.get('sqft', 2000)
+
+        print(f"[App] Generated {len(rooms)} rooms from QBD")
+
+        # Emit document changed to trigger UI updates
+        self.document.document_changed.emit()
 
     def _on_open(self):
         """Open existing document."""
@@ -1168,6 +1285,36 @@ class ArchEngineApplication(QMainWindow):
             if self.document.save(Path(file_path)):
                 self.config.add_recent_file(Path(file_path))
                 self.status_bar.showMessage(f"Saved: {Path(file_path).name}", 5000)
+
+    def _on_define_site(self):
+        """Show site definition dialog to fetch terrain elevation data."""
+        from dialogs.site_dialog import show_site_dialog
+
+        # Show the site dialog
+        site_data = show_site_dialog(self)
+
+        if site_data and 'terrain_mesh' in site_data:
+            # User provided terrain data - update the current document
+            self.document._data['terrain_mesh'] = site_data['terrain_mesh']
+            self.document._data['site'] = site_data
+
+            # Mark document as modified
+            self.document.set_modified()
+
+            # Update the 3D viewport
+            if HAS_VIEWPORT and self.viewport_3d:
+                print(f"[App] Updating viewport with site terrain mesh")
+                self.viewport_3d.load_json(self.document._data)
+
+            self.status_bar.showMessage(
+                f"Site terrain loaded: {site_data['terrain_mesh']['vertex_count']} vertices",
+                5000
+            )
+        elif site_data:
+            # Site data but no terrain
+            self.document._data['site'] = site_data
+            self.document.set_modified()
+            self.status_bar.showMessage("Site data saved (no terrain)", 3000)
 
     def _check_save(self) -> bool:
         """Check if document should be saved. Returns False to cancel."""

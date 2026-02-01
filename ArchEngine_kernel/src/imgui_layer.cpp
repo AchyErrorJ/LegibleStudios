@@ -1,6 +1,8 @@
 #include "imgui_layer.hpp"
 #include "physics_bridge.hpp"
 #include "renderer.hpp"
+#include "llm_assistant.hpp"
+#include "memory_test.hpp"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <chrono>
@@ -135,7 +137,14 @@ void ImGuiLayer::drawMainMenuBar(VisualizationMode& mode, bool& showDemo, bool& 
             ImGui::MenuItem("Show Metrics", nullptr, &showMetrics);
             ImGui::MenuItem("Material Library", nullptr, &m_showMaterialLibrary);
             ImGui::MenuItem("Material Inspector", nullptr, &m_showMaterialInspector);
+            ImGui::MenuItem("Material Test (PBR)", nullptr, &m_showMaterialTestWindow);
             ImGui::MenuItem("Render Preview", nullptr, &m_showRenderPreviewPanel);
+            ImGui::Separator();
+            ImGui::MenuItem("AI Tuning Assistant", nullptr, &m_showLLMAssistantWindow);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Run Memory Test")) {
+                m_runMemoryTest = true;
+            }
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -734,6 +743,14 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
 
                 ImGui::Separator();
 
+                // Interactive light placement
+                ImGui::Checkbox("Click to Position Light", &m_lightPlacementMode);
+                if (m_lightPlacementMode) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Click in scene to set sun position");
+                }
+
+                ImGui::Separator();
+
                 // Sun animation
                 static bool animateSun = false;
                 static float animSpeed = 0.1f;  // Slower default
@@ -761,6 +778,254 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                     int hour = static_cast<int>(hours) % 24;
                     int minute = static_cast<int>((hours - hour) * 60.0f) % 60;
                     ImGui::Text("Time: %02d:%02d", (hour + 6) % 24, minute);
+                }
+            }
+        }
+
+        ImGui::Separator();
+
+        // Multi-Light System
+        if (ImGui::CollapsingHeader("Additional Lights")) {
+            u32 lightCount = renderer.getLightCount();
+
+            ImGui::Text("Lights: %u / %u", lightCount, MAX_LIGHTS);
+
+            // Click to place lights
+            ImGui::Text("Click to Place:");
+            bool placingPoint = (m_placeLightType == PlaceLightType::Point);
+            bool placingSpot = (m_placeLightType == PlaceLightType::Spot);
+
+            if (ImGui::RadioButton("Off", !placingPoint && !placingSpot)) {
+                m_placeLightType = PlaceLightType::None;
+            }
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Point", placingPoint)) {
+                m_placeLightType = placingPoint ? PlaceLightType::None : PlaceLightType::Point;
+            }
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Spot", placingSpot)) {
+                m_placeLightType = placingSpot ? PlaceLightType::None : PlaceLightType::Spot;
+            }
+
+            if (m_placeLightType != PlaceLightType::None) {
+                ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.4f, 1.0f), "Click in scene to place light");
+
+                // Snap plane selection
+                ImGui::Text("Snap Plane:");
+                int snapIdx = static_cast<int>(m_snapPlane);
+                const char* snapNames[] = { "Ground", "Floor 1 (8ft)", "Floor 2 (18ft)", "Floor 3 (28ft)", "Ceiling (10ft)", "Custom" };
+                if (ImGui::Combo("##snapplane", &snapIdx, snapNames, 6)) {
+                    m_snapPlane = static_cast<SnapPlane>(snapIdx);
+                }
+
+                if (m_snapPlane == SnapPlane::Custom) {
+                    ImGui::SliderFloat("Custom Height (ft)", &m_customSnapHeight, 0.0f, 50.0f, "%.1f");
+                }
+
+                // Show current snap height
+                float snapHeight = getSnapPlaneHeight();
+                ImGui::Text("Placement Height: %.1f ft (%.1f m)", snapHeight, snapHeight * 0.3048f);
+
+                // Show preview position if valid
+                if (m_lightPreviewValid) {
+                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
+                        "Preview: (%.1f, %.1f, %.1f)",
+                        m_lightPreviewPos.x, m_lightPreviewPos.y, m_lightPreviewPos.z);
+                }
+
+                ImGui::Separator();
+                ImGui::Text("Light Properties:");
+                ImGui::SliderFloat("Intensity##place", &m_lightPlacementIntensity, 0.5f, 20.0f, "%.1f");
+                ImGui::SliderFloat("Range##place", &m_lightPlacementRange, 5.0f, 50.0f, "%.1f");
+                ImGui::ColorEdit3("Color##place", &m_lightPlacementColor.x);
+
+                // Group selection for placement
+                const char* groupNames[] = { "Interior", "Exterior", "Accent", "Custom" };
+                ImGui::Combo("Group##place", &m_placementLightGroup, groupNames, 4);
+            }
+
+            ImGui::Separator();
+
+            // Light Group Controls
+            ImGui::Text("Light Groups:");
+            const char* groupLabels[] = { "Interior", "Exterior", "Accent", "Custom" };
+            for (int g = 0; g < 4; g++) {
+                ImGui::PushID(g);
+                bool enabled = m_lightGroupEnabled[g];
+                if (ImGui::Checkbox(groupLabels[g], &enabled)) {
+                    m_lightGroupEnabled[g] = enabled;
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                ImGui::SliderFloat("##intensity", &m_lightGroupIntensity[g], 0.0f, 2.0f, "%.1fx");
+                ImGui::PopID();
+            }
+
+            ImGui::Separator();
+
+            // Add light at origin buttons
+            if (lightCount < MAX_LIGHTS) {
+                if (ImGui::Button("+ Point at Origin")) {
+                    Light light = Light::createPoint(vec3(0.0f, 3.0f, 0.0f), vec3(1.0f), 5.0f, 15.0f);
+                    renderer.addLight(light);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("+ Spot at Origin")) {
+                    Light light = Light::createSpot(vec3(0.0f, 5.0f, 0.0f), vec3(0.0f, -1.0f, 0.0f),
+                                                     vec3(1.0f), 8.0f, 20.0f, 25.0f, 40.0f);
+                    renderer.addLight(light);
+                }
+            }
+
+            if (ImGui::Button("Clear All Lights")) {
+                renderer.clearLights();
+                m_selectedLightIndex = -1;
+            }
+
+            ImGui::Separator();
+
+            // Light list
+            ImGui::Text("Placed Lights:");
+            for (u32 i = 0; i < lightCount; i++) {
+                Light* light = renderer.getLight(i);
+                if (!light) continue;
+
+                const char* typeNames[] = {"Dir", "Pt", "Spot"};
+                const char* groupNames[] = {"Int", "Ext", "Acc", "Cust"};
+                LightType type = light->getType();
+                int typeIdx = static_cast<int>(type);
+                int groupIdx = static_cast<int>(light->getGroup());
+
+                // Show enabled state with color
+                bool lightEnabled = light->isEnabled() && m_lightGroupEnabled[groupIdx];
+                if (!lightEnabled) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+                }
+
+                // Build label with shadow indicator
+                char label[80];
+                const char* shadowIndicator = light->isCastingShadow() ? " [S]" : "";
+                snprintf(label, sizeof(label), "%u: %s [%s]%s%s", i, typeNames[typeIdx], groupNames[groupIdx],
+                         shadowIndicator, lightEnabled ? "" : " (off)");
+
+                bool isSelected = (m_selectedLightIndex == static_cast<int>(i));
+                if (ImGui::Selectable(label, isSelected)) {
+                    m_selectedLightIndex = isSelected ? -1 : static_cast<int>(i);
+                }
+
+                if (!lightEnabled) {
+                    ImGui::PopStyleColor();
+                }
+            }
+
+            // Edit selected light
+            if (m_selectedLightIndex >= 0 && m_selectedLightIndex < static_cast<int>(lightCount)) {
+                Light* light = renderer.getLight(static_cast<u32>(m_selectedLightIndex));
+                if (light) {
+                    ImGui::Separator();
+                    ImGui::Text("Edit Light %d", m_selectedLightIndex);
+
+                    // Position
+                    vec3 pos = light->getPosition();
+                    if (ImGui::DragFloat3("Position", &pos.x, 0.1f)) {
+                        light->setPosition(pos);
+                    }
+
+                    // Color
+                    vec3 color = light->getColor();
+                    if (ImGui::ColorEdit3("Color", &color.x)) {
+                        light->setColor(color);
+                    }
+
+                    // Intensity
+                    float intensity = light->getIntensity();
+                    if (ImGui::SliderFloat("Intensity", &intensity, 0.1f, 50.0f)) {
+                        light->setIntensity(intensity);
+                    }
+
+                    // Light Group
+                    const char* groupNames[] = { "Interior", "Exterior", "Accent", "Custom" };
+                    int currentGroup = static_cast<int>(light->getGroup());
+                    if (ImGui::Combo("Group", &currentGroup, groupNames, 4)) {
+                        light->setGroup(static_cast<LightGroup>(currentGroup));
+                    }
+
+                    // Enabled checkbox
+                    bool lightEnabled = light->isEnabled();
+                    if (ImGui::Checkbox("Enabled", &lightEnabled)) {
+                        light->setEnabled(lightEnabled);
+                    }
+
+                    // Shadow casting checkbox (directional/spot lights only)
+                    LightType lightType = light->getType();
+                    if (lightType == LightType::Directional || lightType == LightType::Spot) {
+                        bool castsShadow = light->isCastingShadow();
+                        if (ImGui::Checkbox("Cast Shadow", &castsShadow)) {
+                            light->setCastShadow(castsShadow);
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(?)");
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("Only one light can cast shadows at a time.\nThe first shadow-casting light will be used.");
+                        }
+                    }
+
+                    // Range (for point/spot)
+                    LightType type = light->getType();
+                    if (type == LightType::Point || type == LightType::Spot) {
+                        float range = light->getRange();
+                        if (ImGui::SliderFloat("Range", &range, 1.0f, 100.0f)) {
+                            light->setRange(range);
+                        }
+                    }
+
+                    // Direction and angles (for spot)
+                    if (type == LightType::Spot) {
+                        vec3 dir = light->getDirection();
+                        if (ImGui::DragFloat3("Direction", &dir.x, 0.01f, -1.0f, 1.0f)) {
+                            light->setDirection(dir);
+                        }
+
+                        float innerAngle = light->getInnerAngleDeg();
+                        float outerAngle = light->getOuterAngleDeg();
+                        bool anglesChanged = false;
+                        if (ImGui::SliderFloat("Inner Angle", &innerAngle, 5.0f, 85.0f, "%.1f deg")) {
+                            anglesChanged = true;
+                        }
+                        if (ImGui::SliderFloat("Outer Angle", &outerAngle, 10.0f, 90.0f, "%.1f deg")) {
+                            anglesChanged = true;
+                        }
+                        if (anglesChanged) {
+                            // Ensure outer >= inner
+                            if (outerAngle < innerAngle) outerAngle = innerAngle + 5.0f;
+                            light->setSpotAngles(innerAngle, outerAngle);
+                        }
+                    }
+
+                    // Presets
+                    ImGui::Separator();
+                    ImGui::Text("Presets:");
+                    if (ImGui::Button("Warm")) {
+                        light->setColor(vec3(1.0f, 0.85f, 0.7f));
+                        light->setIntensity(3.0f);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Cool")) {
+                        light->setColor(vec3(0.9f, 0.95f, 1.0f));
+                        light->setIntensity(4.0f);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Candle")) {
+                        light->setColor(vec3(1.0f, 0.6f, 0.2f));
+                        light->setIntensity(1.5f);
+                    }
+
+                    // Remove button
+                    ImGui::Separator();
+                    if (ImGui::Button("Remove This Light")) {
+                        renderer.removeLight(static_cast<u32>(m_selectedLightIndex));
+                        m_selectedLightIndex = -1;
+                    }
                 }
             }
         }
@@ -1704,6 +1969,147 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
 
         ImGui::Separator();
 
+        // Debug Visualization modes
+        if (ImGui::CollapsingHeader("Debug Visualization")) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Use these to verify effects are working");
+
+            // Material Test Scene (PBR Validation) - Quick access
+            ImGui::Spacing();
+            if (ImGui::Button("Open Material Test Window")) {
+                m_showMaterialTestWindow = true;
+            }
+            ImGui::SameLine();
+            bool showTestScene = renderer.getShowMaterialTestScene();
+            if (ImGui::Checkbox("Show Spheres", &showTestScene)) {
+                renderer.setShowMaterialTestScene(showTestScene);
+            }
+            ImGui::SetItemTooltip("Tools > Material Test (PBR) for full controls");
+            ImGui::Spacing();
+
+            // Shader Effect Toggles
+            ImGui::Text("Shader Effects:");
+            ImGui::Indent();
+
+            bool iblEnabled = renderer.getIBLEnabled();
+            if (ImGui::Checkbox("IBL (Ambient Lighting)", &iblEnabled)) {
+                renderer.setIBLEnabled(iblEnabled);
+            }
+            ImGui::SetItemTooltip("Image-Based Lighting: ambient light from environment map");
+
+            bool directLightEnabled = renderer.getDirectLightEnabled();
+            if (ImGui::Checkbox("Direct Light (Sun)", &directLightEnabled)) {
+                renderer.setDirectLightEnabled(directLightEnabled);
+            }
+            ImGui::SetItemTooltip("Direct lighting from sun and additional lights");
+
+            bool normalMappingEnabled = renderer.getNormalMappingEnabled();
+            if (ImGui::Checkbox("Normal Mapping", &normalMappingEnabled)) {
+                renderer.setNormalMappingEnabled(normalMappingEnabled);
+            }
+            ImGui::SetItemTooltip("Surface detail from normal maps");
+
+            ImGui::Unindent();
+            ImGui::Spacing();
+
+            // IBL Intensity Settings (collapsible)
+            if (ImGui::TreeNode("IBL Settings")) {
+                float iblOverall = renderer.getIBLIntensity();
+                if (ImGui::SliderFloat("Overall Intensity", &iblOverall, 0.0f, 3.0f, "%.2f")) {
+                    renderer.setIBLIntensity(iblOverall);
+                }
+                ImGui::SetItemTooltip("Master intensity for all IBL (ambient lighting)");
+
+                float iblDiffuse = renderer.getIBLDiffuseIntensity();
+                if (ImGui::SliderFloat("Diffuse Intensity", &iblDiffuse, 0.0f, 3.0f, "%.2f")) {
+                    renderer.setIBLDiffuseIntensity(iblDiffuse);
+                }
+                ImGui::SetItemTooltip("Diffuse ambient from environment (irradiance map)");
+
+                float iblSpecular = renderer.getIBLSpecularIntensity();
+                if (ImGui::SliderFloat("Specular Intensity", &iblSpecular, 0.0f, 3.0f, "%.2f")) {
+                    renderer.setIBLSpecularIntensity(iblSpecular);
+                }
+                ImGui::SetItemTooltip("Specular reflections from environment (prefiltered map)\nReduce this to fix white film on glossy surfaces");
+
+                float fresnel = renderer.getFresnelIntensity();
+                if (ImGui::SliderFloat("Fresnel Intensity", &fresnel, 0.0f, 2.0f, "%.2f")) {
+                    renderer.setFresnelIntensity(fresnel);
+                }
+                ImGui::SetItemTooltip("Fresnel effect strength (edge reflectivity)\nReducing this makes surfaces less reflective at grazing angles");
+
+                if (ImGui::Button("Reset IBL")) {
+                    renderer.setIBLIntensity(1.0f);
+                    renderer.setIBLDiffuseIntensity(1.0f);
+                    renderer.setIBLSpecularIntensity(0.4f);
+                    renderer.setFresnelIntensity(0.6f);
+                }
+
+                ImGui::TreePop();
+            }
+            ImGui::Spacing();
+
+            // Post-processing debug mode
+            ImGui::Text("Post-Processing:");
+            const char* ppDebugModes[] = { "None (Normal)", "SSAO Only", "Bloom Only", "HDR Scene (No FX)", "Depth Edges", "SSR Only", "Normals" };
+            int currentPPDebug = static_cast<int>(renderer.getPostProcessDebugMode());
+            if (ImGui::Combo("PP Debug Mode", &currentPPDebug, ppDebugModes, IM_ARRAYSIZE(ppDebugModes))) {
+                renderer.setPostProcessDebugMode(static_cast<PostProcessDebugMode>(currentPPDebug));
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "None: Normal rendering with all effects\n"
+                    "SSAO Only: Show ambient occlusion buffer (dark = occluded)\n"
+                    "Bloom Only: Show bloom contribution\n"
+                    "HDR Scene: Scene without SSAO/bloom (tests tonemapping)\n"
+                    "Depth Edges: Show depth-based edge detection\n"
+                    "SSR Only: Show screen-space reflections\n"
+                    "Normals: Show normal buffer"
+                );
+            }
+
+            ImGui::Spacing();
+
+            // Material/Displacement debug mode
+            ImGui::Text("Material/Lighting Debug:");
+            const char* matDebugModes[] = {
+                "None (Normal)", "Displacement", "POM Depth", "Normals", "UVs", "AO Map",
+                "Specular IBL", "Diffuse IBL", "Total Ambient", "BRDF LUT", "Direct Light", "Fresnel"
+            };
+            int currentMatDebug = static_cast<int>(renderer.getMaterialDebugMode());
+            if (ImGui::Combo("Material Debug Mode", &currentMatDebug, matDebugModes, IM_ARRAYSIZE(matDebugModes))) {
+                renderer.setMaterialDebugMode(static_cast<MaterialDebugMode>(currentMatDebug));
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "None: Normal rendering\n"
+                    "Displacement: Show tessellation displacement\n"
+                    "POM Depth: Show parallax depth offset\n"
+                    "Normals: Show surface normals\n"
+                    "UVs: Show UV coordinates\n"
+                    "AO Map: Show ambient occlusion texture\n"
+                    "Specular IBL: Show specular reflection contribution\n"
+                    "Diffuse IBL: Show diffuse ambient contribution\n"
+                    "Total Ambient: Show combined ambient lighting\n"
+                    "BRDF LUT: Show BRDF lookup (R=scale, G=bias)\n"
+                    "Direct Light: Show sun/lights only (no ambient)\n"
+                    "Fresnel: Show surface reflectivity"
+                );
+            }
+
+            ImGui::Spacing();
+
+            // Quick reset button
+            if (ImGui::Button("Reset All Debug Modes")) {
+                renderer.setPostProcessDebugMode(PostProcessDebugMode::None);
+                renderer.setMaterialDebugMode(MaterialDebugMode::None);
+                renderer.setIBLEnabled(true);
+                renderer.setDirectLightEnabled(true);
+                renderer.setNormalMappingEnabled(true);
+            }
+        }
+
+        ImGui::Separator();
+
         // Visualization mode (moved from elsewhere for convenience)
         if (ImGui::CollapsingHeader("Visualization")) {
             VisualizationMode mode = renderer.getVisualizationMode();
@@ -1767,6 +2173,18 @@ void ImGuiLayer::setHighResRenderState(bool inFlight, const std::string& status,
     m_highResRenderInFlight = inFlight;
     m_highResRenderStatus = status;
     m_highResRenderProgress = progress;
+}
+
+float ImGuiLayer::getSnapPlaneHeight() const {
+    switch (m_snapPlane) {
+        case SnapPlane::Ground:  return 0.0f;       // Ground level
+        case SnapPlane::Floor1:  return 8.0f;       // ~8ft ceiling for floor 1
+        case SnapPlane::Floor2:  return 18.0f;      // ~18ft for floor 2 ceiling
+        case SnapPlane::Floor3:  return 28.0f;      // ~28ft for floor 3 ceiling
+        case SnapPlane::Ceiling: return 10.0f;      // Default ceiling height
+        case SnapPlane::Custom:  return m_customSnapHeight;
+        default: return 8.0f;
+    }
 }
 
 void ImGuiLayer::drawPreviewWindow() {
@@ -1947,6 +2365,256 @@ void ImGuiLayer::drawRenderPreviewPanel(Renderer& renderer) {
 
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No preview rendered yet");
+        }
+    }
+    ImGui::End();
+}
+
+// ============================================================================
+// Material Test Window (PBR Validation)
+// ============================================================================
+
+void ImGuiLayer::drawMaterialTestWindow(Renderer& renderer, Camera& camera) {
+    if (!m_showMaterialTestWindow) return;
+
+    ImGui::SetNextWindowSize(ImVec2(350, 400), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Material Test", &m_showMaterialTestWindow)) {
+        ImGui::TextColored(ImVec4(0.8f, 0.6f, 0.2f, 1.0f), "PBR Validation Scene");
+        ImGui::TextWrapped("Test spheres with varying roughness and metallic values to validate IBL and lighting.");
+        ImGui::Separator();
+
+        // Show/Hide toggle
+        bool showTestScene = renderer.getShowMaterialTestScene();
+        if (ImGui::Checkbox("Show Test Spheres", &showTestScene)) {
+            renderer.setShowMaterialTestScene(showTestScene);
+        }
+
+        // Focus camera button
+        if (ImGui::Button("Focus Camera on Test Scene")) {
+            camera.position = renderer.getMaterialTestSceneCameraPosition();
+            camera.target = renderer.getMaterialTestSceneCameraTarget();
+        }
+        ImGui::SetItemTooltip("Move camera to view the material test spheres");
+
+        ImGui::Separator();
+
+        // Preset selector
+        ImGui::Text("Test Preset:");
+        const char* presetNames[] = {
+            "Full Grid (all spheres)",
+            "Dielectrics Only (metallic=0)",
+            "Metals Only (metallic=1)",
+            "Roughness Row (mid metallic)",
+            "Metallic Column (mid roughness)"
+        };
+
+        int currentPreset = renderer.getMaterialTestPreset();
+        for (int i = 0; i < 5; ++i) {
+            if (ImGui::RadioButton(presetNames[i], currentPreset == i)) {
+                renderer.setMaterialTestPreset(i);
+                m_materialTestPreset = i;
+            }
+        }
+
+        ImGui::Separator();
+
+        // Grid size
+        int gridSize = renderer.getMaterialTestGridSize();
+        if (ImGui::SliderInt("Grid Size", &gridSize, 3, 9, "%dx%d")) {
+            renderer.setMaterialTestGridSize(gridSize);
+        }
+
+        ImGui::Separator();
+
+        // Reference guide
+        if (ImGui::CollapsingHeader("How to Read", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::BulletText("X-axis: Roughness 0 (left) to 1 (right)");
+            ImGui::BulletText("Y-axis: Metallic 0 (bottom) to 1 (top)");
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f), "Expected appearance:");
+            ImGui::BulletText("Bottom-left: Glossy plastic");
+            ImGui::BulletText("Bottom-right: Matte plastic/rubber");
+            ImGui::BulletText("Top-left: Mirror-like metal");
+            ImGui::BulletText("Top-right: Brushed/rough metal");
+        }
+
+        if (ImGui::CollapsingHeader("IBL Tuning Tips")) {
+            ImGui::TextWrapped(
+                "If metals look too bright or have white film:\n"
+                "- Reduce Specular Intensity\n"
+                "- Reduce Fresnel Intensity\n\n"
+                "If dielectrics look too flat:\n"
+                "- Increase Diffuse Intensity\n\n"
+                "If everything looks washed out:\n"
+                "- Reduce Overall Intensity"
+            );
+        }
+    }
+    ImGui::End();
+}
+
+// ============================================================================
+// LLM Render Tuning Assistant
+// ============================================================================
+
+void ImGuiLayer::drawLLMAssistantWindow(Renderer& renderer) {
+    if (!m_showLLMAssistantWindow) return;
+
+    // Create assistant on first use
+    if (!m_llmAssistant) {
+        m_llmAssistant = std::make_unique<LLMAssistant>();
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(500, 600), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("AI Tuning Assistant", &m_showLLMAssistantWindow)) {
+        // Header
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Render Tuning Assistant");
+        ImGui::TextWrapped("Describe rendering issues and get parameter suggestions.");
+        ImGui::Separator();
+
+        // Connection status
+        bool connected = m_llmAssistant->isConnected();
+        if (connected) {
+            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Connected to LM Studio");
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f), "Not connected");
+            if (ImGui::Button("Connect to LM Studio")) {
+                m_llmAssistant->testConnection();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("(localhost:1234)");
+        }
+
+        ImGui::Separator();
+
+        // Chat history
+        ImGui::BeginChild("ChatHistory", ImVec2(0, -100), true);
+        for (const auto& msg : m_llmAssistant->getChatHistory()) {
+            if (msg.role == ChatMessage::Role::User) {
+                ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "You:");
+                ImGui::TextWrapped("%s", msg.content.c_str());
+            } else {
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Assistant:");
+                ImGui::TextWrapped("%s", msg.content.c_str());
+
+                // Show parameter suggestions with apply buttons
+                if (msg.hasSuggestions()) {
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.4f, 1.0f), "Suggested Changes:");
+                    for (const auto& sug : msg.suggestions) {
+                        ImGui::BulletText("%s: %.2f -> %.2f",
+                            sug.displayName.c_str(), sug.currentValue, sug.suggestedValue);
+
+                        ImGui::SameLine();
+                        std::string btnId = "Apply##" + sug.paramName;
+                        if (ImGui::SmallButton(btnId.c_str())) {
+                            // Apply the suggestion
+                            if (sug.paramName == "iblIntensity")
+                                renderer.setIBLIntensity(sug.suggestedValue);
+                            else if (sug.paramName == "iblDiffuseIntensity")
+                                renderer.setIBLDiffuseIntensity(sug.suggestedValue);
+                            else if (sug.paramName == "iblSpecularIntensity")
+                                renderer.setIBLSpecularIntensity(sug.suggestedValue);
+                            else if (sug.paramName == "fresnelIntensity")
+                                renderer.setFresnelIntensity(sug.suggestedValue);
+                            else if (sug.paramName == "exposure")
+                                renderer.getPostProcess()->setCompositeConfig(
+                                    {sug.suggestedValue,
+                                     renderer.getPostProcess()->getCompositeConfig().tonemapMode,
+                                     renderer.getPostProcess()->getCompositeConfig().enabled});
+                            else if (sug.paramName == "bloomIntensity") {
+                                auto cfg = renderer.getPostProcess()->getBloomConfig();
+                                cfg.intensity = sug.suggestedValue;
+                                renderer.getPostProcess()->setBloomConfig(cfg);
+                            }
+                            else if (sug.paramName == "ssaoIntensity") {
+                                auto cfg = renderer.getPostProcess()->getSSAOConfig();
+                                cfg.intensity = sug.suggestedValue;
+                                renderer.getPostProcess()->setSSAOConfig(cfg);
+                            }
+                        }
+                    }
+                }
+            }
+            ImGui::Spacing();
+            ImGui::Separator();
+        }
+
+        // Auto-scroll to bottom
+        if (m_llmAssistant->hasResponse()) {
+            ImGui::SetScrollHereY(1.0f);
+            m_llmAssistant->getLatestResponse();  // Clear the flag
+        }
+
+        // Show processing indicator
+        if (m_llmAssistant->isProcessing()) {
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.4f, 1.0f), "Thinking...");
+        }
+
+        ImGui::EndChild();
+
+        // Input area
+        ImGui::Separator();
+        bool sendMessage = false;
+
+        ImGui::PushItemWidth(-80);
+        if (ImGui::InputText("##llm_input", m_llmInputBuffer, sizeof(m_llmInputBuffer),
+                            ImGuiInputTextFlags_EnterReturnsTrue)) {
+            sendMessage = true;
+        }
+        ImGui::PopItemWidth();
+
+        ImGui::SameLine();
+        if (ImGui::Button("Send") || sendMessage) {
+            if (strlen(m_llmInputBuffer) > 0 && !m_llmAssistant->isProcessing()) {
+                // Build render state snapshot
+                RenderStateSnapshot state;
+                state.iblIntensity = renderer.getIBLIntensity();
+                state.iblDiffuseIntensity = renderer.getIBLDiffuseIntensity();
+                state.iblSpecularIntensity = renderer.getIBLSpecularIntensity();
+                state.fresnelIntensity = renderer.getFresnelIntensity();
+                state.exposure = renderer.getPostProcess()->getCompositeConfig().exposure;
+                state.bloomIntensity = renderer.getPostProcess()->getBloomConfig().intensity;
+                state.bloomThreshold = renderer.getPostProcess()->getBloomConfig().threshold;
+                state.ssaoIntensity = renderer.getPostProcess()->getSSAOConfig().intensity;
+                state.ssaoRadius = renderer.getPostProcess()->getSSAOConfig().radius;
+                state.iblEnabled = renderer.getIBLEnabled();
+                state.directLightEnabled = renderer.getDirectLightEnabled();
+                state.normalMappingEnabled = renderer.getNormalMappingEnabled();
+                state.ssaoEnabled = renderer.getPostProcess()->getSSAOConfig().enabled;
+                state.bloomEnabled = renderer.getPostProcess()->getBloomConfig().enabled;
+                state.defaultRoughness = renderer.getDefaultRoughness();
+                state.defaultMetallic = renderer.getDefaultMetallic();
+
+                m_llmAssistant->sendMessage(m_llmInputBuffer, state);
+                m_llmInputBuffer[0] = '\0';
+            }
+        }
+
+        // Quick prompts
+        ImGui::Spacing();
+        ImGui::TextDisabled("Quick prompts:");
+        if (ImGui::SmallButton("White film on surfaces")) {
+            strcpy(m_llmInputBuffer, "There's a white film on surfaces, especially when I zoom in");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Too bright")) {
+            strcpy(m_llmInputBuffer, "The scene looks too bright and washed out");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Metals wrong")) {
+            strcpy(m_llmInputBuffer, "Metallic surfaces don't look right");
+        }
+
+        // Clear button
+        if (ImGui::Button("Clear Chat")) {
+            m_llmAssistant->clearHistory();
+        }
+
+        // Error display
+        if (!m_llmAssistant->getLastError().empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s",
+                              m_llmAssistant->getLastError().c_str());
         }
     }
     ImGui::End();

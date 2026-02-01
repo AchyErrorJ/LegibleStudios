@@ -3,6 +3,7 @@
 #include "types.hpp"
 #include "obc_engine.hpp"
 #include "slicer_2d.hpp"
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -180,7 +181,6 @@ struct QBDWall {
     WallCategory category = WallCategory::Interior;
     std::string room1;          // Room on one side
     std::string room2;          // Room on other side
-    std::string material;       // Material override (e.g., "brick_red_01")
 
     f32 length() const {
         return glm::length(vec2(end.x - start.x, end.y - start.y));
@@ -358,7 +358,9 @@ struct QBDLayout {
     std::unordered_map<std::string, QBDRoom> rooms;
     std::vector<std::string> unplacedRooms;
     std::vector<WallType> wallTypes;
-    TerrainMesh terrain_mesh;  // Terrain mesh for site topography
+
+    // Terrain mesh from Python (stored as raw JSON to defer parsing)
+    nlohmann::json terrain_mesh_json;
 
     QBDSummary summary;
     QBDAnswers answers;

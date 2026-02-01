@@ -575,6 +575,14 @@ void from_json(const json& j, Building& b) {
     b.name = j.value("name", "Unnamed Building");
     b.elements.clear();
 
+    // DEBUG: Check if terrain_mesh is in JSON
+    std::cout << "[from_json] Building JSON keys: ";
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        std::cout << it.key() << " ";
+    }
+    std::cout << "\n";
+    std::cout << "[from_json] Has terrain_mesh: " << j.contains("terrain_mesh") << "\n";
+
     if (j.contains("elements")) {
         for (const auto& e : j["elements"]) {
             StructuralElement elem;
@@ -644,35 +652,44 @@ void from_json(const json& j, Building& b) {
         b.terrainMesh.depth_ft = tm.value("depth_ft", 0.0f);
         b.terrainMesh.min_elevation = minElev;
         b.terrainMesh.max_elevation = maxElev;
+        b.terrainMesh.version++;  // Increment version to trigger GPU rebuild
 
-        // Parse vertices with feet-to-mm conversion and elevation coloring
+        // Parse vertices - Python terrain.py already converts to mm with Y-up coordinate system
+        // No conversion needed: x=east-west, y=elevation (up), z=north-south, all in mm
         if (tm.contains("vertices")) {
+            // Elevation range in mm for color computation
+            f32 elevRangeMM = elevRange * FT_TO_MM;
+
+            int vertexIdx = 0;
             for (const auto& v : tm["vertices"]) {
                 Vertex vert;
 
-                // Position: convert feet to millimeters
-                // JSON format: position is [x, y, z] where z is elevation
+                // Position: already in mm from Python, Y is elevation (up)
                 if (v.contains("position") && v["position"].size() >= 3) {
-                    f32 x_ft = v["position"][0].get<f32>();
-                    f32 y_ft = v["position"][1].get<f32>();
-                    f32 z_ft = v["position"][2].get<f32>();  // This is elevation
+                    f32 x = v["position"][0].get<f32>();  // Already in mm
+                    f32 y = v["position"][1].get<f32>();  // Elevation in mm (Y-up)
+                    f32 z = v["position"][2].get<f32>();  // Already in mm
 
-                    // Convert to mm: X stays X, Y becomes elevation (up), Z stays Z (depth)
-                    // In the renderer, Y is up, so we swap: position.y = elevation * FT_TO_MM
-                    vert.position = vec3(x_ft * FT_TO_MM, z_ft * FT_TO_MM, y_ft * FT_TO_MM);
+                    vert.position = vec3(x, y, z);
 
-                    // Compute color from elevation
-                    f32 normalizedElev = (z_ft - minElev) / elevRange;
+                    // DEBUG: Print first few vertices
+                    if (vertexIdx < 3) {
+                        std::cout << "[Terrain] Vertex " << vertexIdx << ": Y=" << y << " mm\n";
+                    }
+                    vertexIdx++;
+
+                    // Compute color from elevation (y position)
+                    // Python offsets elevation so min is near 0, so y/elevRangeMM gives ~0-1 range
+                    f32 normalizedElev = std::clamp(y / elevRangeMM, 0.0f, 1.0f);
                     vert.color = getElevationColor(normalizedElev);
                 }
 
-                // Normal
+                // Normal: already in correct coordinate system from Python
                 if (v.contains("normal") && v["normal"].size() >= 3) {
                     f32 nx = v["normal"][0].get<f32>();
                     f32 ny = v["normal"][1].get<f32>();
                     f32 nz = v["normal"][2].get<f32>();
-                    // Swap Y and Z to match coordinate system
-                    vert.normal = glm::normalize(vec3(nx, nz, ny));
+                    vert.normal = glm::normalize(vec3(nx, ny, nz));
                 } else {
                     vert.normal = vec3(0.0f, 1.0f, 0.0f);  // Default up
                 }
@@ -1022,6 +1039,135 @@ void from_json(const json& j, ParametricWall& w) {
     // Initialize adjusted points to original
     w.adjustedStart = w.startPoint;
     w.adjustedEnd = w.endPoint;
+}
+
+// ============================================================================
+// TEST TERRAIN GENERATION
+// ============================================================================
+
+TerrainMesh TerrainMesh::generateTestTerrain(f32 width_ft, f32 depth_ft, u32 grid_size,
+                                              f32 base_elevation, f32 height_range) {
+    TerrainMesh terrain;
+
+    terrain.width_ft = width_ft;
+    terrain.depth_ft = depth_ft;
+
+    // Grid spacing
+    f32 dx = width_ft / static_cast<f32>(grid_size - 1);
+    f32 dz = depth_ft / static_cast<f32>(grid_size - 1);
+
+    // Track min/max elevation
+    f32 minElev = base_elevation;
+    f32 maxElev = base_elevation;
+
+    // Generate vertices with procedural height
+    terrain.vertices.reserve(grid_size * grid_size);
+
+    for (u32 z = 0; z < grid_size; z++) {
+        for (u32 x = 0; x < grid_size; x++) {
+            // Position in feet
+            f32 px = static_cast<f32>(x) * dx - width_ft * 0.5f;  // Center at origin
+            f32 pz = static_cast<f32>(z) * dz - depth_ft * 0.5f;
+
+            // Procedural height using multiple sine waves (simple hills)
+            f32 nx = px / width_ft;
+            f32 nz = pz / depth_ft;
+
+            f32 height = 0.0f;
+            // Large hills
+            height += std::sin(nx * 3.14159f * 2.0f) * std::cos(nz * 3.14159f * 2.0f) * 0.4f;
+            // Medium features
+            height += std::sin(nx * 3.14159f * 4.0f + 0.5f) * std::sin(nz * 3.14159f * 3.0f) * 0.25f;
+            // Small details
+            height += std::sin(nx * 3.14159f * 8.0f) * std::cos(nz * 3.14159f * 7.0f + 1.0f) * 0.15f;
+
+            // Normalize to [0, 1] then scale
+            height = (height + 1.0f) * 0.5f;  // Now 0-1
+            f32 py = base_elevation + height * height_range;
+
+            minElev = std::min(minElev, py);
+            maxElev = std::max(maxElev, py);
+
+            Vertex vert{};
+            // Keep in feet (same units as building elements)
+            vert.position = vec3(px, py, -pz);  // Flip Z for coordinate system
+
+            // Compute normal (will be refined after all vertices are created)
+            vert.normal = vec3(0.0f, 1.0f, 0.0f);
+
+            // UV coordinates
+            vert.texCoord = vec2(static_cast<f32>(x) / (grid_size - 1),
+                                 static_cast<f32>(z) / (grid_size - 1));
+
+            // Color will be set after we know the elevation range
+            vert.color = vec3(1.0f);
+
+            terrain.vertices.push_back(vert);
+        }
+    }
+
+    terrain.min_elevation = minElev;
+    terrain.max_elevation = maxElev;
+
+    // Now set colors based on actual elevation range
+    f32 elevRange = maxElev - minElev;
+    if (elevRange < 0.01f) elevRange = 1.0f;
+
+    for (u32 z = 0; z < grid_size; z++) {
+        for (u32 x = 0; x < grid_size; x++) {
+            u32 idx = z * grid_size + x;
+            // Get elevation from Y position (already in feet)
+            f32 elev = terrain.vertices[idx].position.y;
+            f32 normalizedElev = (elev - minElev) / elevRange;
+            terrain.vertices[idx].color = getElevationColor(normalizedElev);
+        }
+    }
+
+    // Compute proper normals using finite differences
+    for (u32 z = 0; z < grid_size; z++) {
+        for (u32 x = 0; x < grid_size; x++) {
+            u32 idx = z * grid_size + x;
+
+            // Get neighboring heights
+            f32 hL = (x > 0) ? terrain.vertices[idx - 1].position.y : terrain.vertices[idx].position.y;
+            f32 hR = (x < grid_size - 1) ? terrain.vertices[idx + 1].position.y : terrain.vertices[idx].position.y;
+            f32 hD = (z > 0) ? terrain.vertices[idx - grid_size].position.y : terrain.vertices[idx].position.y;
+            f32 hU = (z < grid_size - 1) ? terrain.vertices[idx + grid_size].position.y : terrain.vertices[idx].position.y;
+
+            // Compute normal from gradient (all values in feet)
+            vec3 normal = glm::normalize(vec3(hL - hR, 2.0f * dx, hD - hU));
+            terrain.vertices[idx].normal = normal;
+        }
+    }
+
+    // Generate indices (two triangles per quad)
+    terrain.indices.reserve((grid_size - 1) * (grid_size - 1) * 6);
+
+    for (u32 z = 0; z < grid_size - 1; z++) {
+        for (u32 x = 0; x < grid_size - 1; x++) {
+            u32 topLeft = z * grid_size + x;
+            u32 topRight = topLeft + 1;
+            u32 bottomLeft = topLeft + grid_size;
+            u32 bottomRight = bottomLeft + 1;
+
+            // Triangle 1
+            terrain.indices.push_back(topLeft);
+            terrain.indices.push_back(bottomLeft);
+            terrain.indices.push_back(topRight);
+
+            // Triangle 2
+            terrain.indices.push_back(topRight);
+            terrain.indices.push_back(bottomLeft);
+            terrain.indices.push_back(bottomRight);
+        }
+    }
+
+    std::cout << "[Terrain] Generated test terrain: " << terrain.vertices.size()
+              << " vertices, " << (terrain.indices.size() / 3) << " triangles, "
+              << width_ft << "x" << depth_ft << " ft, elevation " << minElev
+              << "-" << maxElev << " ft\n";
+
+    return terrain;
 }
 
 } // namespace arch

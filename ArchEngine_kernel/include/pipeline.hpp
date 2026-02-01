@@ -10,7 +10,8 @@ struct PipelineConfig {
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     VkPipelineRasterizationStateCreateInfo rasterization{};
     VkPipelineMultisampleStateCreateInfo multisample{};
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};  // Primary attachment (for backwards compat)
+    std::vector<VkPipelineColorBlendAttachmentState> colorBlendAttachments;  // Multiple attachments for MRT
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     VkPipelineTessellationStateCreateInfo tessellation{};
     std::vector<VkDynamicState> dynamicStates;
@@ -23,6 +24,7 @@ struct PipelineConfig {
     static PipelineConfig defaultConfig();
     static PipelineConfig transparentConfig();  // Alpha blending enabled
     static PipelineConfig tessellationConfig(); // Tessellation enabled
+    static PipelineConfig mrtConfig(u32 colorAttachmentCount);  // Multiple render targets
 };
 
 class Pipeline {
@@ -47,9 +49,8 @@ public:
     VkPipeline getHandle() const { return m_pipeline; }
     VkPipelineLayout getLayout() const { return m_pipelineLayout; }
 
-    static std::vector<char> readFile(const std::string& filepath);
-
 private:
+    static std::vector<char> readFile(const std::string& filepath);
     VkShaderModule createShaderModule(const std::vector<char>& code);
 
     VulkanContext& m_context;

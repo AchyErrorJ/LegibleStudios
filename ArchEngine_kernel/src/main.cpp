@@ -8,6 +8,8 @@
 #include "mesh.hpp"
 #include "qbd_interface.hpp"
 #include "ipc_server.hpp"
+#include "lights.hpp"
+#include "memory_test.hpp"
 #include <iostream>
 #include <algorithm>
 #include <chrono>
@@ -125,6 +127,22 @@ bool rayPlaneIntersect(vec3 rayOrigin, vec3 rayDir, float planeY, vec3& hitPoint
     float t = (planeY - rayOrigin.y) / rayDir.y;
     if (t < 0) return false;  // Plane behind ray
     hitPoint = rayOrigin + rayDir * t;
+    return true;
+}
+
+// Ray-sphere intersection for light indicator picking
+bool raySphereIntersect(vec3 rayOrigin, vec3 rayDir, vec3 sphereCenter, float radius, float& t) {
+    vec3 oc = rayOrigin - sphereCenter;
+    float a = glm::dot(rayDir, rayDir);
+    float b = 2.0f * glm::dot(oc, rayDir);
+    float c = glm::dot(oc, oc) - radius * radius;
+    float discriminant = b * b - 4.0f * a * c;
+    if (discriminant < 0) return false;
+    t = (-b - std::sqrt(discriminant)) / (2.0f * a);
+    if (t < 0) {
+        t = (-b + std::sqrt(discriminant)) / (2.0f * a);
+        if (t < 0) return false;
+    }
     return true;
 }
 
@@ -604,6 +622,103 @@ int main(int argc, char* argv[]) {
                     return;  // Don't do normal selection when drawing
                 }
 
+                // Handle light placement mode - click to position sun
+                if (imgui.isLightPlacementMode()) {
+                    vec3 hitPoint;
+                    if (rayPlaneIntersect(rayOrigin, rayDir, 0.0f, hitPoint)) {
+                        // Calculate direction from hit point to sun position
+                        // Sun is above and in the direction of the click from scene center
+                        vec3 sceneCenter(20.0f, 0.0f, 15.0f);  // Approximate scene center
+
+                        // Direction from scene center to click point (horizontal)
+                        vec3 toClick = hitPoint - sceneCenter;
+                        toClick.y = 0.0f;  // Keep horizontal
+                        float distance = glm::length(toClick);
+
+                        if (distance > 0.1f) {
+                            toClick = glm::normalize(toClick);
+
+                            // Sun direction: from the clicked direction, 45 degrees up
+                            // Light direction points FROM the sun TO the scene
+                            float elevation = 0.7f;  // ~40 degree elevation
+                            vec3 lightDir = vec3(
+                                -toClick.x * std::cos(elevation),
+                                -std::sin(elevation),
+                                -toClick.z * std::cos(elevation)
+                            );
+                            lightDir = glm::normalize(lightDir);
+
+                            renderer.setLightDirection(lightDir);
+                            std::cout << "Light positioned from direction: ("
+                                      << -lightDir.x << ", " << -lightDir.y << ", " << -lightDir.z << ")" << std::endl;
+                        }
+                    }
+                    return;  // Don't do normal selection when placing light
+                }
+
+                // Handle point/spot light placement mode
+                if (imgui.isPlacingLight()) {
+                    vec3 hitPoint;
+                    if (rayPlaneIntersect(rayOrigin, rayDir, 0.0f, hitPoint)) {
+                        // Place light at clicked X/Z with snap plane height
+                        vec3 lightPos(hitPoint.x, imgui.getSnapPlaneHeight(), hitPoint.z);
+                        vec3 lightColor = imgui.getLightPlacementColor();
+                        float intensity = imgui.getLightPlacementIntensity();
+                        float range = imgui.getLightPlacementRange();
+
+                        Light light;
+                        if (imgui.getPlaceLightType() == ImGuiLayer::PlaceLightType::Point) {
+                            light = Light::createPoint(lightPos, lightColor, intensity, range);
+                            std::cout << "Placed point light at (" << lightPos.x << ", "
+                                      << lightPos.y << ", " << lightPos.z << ")" << std::endl;
+                        } else {
+                            // Spot light pointing down
+                            light = Light::createSpot(lightPos, vec3(0.0f, -1.0f, 0.0f),
+                                                      lightColor, intensity, range, 25.0f, 40.0f);
+                            std::cout << "Placed spot light at (" << lightPos.x << ", "
+                                      << lightPos.y << ", " << lightPos.z << ")" << std::endl;
+                        }
+                        // Set light group from UI selection
+                        light.setGroup(static_cast<LightGroup>(imgui.getPlacementLightGroup()));
+                        renderer.addLight(light);
+                    }
+                    return;  // Don't do normal selection when placing lights
+                }
+
+                // Check for light indicator clicks (select lights by clicking on them)
+                {
+                    const float lightIndicatorRadius = 0.5f;  // Match indicator size
+                    const auto& lights = renderer.getLights();
+                    int closestLightIdx = -1;
+                    float closestLightT = std::numeric_limits<float>::max();
+
+                    for (size_t i = 0; i < lights.size(); i++) {
+                        const auto& light = lights[i];
+                        if (light.getType() == LightType::Directional) continue;  // Skip directional lights
+
+                        vec3 lightPos = light.getPosition();
+                        float t;
+                        if (raySphereIntersect(rayOrigin, rayDir, lightPos, lightIndicatorRadius, t)) {
+                            if (t < closestLightT) {
+                                closestLightT = t;
+                                closestLightIdx = static_cast<int>(i);
+                            }
+                        }
+                    }
+
+                    if (closestLightIdx >= 0) {
+                        imgui.setSelectedLightIndex(closestLightIdx);
+                        const auto& light = lights[closestLightIdx];
+                        const char* typeNames[] = {"Directional", "Point", "Spot"};
+                        std::cout << "Selected light " << closestLightIdx << " ("
+                                  << typeNames[static_cast<int>(light.getType())] << ") at ("
+                                  << light.getPosition().x << ", "
+                                  << light.getPosition().y << ", "
+                                  << light.getPosition().z << ")" << std::endl;
+                        return;  // Don't select elements when clicking a light
+                    }
+                }
+
                 // Test intersection with all elements - collect ALL hits for cycling
                 hitCandidates.clear();
                 hitCycleIndex = 0;
@@ -686,6 +801,37 @@ int main(int argc, char* argv[]) {
                 cameraPitch -= static_cast<f32>(dy) * 0.005f;
                 cameraPitch = glm::clamp(cameraPitch, -1.4f, 1.4f);
             }
+
+            // Update light placement preview position
+            if (imgui.isPlacingLight()) {
+                auto [winWidth, winHeight] = window.getWindowSize();
+                float ndcX = (2.0f * static_cast<float>(xpos) / static_cast<float>(winWidth)) - 1.0f;
+                float ndcY = 1.0f - (2.0f * static_cast<float>(ypos) / static_cast<float>(winHeight));
+
+                float aspect = static_cast<float>(winWidth) / static_cast<float>(winHeight);
+                mat4 proj = camera.getProjectionMatrix(aspect);
+                mat4 view = camera.getViewMatrix();
+                mat4 invVP = glm::inverse(proj * view);
+
+                vec4 nearPoint = invVP * vec4(ndcX, ndcY, -1.0f, 1.0f);
+                vec4 farPoint = invVP * vec4(ndcX, ndcY, 1.0f, 1.0f);
+                nearPoint /= nearPoint.w;
+                farPoint /= farPoint.w;
+
+                vec3 rayOrigin = vec3(nearPoint);
+                vec3 rayDir = glm::normalize(vec3(farPoint) - vec3(nearPoint));
+
+                vec3 hitPoint;
+                if (rayPlaneIntersect(rayOrigin, rayDir, 0.0f, hitPoint)) {
+                    float snapHeight = imgui.getSnapPlaneHeight();
+                    vec3 previewPos(hitPoint.x, snapHeight, hitPoint.z);
+                    imgui.setLightPreviewPosition(previewPos, true);
+                } else {
+                    imgui.setLightPreviewPosition(vec3(0.0f), false);
+                }
+            } else {
+                imgui.setLightPreviewPosition(vec3(0.0f), false);
+            }
         });
 
         window.setKeyCallback([&](i32 key, i32 scancode, i32 action, i32 mods) {
@@ -764,6 +910,19 @@ int main(int argc, char* argv[]) {
                             std::cout << "Stress values updated.\n";
                         } else {
                             std::cout << "Physics engine not available\n";
+                        }
+                        break;
+
+                    // Generate test terrain (T key)
+                    case GLFW_KEY_T:
+                        {
+                            std::cout << "Generating test terrain...\n";
+                            // Generate a 200x200 ft terrain with 64x64 grid resolution
+                            // Base elevation -8ft with 6ft range: terrain goes from -8 to -2 ft (below building floor at Y=0)
+                            buildings[currentBuilding].terrainMesh =
+                                TerrainMesh::generateTestTerrain(200.0f, 200.0f, 64, -8.0f, 6.0f);
+                            renderer.invalidateTerrainCache();
+                            std::cout << "Test terrain generated. Press T again to regenerate.\n";
                         }
                         break;
 
@@ -928,6 +1087,12 @@ int main(int argc, char* argv[]) {
             if (renderer.beginFrame()) {
                 renderer.setCamera(camera);
 
+                // Sync light group settings from UI to renderer
+                for (int g = 0; g < 4; g++) {
+                    renderer.setLightGroupEnabled(g, imgui.isLightGroupEnabled(g));
+                    renderer.setLightGroupIntensity(g, imgui.getLightGroupIntensity(g));
+                }
+
                 // Background color based on visualization mode
                 vec4 clearColor;
                 switch (vizMode) {
@@ -948,14 +1113,31 @@ int main(int argc, char* argv[]) {
                 renderer.renderShadowPass(buildings[currentBuilding].elements);
 
                 // Use HDR render path for post-processing (SSAO, bloom, tonemapping)
-                if (renderer.isPostProcessingEnabled()) {
-                    // Render scene to HDR framebuffer
-                    renderer.beginHDRRenderPass(clearColor);
+                bool useHDRPath = renderer.isPostProcessingEnabled();
+                if (useHDRPath) {
+                    // Try to start HDR render pass - fallback to SDR if it fails
+                    useHDRPath = renderer.beginHDRRenderPass(clearColor);
+                }
 
+                if (useHDRPath) {
+                    // HDR path active - render to HDR framebuffer
                     renderer.drawSky();
                     renderer.drawGrid(150.0f, 5.0f);
                     renderer.drawTerrain(buildings[currentBuilding].terrainMesh);
                     renderer.drawStructuralFrame(buildings[currentBuilding].elements, buildings[currentBuilding], imgui.getSelectedElements());
+
+                    // Draw material test scene (PBR validation spheres) if enabled
+                    renderer.drawMaterialTestScene();
+
+                    // Draw visual indicators for placed lights
+                    renderer.drawLightIndicators(imgui.getSelectedLightIndex());
+
+                    // Draw light placement marker if in placement mode
+                    if (imgui.hasValidLightPreview()) {
+                        vec3 previewPos = imgui.getLightPreviewPosition();
+                        vec3 markerColor = imgui.getLightPlacementColor();
+                        renderer.drawPlacementMarker(previewPos, markerColor, 0.5f);
+                    }
 
                     renderer.endHDRRenderPass();
 
@@ -980,6 +1162,19 @@ int main(int argc, char* argv[]) {
                     // Draw current building with visualization mode coloring
                     // Highlight all selected elements
                     renderer.drawStructuralFrame(buildings[currentBuilding].elements, buildings[currentBuilding], imgui.getSelectedElements());
+
+                    // Draw material test scene (PBR validation spheres) if enabled
+                    renderer.drawMaterialTestScene();
+
+                    // Draw visual indicators for placed lights
+                    renderer.drawLightIndicators(imgui.getSelectedLightIndex());
+
+                    // Draw light placement marker if in placement mode
+                    if (imgui.hasValidLightPreview()) {
+                        vec3 previewPos = imgui.getLightPreviewPosition();
+                        vec3 markerColor = imgui.getLightPlacementColor();
+                        renderer.drawPlacementMarker(previewPos, markerColor, 0.5f);
+                    }
                 }
 
                 // Draw ImGui panels
@@ -1130,6 +1325,8 @@ int main(int argc, char* argv[]) {
                 imgui.drawPerformancePanel(currentFps, renderer.getStats().drawCalls, renderer.getStats().triangles, renderer.getStats().culledElements);
                 imgui.drawPreviewWindow();
                 imgui.drawRenderPreviewPanel(renderer);
+                imgui.drawMaterialTestWindow(renderer, camera);
+                imgui.drawLLMAssistantWindow(renderer);
 
                 // Apply material to selection (button)
                 if (imgui.wasApplyMaterialRequested()) {
@@ -1992,6 +2189,12 @@ int main(int argc, char* argv[]) {
 
                 renderer.endRenderPass();
                 renderer.endFrame();
+
+                // Run memory test if requested from Tools menu
+                if (imgui.shouldRunMemoryTest()) {
+                    context.waitIdle();
+                    MemoryTest::runAllTests(context, renderer);
+                }
             }
         }
 

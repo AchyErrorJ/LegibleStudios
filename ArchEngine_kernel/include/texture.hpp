@@ -31,6 +31,11 @@ public:
     static Texture* getGrey();           // Mid-grey (0.5) for height maps - no displacement
     static Texture* getNormalDefault();  // Flat normal (0.5, 0.5, 1.0)
 
+    // Default cubemap for IBL fallback (1x1 black cubemap)
+    static VkImage getBlackCubeImage();
+    static VkImageView getBlackCubeImageView();
+    static VkSampler getBlackCubeSampler();
+
     VkImageView getImageView() const { return m_imageView; }
     VkSampler getSampler() const { return m_sampler; }
 
@@ -58,6 +63,13 @@ private:
     static std::unique_ptr<Texture> s_black;
     static std::unique_ptr<Texture> s_grey;
     static std::unique_ptr<Texture> s_normalDefault;
+
+    // Static black cubemap for IBL fallback
+    static VkImage s_blackCubeImage;
+    static VkDeviceMemory s_blackCubeMemory;
+    static VkImageView s_blackCubeImageView;
+    static VkSampler s_blackCubeSampler;
+    static void createBlackCubemap(VulkanContext& context);
 };
 
 // PBR Material definition

@@ -2250,6 +2250,7 @@ class RoomResizeGrip(QGraphicsItem):
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setAcceptHoverEvents(True)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
         self.setZValue(200)  # Above everything
 
@@ -2277,7 +2278,14 @@ class RoomResizeGrip(QGraphicsItem):
             self.setCursor(Qt.CursorShape.SizeHorCursor)
 
     def boundingRect(self) -> QRectF:
-        return QRectF(-120, -120, 240, 240)
+        return QRectF(-150, -150, 300, 300)
+
+    def shape(self) -> QPainterPath:
+        """Return shape for hit testing."""
+        path = QPainterPath()
+        # Larger hit area for easier clicking
+        path.addEllipse(QRectF(-150, -150, 300, 300))
+        return path
 
     def paint(self, painter: QPainter, option, widget):
         # Only show at LOD 1 and when room is selected
@@ -2368,109 +2376,516 @@ class RoomResizeGrip(QGraphicsItem):
 
 
 class RoomItem(QGraphicsItem):
-    """Graphics item representing a room."""
+    """Graphics item representing a room.
 
-    def __init__(self, room: Room, document=None, parent=None):
+    At LOD 1 (Topology), rooms become draggable blobs that can be repositioned.
+    The room's vertices are updated when dragged.
+    """
+
+    def __init__(self, room: Room, document=None, view=None, parent=None):
         super().__init__(parent)
         self.room = room
         self.document = document
+        self._view = view
+
+        # Dragging state
+        self._dragging = False
+        self._drag_start_mouse_pos = None  # Mouse scene position at drag start
+        self._drag_start_item_pos = None   # Item position at drag start
+
+        # Resize grips
+        self._resize_grips = []
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.setZValue(-10)  # Draw rooms behind walls
 
-    def boundingRect(self) -> QRectF:
-        """Return bounding rectangle."""
-        if not self.room.vertices:
-            # Fallback to bounds
-            b = self.room.bounds
-            return QRectF(b['x'], b['y'], b['width'], b['height'])
+        # Calculate center from vertices
+        self._update_center()
 
-        # Calculate bounding rect from vertices
-        xs = [v[0] for v in self.room.vertices]
-        zs = [v[1] for v in self.room.vertices]
-        margin = 100
-        return QRectF(
-            min(xs) - margin, min(zs) - margin,
-            max(xs) - min(xs) + margin * 2,
-            max(zs) - min(zs) + margin * 2
-        )
+        # Position item at room center (draw relative to this)
+        if self.room.center:
+            self.setPos(self.room.center['x'], self.room.center['z'])
+
+        # Check LOD and enable dragging if at LOD 1
+        self._update_movable_state()
+
+    def _update_center(self):
+        """Calculate room center from vertices."""
+        if self.room.vertices:
+            xs = [v[0] for v in self.room.vertices]
+            zs = [v[1] for v in self.room.vertices]
+            self.room.center = {
+                'x': (min(xs) + max(xs)) / 2,
+                'z': (min(zs) + max(zs)) / 2
+            }
+
+    def _update_movable_state(self):
+        """Enable/disable dragging based on LOD level."""
+        is_lod_1 = self._view and self._view.lod_level == 1
+        # Don't use ItemIsMovable - we handle dragging manually
+        if is_lod_1:
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            self.setZValue(100)  # Bring to front at LOD 1
+        else:
+            self.unsetCursor()
+            self.setZValue(-10)  # Behind walls at other LODs
+
+    def _create_resize_grips(self):
+        """Create resize grips for each edge of the room."""
+        self._remove_resize_grips()
+
+        if not self.room.vertices or not self._view:
+            return
+
+        scene = self._view.scene
+        n = len(self.room.vertices)
+
+        for i in range(n):
+            grip = RoomResizeGrip(self, i)
+            scene.addItem(grip)
+            self._resize_grips.append(grip)
+            grip._update_cursor_and_orientation()
+
+        self._update_grip_positions()
+
+    def _remove_resize_grips(self):
+        """Remove all resize grips."""
+        for grip in self._resize_grips:
+            if grip.scene():
+                grip.scene().removeItem(grip)
+        self._resize_grips.clear()
+
+    def _update_grip_positions(self):
+        """Update positions of all resize grips to edge midpoints."""
+        if not self.room.vertices:
+            return
+
+        n = len(self.room.vertices)
+        for i, grip in enumerate(self._resize_grips):
+            v1 = self.room.vertices[i]
+            v2 = self.room.vertices[(i + 1) % n]
+            mid_x = (v1[0] + v2[0]) / 2
+            mid_y = (v1[1] + v2[1]) / 2
+            grip.setPos(mid_x, mid_y)
+            grip._update_cursor_and_orientation()
+
+    def _update_room_geometry(self):
+        """Update room center, bounds, and area after resize."""
+        self._update_center()
+
+        if self.room.vertices:
+            xs = [v[0] for v in self.room.vertices]
+            zs = [v[1] for v in self.room.vertices]
+            self.room.bounds['x'] = min(xs)
+            self.room.bounds['y'] = min(zs)
+            self.room.bounds['width'] = max(xs) - min(xs)
+            self.room.bounds['height'] = max(zs) - min(zs)
+
+            # Update area (simple polygon area calculation)
+            area = 0
+            n = len(self.room.vertices)
+            for i in range(n):
+                j = (i + 1) % n
+                area += self.room.vertices[i][0] * self.room.vertices[j][1]
+                area -= self.room.vertices[j][0] * self.room.vertices[i][1]
+            self.room.area = abs(area) / 2
+
+        # Update item position to new center
+        if self.room.center:
+            self.setPos(self.room.center['x'], self.room.center['z'])
+
+    def itemChange(self, change, value):
+        """Handle item changes - create/remove grips on selection change."""
+        if change == QGraphicsItem.GraphicsItemChange.ItemSelectedChange:
+            is_selected = value
+            is_lod_1 = self._view and self._view.lod_level == 1
+            if is_selected and is_lod_1:
+                # Defer grip creation to after selection is complete
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, self._create_resize_grips)
+            else:
+                self._remove_resize_grips()
+        return super().itemChange(change, value)
+
+    def _get_edges_at_pos(self, pos: QPointF) -> list:
+        """Get room edges as line segments at a given position.
+
+        Returns list of tuples: ((x1, y1), (x2, y2), edge_type)
+        edge_type is 'left', 'right', 'top', 'bottom' for axis-aligned edges
+        """
+        if not self.room.vertices or not self.room.center:
+            return []
+
+        # Calculate offset from current center to new position
+        cx = self.room.center['x']
+        cz = self.room.center['z']
+        dx = pos.x() - cx
+        dz = pos.y() - cz
+
+        edges = []
+        verts = self.room.vertices
+        n = len(verts)
+        for i in range(n):
+            v1 = verts[i]
+            v2 = verts[(i + 1) % n]
+            # Apply offset
+            x1, y1 = v1[0] + dx, v1[1] + dz
+            x2, y2 = v2[0] + dx, v2[1] + dz
+
+            # Determine edge type based on orientation
+            if abs(x1 - x2) < 1:  # Vertical edge
+                edge_type = 'left' if x1 < cx + dx else 'right'
+            elif abs(y1 - y2) < 1:  # Horizontal edge
+                edge_type = 'top' if y1 < cz + dz else 'bottom'
+            else:
+                edge_type = 'diagonal'
+
+            edges.append(((x1, y1), (x2, y2), edge_type))
+        return edges
+
+    def _find_snap(self, new_pos: QPointF, snap_threshold: float = 500) -> QPointF:
+        """Find snap position by checking against other rooms.
+
+        Snaps edges of this room to edges of other rooms when close enough.
+        Returns adjusted position, or original if no snap found.
+        """
+        if not self._view or not self.room.vertices:
+            return new_pos
+
+        # Get all other room items
+        other_rooms = [item for item in self._view._room_items if item != self]
+        if not other_rooms:
+            return new_pos
+
+        # Get our edges at the proposed new position
+        our_edges = self._get_edges_at_pos(new_pos)
+        if not our_edges:
+            return new_pos
+
+        # Calculate our bounding box at new position
+        cx = self.room.center['x']
+        cz = self.room.center['z']
+        dx = new_pos.x() - cx
+        dz = new_pos.y() - cz
+
+        our_xs = [v[0] + dx for v in self.room.vertices]
+        our_zs = [v[1] + dz for v in self.room.vertices]
+        our_left = min(our_xs)
+        our_right = max(our_xs)
+        our_top = min(our_zs)
+        our_bottom = max(our_zs)
+
+        best_snap_x = None
+        best_snap_y = None
+        best_dist_x = snap_threshold
+        best_dist_y = snap_threshold
+
+        for other in other_rooms:
+            if not other.room.vertices:
+                continue
+
+            # Get other room's bounding box
+            other_xs = [v[0] for v in other.room.vertices]
+            other_zs = [v[1] for v in other.room.vertices]
+            other_left = min(other_xs)
+            other_right = max(other_xs)
+            other_top = min(other_zs)
+            other_bottom = max(other_zs)
+
+            # Check horizontal snaps (our left to their right, our right to their left)
+            # Our right edge to their left edge
+            dist = abs(our_right - other_left)
+            if dist < best_dist_x:
+                best_dist_x = dist
+                best_snap_x = new_pos.x() - (our_right - other_left)
+
+            # Our left edge to their right edge
+            dist = abs(our_left - other_right)
+            if dist < best_dist_x:
+                best_dist_x = dist
+                best_snap_x = new_pos.x() + (other_right - our_left)
+
+            # Check vertical snaps (our top to their bottom, our bottom to their top)
+            # Our bottom edge to their top edge
+            dist = abs(our_bottom - other_top)
+            if dist < best_dist_y:
+                best_dist_y = dist
+                best_snap_y = new_pos.y() - (our_bottom - other_top)
+
+            # Our top edge to their bottom edge
+            dist = abs(our_top - other_bottom)
+            if dist < best_dist_y:
+                best_dist_y = dist
+                best_snap_y = new_pos.y() + (other_bottom - our_top)
+
+        # Apply snaps
+        result_x = best_snap_x if best_snap_x is not None else new_pos.x()
+        result_y = best_snap_y if best_snap_y is not None else new_pos.y()
+
+        return QPointF(result_x, result_y)
+
+    def mousePressEvent(self, event):
+        """Handle mouse press - prepare for potential drag at LOD 1."""
+        # Only handle left button at LOD 1
+        if self._view and self._view.lod_level == 1 and event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_mouse_pos = event.scenePos()
+            self._drag_start_item_pos = self.pos()
+            self._dragging = False
+            event.accept()
+            # Don't call super - we're handling this ourselves
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Handle mouse move - drag room at LOD 1."""
+        if self._drag_start_mouse_pos is not None and self._drag_start_item_pos is not None:
+            delta = event.scenePos() - self._drag_start_mouse_pos
+
+            # Only start actual drag if moved more than threshold (in scene units)
+            if not self._dragging:
+                if abs(delta.x()) > 50 or abs(delta.y()) > 50:
+                    self._dragging = True
+                    # Hide grips during drag for cleaner experience
+                    for grip in self._resize_grips:
+                        grip.setVisible(False)
+                else:
+                    return
+
+            # Calculate new position
+            new_pos = self._drag_start_item_pos + delta
+
+            # Apply snapping to other rooms
+            snapped_pos = self._find_snap(new_pos)
+
+            self.setPos(snapped_pos)
+
+            # Update grip positions to follow the drag
+            self._update_grip_positions_for_drag(snapped_pos)
+
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def _update_grip_positions_for_drag(self, new_center_pos: QPointF):
+        """Update grip positions during drag based on new center position."""
+        if not self.room.vertices or not self.room.center:
+            return
+
+        # Calculate offset from original center to new position
+        dx = new_center_pos.x() - self.room.center['x']
+        dy = new_center_pos.y() - self.room.center['z']
+
+        n = len(self.room.vertices)
+        for i, grip in enumerate(self._resize_grips):
+            v1 = self.room.vertices[i]
+            v2 = self.room.vertices[(i + 1) % n]
+            mid_x = (v1[0] + v2[0]) / 2 + dx
+            mid_y = (v1[1] + v2[1]) / 2 + dy
+            grip.setPos(mid_x, mid_y)
+
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release - finalize drag by updating vertices."""
+        was_dragging = self._dragging
+
+        if was_dragging and self._drag_start_item_pos is not None and self.room.vertices:
+            # Calculate how much the room moved
+            delta = self.pos() - QPointF(self.room.center['x'], self.room.center['z'])
+            dx = delta.x()
+            dy = delta.y()
+
+            # Update vertices to match new position
+            for v in self.room.vertices:
+                v[0] += dx
+                v[1] += dy
+
+            # Update center and bounds
+            self._update_center()
+            xs = [v[0] for v in self.room.vertices]
+            zs = [v[1] for v in self.room.vertices]
+            self.room.bounds['x'] = min(xs)
+            self.room.bounds['y'] = min(zs)
+            self.room.bounds['width'] = max(xs) - min(xs)
+            self.room.bounds['height'] = max(zs) - min(zs)
+
+            # Recalculate adjacencies
+            if self.document:
+                self.document.detect_room_adjacencies()
+                if self._view and hasattr(self._view, 'refresh_connections'):
+                    self._view.refresh_connections()
+            from core.events import event_bus
+            event_bus.document_modified.emit()
+
+            # Update grip positions after vertices are updated
+            self._update_grip_positions()
+            # Show grips again
+            for grip in self._resize_grips:
+                grip.setVisible(True)
+
+        # Always reset drag state
+        self._dragging = False
+        self._drag_start_mouse_pos = None
+        self._drag_start_item_pos = None
+
+        super().mouseReleaseEvent(event)
+
+    def boundingRect(self) -> QRectF:
+        """Return bounding rectangle in local coordinates (relative to item pos)."""
+        if not self.room.vertices or not self.room.center:
+            # Fallback to bounds centered at origin - include text area
+            b = self.room.bounds
+            half_w = max(b['width']/2, 2000) + 200
+            half_h = max(b['height']/2, 800) + 200
+            return QRectF(-half_w, -half_h, half_w * 2, half_h * 2)
+
+        # Calculate bounding rect relative to center (item pos)
+        cx = self.room.center['x']
+        cz = self.room.center['z']
+        xs = [v[0] - cx for v in self.room.vertices]
+        zs = [v[1] - cz for v in self.room.vertices]
+
+        # Expand to include text (extends -2000 to 2000 in x)
+        # and handles (extends to ~600) and pin indicator (at -700 y)
+        min_x = min(min(xs), -2100)
+        max_x = max(max(xs), 2100)
+        min_z = min(min(zs), -800)  # Pin at -600, handles at -550
+        max_z = max(max(zs), 700)   # Area text extends to ~400
+
+        return QRectF(min_x, min_z, max_x - min_x, max_z - min_z)
 
     def shape(self) -> QPainterPath:
-        """Return shape for hit testing."""
+        """Return shape for hit testing in local coordinates."""
         path = QPainterPath()
-        if self.room.vertices:
+        if self.room.vertices and self.room.center:
+            cx = self.room.center['x']
+            cz = self.room.center['z']
             polygon = QPolygonF()
             for v in self.room.vertices:
-                polygon.append(QPointF(v[0], v[1]))
+                polygon.append(QPointF(v[0] - cx, v[1] - cz))
             path.addPolygon(polygon)
         return path
 
     def paint(self, painter: QPainter, option, widget):
-        """Paint the room."""
+        """Paint the room.
+
+        At LOD 1 (Topology), rooms are shown as prominent draggable blobs.
+        At other LOD levels, rooms are shown as subtle background shapes.
+        """
+        # Sync item position with room center when not dragging
+        # This prevents zoom or other operations from affecting position
+        # Also check _drag_start_mouse_pos to avoid resetting during drag threshold check
+        if not self._dragging and self._drag_start_mouse_pos is None and self.room.center:
+            expected_pos = QPointF(self.room.center['x'], self.room.center['z'])
+            if self.pos() != expected_pos:
+                self.setPos(expected_pos)
+
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Room fill color based on type
-        room_colors = {
-            'living': QColor(200, 230, 200, 60),
-            'bedroom': QColor(200, 200, 230, 60),
-            'kitchen': QColor(230, 220, 200, 60),
-            'bathroom': QColor(200, 220, 230, 60),
-            'dining': QColor(230, 230, 200, 60),
-            'office': QColor(220, 220, 220, 60),
-            'garage': QColor(180, 180, 180, 60),
-            'generic': QColor(210, 210, 210, 40),
-        }
+        is_lod_1 = self._view and self._view.lod_level == 1
+
+        # Room fill color based on type - more saturated at LOD 1
+        if is_lod_1:
+            # LOD 1: Vibrant blob colors for easy identification
+            room_colors = {
+                'living': QColor(120, 200, 120, 180),
+                'bedroom': QColor(120, 120, 200, 180),
+                'kitchen': QColor(200, 180, 100, 180),
+                'bathroom': QColor(100, 180, 200, 180),
+                'dining': QColor(200, 200, 100, 180),
+                'office': QColor(180, 180, 180, 180),
+                'garage': QColor(140, 140, 140, 180),
+                'generic': QColor(160, 160, 160, 150),
+            }
+        else:
+            # Other LODs: Subtle background colors
+            room_colors = {
+                'living': QColor(200, 230, 200, 60),
+                'bedroom': QColor(200, 200, 230, 60),
+                'kitchen': QColor(230, 220, 200, 60),
+                'bathroom': QColor(200, 220, 230, 60),
+                'dining': QColor(230, 230, 200, 60),
+                'office': QColor(220, 220, 220, 60),
+                'garage': QColor(180, 180, 180, 60),
+                'generic': QColor(210, 210, 210, 40),
+            }
 
         fill_color = room_colors.get(self.room.room_type, room_colors['generic'])
         if self.isSelected():
-            fill_color = QColor(100, 200, 255, 80)
+            fill_color = QColor(100, 200, 255, 180 if is_lod_1 else 80)
 
-        # Draw room polygon
-        if self.room.vertices:
+        # Draw room polygon (in local coords, relative to center)
+        if self.room.vertices and self.room.center:
+            cx = self.room.center['x']
+            cz = self.room.center['z']
             polygon = QPolygonF()
             for v in self.room.vertices:
-                polygon.append(QPointF(v[0], v[1]))
+                polygon.append(QPointF(v[0] - cx, v[1] - cz))
 
-            # Fill
+            # Fill with appropriate style
             painter.setBrush(QBrush(fill_color))
-            pen = QPen(QColor(100, 200, 255) if self.isSelected() else QColor(100, 100, 100), 20, Qt.PenStyle.DashLine)
+            if is_lod_1:
+                # LOD 1: Solid border, thicker line
+                pen_color = QColor(255, 255, 255) if self.isSelected() else QColor(80, 80, 80)
+                pen = QPen(pen_color, 40, Qt.PenStyle.SolidLine)
+            else:
+                # Other LODs: Dashed border
+                pen = QPen(QColor(100, 200, 255) if self.isSelected() else QColor(100, 100, 100), 20, Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawPolygon(polygon)
 
-            # Draw room label at center
-            if self.room.center:
-                cx, cz = self.room.center['x'], self.room.center['z']
-            else:
-                xs = [v[0] for v in self.room.vertices]
-                zs = [v[1] for v in self.room.vertices]
-                cx = (min(xs) + max(xs)) / 2
-                cz = (min(zs) + max(zs)) / 2
-
-            # Room name
+            # Draw room label at center (0,0 in local coords)
+            # Room name - larger at LOD 1, centered on room
             painter.setPen(QPen(Qt.GlobalColor.white))
             font = painter.font()
-            font.setPointSize(100)
+            font.setPointSize(140 if is_lod_1 else 100)
             font.setBold(True)
             painter.setFont(font)
 
             name_text = self.room.name or self.room.room_type.capitalize()
-            painter.drawText(QPointF(cx - 400, cz), name_text)
+            # Create rect centered at origin (item pos is at room center)
+            text_rect = QRectF(-2000, -300, 4000, 400)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, name_text)
 
-            # Area text
-            font.setPointSize(80)
+            # Area text - centered below name
+            font.setPointSize(100 if is_lod_1 else 80)
             font.setBold(False)
             painter.setFont(font)
             area_m2 = self.room.area / 1e6 if self.room.area else 0
-            painter.drawText(QPointF(cx - 300, cz + 200), f"{area_m2:.1f} m²")
+            area_rect = QRectF(-2000, 100, 4000, 300)
+            painter.drawText(area_rect, Qt.AlignmentFlag.AlignCenter, f"{area_m2:.1f} m²")
 
-            # Draw pin indicator if pinned
+            # Draw drag handle at LOD 1 (at center = 0,0 in local coords)
+            if is_lod_1:
+                painter.save()
+                handle_color = QColor(255, 255, 255, 200)
+                painter.setPen(QPen(handle_color, 25))
+                arrow_size = 150
+                # Up arrow
+                painter.drawLine(QPointF(0, -400), QPointF(0, -400 - arrow_size))
+                painter.drawLine(QPointF(0, -400 - arrow_size), QPointF(-50, -400 - arrow_size + 50))
+                painter.drawLine(QPointF(0, -400 - arrow_size), QPointF(50, -400 - arrow_size + 50))
+                # Down arrow
+                painter.drawLine(QPointF(0, 450), QPointF(0, 450 + arrow_size))
+                painter.drawLine(QPointF(0, 450 + arrow_size), QPointF(-50, 450 + arrow_size - 50))
+                painter.drawLine(QPointF(0, 450 + arrow_size), QPointF(50, 450 + arrow_size - 50))
+                # Left arrow
+                painter.drawLine(QPointF(-400, 0), QPointF(-400 - arrow_size, 0))
+                painter.drawLine(QPointF(-400 - arrow_size, 0), QPointF(-400 - arrow_size + 50, -50))
+                painter.drawLine(QPointF(-400 - arrow_size, 0), QPointF(-400 - arrow_size + 50, 50))
+                # Right arrow
+                painter.drawLine(QPointF(400, 0), QPointF(400 + arrow_size, 0))
+                painter.drawLine(QPointF(400 + arrow_size, 0), QPointF(400 + arrow_size - 50, -50))
+                painter.drawLine(QPointF(400 + arrow_size, 0), QPointF(400 + arrow_size - 50, 50))
+                painter.restore()
+
+            # Draw pin indicator if pinned (at center = 0,0)
             if self.room.is_pinned:
                 painter.save()
                 painter.setPen(QPen(QColor(255, 100, 100), 30))
                 painter.setBrush(QBrush(QColor(255, 100, 100, 180)))
-                painter.drawEllipse(QPointF(cx, cz - 300), 120, 120)
+                painter.drawEllipse(QPointF(0, -600), 120, 120)
                 painter.setPen(QPen(Qt.GlobalColor.white, 40))
-                painter.drawPoint(QPointF(cx, cz - 300))
+                painter.drawPoint(QPointF(0, -600))
                 painter.restore()
 
 
@@ -2525,6 +2940,58 @@ class PlanView(BaseView):
         """Set the tool manager."""
         self._tool_manager = tool_manager
 
+    def set_lod_level(self, level: int):
+        """Set LOD level and update item visibility/states."""
+        super().set_lod_level(level)
+        self._apply_lod_visibility()
+
+    def _apply_lod_visibility(self):
+        """Apply visibility settings based on current LOD level."""
+        # LOD 1 (Topology): Only show room blobs and connections
+        # LOD 2+: Show walls, doors, windows
+        is_lod_1 = (self._lod_level == 1)
+
+        # Update room items - they become draggable at LOD 1
+        for room_item in self._room_items:
+            room_item._update_movable_state()
+            room_item.update()  # Force repaint
+
+        # Hide walls at LOD 1
+        for wall_item in self._wall_items:
+            wall_item.setVisible(not is_lod_1)
+            # Also hide layer items
+            for layer_item in wall_item._layer_items:
+                layer_item.setVisible(not is_lod_1)
+
+        # Hide doors at LOD 1
+        for door_item in self._door_items:
+            door_item.setVisible(not is_lod_1)
+
+        # Hide windows at LOD 1
+        for window_item in self._window_items:
+            window_item.setVisible(not is_lod_1)
+
+        # Force scene update
+        self.scene.update()
+
+    def refresh_connections(self):
+        """Refresh room connection items from document data.
+
+        Called after room adjacencies change or on initial load.
+        Connection items are only visible at LOD 1.
+        """
+        # Clear existing connection items
+        for item in self._connection_items:
+            self.scene.removeItem(item)
+        self._connection_items.clear()
+
+        # Create connection items from document
+        if hasattr(self.document, 'room_connections'):
+            for conn in self.document.room_connections:
+                item = ConnectionItem(conn, document=self.document, view=self)
+                self.scene.addItem(item)
+                self._connection_items.append(item)
+
     @property
     def tool_manager(self):
         """Get tool manager."""
@@ -2553,12 +3020,15 @@ class PlanView(BaseView):
             self.scene.removeItem(item)
         for item in self._room_labels:
             self.scene.removeItem(item)
+        for item in self._connection_items:
+            self.scene.removeItem(item)
 
         self._wall_items.clear()
         self._door_items.clear()
         self._window_items.clear()
         self._room_items.clear()
         self._room_labels.clear()
+        self._connection_items.clear()
 
         # Add walls
         for wall in self.document.walls:
@@ -2585,18 +3055,20 @@ class PlanView(BaseView):
             self._window_items.append(item)
 
         # Add rooms (polygon rooms with RoomItem, bounds-only with RoomLabelItem)
-        # TEMPORARILY DISABLED to debug segfault
-        # for room_id, room in self.document.rooms.items():
-        #     if room.vertices:
-        #         # Polygon room - use RoomItem
-        #         item = RoomItem(room, document=self.document)
-        #         self.scene.addItem(item)
-        #         self._room_items.append(item)
-        #     else:
-        #         # Bounds-only room - use legacy label
-        #         label = RoomLabelItem(room)
-        #         self.scene.addItem(label)
-        #         self._room_labels.append(label)
+        for room_id, room in self.document.rooms.items():
+            if room.vertices:
+                # Polygon room - use RoomItem (draggable at LOD 1)
+                item = RoomItem(room, document=self.document, view=self)
+                self.scene.addItem(item)
+                self._room_items.append(item)
+            else:
+                # Bounds-only room - use legacy label
+                label = RoomLabelItem(room)
+                self.scene.addItem(label)
+                self._room_labels.append(label)
+
+        # Add room connections (visible at LOD 1)
+        self.refresh_connections()
 
         # Add reference planes (grid lines)
         for item in self._reference_plane_items:
@@ -2607,6 +3079,9 @@ class PlanView(BaseView):
             item = ReferencePlaneItem(plane, view=self)
             self.scene.addItem(item)
             self._reference_plane_items.append(item)
+
+        # Apply current LOD visibility settings to newly created items
+        self._apply_lod_visibility()
 
         self.viewport().update()
 
@@ -2689,7 +3164,7 @@ class PlanView(BaseView):
 
         # Check if clicking on a grip - let QGraphicsView handle it
         item = self.scene.itemAt(scene_pos, self.transform())
-        if isinstance(item, GripItem):
+        if isinstance(item, (GripItem, RoomResizeGrip)):
             super().mousePressEvent(event)
             return
 
@@ -2711,9 +3186,9 @@ class PlanView(BaseView):
             super().mouseMoveEvent(event)
             return
 
-        # Check if a grip is being dragged - let Qt handle it
+        # Check if any item is grabbing the mouse (grips, room items, etc.)
         grabber = self.scene.mouseGrabberItem()
-        if isinstance(grabber, GripItem):
+        if grabber is not None:
             super().mouseMoveEvent(event)
             # Still update status bar
             scene_pos = self.mapToScene(event.position().toPoint())
@@ -2741,16 +3216,16 @@ class PlanView(BaseView):
             super().mouseReleaseEvent(event)
             return
 
-        # Check if a grip was being dragged - let Qt handle it
+        # Check if any item was grabbing the mouse - let Qt handle it
         grabber = self.scene.mouseGrabberItem()
-        if isinstance(grabber, GripItem):
+        if grabber is not None:
             super().mouseReleaseEvent(event)
             return
 
         # Check if click was on a grip
         scene_pos = self.mapToScene(event.position().toPoint())
         item = self.scene.itemAt(scene_pos, self.transform())
-        if isinstance(item, GripItem):
+        if isinstance(item, (GripItem, RoomResizeGrip)):
             super().mouseReleaseEvent(event)
             return
 

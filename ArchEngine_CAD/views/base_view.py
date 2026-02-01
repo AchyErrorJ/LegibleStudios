@@ -213,10 +213,11 @@ class BaseView(QGraphicsView):
         # Shift+scroll = LOD change
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             if delta > 0:
-                self._lod_level = max(1, self._lod_level - 1)
+                new_lod = max(1, self._lod_level - 1)
             else:
-                self._lod_level = min(5, self._lod_level + 1)
-            self.lod_level_changed.emit(self._lod_level)
+                new_lod = min(5, self._lod_level + 1)
+            # Call set_lod_level to trigger visibility updates in subclasses
+            self.set_lod_level(new_lod)
             event.accept()
             return
 

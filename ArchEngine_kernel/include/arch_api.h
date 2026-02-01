@@ -893,6 +893,86 @@ ARCH_API void arch_set_terrain_material(float roughness, float metallic);
  */
 ARCH_API void arch_set_terrain_color_mode(int mode);
 
+// =============================================================================
+// Building Placement API
+// =============================================================================
+
+/**
+ * Set the building position offset.
+ * The building will be rendered at this position (in mm).
+ *
+ * @param x X position in mm
+ * @param y Y position in mm (elevation)
+ * @param z Z position in mm
+ */
+ARCH_API void arch_set_building_position(float x, float y, float z);
+
+/**
+ * Get the current building position.
+ *
+ * @param out_x Output X position in mm
+ * @param out_y Output Y position in mm
+ * @param out_z Output Z position in mm
+ */
+ARCH_API void arch_get_building_position(float* out_x, float* out_y, float* out_z);
+
+/**
+ * Get terrain elevation at a given XZ position.
+ * Samples the terrain mesh to find the Y value at that point.
+ *
+ * @param x X position in mm
+ * @param z Z position in mm
+ * @param out_elevation Output elevation in mm (Y value at that point)
+ * @return 1 if point is within terrain bounds, 0 if outside or no terrain
+ */
+ARCH_API int arch_get_terrain_elevation_at(float x, float z, float* out_elevation);
+
+/**
+ * Place building on terrain at the specified XZ position.
+ * Automatically samples terrain elevation and sets building Y to match.
+ *
+ * @param x X position in mm
+ * @param z Z position in mm
+ * @return 1 on success, 0 if position is outside terrain bounds
+ */
+ARCH_API int arch_place_building_on_terrain(float x, float z);
+
+/**
+ * Convert screen coordinates to world ray.
+ * Returns the ray origin and direction for mouse picking.
+ *
+ * @param screen_x Screen X coordinate (pixels from left)
+ * @param screen_y Screen Y coordinate (pixels from top)
+ * @param out_origin_x Ray origin X
+ * @param out_origin_y Ray origin Y
+ * @param out_origin_z Ray origin Z
+ * @param out_dir_x Ray direction X
+ * @param out_dir_y Ray direction Y
+ * @param out_dir_z Ray direction Z
+ */
+ARCH_API void arch_screen_to_world_ray(int screen_x, int screen_y,
+                                        float* out_origin_x, float* out_origin_y, float* out_origin_z,
+                                        float* out_dir_x, float* out_dir_y, float* out_dir_z);
+
+/**
+ * Raycast against terrain mesh.
+ * Returns the world position where the ray intersects the terrain.
+ *
+ * @param origin_x Ray origin X
+ * @param origin_y Ray origin Y
+ * @param origin_z Ray origin Z
+ * @param dir_x Ray direction X (normalized)
+ * @param dir_y Ray direction Y (normalized)
+ * @param dir_z Ray direction Z (normalized)
+ * @param out_hit_x Hit position X (if hit)
+ * @param out_hit_y Hit position Y (if hit)
+ * @param out_hit_z Hit position Z (if hit)
+ * @return 1 if ray hits terrain, 0 if no hit
+ */
+ARCH_API int arch_raycast_terrain(float origin_x, float origin_y, float origin_z,
+                                   float dir_x, float dir_y, float dir_z,
+                                   float* out_hit_x, float* out_hit_y, float* out_hit_z);
+
 #ifdef __cplusplus
 }
 #endif

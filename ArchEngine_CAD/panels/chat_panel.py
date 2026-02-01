@@ -61,6 +61,8 @@ class ChatPanel(QWidget):
     # Signals
     message_sent = pyqtSignal(str)  # user message
     schema_updated = pyqtSignal(dict)  # Emitted when LLM updates schema
+    onboarding_complete = pyqtSignal(dict)  # Emitted when onboarding finishes with extracted data
+    onboarding_progress = pyqtSignal(int, int)  # Emitted on progress (current, total)
 
     def __init__(self, document: ArchDocument, parent=None):
         super().__init__(parent)
@@ -248,7 +250,12 @@ class ChatPanel(QWidget):
         # Emit signal for external handlers
         self.message_sent.emit(message)
 
-        # Get current state
+        # Check if in onboarding mode
+        if self.is_onboarding:
+            self._process_onboarding_response(message)
+            return
+
+        # Normal mode - Get current state
         pinned = self.document.get_pinned_elements()
         pinned_count = sum(len(v) for v in pinned.values())
 
@@ -361,3 +368,169 @@ class ChatPanel(QWidget):
         pin_str = f"{pinned_count} pinned" if pinned_count > 0 else "None pinned"
 
         self.context_label.setText(f"{select_str} | {pin_str}")
+
+    # =========================================================================
+    # Onboarding Mode
+    # =========================================================================
+
+    def start_onboarding(self):
+        """
+        Start onboarding mode - LLM asks questions to understand requirements.
+
+        In onboarding mode:
+        1. LLM asks an opening question
+        2. User responds
+        3. LLM analyzes and asks follow-up (up to 3 questions)
+        4. After 3 questions, generates building from collected info
+        """
+        self._onboarding_mode = True
+        self._onboarding_turn = 0
+        self._onboarding_max = 3
+        self._onboarding_data = {}
+        self._onboarding_history = []
+
+        # Update placeholder
+        self.input_field.setPlaceholderText("Tell me about your dream home...")
+
+        # Clear chat and show welcome
+        self.chat_history.clear()
+        self._add_message("System", "Starting design conversation...", "#888")
+
+        # Ask first question
+        self._ask_onboarding_question()
+
+    def _ask_onboarding_question(self):
+        """Ask the next onboarding question using LLM."""
+        from onboarding.question_bank import get_question_bank_text, ONBOARDING_SYSTEM_PROMPT
+
+        self._onboarding_turn += 1
+
+        # Emit progress signal
+        self.onboarding_progress.emit(self._onboarding_turn, self._onboarding_max)
+
+        # Build context from previous turns
+        context_lines = []
+        for turn in self._onboarding_history:
+            context_lines.append(f"Q: {turn['question']}")
+            context_lines.append(f"A: {turn['response']}")
+            if turn.get('extracted'):
+                context_lines.append(f"   [Extracted: {turn['extracted']}]")
+
+        previous_context = "\n".join(context_lines) if context_lines else "This is the first question."
+
+        # Build system prompt
+        system_prompt = ONBOARDING_SYSTEM_PROMPT.format(
+            question_bank=get_question_bank_text(),
+            question_number=self._onboarding_turn,
+            previous_context=previous_context
+        )
+
+        if LLM_AVAILABLE and self.modifier:
+            # Use LLM to generate question
+            self._generate_onboarding_question(system_prompt)
+        else:
+            # Fallback questions
+            fallback = [
+                "What kind of space are you dreaming of creating today?",
+                "Who will be living in this home and what are their needs?",
+                "What's most important to you - open spaces, natural light, or cozy defined rooms?"
+            ]
+            idx = min(self._onboarding_turn - 1, len(fallback) - 1)
+            self._add_message("Assistant", fallback[idx], "#6bff6b")
+
+    def _generate_onboarding_question(self, system_prompt: str):
+        """Generate onboarding question using LLM."""
+        from .chat_panel import LLMWorker  # Avoid circular import
+
+        # For onboarding, we use a simpler direct call
+        try:
+            provider = LLMConfig.get_active() if LLM_AVAILABLE else None
+            if provider:
+                from llm.provider import Message
+                messages = [
+                    Message("system", system_prompt),
+                    Message("user", f"Ask question {self._onboarding_turn} of {self._onboarding_max}.")
+                ]
+                response = provider.chat(messages)
+                question = response.content.strip()
+                self._add_message("Assistant", question, "#6bff6b")
+                self._current_onboarding_question = question
+            else:
+                self._ask_fallback_question()
+        except Exception as e:
+            print(f"[Chat] Onboarding LLM error: {e}")
+            self._ask_fallback_question()
+
+    def _ask_fallback_question(self):
+        """Ask fallback question when LLM unavailable."""
+        fallback = [
+            "What kind of space are you dreaming of creating today?",
+            "Who will be living here and what rooms do you need?",
+            "Any specific style or features that are important to you?"
+        ]
+        idx = min(self._onboarding_turn - 1, len(fallback) - 1)
+        question = fallback[idx]
+        self._add_message("Assistant", question, "#6bff6b")
+        self._current_onboarding_question = question
+
+    def _process_onboarding_response(self, user_response: str):
+        """Process user response in onboarding mode."""
+        from onboarding.onboarding_manager import OnboardingManager
+
+        # Extract data from response
+        manager = OnboardingManager()
+        extracted = manager._extract_data(user_response)
+
+        # Store this turn
+        self._onboarding_history.append({
+            "question": getattr(self, '_current_onboarding_question', ''),
+            "response": user_response,
+            "extracted": extracted
+        })
+
+        # Merge extracted data
+        self._onboarding_data.update(extracted)
+
+        # Check if done
+        if self._onboarding_turn >= self._onboarding_max:
+            self._complete_onboarding()
+        else:
+            # Ask next question
+            self._ask_onboarding_question()
+
+    def _complete_onboarding(self):
+        """Complete onboarding and generate building."""
+        self._onboarding_mode = False
+
+        # Show completion message
+        self._add_message("System",
+            f"Great! I've gathered enough information. Let me generate your design...",
+            "#6bff6b")
+
+        # Build requirements summary
+        data = self._onboarding_data
+        summary = []
+        if data.get('bedrooms'):
+            summary.append(f"{data['bedrooms']} bedrooms")
+        if data.get('bathrooms'):
+            summary.append(f"{data['bathrooms']} bathrooms")
+        if data.get('sqft'):
+            summary.append(f"{data['sqft']} sq ft")
+        if data.get('style'):
+            summary.append(f"{data['style']} style")
+        if data.get('special_rooms'):
+            summary.append(f"with {', '.join(data['special_rooms'])}")
+
+        if summary:
+            self._add_message("System", f"Design requirements: {', '.join(summary)}", "#888")
+
+        # Emit signal for building generation
+        self.onboarding_complete.emit(self._onboarding_data)
+
+        # Reset placeholder
+        self.input_field.setPlaceholderText("Describe design changes...")
+
+    @property
+    def is_onboarding(self) -> bool:
+        """Check if in onboarding mode."""
+        return getattr(self, '_onboarding_mode', False)

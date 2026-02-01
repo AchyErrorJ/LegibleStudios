@@ -56,8 +56,8 @@ void main() {
         fragColor = colorData.rgb;
     }
 
-    // Light space position for shadow mapping
-    fragLightSpacePos = ubo.lightViewProj * worldPos;
+    // Light space position for shadow mapping (use first shadow map matrix)
+    fragLightSpacePos = ubo.lightViewProj[0] * worldPos;
 
     // Pass material properties to fragment shader
     fragMaterial = push.material;

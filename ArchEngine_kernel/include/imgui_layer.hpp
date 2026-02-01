@@ -6,6 +6,7 @@
 #include <string>
 #include <set>
 #include <vector>
+#include <memory>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
@@ -194,6 +195,45 @@ public:
     // Check if wall creation is ready (2 points for wall)
     bool isWallDrawComplete() const { return m_drawMode == DrawMode::DrawWall && m_drawPoints.size() >= 2; }
 
+    // Light placement mode - click to position sun light
+    bool isLightPlacementMode() const { return m_lightPlacementMode; }
+    void setLightPlacementMode(bool enabled) { m_lightPlacementMode = enabled; }
+
+    // Light placement mode for adding point/spot lights
+    enum class PlaceLightType { None, Point, Spot };
+    bool isPlacingLight() const { return m_placeLightType != PlaceLightType::None; }
+    PlaceLightType getPlaceLightType() const { return m_placeLightType; }
+    void setPlaceLightType(PlaceLightType type) { m_placeLightType = type; }
+    float getLightPlacementHeight() const { return m_lightPlacementHeight; }
+    float getLightPlacementIntensity() const { return m_lightPlacementIntensity; }
+    float getLightPlacementRange() const { return m_lightPlacementRange; }
+    vec3 getLightPlacementColor() const { return m_lightPlacementColor; }
+
+    // Light placement preview position (updated by main loop)
+    void setLightPreviewPosition(vec3 pos, bool valid) { m_lightPreviewPos = pos; m_lightPreviewValid = valid; }
+    vec3 getLightPreviewPosition() const { return m_lightPreviewPos; }
+    bool hasValidLightPreview() const { return m_lightPreviewValid && isPlacingLight(); }
+
+    // Snap planes for placement
+    enum class SnapPlane { Ground, Floor1, Floor2, Floor3, Ceiling, Custom };
+    SnapPlane getSnapPlane() const { return m_snapPlane; }
+    void setSnapPlane(SnapPlane plane) { m_snapPlane = plane; }
+    float getSnapPlaneHeight() const;  // Returns actual height based on selected plane
+    float getCustomSnapHeight() const { return m_customSnapHeight; }
+    void setCustomSnapHeight(float h) { m_customSnapHeight = h; }
+
+    // Light selection (for clicking on indicators in scene)
+    int getSelectedLightIndex() const { return m_selectedLightIndex; }
+    void setSelectedLightIndex(int idx) { m_selectedLightIndex = idx; }
+
+    // Light group controls
+    bool isLightGroupEnabled(int group) const { return (group >= 0 && group < 4) ? m_lightGroupEnabled[group] : true; }
+    void setLightGroupEnabled(int group, bool enabled) { if (group >= 0 && group < 4) m_lightGroupEnabled[group] = enabled; }
+    float getLightGroupIntensity(int group) const { return (group >= 0 && group < 4) ? m_lightGroupIntensity[group] : 1.0f; }
+    void setLightGroupIntensity(int group, float intensity) { if (group >= 0 && group < 4) m_lightGroupIntensity[group] = intensity; }
+    int getPlacementLightGroup() const { return m_placementLightGroup; }
+    void setPlacementLightGroup(int group) { m_placementLightGroup = group; }
+
     // Get parametric wall creation request
     bool wasParametricWallRequested() const { return m_parametricWallRequested; }
     void clearParametricWallRequest() { m_parametricWallRequested = false; }
@@ -259,6 +299,23 @@ public:
     void setMaterialLibraryVisibility(bool show) { m_showMaterialLibrary = show; }
     bool getMaterialLibraryVisibility() const { return m_showMaterialLibrary; }
 
+    // Material Test Window (PBR validation)
+    void drawMaterialTestWindow(Renderer& renderer, Camera& camera);
+    void setMaterialTestWindowVisibility(bool show) { m_showMaterialTestWindow = show; }
+    bool getMaterialTestWindowVisibility() const { return m_showMaterialTestWindow; }
+
+    // LLM Render Tuning Assistant
+    void drawLLMAssistantWindow(Renderer& renderer);
+    void setLLMAssistantWindowVisibility(bool show) { m_showLLMAssistantWindow = show; }
+    bool getLLMAssistantWindowVisibility() const { return m_showLLMAssistantWindow; }
+
+    // Memory test
+    bool shouldRunMemoryTest() {
+        bool run = m_runMemoryTest;
+        m_runMemoryTest = false;
+        return run;
+    }
+
 private:
     void createDescriptorPool();
     void uploadFonts();
@@ -289,6 +346,24 @@ private:
     DrawMode m_drawMode = DrawMode::None;
     std::vector<vec3> m_drawPoints;
     bool m_parametricWallRequested = false;
+    bool m_lightPlacementMode = false;
+
+    // Light placement state
+    PlaceLightType m_placeLightType = PlaceLightType::None;
+    float m_lightPlacementHeight = 6.5f;      // ~2 meters in feet
+    float m_lightPlacementIntensity = 5.0f;
+    float m_lightPlacementRange = 15.0f;
+    vec3 m_lightPlacementColor = vec3(1.0f, 0.95f, 0.9f);  // Warm white
+    vec3 m_lightPreviewPos = vec3(0.0f);
+    bool m_lightPreviewValid = false;
+    SnapPlane m_snapPlane = SnapPlane::Ceiling;
+    float m_customSnapHeight = 8.0f;
+    int m_selectedLightIndex = -1;  // Currently selected light for editing (-1 = none)
+
+    // Light group settings
+    bool m_lightGroupEnabled[4] = {true, true, true, true};  // Interior, Exterior, Accent, Custom
+    float m_lightGroupIntensity[4] = {1.0f, 1.0f, 1.0f, 1.0f};  // Per-group intensity multiplier
+    int m_placementLightGroup = 0;  // Default group for newly placed lights (0=Interior)
 
     // Material UI state
     bool m_materialUiInitialized = false;
@@ -398,6 +473,18 @@ private:
     // Live Render Preview Panel state (GPU-direct preview)
     bool m_showRenderPreviewPanel = false;
     bool m_renderPreviewRefreshRequested = false;
+
+    // Material Test Window state (PBR validation)
+    bool m_showMaterialTestWindow = false;
+    int m_materialTestPreset = 0;  // 0=Full Grid, 1=Dielectrics, 2=Metals, 3=Roughness Row, 4=Metallic Column
+
+    // LLM Assistant Window state
+    bool m_showLLMAssistantWindow = false;
+    char m_llmInputBuffer[512] = "";
+    std::unique_ptr<class LLMAssistant> m_llmAssistant;
+
+    // Memory test flag
+    bool m_runMemoryTest = false;
 
     // Improved Material Library state
     bool m_showMaterialLibrary = false;

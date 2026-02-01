@@ -149,7 +149,7 @@ class OnboardingOverlay(QWidget):
         progress_stack_layout.addWidget(self.progress_fill)
         progress_stack_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        top_section.addWidget(progress_bar, alignment=Qt.AlignmentFlag.AlignCenter)
+        top_section.addWidget(progress_stack, alignment=Qt.AlignmentFlag.AlignCenter)
         bg_layout.addLayout(top_section)
 
         bg_layout.addStretch()
@@ -310,6 +310,33 @@ class OnboardingOverlay(QWidget):
         self.resize(self.parent().size() if self.parent() else self.size())
         self.setWindowOpacity(0.0)
 
+        # Start chat panel onboarding mode
+        if hasattr(self.chat_panel, 'start_onboarding'):
+            # Connect to progress updates
+            try:
+                self.chat_panel.onboarding_progress.disconnect(self._on_chat_progress)
+            except TypeError:
+                pass
+            self.chat_panel.onboarding_progress.connect(self._on_chat_progress)
+
+            # Connect to onboarding completion
+            try:
+                self.chat_panel.onboarding_complete.disconnect(self._on_chat_onboarding_complete)
+            except TypeError:
+                pass
+            self.chat_panel.onboarding_complete.connect(self._on_chat_onboarding_complete)
+
+            # Start onboarding
+            self.chat_panel.start_onboarding()
+
+    def _on_chat_progress(self, current: int, total: int):
+        """Handle chat panel progress update."""
+        self._update_progress(current)
+        if current < total:
+            self.subtitle_label.setText(
+                f"Great! {total - current} more question{'s' if total - current > 1 else ''} to go."
+            )
+
         # Fade in
         fade_in = QPropertyAnimation(self, b"windowOpacity")
         fade_in.setDuration(500)
@@ -320,6 +347,15 @@ class OnboardingOverlay(QWidget):
 
         self.show()
         self.raise_()
+
+    def _on_chat_onboarding_complete(self, data: dict):
+        """Handle chat panel onboarding completion."""
+        print(f"[Onboarding] Chat onboarding complete with data: {data}")
+        self.subtitle_label.setText("Design complete! Moving to workspace...")
+        self._update_progress(self.max_questions)
+
+        # Trigger transition after a short delay
+        QTimer.singleShot(1500, self.start_transition)
 
     def paintEvent(self, event):
         """Paint the overlay with rounded corners."""
