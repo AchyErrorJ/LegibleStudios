@@ -10,6 +10,7 @@
 #include "vulkan_context.hpp"
 #include "renderer.hpp"
 #include "qbd_interface.hpp"
+#include "path_tracer.hpp"
 
 #include <memory>
 #include <string>
@@ -31,8 +32,10 @@ using namespace arch;
 namespace {
     std::unique_ptr<VulkanContext> g_context;
     std::unique_ptr<Renderer> g_renderer;
+    std::unique_ptr<PathTracer> g_pathTracer;
     Building g_building;
     qbd::QBDLayout g_layout;  // Store layout for room access
+    PathTracerConfig g_ptConfig;  // Path tracer configuration
 
     // Camera state
     float g_cameraYaw = 0.5f;
@@ -48,6 +51,7 @@ namespace {
     int g_height = 600;
     int g_selectedElement = -1;
     VisualizationMode g_vizMode = VisualizationMode::Material;
+    bool g_terrainEnabled = true;  // Terrain rendering enabled by default
 
     // Error handling
     std::string g_lastError;
@@ -73,7 +77,7 @@ namespace {
         camera.up = vec3(0, 1, 0);
         camera.fov = g_cameraFOV;
         camera.nearPlane = 0.1f;
-        camera.farPlane = 500.0f;
+        camera.farPlane = 100000.0f;  // Large value to handle mm units
         camera.isOrthographic = g_cameraOrthographic;
         camera.orthoSize = g_cameraDistance * 0.5f;  // Scale ortho based on distance
 
@@ -169,6 +173,37 @@ ARCH_API int arch_init(void* hwnd, int width, int height) {
     }
 }
 
+ARCH_API int arch_init_headless(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (g_initialized) {
+        setError("Already initialized");
+        return -1;
+    }
+
+    try {
+        // Create headless Vulkan context (no window/surface)
+        VulkanConfig config{};
+        config.enableValidation = false;
+        config.headless = true;
+
+        g_context = VulkanContext::createHeadless(config);
+        // No renderer needed for headless path tracing
+        // g_renderer is left null - only path tracer will be used
+
+        // Initialize with empty building
+        g_building.name = "Empty";
+
+        g_initialized = true;
+        std::cout << "[ArchAPI] Initialized in headless mode" << std::endl;
+        return 0;
+    }
+    catch (const std::exception& e) {
+        setError(std::string("Headless init failed: ") + e.what());
+        return -1;
+    }
+}
+
 ARCH_API void arch_shutdown(void) {
     std::lock_guard<std::mutex> lock(g_mutex);
 
@@ -178,6 +213,7 @@ ARCH_API void arch_shutdown(void) {
         g_context->waitIdle();
     }
 
+    g_pathTracer.reset();
     g_renderer.reset();
     g_context.reset();
 
@@ -320,6 +356,11 @@ ARCH_API int arch_render_frame(void) {
             g_renderer->drawSky();
             g_renderer->drawGrid(150.0f, 5.0f);
 
+            // Draw terrain if enabled
+            if (g_terrainEnabled && g_building.terrainMesh.hasData()) {
+                g_renderer->drawTerrain(g_building.terrainMesh);
+            }
+
             // Draw building with selection
             std::set<int> selected;
             if (g_selectedElement >= 0) {
@@ -382,6 +423,11 @@ ARCH_API void arch_reset_camera(void) {
     g_cameraDistance = size * 1.5f;
     g_cameraYaw = 0.5f;
     g_cameraPitch = 0.4f;
+
+    std::cout << "[Camera] Bounds: (" << minBound.x << ", " << minBound.y << ", " << minBound.z << ") to ("
+              << maxBound.x << ", " << maxBound.y << ", " << maxBound.z << ")\n";
+    std::cout << "[Camera] Target: (" << g_cameraTarget.x << ", " << g_cameraTarget.y << ", " << g_cameraTarget.z
+              << "), Distance: " << g_cameraDistance << "\n";
 }
 
 ARCH_API void arch_set_camera_fov(float fov) {
@@ -1265,7 +1311,7 @@ ARCH_API int arch_get_element_material_name(int element_index, char* out_name, i
 
 // Global terrain state (C++ namespace, not exported)
 namespace {
-    bool g_terrainEnabled = true;
+    // g_terrainEnabled is defined at top of file with other globals
     vec3 g_terrainOffset = {0.0f, 0.0f, 0.0f};
     float g_terrainRoughness = 0.8f;
     float g_terrainMetallic = 0.0f;
@@ -1323,28 +1369,27 @@ ARCH_API int arch_set_terrain_data(const ArchTerrainVertex* vertices, int vertex
     float elevRange = max_elevation - min_elevation;
     if (elevRange < 0.001f) elevRange = 1.0f;  // Avoid division by zero
 
-    // Convert vertices: feet to mm, compute colors
-    const float feetToMm = 304.8f;
+    // Convert vertices (keep in feet, same units as building elements)
     g_building.terrainMesh.vertices.reserve(vertex_count);
 
     for (int i = 0; i < vertex_count; i++) {
         const ArchTerrainVertex& src = vertices[i];
         Vertex vert{};
 
-        // Position: convert feet to mm, swap Y/Z for coordinate system
+        // Position: keep in feet (same units as building elements)
         // API: X=east, Y=up(elevation), Z=north
         // Engine: X=east, Y=up, Z=south (flip Z)
         vert.position = vec3(
-            src.pos_x * feetToMm,
-            src.pos_y * feetToMm,  // Y is elevation (up)
-            -src.pos_z * feetToMm  // Flip Z for south
+            src.pos_x,
+            src.pos_y,   // Y is elevation (up)
+            -src.pos_z   // Flip Z for south
         );
 
-        // Apply offset
+        // Apply offset (in feet)
         vert.position += vec3(
-            g_terrainOffset.x * feetToMm,
-            g_terrainOffset.y * feetToMm,
-            -g_terrainOffset.z * feetToMm
+            g_terrainOffset.x,
+            g_terrainOffset.y,
+            -g_terrainOffset.z
         );
 
         // Normal (swap Y/Z, flip Z)
@@ -1459,6 +1504,249 @@ ARCH_API void arch_set_terrain_material(float roughness, float metallic) {
 ARCH_API void arch_set_terrain_color_mode(int mode) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_terrainColorMode = mode;
+}
+
+// =============================================================================
+// Path Tracer API Implementation
+// =============================================================================
+
+ARCH_API int arch_pt_set_config(int width, int height, int samples, int bounces) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (width <= 0 || height <= 0 || samples <= 0 || bounces <= 0) {
+        setError("Invalid path tracer configuration");
+        return -1;
+    }
+
+    g_ptConfig.width = static_cast<u32>(width);
+    g_ptConfig.height = static_cast<u32>(height);
+    g_ptConfig.samplesPerPixel = static_cast<u32>(samples);
+    g_ptConfig.maxBounces = static_cast<u32>(bounces);
+
+    std::cout << "[PathTracer API] Config: " << width << "x" << height
+              << ", " << samples << " spp, " << bounces << " bounces\n";
+
+    return 0;
+}
+
+ARCH_API int arch_pt_start_render(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_initialized || !g_context) {
+        setError("Not initialized");
+        return -1;
+    }
+
+    if (g_building.elements.empty()) {
+        setError("No scene loaded");
+        return -2;
+    }
+
+    // Create path tracer if needed
+    if (!g_pathTracer) {
+        g_pathTracer = std::make_unique<PathTracer>(*g_context);
+        // Load PBR textures from materials directory
+        g_pathTracer->loadMaterialTextures("materials");
+    }
+
+    // Set scene
+    if (!g_pathTracer->setScene(g_building.elements)) {
+        setError("Failed to upload scene to path tracer");
+        return -3;
+    }
+
+    // Set camera
+    Camera camera;
+    camera.position.x = g_cameraTarget.x + g_cameraDistance * cos(g_cameraPitch) * sin(g_cameraYaw);
+    camera.position.y = g_cameraTarget.y + g_cameraDistance * sin(g_cameraPitch);
+    camera.position.z = g_cameraTarget.z + g_cameraDistance * cos(g_cameraPitch) * cos(g_cameraYaw);
+    camera.target = g_cameraTarget;
+    camera.up = vec3(0, 1, 0);
+    camera.fov = g_cameraFOV;
+    camera.nearPlane = 0.1f;
+    camera.farPlane = 100000.0f;  // Large value to handle mm units
+    camera.isOrthographic = g_cameraOrthographic;
+    camera.orthoSize = g_cameraDistance * 0.5f;
+
+    std::cout << "[PathTracer] Camera pos: (" << camera.position.x << ", " << camera.position.y << ", " << camera.position.z
+              << "), target: (" << camera.target.x << ", " << camera.target.y << ", " << camera.target.z << ")\n";
+
+    g_pathTracer->setCamera(camera);
+    g_pathTracer->setConfig(g_ptConfig);
+
+    // Pass section clipping from renderer to path tracer
+    if (g_renderer) {
+        g_pathTracer->setClipPlane(g_renderer->getClipPlane(), g_renderer->getClippingEnabled());
+        std::cout << "[PathTracer] Clipping: enabled=" << g_renderer->getClippingEnabled()
+                  << ", plane=(" << g_renderer->getClipPlane().x << ", " << g_renderer->getClipPlane().y
+                  << ", " << g_renderer->getClipPlane().z << ", " << g_renderer->getClipPlane().w << ")\n";
+    }
+
+    // Start render
+    g_pathTracer->startRender();
+
+    return 0;
+}
+
+ARCH_API int arch_pt_render_frame(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_pathTracer) {
+        return -1;
+    }
+
+    if (!g_pathTracer->isRendering()) {
+        return g_pathTracer->isComplete() ? 0 : -1;
+    }
+
+    bool moreFrames = g_pathTracer->renderFrame();
+    return moreFrames ? 1 : 0;
+}
+
+ARCH_API int arch_pt_get_progress(float* progress) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!progress) {
+        return -1;
+    }
+
+    if (!g_pathTracer) {
+        *progress = 0.0f;
+        return 0;
+    }
+
+    *progress = g_pathTracer->getProgress();
+    return 0;
+}
+
+ARCH_API void arch_pt_stop(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (g_pathTracer) {
+        g_pathTracer->stopRender();
+    }
+}
+
+ARCH_API int arch_pt_is_rendering(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return (g_pathTracer && g_pathTracer->isRendering()) ? 1 : 0;
+}
+
+ARCH_API int arch_pt_is_complete(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return (g_pathTracer && g_pathTracer->isComplete()) ? 1 : 0;
+}
+
+ARCH_API int arch_pt_get_sample_count(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_pathTracer) {
+        return 0;
+    }
+
+    return static_cast<int>(g_pathTracer->getCurrentSample());
+}
+
+ARCH_API int arch_pt_save_png(const char* path, float exposure) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_pathTracer) {
+        setError("Path tracer not initialized");
+        return -1;
+    }
+
+    if (!path) {
+        setError("Invalid path");
+        return -2;
+    }
+
+    if (!g_pathTracer->savePNG(std::string(path), exposure)) {
+        setError("Failed to save PNG");
+        return -3;
+    }
+
+    return 0;
+}
+
+ARCH_API int arch_pt_save_hdr(const char* path) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_pathTracer) {
+        setError("Path tracer not initialized");
+        return -1;
+    }
+
+    if (!path) {
+        setError("Invalid path");
+        return -2;
+    }
+
+    if (!g_pathTracer->saveEXR(std::string(path))) {
+        setError("Failed to save HDR");
+        return -3;
+    }
+
+    return 0;
+}
+
+ARCH_API int arch_pt_apply_denoise(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_pathTracer) {
+        setError("Path tracer not initialized");
+        return -1;
+    }
+
+    g_pathTracer->applyDenoising();
+    return 0;
+}
+
+ARCH_API void arch_pt_set_exposure(float exposure) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_ptConfig.exposure = exposure;
+
+    if (g_pathTracer) {
+        g_pathTracer->setConfig(g_ptConfig);
+    }
+}
+
+ARCH_API float arch_pt_get_exposure(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_ptConfig.exposure;
+}
+
+ARCH_API void arch_pt_set_tonemap_mode(int mode) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (mode >= 0 && mode <= 2) {
+        g_ptConfig.tonemapMode = static_cast<u32>(mode);
+        if (g_pathTracer) {
+            g_pathTracer->setConfig(g_ptConfig);
+        }
+    }
+}
+
+ARCH_API int arch_pt_get_tonemap_mode(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return static_cast<int>(g_ptConfig.tonemapMode);
+}
+
+ARCH_API void arch_pt_set_nee_enabled(int enabled) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_ptConfig.enableNEE = (enabled != 0);
+
+    if (g_pathTracer) {
+        g_pathTracer->setConfig(g_ptConfig);
+    }
+}
+
+ARCH_API void arch_pt_set_rr_enabled(int enabled) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_ptConfig.enableRR = (enabled != 0);
+
+    if (g_pathTracer) {
+        g_pathTracer->setConfig(g_ptConfig);
+    }
 }
 
 } // extern "C"

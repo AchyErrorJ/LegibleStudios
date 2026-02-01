@@ -725,9 +725,32 @@ Building QBDInterface::toBuilding(const QBDLayout& layout) {
                 elem.mesh.vertices.push_back(v);
             }
 
+            // Compute surface normal from first triangle to determine winding
+            // For roof surfaces, normal should point upward (positive Y)
+            bool reverseWinding = false;
+            if (surface.vertices.size() >= 3) {
+                vec3 v0 = surface.vertices[0];
+                vec3 v1 = surface.vertices[1];
+                vec3 v2 = surface.vertices[2];
+                vec3 edge1 = v1 - v0;
+                vec3 edge2 = v2 - v0;
+                vec3 normal = glm::cross(edge1, edge2);
+                // If normal points down, reverse winding
+                if (normal.y < 0) {
+                    reverseWinding = true;
+                }
+            }
+
             // Fan triangulation for convex polygon
+            // Use correct winding to ensure outward-facing normals
             for (size_t i = 1; i + 1 < surface.vertices.size(); i++) {
-                elem.mesh.faces.push_back({0, static_cast<u32>(i), static_cast<u32>(i + 1)});
+                if (reverseWinding) {
+                    // Reversed winding: 0, i+1, i
+                    elem.mesh.faces.push_back({0, static_cast<u32>(i + 1), static_cast<u32>(i)});
+                } else {
+                    // Normal winding: 0, i, i+1
+                    elem.mesh.faces.push_back({0, static_cast<u32>(i), static_cast<u32>(i + 1)});
+                }
             }
 
             building.elements.push_back(elem);
