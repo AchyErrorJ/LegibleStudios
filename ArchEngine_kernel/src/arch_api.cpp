@@ -1315,7 +1315,8 @@ namespace {
     vec3 g_terrainOffset = {0.0f, 0.0f, 0.0f};
     float g_terrainRoughness = 0.8f;
     float g_terrainMetallic = 0.0f;
-    int g_terrainColorMode = 0;  // 0=elevation gradient
+    int g_terrainColorMode = 0;  // 0=elevation gradient, 1=textured
+    std::string g_terrainTextureName = "";  // Empty = use vertex colors, otherwise use material texture
 
     // Elevation color gradient (same as geometry_loader.cpp)
     vec3 getTerrainElevationColor(float normalizedElevation) {
@@ -1506,6 +1507,79 @@ ARCH_API void arch_set_terrain_color_mode(int mode) {
     g_terrainColorMode = mode;
 }
 
+ARCH_API void arch_set_terrain_texture(const char* material_name) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (material_name && strlen(material_name) > 0) {
+        g_terrainTextureName = material_name;
+        g_terrainColorMode = 1;  // Switch to textured mode
+        if (g_renderer) {
+            g_renderer->setTerrainMaterial(material_name);
+        }
+        std::cout << "[Terrain API] Set texture: " << material_name << std::endl;
+    } else {
+        g_terrainTextureName = "";
+        g_terrainColorMode = 0;  // Switch back to vertex color mode
+        if (g_renderer) {
+            g_renderer->setTerrainMaterial("");
+        }
+        std::cout << "[Terrain API] Cleared texture, using elevation colors" << std::endl;
+    }
+}
+
+ARCH_API const char* arch_get_terrain_texture(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_terrainTextureName.c_str();
+}
+
+// =============================================================================
+// Environment/HDRI API
+// =============================================================================
+
+ARCH_API int arch_load_hdri(const char* path) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_initialized || !g_renderer) {
+        setError("Not initialized");
+        return -1;
+    }
+
+    if (!path || strlen(path) == 0) {
+        setError("Invalid HDRI path");
+        return -2;
+    }
+
+    std::cout << "[ArchAPI] Loading HDRI: " << path << std::endl;
+
+    if (g_renderer->loadHdrEnvironment(path)) {
+        std::cout << "[ArchAPI] HDRI loaded successfully" << std::endl;
+        return 0;
+    } else {
+        setError("Failed to load HDRI");
+        return -3;
+    }
+}
+
+ARCH_API const char* arch_list_hdris(void) {
+    static std::string result;
+    result.clear();
+
+    std::string hdriDir = "hdri";
+    if (!std::filesystem::exists(hdriDir)) {
+        hdriDir = "../../hdri";
+    }
+
+    if (std::filesystem::exists(hdriDir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(hdriDir)) {
+            if (entry.path().extension() == ".hdr") {
+                if (!result.empty()) result += ";";
+                result += entry.path().filename().string();
+            }
+        }
+    }
+
+    return result.c_str();
+}
+
 // =============================================================================
 // Path Tracer API Implementation
 // =============================================================================
@@ -1549,8 +1623,23 @@ ARCH_API int arch_pt_start_render(void) {
         g_pathTracer->loadMaterialTextures("materials");
     }
 
-    // Set scene
-    if (!g_pathTracer->setScene(g_building.elements)) {
+    // Set scene with terrain (if enabled and available)
+    const TerrainMesh* terrain = nullptr;
+    std::string terrainMatName = "";
+    std::cout << "[PathTracer] Terrain check: enabled=" << g_terrainEnabled
+              << ", hasData=" << g_building.terrainMesh.hasData()
+              << ", vertices=" << g_building.terrainMesh.vertices.size()
+              << ", indices=" << g_building.terrainMesh.indices.size() << "\n";
+    if (g_terrainEnabled && g_building.terrainMesh.hasData()) {
+        terrain = &g_building.terrainMesh;
+        terrainMatName = g_terrainTextureName;
+        std::cout << "[PathTracer] Including terrain with " << g_building.terrainMesh.indices.size() / 3
+                  << " triangles, material='" << terrainMatName << "'\n";
+    } else {
+        std::cout << "[PathTracer] Terrain NOT included\n";
+    }
+
+    if (!g_pathTracer->setScene(g_building.elements, terrain, terrainMatName)) {
         setError("Failed to upload scene to path tracer");
         return -3;
     }
@@ -1580,6 +1669,11 @@ ARCH_API int arch_pt_start_render(void) {
         std::cout << "[PathTracer] Clipping: enabled=" << g_renderer->getClippingEnabled()
                   << ", plane=(" << g_renderer->getClipPlane().x << ", " << g_renderer->getClipPlane().y
                   << ", " << g_renderer->getClipPlane().z << ", " << g_renderer->getClipPlane().w << ")\n";
+
+        // Pass UV scale from renderer to path tracer for consistent texturing
+        float uvScale = g_renderer->getMaterialUVScale();
+        g_pathTracer->setUVScale(uvScale);
+        std::cout << "[PathTracer] UV scale: " << uvScale << "\n";
     }
 
     // Start render

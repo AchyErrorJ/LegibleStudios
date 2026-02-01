@@ -70,7 +70,8 @@ struct alignas(16) PathTraceUBO {
     u32 width;                      // Image width
     u32 height;                     // Image height
     u32 enableClipping;             // Section clipping enabled flag
-    u32 _pad[2];                    // Padding to 16-byte alignment
+    f32 uvScale;                    // UV scale to match live renderer (base=0.001 * this value)
+    u32 _pad[1];                    // Padding to 16-byte alignment
 };
 
 /**
@@ -130,6 +131,17 @@ public:
     bool setScene(const std::vector<StructuralElement>& elements);
 
     /**
+     * @brief Set the scene to render with terrain
+     * @param elements Structural elements making up the scene
+     * @param terrain Optional terrain mesh (nullptr to skip)
+     * @param terrainMaterialName Material name for terrain texturing
+     * @return true if scene was successfully uploaded to GPU
+     */
+    bool setScene(const std::vector<StructuralElement>& elements,
+                  const TerrainMesh* terrain,
+                  const std::string& terrainMaterialName);
+
+    /**
      * @brief Set the camera
      * @param camera Camera parameters (position, target, FOV, etc.)
      */
@@ -158,6 +170,21 @@ public:
      * @param enabled Whether clipping is enabled
      */
     void setClipPlane(const vec4& plane, bool enabled);
+
+    /**
+     * @brief Set UV scale to match live renderer
+     * @param scale UV scale multiplier (live renderer uses base 0.001 * scale)
+     *
+     * The path tracer uses world-space UV projection. To match the live renderer's
+     * appearance, set this to the same value as the live renderer's material UV scale.
+     * Default is 100.0 which gives 0.001 * 100 = 0.1 effective scale.
+     */
+    void setUVScale(f32 scale) { m_uvScale = scale; }
+
+    /**
+     * @brief Get current UV scale
+     */
+    f32 getUVScale() const { return m_uvScale; }
 
     /**
      * @brief Load PBR textures from materials directory
@@ -296,6 +323,7 @@ private:
     EnvironmentMap* m_envMap = nullptr;
     vec4 m_clipPlane = vec4(0.0f, 1.0f, 0.0f, 0.0f);  // Default: horizontal plane at y=0
     bool m_enableClipping = false;
+    f32 m_uvScale = 100.0f;  // Default UV scale: 0.001 * 100 = 0.1 effective scale
 
     // State
     PathTracerState m_state = PathTracerState::Idle;
@@ -309,6 +337,7 @@ private:
     std::vector<GPUBVHNode> m_bvhNodes;
     std::vector<GPUPTMaterial> m_materials;
     bool m_sceneValid = false;
+    std::string m_terrainMaterialName;  // Store terrain material name for texture index update
 
     // GPU buffers
     VkBuffer m_triangleBuffer = VK_NULL_HANDLE;

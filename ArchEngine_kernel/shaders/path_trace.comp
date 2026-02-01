@@ -40,6 +40,7 @@ layout(binding = 1) uniform PathTraceUBO {
     uint width;
     uint height;
     uint enableClipping;  // Section clipping enabled flag
+    float uvScale;        // UV scale to match live renderer (effective = 0.001 * uvScale)
 } ubo;
 
 // BVH Node structure (32 bytes)
@@ -94,29 +95,50 @@ const float MAX_DIST = 1e20;
 // ============================================================================
 
 // Compute world-space UVs for texture sampling
-vec2 computeWorldUV(vec3 worldPos, vec3 normal) {
+// Matches renderer.cpp calcWorldUV for consistent texturing between real-time and path tracer
+// isTerrain flag uses simple XZ projection for terrain surfaces
+vec2 computeWorldUV(vec3 worldPos, vec3 normal, bool isTerrain) {
     // Scale for world-space UV projection
-    // 0.1 = 1 texture tile per 10 feet (~3 meters)
-    float scale = 0.1;
+    // Live renderer uses base=0.001 * uvScale, so effective scale = 0.001 * ubo.uvScale
+    // Default uvScale=100 gives effective 0.1 = 1 texture tile per 10 feet (~3 meters)
+    float scale = 0.001 * ubo.uvScale;
 
     vec3 absNormal = abs(normal);
+    vec3 uAxis, vAxis;
 
-    // Horizontal and sloped surfaces (floors, roofs): use XZ projection
-    // This avoids seams at roof ridges/hips - textures may stretch on steep slopes
-    // but will be seamless across the entire roof
-    if (absNormal.y > 0.3) {
+    // Terrain always uses simple XZ projection regardless of slope
+    if (isTerrain) {
         return vec2(worldPos.x, worldPos.z) * scale;
     }
 
-    // Vertical surfaces (walls): V is always Y (vertical)
-    // For diagonal walls, blend between X and Z based on normal direction
-    float xWeight = absNormal.x / (absNormal.x + absNormal.z + 0.001);
-    float zWeight = 1.0 - xWeight;
+    // For nearly horizontal surfaces (floors, flat roofs): use XZ projection
+    if (absNormal.y > 0.95) {
+        uAxis = vec3(1.0, 0.0, 0.0);
+        vAxis = vec3(0.0, 0.0, 1.0);
+    }
+    // For nearly vertical surfaces (walls): V is always Y (vertical)
+    else if (absNormal.y < 0.1) {
+        if (absNormal.x > absNormal.z) {
+            // Wall facing X uses Z for U
+            uAxis = vec3(0.0, 0.0, 1.0);
+            vAxis = vec3(0.0, 1.0, 0.0);
+        } else {
+            // Wall facing Z uses X for U
+            uAxis = vec3(1.0, 0.0, 0.0);
+            vAxis = vec3(0.0, 1.0, 0.0);
+        }
+    }
+    // For sloped surfaces (roofs) - use tangent space aligned to slope
+    else {
+        // Project normal onto XZ plane to get slope direction
+        vec3 slopeDir = normalize(vec3(normal.x, 0.0, normal.z));
+        // U axis runs horizontally along the roof ridge (perpendicular to slope fall)
+        uAxis = normalize(cross(vec3(0.0, 1.0, 0.0), slopeDir));
+        // V axis runs up/down the slope
+        vAxis = normalize(cross(normal, uAxis));
+    }
 
-    // Wall facing X uses Z for U, wall facing Z uses X for U
-    float u = worldPos.z * xWeight + worldPos.x * zWeight;
-
-    return vec2(u, worldPos.y) * scale;
+    return vec2(dot(worldPos, uAxis), dot(worldPos, vAxis)) * scale;
 }
 
 // Sample albedo from texture array if available
@@ -323,9 +345,10 @@ HitInfo intersectBVH(vec3 origin, vec3 dir) {
                         result.geometricNormal = normalize(cross(edge1, edge2));
                         result.normal = result.geometricNormal;
 
-                        // Flip normal if backface
+                        // Flip normals if backface (for correct shading and UV projection)
                         if (dot(result.normal, dir) > 0.0) {
                             result.normal = -result.normal;
+                            result.geometricNormal = -result.geometricNormal;
                         }
                     }
                 }
@@ -528,9 +551,10 @@ vec3 tracePath(vec3 origin, vec3 dir, inout uint seed) {
         // Get material
         Material mat = materials[hit.materialIndex];
         int texIndex = int(mat.texIndices.x);  // Base texture index (-1 if no textures)
+        bool isTerrain = mat.texIndices.w > 0.5;  // Terrain flag in w component
 
         // Compute world-space UVs for proper texture tiling
-        vec2 worldUV = computeWorldUV(hit.position, hit.geometricNormal);
+        vec2 worldUV = computeWorldUV(hit.position, hit.geometricNormal, isTerrain);
 
         // DEBUG: Visualize material properties
         // Uncomment ONE of these to debug:

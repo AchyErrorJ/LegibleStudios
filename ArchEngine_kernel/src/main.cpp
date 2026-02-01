@@ -1701,11 +1701,29 @@ int main(int argc, char* argv[]) {
                             pathTracer->setEnvironmentMap(renderer.getEnvironmentMap());
                         }
 
-                        // Build scene
+                        // Build scene with terrain if available
                         highResRenderStatus = "Path Tracer: Uploading scene...";
                         imgui.setHighResRenderState(true, highResRenderStatus, 0.08f);
 
-                        if (!pathTracer->setScene(renderElements)) {
+                        // Get terrain from building if it has data
+                        const TerrainMesh* terrain = nullptr;
+                        std::string terrainMatName = "";
+                        if (renderBuilding.terrainMesh.hasData()) {
+                            terrain = &renderBuilding.terrainMesh;
+                            terrainMatName = renderer.getTerrainMaterial();
+                            // Use default grass material if none selected
+                            if (terrainMatName.empty()) {
+                                terrainMatName = "polyhaven/grass_path_2";
+                            }
+                            std::cout << "[PathTracer] Including terrain: "
+                                      << renderBuilding.terrainMesh.indices.size() / 3
+                                      << " triangles, material='" << terrainMatName << "'\n";
+                        }
+
+                        // Pass UV scale from renderer to path tracer
+                        pathTracer->setUVScale(renderer.getMaterialUVScale());
+
+                        if (!pathTracer->setScene(renderElements, terrain, terrainMatName)) {
                             highResRenderStatus = "Path Tracer: Failed to build scene";
                             imgui.setHighResRenderState(false, highResRenderStatus, 1.0f);
                         } else {

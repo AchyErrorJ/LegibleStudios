@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <set>
 
 // STB for PNG/HDR export (implementation is in renderer.cpp)
 #include "../external/stb_image_write.h"
@@ -168,8 +169,18 @@ VkShaderModule PathTracer::loadShaderModule(const std::string& filename) {
 }
 
 bool PathTracer::setScene(const std::vector<StructuralElement>& elements) {
-    // Build BVH from scene
-    if (!buildSceneBVH(elements, m_triangles, m_bvhNodes, m_materials)) {
+    // Forward to terrain-aware overload with no terrain
+    return setScene(elements, nullptr, "");
+}
+
+bool PathTracer::setScene(const std::vector<StructuralElement>& elements,
+                          const TerrainMesh* terrain,
+                          const std::string& terrainMaterialName) {
+    // Store terrain material name for later texture index update
+    m_terrainMaterialName = terrainMaterialName;
+
+    // Build BVH from scene (with optional terrain)
+    if (!buildSceneBVH(elements, terrain, terrainMaterialName, m_triangles, m_bvhNodes, m_materials)) {
         std::cerr << "[PathTracer] Failed to build scene BVH\n";
         m_sceneValid = false;
         return false;
@@ -602,6 +613,7 @@ void PathTracer::updateUBO() {
     ubo.tonemapMode = m_config.tonemapMode;
     ubo.width = m_config.width;
     ubo.height = m_config.height;
+    ubo.uvScale = m_uvScale;
 
     std::memcpy(m_uboMapped, &ubo, sizeof(ubo));
 }
@@ -1032,6 +1044,54 @@ bool PathTracer::loadMaterialTextures(const std::string& materialsDir) {
         }
     }
 
+    // Also scan polyhaven folder for any materials not in material_map.json
+    std::string polyhavenDir = m_materialsBasePath + "/polyhaven";
+    if (fs::exists(polyhavenDir) && fs::is_directory(polyhavenDir)) {
+        std::set<std::string> existingMaterials;
+        for (const auto& tex : texturesToLoad) {
+            existingMaterials.insert(tex.materialName);
+        }
+
+        for (const auto& entry : fs::directory_iterator(polyhavenDir)) {
+            if (entry.is_directory()) {
+                std::string matName = "polyhaven/" + entry.path().filename().string();
+                // Skip if already in the list
+                if (existingMaterials.count(matName) > 0) continue;
+
+                std::string folder = entry.path().string();
+                // Check for albedo texture (try common extensions)
+                std::string albedoPath;
+                for (const auto& ext : {".jpg", ".png", ".jpeg"}) {
+                    std::string testPath = folder + "/albedo" + ext;
+                    if (fs::exists(testPath)) {
+                        albedoPath = testPath;
+                        break;
+                    }
+                }
+
+                if (!albedoPath.empty()) {
+                    TextureToLoad tex;
+                    tex.materialName = matName;
+                    tex.albedoPath = albedoPath;
+
+                    // Find other textures with same extension
+                    std::string ext = fs::path(albedoPath).extension().string();
+                    tex.normalPath = folder + "/normal" + ext;
+                    tex.roughnessPath = folder + "/roughness" + ext;
+                    tex.aoPath = folder + "/ao" + ext;
+
+                    // Use fallbacks if files don't exist
+                    if (!fs::exists(tex.normalPath)) tex.normalPath = folder + "/normal.jpg";
+                    if (!fs::exists(tex.roughnessPath)) tex.roughnessPath = folder + "/roughness.jpg";
+                    if (!fs::exists(tex.aoPath)) tex.aoPath = folder + "/ao.jpg";
+
+                    texturesToLoad.push_back(tex);
+                    std::cout << "[PathTracer] Found additional material: " << matName << "\n";
+                }
+            }
+        }
+    }
+
     if (texturesToLoad.empty()) {
         std::cout << "[PathTracer] No Poly Haven textures found to load\n";
         std::cout << "[PathTracer] Checked base path: " << m_materialsBasePath << "\n";
@@ -1306,7 +1366,7 @@ void PathTracer::updateMaterialTextureIndices(const std::vector<StructuralElemen
         std::cout << "  " << name << " -> " << idx << "\n";
     }
 
-    // Resolve material name for each element (same logic as bvh.cpp)
+    // Resolve material name for each element (same logic as bvh.cpp and renderer.cpp)
     auto resolveMaterialName = [](const StructuralElement& elem) -> std::string {
         const std::string& matName = elem.material;
 
@@ -1316,15 +1376,64 @@ void PathTracer::updateMaterialTextureIndices(const std::vector<StructuralElemen
             if (matName.find("polyhaven/") == 0) {
                 return matName;
             }
-            // Map common names to polyhaven
-            if (matName.find("brick") != std::string::npos) return "polyhaven/brick_wall_006";
-            if (matName.find("concrete") != std::string::npos) return "polyhaven/concrete_wall_008";
-            if (matName.find("wood") != std::string::npos) return "polyhaven/wood_floor_deck";
-            if (matName.find("roof") != std::string::npos) return "polyhaven/roof_slates_02";
-            if (matName.find("metal") != std::string::npos) return "polyhaven/metal_plate_02";
+
+            // Convert to lowercase for matching
+            std::string lower = matName;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+            // Keyword-based mapping (same as renderer and bvh.cpp)
+            if (lower.find("brick") != std::string::npos) {
+                return "polyhaven/brick_wall_006";
+            }
+            if (lower.find("concrete") != std::string::npos || lower.find("cement") != std::string::npos ||
+                lower.find("stone") != std::string::npos) {
+                return "polyhaven/concrete_wall_008";
+            }
+            if (lower.find("drywall") != std::string::npos || lower.find("plaster") != std::string::npos ||
+                lower.find("gypsum") != std::string::npos || lower.find("paint") != std::string::npos ||
+                lower.find("stucco") != std::string::npos || lower.find("interior") != std::string::npos ||
+                lower.find("tyvek") != std::string::npos || lower.find("membrane") != std::string::npos ||
+                lower.find("poly") != std::string::npos || lower.find("vapor") != std::string::npos) {
+                return "polyhaven/concrete_wall_008";
+            }
+            if (lower.find("tile") != std::string::npos || lower.find("ceramic") != std::string::npos) {
+                return "polyhaven/concrete_floor_003";
+            }
+            if (lower.find("wood") != std::string::npos || lower.find("timber") != std::string::npos ||
+                lower.find("osb") != std::string::npos || lower.find("plywood") != std::string::npos) {
+                return "polyhaven/wood_floor_deck";
+            }
+            if (lower.find("vinyl") != std::string::npos || lower.find("siding") != std::string::npos) {
+                return "polyhaven/concrete_wall_008";
+            }
+            if (lower.find("glass") != std::string::npos || lower.find("glazing") != std::string::npos ||
+                lower.find("window") != std::string::npos) {
+                return "glass";
+            }
+            if (lower.find("metal") != std::string::npos || lower.find("steel") != std::string::npos ||
+                lower.find("aluminum") != std::string::npos) {
+                return "polyhaven/metal_plate_02";
+            }
+            if (lower.find("shingle") != std::string::npos || lower.find("asphalt") != std::string::npos ||
+                lower.find("roof") != std::string::npos || lower.find("slate") != std::string::npos) {
+                return "polyhaven/roof_slates_02";
+            }
+            if (lower.find("grass") != std::string::npos || lower.find("lawn") != std::string::npos) {
+                return "polyhaven/grass_path_2";
+            }
+            if (lower.find("gravel") != std::string::npos || lower.find("patio") != std::string::npos) {
+                return "polyhaven/gravel_concrete";
+            }
+            if (lower.find("door") != std::string::npos) {
+                return "polyhaven/wood_floor_deck";
+            }
+            // Generic "wall" without specific material
+            if (lower == "wall" || lower == "partition") {
+                return "polyhaven/concrete_wall_008";
+            }
         }
 
-        // Default based on element type (matching renderer's resolveMaterialName)
+        // Default based on element type
         switch (elem.type) {
             case ElementType::Wall: return "polyhaven/brick_wall_006";
             case ElementType::Floor: return "polyhaven/concrete_floor_003";
@@ -1332,13 +1441,16 @@ void PathTracer::updateMaterialTextureIndices(const std::vector<StructuralElemen
             case ElementType::Door:
             case ElementType::Beam:
             case ElementType::Column: return "polyhaven/wood_floor_deck";
+            case ElementType::Window: return "glass";
             default: return "polyhaven/concrete_wall_008";
         }
     };
 
     // Material color lookup (approximate Poly Haven colors)
     auto getPolyHavenColor = [](const std::string& matName) -> vec4 {
-        if (matName.find("brick") != std::string::npos) {
+        if (matName.find("glass") != std::string::npos) {
+            return vec4(0.95f, 0.97f, 1.0f, 0.15f);  // Clear glass with low alpha
+        } else if (matName.find("brick") != std::string::npos) {
             return vec4(0.45f, 0.28f, 0.22f, 1.0f);  // Reddish brown brick
         } else if (matName.find("concrete") != std::string::npos) {
             return vec4(0.5f, 0.48f, 0.45f, 1.0f);   // Grey concrete
@@ -1368,15 +1480,39 @@ void PathTracer::updateMaterialTextureIndices(const std::vector<StructuralElemen
         // Debug first few materials
         if (i < 5) {
             std::cout << "[PathTracer] Element " << i << " type=" << static_cast<int>(elements[i].type)
-                      << " -> material=" << matName << " texIndex=" << texIndex << "\n";
+                      << " input='" << elements[i].material << "'"
+                      << " -> resolved=" << matName << " texIndex=" << texIndex << "\n";
         }
 
         // Always update albedo color to match resolved material
         m_materials[i].albedo = getPolyHavenColor(matName);
 
+        // Set glass material properties
+        if (matName.find("glass") != std::string::npos) {
+            m_materials[i].properties.x = 0.02f;  // Very smooth
+            m_materials[i].properties.y = 0.0f;   // Non-metallic
+            m_materials[i].properties.z = 1.5f;   // IOR
+            m_materials[i].properties.w = 0.95f;  // High transmission
+        }
+
         if (texIndex >= 0) {
             m_materials[i].texIndices.x = static_cast<f32>(texIndex);
             numUpdated++;
+        }
+    }
+
+    // Update terrain material if it exists (it's the material after all elements)
+    if (m_materials.size() > elements.size() && !m_terrainMaterialName.empty()) {
+        size_t terrainMatIndex = elements.size();
+        int texIndex = getTextureIndex(m_terrainMaterialName);
+        if (texIndex >= 0) {
+            m_materials[terrainMatIndex].texIndices.x = static_cast<f32>(texIndex);
+            std::cout << "[PathTracer] Updated terrain material '" << m_terrainMaterialName
+                      << "' with texture index " << texIndex << "\n";
+            numUpdated++;
+        } else {
+            std::cout << "[PathTracer] Warning: terrain texture '" << m_terrainMaterialName
+                      << "' not found in loaded textures\n";
         }
     }
 
