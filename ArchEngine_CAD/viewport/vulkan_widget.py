@@ -94,6 +94,7 @@ class VulkanViewportWidget(QWidget):
     section_changed = pyqtSignal(bool, int, float, bool)  # enabled, axis, height, flipped
     element_selected = pyqtSignal(int)  # element index (-1 for deselect)
     element_hovered = pyqtSignal(str, object)  # element_type, element_id (None for no hover)
+    rooms_loaded = pyqtSignal(list)  # list of room data dicts
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -102,11 +103,13 @@ class VulkanViewportWidget(QWidget):
         self._initialized = False
         self._render_timer: Optional[QTimer] = None
 
-        # Camera state for mouse interaction
+        # Camera state for mouse interaction (distances in FEET - C++ converts mm to ft)
         self._camera_yaw = 0.5
         self._camera_pitch = 0.4
-        self._camera_distance = 60.0
-        self._camera_target = [20.0, 10.0, 15.0]  # x, y, z target point
+        self._camera_distance = 60.0  # 60 feet from target
+        self._camera_target = [26.0, 10.0, 20.0]  # Building center approx (feet)
+        self._free_look_mode = False  # Toggle with Spacebar
+        self._free_look_cam_pos = None  # Stored camera position in free look mode
         self._last_mouse_pos = None
         self._dragging = False
         self._panning = False  # True for pan, False for orbit
@@ -127,6 +130,9 @@ class VulkanViewportWidget(QWidget):
         # Hover state for visual feedback
         self._hovered_element: Optional[tuple] = None  # (element_type, element_id)
         self._hover_update_timer = None  # Throttle hover updates
+
+        # Navigation overlay (optional)
+        self._nav_overlay = None
 
         # Widget setup
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
@@ -178,8 +184,20 @@ class VulkanViewportWidget(QWidget):
             self._lib.arch_set_camera_target.argtypes = [ctypes.c_float, ctypes.c_float, ctypes.c_float]
             self._lib.arch_set_camera_target.restype = None
 
+            self._lib.arch_set_camera_pose.argtypes = [ctypes.c_float, ctypes.c_float, ctypes.c_float,
+                                                       ctypes.c_float, ctypes.c_float, ctypes.c_float]
+            self._lib.arch_set_camera_pose.restype = None
+
             self._lib.arch_reset_camera.argtypes = []
             self._lib.arch_reset_camera.restype = None
+
+            self._lib.arch_get_camera_state.argtypes = [
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.c_float)
+            ]
+            self._lib.arch_get_camera_state.restype = None
 
             self._lib.arch_set_viz_mode.argtypes = [ctypes.c_int]
             self._lib.arch_set_viz_mode.restype = None
@@ -336,11 +354,11 @@ class VulkanViewportWidget(QWidget):
                 self._lib.arch_get_room_count.argtypes = []
                 self._lib.arch_get_room_count.restype = ctypes.c_int
 
-                self._lib.arch_get_room_data.argtypes = [ctypes.c_int, ctypes.POINTER(ArchRoomData)]
-                self._lib.arch_get_room_data.restype = ctypes.c_int
-
-                self._lib.arch_get_all_rooms.argtypes = [ctypes.POINTER(ArchRoomData), ctypes.c_int]
-                self._lib.arch_get_all_rooms.restype = ctypes.c_int
+                # TODO: Define ArchRoomData ctypes Structure to enable these APIs
+                # self._lib.arch_get_room_data.argtypes = [ctypes.c_int, ctypes.POINTER(ArchRoomData)]
+                # self._lib.arch_get_room_data.restype = ctypes.c_int
+                # self._lib.arch_get_all_rooms.argtypes = [ctypes.POINTER(ArchRoomData), ctypes.c_int]
+                # self._lib.arch_get_all_rooms.restype = ctypes.c_int
 
                 # Material settings API
                 self._lib.arch_set_uv_scale.argtypes = [ctypes.c_float, ctypes.c_float]
@@ -473,11 +491,13 @@ class VulkanViewportWidget(QWidget):
                 diag.frame_start()
 
             # Update camera
-            self._lib.arch_set_camera(
-                ctypes.c_float(self._camera_yaw),
-                ctypes.c_float(self._camera_pitch),
-                ctypes.c_float(self._camera_distance)
-            )
+            # Only call arch_set_camera if NOT in free look mode (free look uses arch_set_camera_pose directly)
+            if not self._free_look_mode:
+                self._lib.arch_set_camera(
+                    ctypes.c_float(self._camera_yaw),
+                    ctypes.c_float(self._camera_pitch),
+                    ctypes.c_float(self._camera_distance)
+                )
 
             # Render
             result = self._lib.arch_render_frame()
@@ -573,12 +593,26 @@ class VulkanViewportWidget(QWidget):
 
         try:
             with self._api_lock:
+                # Debug: Check if terrain_mesh is in data
+                if 'terrain_mesh' in data:
+                    tm = data['terrain_mesh']
+                    print(f"[VulkanWidget] terrain_mesh found in JSON: {list(tm.keys())}")
+                    print(f"[VulkanWidget] terrain_mesh has vertices: {'vertices' in tm}")
+                    print(f"[VulkanWidget] terrain_mesh vertex count: {tm.get('vertex_count', 'N/A')}")
+                else:
+                    print(f"[VulkanWidget] ERROR: No terrain_mesh in JSON!")
+                    print(f"[VulkanWidget] Available keys: {list(data.keys())}")
+
                 json_str = json.dumps(data).encode('utf-8')
                 result = self._lib.arch_load_json(json_str)
 
                 if result == 0:
                     load_count = self._lib.arch_get_element_count()
                     print(f"[VulkanWidget] Loaded {load_count} elements")
+
+                    # Check if terrain was loaded
+                    terrain_count = self._lib.arch_has_terrain()
+                    print(f"[VulkanWidget] Terrain loaded: {terrain_count}")
 
                     # Force a sync render to process new geometry before resuming render loop
                     # This helps prevent crashes from stale GPU state
@@ -647,9 +681,29 @@ class VulkanViewportWidget(QWidget):
                 return False
 
     def reset_camera(self):
-        """Reset camera to fit the building."""
+        """Reset camera to fit the building - uses C++ calculated values."""
         if self._initialized and self._lib:
+            # Let C++ calculate proper camera position from building bounds
             self._lib.arch_reset_camera()
+
+            # Get actual values calculated by C++ from building bounds
+            try:
+                tx, ty, tz, dist = ctypes.c_float(), ctypes.c_float(), ctypes.c_float(), ctypes.c_float()
+                self._lib.arch_get_camera_state(
+                    ctypes.byref(tx), ctypes.byref(ty), ctypes.byref(tz), ctypes.byref(dist)
+                )
+                self._camera_target = [tx.value, ty.value, tz.value]
+                self._camera_distance = dist.value
+                print(f"[Viewport] Camera reset: target=[{tx.value:.0f}, {ty.value:.0f}, {tz.value:.0f}], distance={dist.value:.0f}mm")
+            except Exception as e:
+                print(f"[Viewport] Could not get camera state: {e}")
+                self._camera_distance = 15000.0
+                self._camera_target = [8000.0, 3000.0, 6000.0]
+
+            self._camera_yaw = 0.5
+            self._camera_pitch = 0.4
+            self._free_look_cam_pos = None  # Clear free look camera position
+            self.update()  # Trigger repaint
 
     def set_visualization_mode(self, mode: int):
         """
@@ -675,7 +729,7 @@ class VulkanViewportWidget(QWidget):
             self._selection_manager.set_camera(
                 self._camera_yaw * 57.2958,  # Convert to degrees
                 self._camera_pitch * 57.2958,
-                self._camera_distance * 100  # Scale to mm
+                self._camera_distance  # Already in mm
             )
             self._selection_manager.set_viewport_size(self.width(), self.height())
 
@@ -691,6 +745,12 @@ class VulkanViewportWidget(QWidget):
         if self._initialized and self._lib:
             return self._lib.arch_get_selected_element()
         return -1
+
+    def get_rooms(self) -> list:
+        """Get room data from renderer. Returns empty list if not available."""
+        # Room data APIs are not yet fully implemented
+        # TODO: Implement when ArchRoomData ctypes structure is defined
+        return []
 
     def pick_element(self, screen_x: int, screen_y: int) -> int:
         """
@@ -1136,8 +1196,15 @@ class VulkanViewportWidget(QWidget):
     # Mouse interaction
     # =========================================================================
 
+    def _route_overlay_mouse(self, event):
+        """Route mouse event to overlay if active. Returns True if handled."""
+        # Stub - no overlay handling for now
+        return False
+
     def mousePressEvent(self, event):
         """Handle mouse press for camera control, section dragging, or element selection."""
+        # Ensure widget has focus for keyboard shortcuts
+        self.setFocus()
         if self._route_overlay_mouse(event):
             return
         if event.button() == Qt.MouseButton.LeftButton and self._section_mode:
@@ -1227,10 +1294,11 @@ class VulkanViewportWidget(QWidget):
             dy = event.pos().y() - self._last_mouse_pos.y()
 
             if self._panning:
-                # Pan: move camera target in screen space
+                # Pan: move camera in screen space
                 import math
-                # Calculate right and up vectors based on camera orientation
-                pan_speed = self._camera_distance * 0.002
+                # Pan speed in feet - scale with distance for consistent feel
+                base_pan_speed = 0.1  # 0.1 feet per pixel at base distance
+                pan_speed = base_pan_speed * (self._camera_distance / 60.0)  # Scale with zoom
 
                 # Right vector (perpendicular to view direction in XZ plane)
                 right_x = math.cos(self._camera_yaw)
@@ -1239,23 +1307,95 @@ class VulkanViewportWidget(QWidget):
                 # Up vector (world Y for now, could be more sophisticated)
                 up_y = 1.0
 
-                # Move target
-                self._camera_target[0] -= dx * pan_speed * right_x
-                self._camera_target[2] -= dx * pan_speed * right_z
-                self._camera_target[1] += dy * pan_speed * up_y
+                if self._free_look_mode and self._free_look_cam_pos is not None:
+                    # Free look: move BOTH camera position and target together
+                    move_x = -dx * pan_speed * right_x
+                    move_z = -dx * pan_speed * right_z
+                    move_y = dy * pan_speed * up_y
 
-                # Update camera target in renderer
-                if self._initialized and self._lib:
-                    self._lib.arch_set_camera_target(
-                        ctypes.c_float(self._camera_target[0]),
-                        ctypes.c_float(self._camera_target[1]),
-                        ctypes.c_float(self._camera_target[2])
-                    )
+                    # Move camera position
+                    self._free_look_cam_pos[0] += move_x
+                    self._free_look_cam_pos[1] += move_y
+                    self._free_look_cam_pos[2] += move_z
+
+                    # Move target by same amount
+                    self._camera_target[0] += move_x
+                    self._camera_target[1] += move_y
+                    self._camera_target[2] += move_z
+
+                    # Update camera pose in renderer
+                    if self._initialized and self._lib:
+                        self._lib.arch_set_camera_pose(
+                            ctypes.c_float(self._free_look_cam_pos[0]),
+                            ctypes.c_float(self._free_look_cam_pos[1]),
+                            ctypes.c_float(self._free_look_cam_pos[2]),
+                            ctypes.c_float(self._camera_target[0]),
+                            ctypes.c_float(self._camera_target[1]),
+                            ctypes.c_float(self._camera_target[2])
+                        )
+                else:
+                    # Orbit mode: only move target
+                    self._camera_target[0] -= dx * pan_speed * right_x
+                    self._camera_target[2] -= dx * pan_speed * right_z
+                    self._camera_target[1] += dy * pan_speed * up_y
+
+                    # Update camera target in renderer
+                    if self._initialized and self._lib:
+                        self._lib.arch_set_camera_target(
+                            ctypes.c_float(self._camera_target[0]),
+                            ctypes.c_float(self._camera_target[1]),
+                            ctypes.c_float(self._camera_target[2])
+                        )
             else:
-                # Orbit: rotate camera around target
-                self._camera_yaw -= dx * 0.005
-                self._camera_pitch -= dy * 0.005
-                self._camera_pitch = max(-1.4, min(1.4, self._camera_pitch))
+                # Camera rotation
+                if self._free_look_mode:
+                    # Free look: first time entering, calculate camera position
+                    import math
+                    if self._free_look_cam_pos is None:
+                        cos_yaw = math.cos(self._camera_yaw)
+                        sin_yaw = math.sin(self._camera_yaw)
+                        cos_pitch = math.cos(self._camera_pitch)
+                        sin_pitch = math.sin(self._camera_pitch)
+                        # Camera position from current orbit state
+                        cam_x = self._camera_target[0] - self._camera_distance * sin_yaw * cos_pitch
+                        cam_y = self._camera_target[1] - self._camera_distance * sin_pitch
+                        cam_z = self._camera_target[2] - self._camera_distance * cos_yaw * cos_pitch
+                        self._free_look_cam_pos = [cam_x, cam_y, cam_z]
+
+                    # Update viewing angles (camera stays fixed)
+                    self._camera_yaw -= dx * 0.005  # Faster for free look
+                    self._camera_pitch -= dy * 0.005
+                    self._camera_pitch = max(-1.57, min(1.57, self._camera_pitch))
+
+                    # Calculate new target from fixed camera position
+                    cam_x, cam_y, cam_z = self._free_look_cam_pos
+                    cos_yaw_new = math.cos(self._camera_yaw)
+                    sin_yaw_new = math.sin(self._camera_yaw)
+                    cos_pitch_new = math.cos(self._camera_pitch)
+                    sin_pitch_new = math.sin(self._camera_pitch)
+
+                    # target = camera + distance * direction
+                    self._camera_target[0] = cam_x + self._camera_distance * sin_yaw_new * cos_pitch_new
+                    self._camera_target[1] = cam_y + self._camera_distance * sin_pitch_new
+                    self._camera_target[2] = cam_z + self._camera_distance * cos_yaw_new * cos_pitch_new
+
+                    # Update camera using direct pose API
+                    if self._initialized and self._lib:
+                        self._lib.arch_set_camera_pose(
+                            ctypes.c_float(cam_x),
+                            ctypes.c_float(cam_y),
+                            ctypes.c_float(cam_z),
+                            ctypes.c_float(self._camera_target[0]),
+                            ctypes.c_float(self._camera_target[1]),
+                            ctypes.c_float(self._camera_target[2])
+                        )
+                else:
+                    # Orbit: rotate camera around target (slower, smoother)
+                    self._camera_yaw -= dx * 0.002
+                    self._camera_pitch -= dy * 0.002
+                    self._camera_pitch = max(-1.4, min(1.4, self._camera_pitch))
+                    # Clear free look camera position when switching back to orbit
+                    self._free_look_cam_pos = None
 
             self._last_mouse_pos = event.pos()
             event.accept()
@@ -1263,7 +1403,10 @@ class VulkanViewportWidget(QWidget):
 
         # Hover detection when not dragging
         if not self._dragging and self._selection_manager and self._document:
-            self._update_hover(event.pos().x(), event.pos().y())
+            try:
+                self._update_hover(event.pos().x(), event.pos().y())
+            except Exception as e:
+                pass  # Ignore hover errors to prevent crashes
 
         super().mouseMoveEvent(event)
 
@@ -1296,8 +1439,13 @@ class VulkanViewportWidget(QWidget):
             self.setCursor(Qt.CursorShape.ArrowCursor)
         super().leaveEvent(event)
 
+    def enterEvent(self, event):
+        """Grab focus when mouse enters viewport for keyboard shortcuts."""
+        self.setFocus()
+        super().enterEvent(event)
+
     def wheelEvent(self, event):
-        """Handle mouse wheel for zoom centered on cursor."""
+        """Handle mouse wheel for zoom (orbit mode) or movement (free look mode)."""
         import math
         delta = event.angleDelta().y() / 120.0
 
@@ -1305,53 +1453,108 @@ class VulkanViewportWidget(QWidget):
             super().wheelEvent(event)
             return
 
-        # Get cursor position relative to widget center (normalized -1 to 1)
-        cursor_pos = event.position()
-        ndc_x = (cursor_pos.x() / self.width()) * 2.0 - 1.0
-        ndc_y = 1.0 - (cursor_pos.y() / self.height()) * 2.0  # Flip Y
+        if self._free_look_mode:
+            # Free look mode: scroll moves camera forward/backward
+            # Calculate forward direction from yaw and pitch
+            cos_yaw = math.cos(self._camera_yaw)
+            sin_yaw = math.sin(self._camera_yaw)
+            cos_pitch = math.cos(self._camera_pitch)
+            sin_pitch = math.sin(self._camera_pitch)
 
-        # Calculate zoom
-        zoom_factor = 0.15
-        old_distance = self._camera_distance
-        new_distance = old_distance * (1.0 - delta * zoom_factor)
-        new_distance = max(5.0, min(500.0, new_distance))
+            # Forward vector (direction camera is looking)
+            forward_x = sin_yaw * cos_pitch
+            forward_y = sin_pitch
+            forward_z = cos_yaw * cos_pitch
 
-        # How much the distance changed
-        distance_delta = old_distance - new_distance
+            # Movement speed - scroll up (positive delta) = forward, scroll down = backward
+            # Camera system uses FEET - scale speed with distance
+            # Far away: move faster, close up: move slower
+            base_speed = 0.05  # 5% of distance per scroll tick
+            move_speed = max(0.5, self._camera_distance * base_speed)  # Min 0.5 feet
+            move_delta = delta * move_speed
 
-        # Calculate camera vectors
-        cos_yaw = math.cos(self._camera_yaw)
-        sin_yaw = math.sin(self._camera_yaw)
-        cos_pitch = math.cos(self._camera_pitch)
-        sin_pitch = math.sin(self._camera_pitch)
+            # Update camera position
+            if self._free_look_cam_pos is None:
+                # Initialize if not set
+                self._free_look_cam_pos = [
+                    self._camera_target[0] - self._camera_distance * forward_x,
+                    self._camera_target[1] - self._camera_distance * forward_y,
+                    self._camera_target[2] - self._camera_distance * forward_z
+                ]
 
-        # Camera right vector (in XZ plane)
-        right_x = cos_yaw
-        right_z = sin_yaw
+            self._free_look_cam_pos[0] += move_delta * forward_x
+            self._free_look_cam_pos[1] += move_delta * forward_y
+            self._free_look_cam_pos[2] += move_delta * forward_z
 
-        # Camera up vector (simplified - just Y for architectural views)
-        up_y = 1.0
+            # Update target to maintain same distance from camera
+            self._camera_target[0] = self._free_look_cam_pos[0] + self._camera_distance * forward_x
+            self._camera_target[1] = self._free_look_cam_pos[1] + self._camera_distance * forward_y
+            self._camera_target[2] = self._free_look_cam_pos[2] + self._camera_distance * forward_z
 
-        # Move target toward cursor position proportional to zoom amount
-        # The FOV determines how much screen space maps to world space
-        fov_factor = math.tan(math.radians(45.0 / 2.0))  # Approximate FOV
-        world_scale = distance_delta * fov_factor
+            # Update camera in renderer
+            if self._initialized and self._lib:
+                self._lib.arch_set_camera_pose(
+                    ctypes.c_float(self._free_look_cam_pos[0]),
+                    ctypes.c_float(self._free_look_cam_pos[1]),
+                    ctypes.c_float(self._free_look_cam_pos[2]),
+                    ctypes.c_float(self._camera_target[0]),
+                    ctypes.c_float(self._camera_target[1]),
+                    ctypes.c_float(self._camera_target[2])
+                )
+        else:
+            # Orbit mode: zoom centered on cursor
+            # Get cursor position relative to widget center (normalized -1 to 1)
+            cursor_pos = event.position()
+            ndc_x = (cursor_pos.x() / self.width()) * 2.0 - 1.0
+            ndc_y = 1.0 - (cursor_pos.y() / self.height()) * 2.0  # Flip Y
 
-        # Shift target based on cursor offset from center
-        self._camera_target[0] += ndc_x * world_scale * right_x
-        self._camera_target[2] += ndc_x * world_scale * right_z
-        self._camera_target[1] += ndc_y * world_scale * cos_pitch
+            # Calculate zoom - faster zoom, closer minimum
+            zoom_factor = 0.15  # Faster zoom for quicker navigation
+            old_distance = self._camera_distance
+            new_distance = old_distance * (1.0 - delta * zoom_factor)
+            # Allow getting very close (1 foot) to 300 feet out (units are FEET)
+            new_distance = max(1.0, min(300.0, new_distance))
 
-        # Apply the zoom
-        self._camera_distance = new_distance
+            # Debug: print when hitting limits
+            if new_distance <= 1.0 or new_distance >= 300.0:
+                print(f"[Viewport] Zoom limit hit: distance={new_distance:.1f}ft")
 
-        # Update camera target in renderer
-        if self._initialized and self._lib:
-            self._lib.arch_set_camera_target(
-                ctypes.c_float(self._camera_target[0]),
-                ctypes.c_float(self._camera_target[1]),
-                ctypes.c_float(self._camera_target[2])
-            )
+            # How much the distance changed
+            distance_delta = old_distance - new_distance
+
+            # Calculate camera vectors
+            cos_yaw = math.cos(self._camera_yaw)
+            sin_yaw = math.sin(self._camera_yaw)
+            cos_pitch = math.cos(self._camera_pitch)
+            sin_pitch = math.sin(self._camera_pitch)
+
+            # Camera right vector (in XZ plane)
+            right_x = cos_yaw
+            right_z = sin_yaw
+
+            # Camera up vector (simplified - just Y for architectural views)
+            up_y = 1.0
+
+            # Move target toward cursor position proportional to zoom amount
+            # The FOV determines how much screen space maps to world space
+            fov_factor = math.tan(math.radians(45.0 / 2.0))  # Approximate FOV
+            world_scale = distance_delta * fov_factor
+
+            # Shift target based on cursor offset from center
+            self._camera_target[0] += ndc_x * world_scale * right_x
+            self._camera_target[2] += ndc_x * world_scale * right_z
+            self._camera_target[1] += ndc_y * world_scale * cos_pitch
+
+            # Apply the zoom
+            self._camera_distance = new_distance
+
+            # Update camera target in renderer
+            if self._initialized and self._lib:
+                self._lib.arch_set_camera_target(
+                    ctypes.c_float(self._camera_target[0]),
+                    ctypes.c_float(self._camera_target[1]),
+                    ctypes.c_float(self._camera_target[2])
+                )
 
         super().wheelEvent(event)
 
@@ -1413,6 +1616,39 @@ class VulkanViewportWidget(QWidget):
                 self.get_clip_height(),
                 flipped
             )
+            event.accept()
+            return
+        elif event.key() == Qt.Key.Key_H:
+            # 'H' key resets camera to home/default view (ignore modifiers for reliability)
+            self._free_look_mode = False  # Exit free look mode
+            self._free_look_cam_pos = None  # Clear free look state
+            self.reset_camera()
+            print("[Viewport] Camera reset to home view (H key)")
+            event.accept()
+            return
+        elif event.key() == Qt.Key.Key_Space and not event.modifiers():
+            # Spacebar toggles free look mode - always reset to home view first
+            self._free_look_mode = not self._free_look_mode
+            mode = "FREE LOOK" if self._free_look_mode else "ORBIT"
+
+            # Reset camera to home position when switching modes
+            self.reset_camera()
+            self._free_look_cam_pos = None  # Clear free look state
+
+            # If entering free look mode, initialize camera position from home
+            if self._free_look_mode:
+                import math
+                cos_yaw = math.cos(self._camera_yaw)
+                sin_yaw = math.sin(self._camera_yaw)
+                cos_pitch = math.cos(self._camera_pitch)
+                sin_pitch = math.sin(self._camera_pitch)
+                cam_x = self._camera_target[0] - self._camera_distance * sin_yaw * cos_pitch
+                cam_y = self._camera_target[1] - self._camera_distance * sin_pitch
+                cam_z = self._camera_target[2] - self._camera_distance * cos_yaw * cos_pitch
+                self._free_look_cam_pos = [cam_x, cam_y, cam_z]
+
+            print(f"[Viewport] Camera mode: {mode} (reset to home)")
+            self.update()
             event.accept()
             return
 

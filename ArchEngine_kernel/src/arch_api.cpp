@@ -34,20 +34,23 @@ namespace {
     Building g_building;
     qbd::QBDLayout g_layout;  // Store layout for room access
 
-    // Camera state
+    // Camera state (all distances in FEET - renderer converts mm to ft internally)
     float g_cameraYaw = 0.5f;
     float g_cameraPitch = 0.4f;
-    float g_cameraDistance = 60.0f;
-    vec3 g_cameraTarget = {20.0f, 10.0f, 15.0f};
-    float g_cameraFOV = 45.0f;
+    float g_cameraDistance = 60.0f;  // 60 feet
+    vec3 g_cameraTarget = {26.0f, 10.0f, 20.0f};  // Building center approx (feet)
+    float g_cameraFOV = 60.0f;  // Wider FOV for better terrain visibility
     bool g_cameraOrthographic = false;
+
+    // Free look mode - camera position is fixed, only view direction changes
+    bool g_freeLookMode = false;
+    vec3 g_freeLookCameraPosition = {0.0f, 10.0f, 60.0f};  // Set by arch_set_camera_pose (feet)
 
     // State
     bool g_initialized = false;
     int g_width = 800;
     int g_height = 600;
     int g_selectedElement = -1;
-    int g_hoveredElement = -1;
     VisualizationMode g_vizMode = VisualizationMode::Material;
 
     // Error handling
@@ -67,14 +70,23 @@ namespace {
         if (!g_renderer) return;
 
         Camera camera;
-        camera.position.x = g_cameraTarget.x + g_cameraDistance * cos(g_cameraPitch) * sin(g_cameraYaw);
-        camera.position.y = g_cameraTarget.y + g_cameraDistance * sin(g_cameraPitch);
-        camera.position.z = g_cameraTarget.z + g_cameraDistance * cos(g_cameraPitch) * cos(g_cameraYaw);
+
+        if (g_freeLookMode) {
+            // Free look mode: use stored camera position
+            camera.position = g_freeLookCameraPosition;
+            std::cout << "[Camera] FREE LOOK mode - pos=(" << camera.position.x << ", " << camera.position.y << ", " << camera.position.z << ") target=(" << g_cameraTarget.x << ", " << g_cameraTarget.y << ", " << g_cameraTarget.z << ")\n";
+        } else {
+            // Orbit mode: calculate position from target, yaw, pitch, distance
+            camera.position.x = g_cameraTarget.x + g_cameraDistance * cos(g_cameraPitch) * sin(g_cameraYaw);
+            camera.position.y = g_cameraTarget.y + g_cameraDistance * sin(g_cameraPitch);
+            camera.position.z = g_cameraTarget.z + g_cameraDistance * cos(g_cameraPitch) * cos(g_cameraYaw);
+        }
+
         camera.target = g_cameraTarget;
         camera.up = vec3(0, 1, 0);
         camera.fov = g_cameraFOV;
         camera.nearPlane = 0.1f;
-        camera.farPlane = 10000.0f;  // Increased from 500ft to 10000ft for better zoom-out range
+        camera.farPlane = 100000.0f;  // Extended for large sites
         camera.isOrthographic = g_cameraOrthographic;
         camera.orthoSize = g_cameraDistance * 0.5f;  // Scale ortho based on distance
 
@@ -238,19 +250,6 @@ ARCH_API int arch_load_json(const char* json_str) {
             }
         }
 
-        // Scale terrain mesh vertices from mm to feet
-        if (g_building.terrainMesh.hasData()) {
-            for (auto& v : g_building.terrainMesh.vertices) {
-                v.position *= mmToFeet;
-            }
-            g_building.terrainMesh.min_elevation *= mmToFeet;
-            g_building.terrainMesh.max_elevation *= mmToFeet;
-            std::cout << "[ArchAPI] Scaled terrain mesh: "
-                      << g_building.terrainMesh.vertices.size() << " vertices, "
-                      << "elevation range: " << g_building.terrainMesh.min_elevation
-                      << " to " << g_building.terrainMesh.max_elevation << " feet" << std::endl;
-        }
-
         std::cout << "[ArchAPI] Loaded building with " << g_building.elements.size() << " elements" << std::endl;
 
         // Reset camera to fit
@@ -302,19 +301,6 @@ ARCH_API int arch_load_file(const char* file_path) {
             }
         }
 
-        // Scale terrain mesh vertices from mm to feet
-        if (g_building.terrainMesh.hasData()) {
-            for (auto& v : g_building.terrainMesh.vertices) {
-                v.position *= mmToFeet;
-            }
-            g_building.terrainMesh.min_elevation *= mmToFeet;
-            g_building.terrainMesh.max_elevation *= mmToFeet;
-            std::cout << "[ArchAPI] Scaled terrain mesh: "
-                      << g_building.terrainMesh.vertices.size() << " vertices, "
-                      << "elevation range: " << g_building.terrainMesh.min_elevation
-                      << " to " << g_building.terrainMesh.max_elevation << " feet" << std::endl;
-        }
-
         std::cout << "[ArchAPI] Loaded file: " << file_path << " (" << g_building.elements.size() << " elements)" << std::endl;
 
         arch_reset_camera();
@@ -345,13 +331,6 @@ ARCH_API int arch_render_frame(void) {
             g_renderer->beginRenderPass(clearColor);
 
             g_renderer->drawSky();
-
-            // DEBUG: Draw terrain FIRST (before grid) to ensure visibility
-            if (g_building.terrainMesh.hasData()) {
-                std::cout << "[arch_api] Drawing terrain BEFORE grid" << std::endl;
-                g_renderer->drawTerrain(g_building.terrainMesh);
-            }
-
             g_renderer->drawGrid(150.0f, 5.0f);
 
             // Draw building with selection
@@ -361,9 +340,9 @@ ARCH_API int arch_render_frame(void) {
             }
             g_renderer->drawStructuralFrame(g_building.elements, g_building, selected);
 
-            // Draw selected/hovered elements as wireframe overlays
-            if (!selected.empty() || g_hoveredElement >= 0) {
-                g_renderer->drawWireframeOutlines(g_building.elements, g_building, selected, g_hoveredElement);
+            // Draw terrain if available
+            if (g_building.terrainMesh.hasData()) {
+                g_renderer->drawTerrain(g_building.terrainMesh);
             }
 
             g_renderer->endRenderPass();
@@ -394,19 +373,45 @@ ARCH_API void arch_resize(int width, int height) {
 }
 
 ARCH_API void arch_set_camera(float yaw, float pitch, float distance) {
+    g_freeLookMode = false;  // Exit free look mode when using orbit camera
     g_cameraYaw = yaw;
     g_cameraPitch = glm::clamp(pitch, -1.4f, 1.4f);
-    g_cameraDistance = glm::clamp(distance, 10.0f, 500.0f);
+    g_cameraDistance = glm::clamp(distance, 1.0f, 300.0f);  // 1 to 300 feet
 }
 
 ARCH_API void arch_set_camera_target(float x, float y, float z) {
     g_cameraTarget = vec3(x, y, z);
 }
 
+ARCH_API void arch_set_camera_pose(float cam_x, float cam_y, float cam_z,
+                                   float target_x, float target_y, float target_z) {
+    // Direct camera positioning for free-look mode
+    g_freeLookMode = true;
+    g_freeLookCameraPosition = vec3(cam_x, cam_y, cam_z);
+
+    vec3 targetPos(target_x, target_y, target_z);
+    g_cameraTarget = targetPos;
+
+    // Calculate distance (for zoom consistency)
+    vec3 offset = g_freeLookCameraPosition - targetPos;
+    g_cameraDistance = glm::length(offset);
+
+    // Calculate yaw and pitch from offset vector
+    if (g_cameraDistance > 0.001f) {
+        vec3 dir = offset / g_cameraDistance;
+        g_cameraPitch = glm::asin(dir.y);  // Vertical angle
+        g_cameraYaw = glm::atan(dir.z, dir.x);  // Horizontal angle
+    }
+
+    std::cout << "[FreeLook] Set camera pose: pos=(" << g_freeLookCameraPosition.x << ", "
+              << g_freeLookCameraPosition.y << ", " << g_freeLookCameraPosition.z << ") target=("
+              << g_cameraTarget.x << ", " << g_cameraTarget.y << ", " << g_cameraTarget.z << ")\n";
+}
+
 ARCH_API void arch_reset_camera(void) {
     if (g_building.elements.empty()) {
         g_cameraTarget = vec3(0, 0, 0);
-        g_cameraDistance = 60.0f;
+        g_cameraDistance = 60.0f;  // 60 feet
         return;
     }
 
@@ -421,6 +426,13 @@ ARCH_API void arch_reset_camera(void) {
     g_cameraDistance = size * 1.5f;
     g_cameraYaw = 0.5f;
     g_cameraPitch = 0.4f;
+}
+
+ARCH_API void arch_get_camera_state(float* out_target_x, float* out_target_y, float* out_target_z, float* out_distance) {
+    if (out_target_x) *out_target_x = g_cameraTarget.x;
+    if (out_target_y) *out_target_y = g_cameraTarget.y;
+    if (out_target_z) *out_target_z = g_cameraTarget.z;
+    if (out_distance) *out_distance = g_cameraDistance;
 }
 
 ARCH_API void arch_set_camera_fov(float fov) {
@@ -456,115 +468,83 @@ ARCH_API int arch_get_selected_element(void) {
     return g_selectedElement;
 }
 
-ARCH_API void arch_set_hovered_element(int element_index) {
-    g_hoveredElement = element_index;
-}
-
 ARCH_API int arch_pick_element(int screen_x, int screen_y) {
-    // Early return without locking to avoid potential mutex issues
+    std::lock_guard<std::mutex> lock(g_mutex);
+
     if (!g_initialized || g_building.elements.empty()) {
         return -1;
     }
 
-    try {
-        std::lock_guard<std::mutex> lock(g_mutex);
+    // Convert screen coordinates to normalized device coordinates (-1 to 1)
+    float ndcX = (2.0f * screen_x / g_width) - 1.0f;
+    float ndcY = 1.0f - (2.0f * screen_y / g_height);  // Flip Y
 
-        // Convert screen coordinates to normalized device coordinates (-1 to 1)
-        float ndcX = (2.0f * screen_x / g_width) - 1.0f;
-        float ndcY = 1.0f - (2.0f * screen_y / g_height);  // Flip Y
+    // Get camera position
+    vec3 camPos;
+    camPos.x = g_cameraTarget.x + g_cameraDistance * cos(g_cameraPitch) * sin(g_cameraYaw);
+    camPos.y = g_cameraTarget.y + g_cameraDistance * sin(g_cameraPitch);
+    camPos.z = g_cameraTarget.z + g_cameraDistance * cos(g_cameraPitch) * cos(g_cameraYaw);
 
-        // Simple clamp without glm::clamp
-        if (ndcX < -1.0f) ndcX = -1.0f;
-        if (ndcX > 1.0f) ndcX = 1.0f;
-        if (ndcY < -1.0f) ndcY = -1.0f;
-        if (ndcY > 1.0f) ndcY = 1.0f;
+    // Build view and projection matrices
+    mat4 view = glm::lookAt(camPos, g_cameraTarget, vec3(0, 1, 0));
+    mat4 proj;
+    float aspect = float(g_width) / float(g_height);
 
-        // Get camera position
-        vec3 camPos;
-        camPos.x = g_cameraTarget.x + g_cameraDistance * cos(g_cameraPitch) * sin(g_cameraYaw);
-        camPos.y = g_cameraTarget.y + g_cameraDistance * sin(g_cameraPitch);
-        camPos.z = g_cameraTarget.z + g_cameraDistance * cos(g_cameraPitch) * cos(g_cameraYaw);
-
-        // Build view and projection matrices
-        mat4 view = glm::lookAt(camPos, g_cameraTarget, vec3(0, 1, 0));
-        mat4 proj;
-        float aspect = float(g_width) / float(g_height);
-
-        if (g_cameraOrthographic) {
-            float orthoSize = g_cameraDistance * 0.5f;
-            proj = glm::ortho(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, 0.1f, 500.0f);
-        } else {
-            proj = glm::perspective(glm::radians(g_cameraFOV), aspect, 0.1f, 500.0f);
-        }
-
-        // Inverse view-projection to get ray
-        mat4 invViewProj = glm::inverse(proj * view);
-
-        // Ray in world space
-        vec4 rayStart4 = invViewProj * vec4(ndcX, ndcY, -1.0f, 1.0f);
-        vec4 rayEnd4 = invViewProj * vec4(ndcX, ndcY, 1.0f, 1.0f);
-
-        // Validate w component to avoid division by zero
-        if (std::abs(rayStart4.w) < 1e-6f || std::abs(rayEnd4.w) < 1e-6f) {
-            return -1;
-        }
-
-        vec3 rayStart = vec3(rayStart4) / rayStart4.w;
-        vec3 rayEnd = vec3(rayEnd4) / rayEnd4.w;
-        vec3 rayDir = glm::normalize(rayEnd - rayStart);
-
-        // Test ray against each element's AABB
-        int closestElement = -1;
-        float closestDist = 1e9f;
-
-        for (size_t i = 0; i < g_building.elements.size(); ++i) {
-            const auto& elem = g_building.elements[i];
-
-            // Skip elements with invalid dimensions
-            if (elem.width <= 0.0f || elem.depth <= 0.0f) {
-                continue;
-            }
-
-            // Compute element AABB
-            vec3 minB = glm::min(elem.start, elem.end);
-            vec3 maxB = glm::max(elem.start, elem.end);
-
-            // Expand by element width/depth (approximate)
-            float halfW = elem.width * 0.5f + 0.1f;
-            float halfD = elem.depth * 0.5f + 0.1f;
-            minB -= vec3(halfW, 0.0f, halfD);
-            maxB += vec3(halfW, halfD, halfD);
-
-            // Ray-AABB intersection test (slab method)
-            // Safe inverse direction calculation
-            vec3 invDir;
-            invDir.x = (std::abs(rayDir.x) > 1e-6f) ? (1.0f / rayDir.x) : 1e6f;
-            invDir.y = (std::abs(rayDir.y) > 1e-6f) ? (1.0f / rayDir.y) : 1e6f;
-            invDir.z = (std::abs(rayDir.z) > 1e-6f) ? (1.0f / rayDir.z) : 1e6f;
-
-            vec3 t1 = (minB - rayStart) * invDir;
-            vec3 t2 = (maxB - rayStart) * invDir;
-
-            vec3 tMin = glm::min(t1, t2);
-            vec3 tMax = glm::max(t1, t2);
-
-            float tNear = std::max(std::max(tMin.x, tMin.y), tMin.z);
-            float tFar = std::min(std::min(tMax.x, tMax.y), tMax.z);
-
-            if (tNear <= tFar && tFar > 0) {
-                float dist = tNear > 0 ? tNear : tFar;
-                if (dist < closestDist) {
-                    closestDist = dist;
-                    closestElement = static_cast<int>(i);
-                }
-            }
-        }
-
-        return closestElement;
-    } catch (...) {
-        // Catch any exception and return -1 instead of crashing
-        return -1;
+    if (g_cameraOrthographic) {
+        float orthoSize = g_cameraDistance * 0.5f;
+        proj = glm::ortho(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, 0.1f, 100000.0f);
+    } else {
+        proj = glm::perspective(glm::radians(g_cameraFOV), aspect, 0.1f, 100000.0f);
     }
+
+    // Inverse view-projection to get ray
+    mat4 invViewProj = glm::inverse(proj * view);
+
+    // Ray in world space
+    vec4 rayStart4 = invViewProj * vec4(ndcX, ndcY, -1.0f, 1.0f);
+    vec4 rayEnd4 = invViewProj * vec4(ndcX, ndcY, 1.0f, 1.0f);
+    vec3 rayStart = vec3(rayStart4) / rayStart4.w;
+    vec3 rayEnd = vec3(rayEnd4) / rayEnd4.w;
+    vec3 rayDir = glm::normalize(rayEnd - rayStart);
+
+    // Test ray against each element's AABB
+    int closestElement = -1;
+    float closestDist = 1e9f;
+
+    for (size_t i = 0; i < g_building.elements.size(); ++i) {
+        const auto& elem = g_building.elements[i];
+
+        // Compute element AABB
+        vec3 minB = glm::min(elem.start, elem.end);
+        vec3 maxB = glm::max(elem.start, elem.end);
+
+        // Expand by element width/depth (approximate)
+        float halfW = elem.width * 0.5f + 0.1f;
+        float halfD = elem.depth * 0.5f + 0.1f;
+        minB -= vec3(halfW, 0, halfD);
+        maxB += vec3(halfW, elem.depth, halfD);
+
+        // Ray-AABB intersection test (slab method)
+        vec3 invDir = 1.0f / rayDir;
+        vec3 t1 = (minB - rayStart) * invDir;
+        vec3 t2 = (maxB - rayStart) * invDir;
+
+        vec3 tMin = glm::min(t1, t2);
+        vec3 tMax = glm::max(t1, t2);
+
+        float tNear = glm::max(glm::max(tMin.x, tMin.y), tMin.z);
+        float tFar = glm::min(glm::min(tMax.x, tMax.y), tMax.z);
+
+        if (tNear <= tFar && tFar > 0) {
+            float dist = tNear > 0 ? tNear : tFar;
+            if (dist < closestDist) {
+                closestDist = dist;
+                closestElement = static_cast<int>(i);
+            }
+        }
+    }
+
+    return closestElement;
 }
 
 ARCH_API int arch_get_element_count(void) {
@@ -661,13 +641,6 @@ ARCH_API void arch_set_material_style(int style) {
 ARCH_API int arch_get_material_style(void) {
     std::lock_guard<std::mutex> lock(g_mutex);
     return g_renderer ? static_cast<int>(g_renderer->getMaterialStyle()) : 1; // Default: Clean
-}
-
-ARCH_API void arch_set_material_root(const char* path) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_renderer && path) {
-        g_renderer->setMaterialRoot(path);
-    }
 }
 
 ARCH_API void arch_set_uv_scale(float scale_u, float scale_v) {
@@ -1333,6 +1306,209 @@ ARCH_API int arch_get_element_material_name(int element_index, char* out_name, i
     out_name[max_length - 1] = '\0';
 
     return 0;
+}
+
+} // extern "C" (temporarily close for C++ terrain helpers)
+
+// =============================================================================
+// Terrain Mesh API Implementation
+// =============================================================================
+
+// Global terrain state (C++ namespace, not exported)
+namespace {
+    bool g_terrainEnabled = true;
+    vec3 g_terrainOffset = {0.0f, 0.0f, 0.0f};
+    float g_terrainRoughness = 0.8f;
+    float g_terrainMetallic = 0.0f;
+    int g_terrainColorMode = 0;  // 0=elevation gradient
+
+    // Elevation color gradient (same as geometry_loader.cpp)
+    vec3 getTerrainElevationColor(float normalizedElevation) {
+        float t = glm::clamp(normalizedElevation, 0.0f, 1.0f);
+
+        // Four-stop gradient: green -> tan -> gray -> white
+        const vec3 lowGreen = vec3(0.34f, 0.55f, 0.30f);   // Low elevation - grass/forest
+        const vec3 midTan = vec3(0.72f, 0.60f, 0.40f);     // Mid elevation - dirt/rock
+        const vec3 highGray = vec3(0.55f, 0.55f, 0.55f);   // High elevation - bare rock
+        const vec3 peakWhite = vec3(0.95f, 0.95f, 0.95f);  // Peak - snow
+
+        if (t < 0.33f) {
+            return glm::mix(lowGreen, midTan, t / 0.33f);
+        } else if (t < 0.66f) {
+            return glm::mix(midTan, highGray, (t - 0.33f) / 0.33f);
+        } else {
+            return glm::mix(highGray, peakWhite, (t - 0.66f) / 0.34f);
+        }
+    }
+}
+
+extern "C" {  // Re-open for C API functions
+
+ARCH_API int arch_set_terrain_data(const ArchTerrainVertex* vertices, int vertex_count,
+                                   const unsigned int* indices, int index_count,
+                                   float width_ft, float depth_ft,
+                                   float min_elevation, float max_elevation) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!vertices || vertex_count <= 0) {
+        setError("Invalid vertices array");
+        return -1;
+    }
+
+    if (!indices || index_count <= 0 || index_count % 3 != 0) {
+        setError("Invalid indices array (must be multiple of 3)");
+        return -2;
+    }
+
+    // Clear existing terrain
+    g_building.terrainMesh.vertices.clear();
+    g_building.terrainMesh.indices.clear();
+
+    // Store metadata
+    g_building.terrainMesh.width_ft = width_ft;
+    g_building.terrainMesh.depth_ft = depth_ft;
+    g_building.terrainMesh.min_elevation = min_elevation;
+    g_building.terrainMesh.max_elevation = max_elevation;
+
+    // Compute elevation range for color mapping
+    float elevRange = max_elevation - min_elevation;
+    if (elevRange < 0.001f) elevRange = 1.0f;  // Avoid division by zero
+
+    // Convert vertices (keep in feet, same units as building elements)
+    g_building.terrainMesh.vertices.reserve(vertex_count);
+
+    for (int i = 0; i < vertex_count; i++) {
+        const ArchTerrainVertex& src = vertices[i];
+        Vertex vert{};
+
+        // Position: keep in feet (same units as building elements)
+        // API: X=east, Y=up(elevation), Z=north
+        // Engine: X=east, Y=up, Z=south (flip Z)
+        vert.position = vec3(
+            src.pos_x,
+            src.pos_y,   // Y is elevation (up)
+            -src.pos_z   // Flip Z for south
+        );
+
+        // Apply offset (in feet)
+        vert.position += vec3(
+            g_terrainOffset.x,
+            g_terrainOffset.y,
+            -g_terrainOffset.z
+        );
+
+        // Normal (swap Y/Z, flip Z)
+        vert.normal = glm::normalize(vec3(src.normal_x, src.normal_y, -src.normal_z));
+
+        // UV
+        vert.texCoord = vec2(src.u, src.v);
+
+        // Compute color from elevation
+        float normalizedElev = (src.pos_y - min_elevation) / elevRange;
+        if (g_terrainColorMode == 0) {
+            vert.color = getTerrainElevationColor(normalizedElev);
+        } else {
+            // Uniform gray
+            vert.color = vec3(0.5f, 0.5f, 0.5f);
+        }
+
+        g_building.terrainMesh.vertices.push_back(vert);
+    }
+
+    // Copy indices
+    g_building.terrainMesh.indices.reserve(index_count);
+    for (int i = 0; i < index_count; i++) {
+        g_building.terrainMesh.indices.push_back(indices[i]);
+    }
+
+    // Reset renderer's terrain cache to force rebuild
+    if (g_renderer) {
+        g_renderer->invalidateTerrainCache();
+    }
+
+    std::cout << "[Terrain API] Set terrain: " << vertex_count << " vertices, "
+              << (index_count / 3) << " triangles, elevation " << min_elevation
+              << "-" << max_elevation << " ft\n";
+
+    return 0;
+}
+
+ARCH_API void arch_clear_terrain(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    g_building.terrainMesh.vertices.clear();
+    g_building.terrainMesh.indices.clear();
+    g_building.terrainMesh.width_ft = 0.0f;
+    g_building.terrainMesh.depth_ft = 0.0f;
+    g_building.terrainMesh.min_elevation = 0.0f;
+    g_building.terrainMesh.max_elevation = 0.0f;
+
+    if (g_renderer) {
+        g_renderer->invalidateTerrainCache();
+    }
+
+    std::cout << "[Terrain API] Cleared terrain data\n";
+}
+
+ARCH_API int arch_has_terrain(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_building.terrainMesh.hasData() ? 1 : 0;
+}
+
+ARCH_API int arch_get_terrain_info(float* out_width_ft, float* out_depth_ft,
+                                   float* out_min_elev, float* out_max_elev,
+                                   int* out_vertex_count, int* out_triangle_count) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_building.terrainMesh.hasData()) {
+        return -1;
+    }
+
+    if (out_width_ft) *out_width_ft = g_building.terrainMesh.width_ft;
+    if (out_depth_ft) *out_depth_ft = g_building.terrainMesh.depth_ft;
+    if (out_min_elev) *out_min_elev = g_building.terrainMesh.min_elevation;
+    if (out_max_elev) *out_max_elev = g_building.terrainMesh.max_elevation;
+    if (out_vertex_count) *out_vertex_count = static_cast<int>(g_building.terrainMesh.vertices.size());
+    if (out_triangle_count) *out_triangle_count = static_cast<int>(g_building.terrainMesh.indices.size() / 3);
+
+    return 0;
+}
+
+ARCH_API void arch_set_terrain_enabled(int enabled) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_terrainEnabled = (enabled != 0);
+}
+
+ARCH_API int arch_get_terrain_enabled(void) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_terrainEnabled ? 1 : 0;
+}
+
+ARCH_API void arch_set_terrain_offset(float offset_x, float offset_y, float offset_z) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_terrainOffset = vec3(offset_x, offset_y, offset_z);
+
+    // If terrain exists, we need to rebuild it with the new offset
+    // For now, just store the offset - a full rebuild would require re-calling set_terrain_data
+    std::cout << "[Terrain API] Set offset: (" << offset_x << ", " << offset_y << ", " << offset_z << ") ft\n";
+}
+
+ARCH_API void arch_get_terrain_offset(float* out_x, float* out_y, float* out_z) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (out_x) *out_x = g_terrainOffset.x;
+    if (out_y) *out_y = g_terrainOffset.y;
+    if (out_z) *out_z = g_terrainOffset.z;
+}
+
+ARCH_API void arch_set_terrain_material(float roughness, float metallic) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_terrainRoughness = glm::clamp(roughness, 0.0f, 1.0f);
+    g_terrainMetallic = glm::clamp(metallic, 0.0f, 1.0f);
+}
+
+ARCH_API void arch_set_terrain_color_mode(int mode) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_terrainColorMode = mode;
 }
 
 } // extern "C"
