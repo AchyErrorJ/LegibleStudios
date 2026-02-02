@@ -231,43 +231,36 @@ class BaseView(QGraphicsView):
     def mousePressEvent(self, event):
         """Handle mouse press."""
         if event.button() == Qt.MouseButton.MiddleButton:
-            # Use Qt's built-in drag mode for smooth panning
+            # Manual panning - don't forward to items
             self._panning = True
             self._last_pan_point = event.position()
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-            # Fake a left button press for the drag mode
-            fake_event = type(event)(
-                event.type(),
-                event.position(),
-                Qt.MouseButton.LeftButton,
-                Qt.MouseButton.LeftButton,
-                event.modifiers()
-            )
-            super().mousePressEvent(fake_event)
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         """Handle mouse move."""
-        if self._panning:
-            # Forward to Qt's drag handler
-            super().mouseMoveEvent(event)
+        if self._panning and self._last_pan_point is not None:
+            # Manual panning - scroll the view
+            delta = event.position() - self._last_pan_point
+            self._last_pan_point = event.position()
+            self.horizontalScrollBar().setValue(
+                self.horizontalScrollBar().value() - int(delta.x())
+            )
+            self.verticalScrollBar().setValue(
+                self.verticalScrollBar().value() - int(delta.y())
+            )
+            event.accept()
         else:
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         """Handle mouse release."""
         if event.button() == Qt.MouseButton.MiddleButton:
-            # Fake a left button release for the drag mode
-            fake_event = type(event)(
-                event.type(),
-                event.position(),
-                Qt.MouseButton.LeftButton,
-                Qt.MouseButton.LeftButton,
-                event.modifiers()
-            )
-            super().mouseReleaseEvent(fake_event)
             self._panning = False
-            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+            self._last_pan_point = None
+            self.unsetCursor()
+            event.accept()
         else:
             super().mouseReleaseEvent(event)

@@ -112,6 +112,49 @@ class Window:
 
 
 @dataclass
+class Floor:
+    """Floor slab data structure."""
+    index: int
+    vertices: List[List[float]]  # Polygon vertices [[x, z], ...]
+    thickness: float = 150  # mm (typical slab thickness)
+    elevation: float = 0  # Y position (bottom of slab)
+    material: str = "concrete"
+    room_ids: List[str] = field(default_factory=list)  # Rooms this floor covers
+
+    @property
+    def area(self) -> float:
+        """Calculate floor area using shoelace formula."""
+        if not self.vertices or len(self.vertices) < 3:
+            return 0
+        area = 0
+        n = len(self.vertices)
+        for i in range(n):
+            j = (i + 1) % n
+            area += self.vertices[i][0] * self.vertices[j][1]
+            area -= self.vertices[j][0] * self.vertices[i][1]
+        return abs(area) / 2.0 / 1_000_000.0  # mm² to m²
+
+
+@dataclass
+class Roof:
+    """Roof data structure."""
+    index: int
+    roof_type: str  # 'hip', 'gable', 'flat', 'shed', 'mansard'
+    base_vertices: List[List[float]]  # Base polygon [[x, z], ...]
+    ridge_vertices: List[List[float]]  # Ridge line(s) [[x, z], ...]
+    base_height: float  # Y position at eaves (top of walls)
+    ridge_height: float  # Y position at ridge peak
+    pitch: float = 30.0  # Roof pitch in degrees
+    overhang: float = 300  # Eave overhang in mm
+    material: str = "shingle"
+
+    @property
+    def slope_height(self) -> float:
+        """Height from eave to ridge."""
+        return self.ridge_height - self.base_height
+
+
+@dataclass
 class WallLayer:
     """Single layer of a wall assembly."""
     name: str
@@ -150,12 +193,21 @@ class Room:
     locked_properties: List[str] = field(default_factory=list)
 
 
+# Room types that default to 'open' connections with each other
+# These are circulation spaces and open-plan living areas
+OPEN_ROOM_TYPES = {
+    'hallway', 'corridor', 'foyer', 'entry',  # Circulation
+    'living', 'dining', 'kitchen', 'great_room',  # Open-plan living
+    'open', 'gallery', 'loft'  # Explicitly open spaces
+}
+
+
 @dataclass
 class RoomConnection:
     """Connection between two adjacent rooms."""
     room_a_id: str
     room_b_id: str
-    connection_type: str  # 'structural', 'open', 'mechanical', 'insulated', 'undefined'
+    connection_type: str  # 'structural', 'open', 'mechanical', 'insulated', 'undefined', 'wall', 'wet_wall'
     shared_edge: Optional[List[List[float]]] = None  # [[x1,y1], [x2,y2]] where rooms meet
     wall_id: Optional[str] = None  # Generated wall if applicable
 
@@ -225,6 +277,8 @@ class ArchDocument(QObject):
         self._walls: List[Wall] = []
         self._doors: List[Door] = []
         self._windows: List[Window] = []
+        self._floors: List[Floor] = []  # Floor slabs
+        self._roofs: List[Roof] = []  # Roof structures
         self._rooms: Dict[str, Room] = {}
         self._wall_types: Dict[str, WallType] = {}
         self._room_connections: List[RoomConnection] = []  # Room adjacencies
@@ -271,6 +325,16 @@ class ArchDocument(QObject):
     def windows(self) -> List[Window]:
         """Get parsed windows."""
         return self._windows
+
+    @property
+    def floors(self) -> List[Floor]:
+        """Get parsed floor slabs."""
+        return self._floors
+
+    @property
+    def roofs(self) -> List[Roof]:
+        """Get parsed roof structures."""
+        return self._roofs
 
     @property
     def rooms(self) -> Dict[str, Room]:
@@ -487,6 +551,32 @@ class ArchDocument(QObject):
 
         return updated
 
+    def _get_default_connection_type(self, room_a: Room, room_b: Room) -> str:
+        """
+        Determine default connection type based on room types.
+
+        Open room types (hallway, living, dining, kitchen, etc.) default
+        to 'open' connections with each other. Other room combinations
+        default to 'wall' (interior partition).
+
+        Args:
+            room_a: First room
+            room_b: Second room
+
+        Returns:
+            'open' if both rooms are open types, otherwise 'wall'
+        """
+        # Get room types, normalized to lowercase
+        type_a = (room_a.room_type or '').lower()
+        type_b = (room_b.room_type or '').lower()
+
+        # If both rooms are open types, default to 'open' (no wall)
+        if type_a in OPEN_ROOM_TYPES and type_b in OPEN_ROOM_TYPES:
+            return 'open'
+
+        # Default to regular interior wall
+        return 'wall'
+
     def detect_room_adjacencies(self, threshold: float = 500.0):
         """
         Detect which rooms are adjacent by checking for overlapping/touching edges.
@@ -499,6 +589,7 @@ class ArchDocument(QObject):
         for conn in self._room_connections:
             # Use sorted tuple as key to handle both orderings
             key = tuple(sorted([conn.room_a_id, conn.room_b_id]))
+            # Only preserve explicitly set types (not 'undefined')
             if conn.connection_type and conn.connection_type != 'undefined':
                 existing_types[key] = conn.connection_type
 
@@ -520,9 +611,13 @@ class ArchDocument(QObject):
                 # Check for shared/overlapping edges
                 shared_edge = self._find_shared_edge(room_a, room_b, threshold)
                 if shared_edge:
-                    # Restore previous connection type if it existed
+                    # Restore previous connection type if it existed,
+                    # otherwise use smart default based on room types
                     key = tuple(sorted([room_a_id, room_b_id]))
-                    conn_type = existing_types.get(key, 'undefined')
+                    if key in existing_types:
+                        conn_type = existing_types[key]
+                    else:
+                        conn_type = self._get_default_connection_type(room_a, room_b)
 
                     conn = RoomConnection(
                         room_a_id=room_a_id,
@@ -531,7 +626,7 @@ class ArchDocument(QObject):
                         shared_edge=shared_edge
                     )
                     self._room_connections.append(conn)
-                    print(f"[Adjacency] {room_a.name} <-> {room_b.name}")
+                    print(f"[Adjacency] {room_a.name} <-> {room_b.name} ({conn_type})")
 
     def _find_shared_edge(self, room_a: Room, room_b: Room, threshold: float) -> Optional[List[List[float]]]:
         """
@@ -915,13 +1010,17 @@ class ArchDocument(QObject):
             )
             self._room_connections.append(conn)
 
-        # Auto-bind walls to rooms if not already bound
-        self._auto_bind_walls_to_rooms()
-
         # Detect room adjacencies if not loaded from data
         print(f"[Document] Rooms loaded: {len(self._rooms)}, connections: {len(self._room_connections)}")
         if not self._room_connections and len(self._rooms) > 1:
             self.detect_room_adjacencies()
+
+        # Regenerate walls from room relationships to ensure consistency
+        # This ensures walls match connection types (open connections = no wall)
+        if len(self._rooms) > 0:
+            self.generate_walls_from_rooms()
+            self.generate_floors_from_rooms()
+            self.generate_roof(roof_type='hip', pitch=30.0)
 
     def _auto_bind_walls_to_rooms(self):
         """
@@ -1243,24 +1342,28 @@ class ArchDocument(QObject):
 
     def generate_walls_from_rooms(self, wall_height: float = 2700.0):
         """
-        Generate walls from room edges.
+        Generate walls from room edges based on room relationships.
+
+        Wall types derived from room relationships:
+        - Exterior walls (structural): Room edges with NO adjacent room
+        - Structural interior walls: User-marked 'structural' connections
+        - Interior/partition walls: Regular 'wall' connections between rooms
+        - Wet walls: 'wet_wall' connections (plumbing walls)
+        - No walls: 'open' connections - open-plan spaces stay open
 
         Rules:
-        - Each room edge becomes a wall
-        - If edge has a connection to another room:
-          - Use connection_type to determine wall category
-          - 'open' connections = no wall
-        - If edge has no connection = exterior wall
         - Shared edges only create one wall (avoid duplicates)
-        - Preserves existing partition walls (is_structural=False)
+        - Preserves manually-added partition walls (bound_room_id empty)
+        - Open connections between open-plan rooms create no wall
 
         Returns (exterior_count, interior_count, open_count).
         """
+        # Map connection types to wall categories
         CONNECTION_TO_CATEGORY = {
             'wall': 'interior',
             'open': None,  # No wall for open connections
             'wet_wall': 'wet_wall',
-            'structural': 'structural',
+            'structural': 'interior',  # Structural interior wall
             'mechanical': 'mechanical',
             'insulated': 'insulated',
             'undefined': 'interior',
@@ -1268,15 +1371,16 @@ class ArchDocument(QObject):
 
         print(f"[WallGen] Generating walls from {len(self._rooms)} rooms...")
 
-        # Preserve partition walls (non-structural walls added at LOD 2)
-        partition_walls = [w for w in self._walls if not w.is_structural]
-        print(f"[WallGen] Preserving {len(partition_walls)} partition walls")
+        # Only preserve manually-added partition walls (not bound to rooms)
+        # These are walls added at LOD 2 that don't correspond to room edges
+        manual_walls = [w for w in self._walls if not w.bound_room_id]
+        print(f"[WallGen] Preserving {len(manual_walls)} manual walls")
 
         # Track processed edges to avoid duplicates
         processed_edges = set()
 
-        # New walls list starts with partition walls
-        new_walls = list(partition_walls)
+        # New walls list starts with manual walls
+        new_walls = list(manual_walls)
         wall_index = len(new_walls)
 
         exterior_count = 0
@@ -1299,7 +1403,7 @@ class ArchDocument(QObject):
 
                 processed_edges.add(edge_key)
 
-                # Check if this edge has a connection
+                # Check if this edge has a connection to another room
                 conn, is_reversed = self._find_connection_for_edge(v1, v2)
 
                 if conn:
@@ -1317,14 +1421,14 @@ class ArchDocument(QObject):
                     category = 'exterior'
                     exterior_count += 1
 
-                # Create the wall
+                # Create the wall - all room-bound walls are structural
                 wall = Wall(
                     index=wall_index,
                     start=(v1[0], 0, v1[1]),  # x, y=0, z
                     end=(v2[0], 0, v2[1]),
                     height=wall_height,
                     category=category,
-                    is_structural=True,
+                    is_structural=True,  # Room-bound walls are always structural
                     bound_room_id=room_id,
                     edge_index=edge_idx,
                 )
@@ -1353,6 +1457,604 @@ class ArchDocument(QObject):
 
         self.document_changed.emit()
         return exterior_count, interior_count, open_count
+
+    def generate_floors_from_rooms(self, thickness: float = 150.0):
+        """
+        Generate floor slabs from room polygons.
+
+        Rooms connected by 'open' connections are merged into single floor slabs.
+        This creates unified floors for open-plan areas (living/dining/kitchen).
+
+        Returns number of floor slabs created.
+        """
+        print(f"[FloorGen] Generating floors from {len(self._rooms)} rooms...")
+
+        # Clear existing floors
+        self._floors.clear()
+
+        if not self._rooms:
+            return 0
+
+        # Group rooms by 'open' connections using union-find
+        room_ids = list(self._rooms.keys())
+        parent = {rid: rid for rid in room_ids}
+
+        def find(x):
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+
+        def union(x, y):
+            px, py = find(x), find(y)
+            if px != py:
+                parent[px] = py
+
+        # Union rooms connected by 'open' connections
+        open_count = 0
+        for conn in self._room_connections:
+            if conn.connection_type == 'open':
+                union(conn.room_a_id, conn.room_b_id)
+                open_count += 1
+
+        print(f"[FloorGen] Found {open_count} open connections")
+
+        # Group rooms by their root parent
+        groups = {}
+        for rid in room_ids:
+            root = find(rid)
+            if root not in groups:
+                groups[root] = []
+            groups[root].append(rid)
+
+        print(f"[FloorGen] Created {len(groups)} floor groups")
+
+        # Generate floor for each group
+        floor_index = 0
+        for group_root, group_room_ids in groups.items():
+            # Collect all vertices from rooms in this group
+            all_vertices = []
+            for rid in group_room_ids:
+                room = self._rooms.get(rid)
+                if room and room.vertices:
+                    all_vertices.extend(room.vertices)
+
+            if not all_vertices:
+                continue
+
+            # For merged floors, compute convex hull
+            # For single rooms, use room vertices directly
+            if len(group_room_ids) == 1:
+                room = self._rooms[group_room_ids[0]]
+                floor_vertices = [list(v) for v in room.vertices] if room.vertices else []
+            else:
+                # Compute convex hull of all vertices
+                floor_vertices = self._convex_hull(all_vertices)
+
+            if len(floor_vertices) < 3:
+                continue
+
+            floor = Floor(
+                index=floor_index,
+                vertices=floor_vertices,
+                thickness=thickness,
+                elevation=0,
+                room_ids=group_room_ids
+            )
+            self._floors.append(floor)
+            floor_index += 1
+
+            room_names = [self._rooms[rid].name for rid in group_room_ids]
+            print(f"[FloorGen] Floor {floor_index}: {', '.join(room_names)} ({len(floor_vertices)} vertices, {floor.area:.1f} m²)")
+
+        self._modified = True
+        print(f"[FloorGen] Total floors: {len(self._floors)}")
+        return len(self._floors)
+
+    def _convex_hull(self, points: List[List[float]]) -> List[List[float]]:
+        """
+        Compute convex hull of 2D points using Graham scan.
+        Returns vertices in counter-clockwise order.
+        """
+        if len(points) < 3:
+            return points
+
+        # Remove duplicates (within tolerance)
+        unique = []
+        seen = set()
+        for p in points:
+            key = (round(p[0] / 10) * 10, round(p[1] / 10) * 10)  # 10mm tolerance
+            if key not in seen:
+                seen.add(key)
+                unique.append(p)
+
+        if len(unique) < 3:
+            return unique
+
+        # Find bottom-most point (and leftmost if tie)
+        start = min(unique, key=lambda p: (p[1], p[0]))
+
+        def cross(o, a, b):
+            return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+        def angle_key(p):
+            import math
+            dx = p[0] - start[0]
+            dy = p[1] - start[1]
+            return (math.atan2(dy, dx), dx * dx + dy * dy)
+
+        # Sort by polar angle
+        sorted_pts = sorted(unique, key=angle_key)
+
+        # Build hull
+        hull = []
+        for p in sorted_pts:
+            while len(hull) >= 2 and cross(hull[-2], hull[-1], p) <= 0:
+                hull.pop()
+            hull.append(p)
+
+        return hull
+
+    def generate_roof(self, roof_type: str = 'hip', pitch: float = 30.0,
+                      wall_height: float = 2700.0, overhang: float = 300.0):
+        """
+        Generate roof over the building exterior.
+
+        Args:
+            roof_type: 'hip', 'gable', 'flat', 'shed'
+            pitch: Roof pitch in degrees (for sloped roofs)
+            wall_height: Height of walls (eave height)
+            overhang: Eave overhang in mm
+
+        Returns:
+            Number of roof sections created.
+        """
+        import math
+
+        print(f"[RoofGen] Generating {roof_type} roof (pitch={pitch}°)...")
+
+        # Clear existing roofs
+        self._roofs.clear()
+
+        # Get building exterior boundary from exterior walls
+        exterior_points = []
+        for wall in self._walls:
+            if wall.category == 'exterior':
+                exterior_points.append([wall.start[0], wall.start[2]])
+                exterior_points.append([wall.end[0], wall.end[2]])
+
+        if not exterior_points:
+            # Fallback: use all room vertices
+            for room in self._rooms.values():
+                if room.vertices:
+                    exterior_points.extend(room.vertices)
+
+        if len(exterior_points) < 3:
+            print("[RoofGen] Not enough points for roof")
+            return 0
+
+        # Get convex hull of exterior
+        base_vertices = self._convex_hull(exterior_points)
+
+        # Add overhang to base
+        base_with_overhang = self._offset_polygon(base_vertices, overhang)
+
+        # Calculate bounding box to determine ridge direction
+        xs = [p[0] for p in base_with_overhang]
+        zs = [p[1] for p in base_with_overhang]
+        min_x, max_x = min(xs), max(xs)
+        min_z, max_z = min(zs), max(zs)
+        width = max_x - min_x
+        depth = max_z - min_z
+        center_x = (min_x + max_x) / 2
+        center_z = (min_z + max_z) / 2
+
+        # Ridge runs along the longer dimension
+        if width >= depth:
+            # Ridge runs along X axis
+            ridge_dir = 'x'
+            span = depth  # Distance from ridge to eave
+        else:
+            # Ridge runs along Z axis
+            ridge_dir = 'z'
+            span = width
+
+        # Calculate ridge height based on pitch
+        # For hip roof, the slope goes from eave to ridge
+        pitch_rad = math.radians(pitch)
+        half_span = span / 2
+        ridge_rise = half_span * math.tan(pitch_rad)
+        ridge_height = wall_height + ridge_rise
+
+        print(f"[RoofGen] Building: {width:.0f}x{depth:.0f}mm, ridge height: {ridge_height:.0f}mm")
+
+        if roof_type == 'flat':
+            # Flat roof - just a slab at wall height
+            roof = Roof(
+                index=0,
+                roof_type='flat',
+                base_vertices=base_with_overhang,
+                ridge_vertices=[],  # No ridge for flat roof
+                base_height=wall_height,
+                ridge_height=wall_height + 100,  # Slight pitch for drainage
+                pitch=0,
+                overhang=overhang,
+            )
+            self._roofs.append(roof)
+
+        elif roof_type == 'hip':
+            # Hip roof - ridge in center, 4 sloping faces
+            # Calculate ridge endpoints (inset from building ends)
+            hip_inset = half_span  # Hip slope from corners
+
+            if ridge_dir == 'x':
+                # Ridge along X
+                ridge_start_x = min_x + hip_inset
+                ridge_end_x = max_x - hip_inset
+                if ridge_start_x >= ridge_end_x:
+                    # Building too square - ridge becomes a point (pyramid)
+                    ridge_vertices = [[center_x, center_z]]
+                else:
+                    ridge_vertices = [
+                        [ridge_start_x, center_z],
+                        [ridge_end_x, center_z]
+                    ]
+            else:
+                # Ridge along Z
+                ridge_start_z = min_z + hip_inset
+                ridge_end_z = max_z - hip_inset
+                if ridge_start_z >= ridge_end_z:
+                    # Building too square - ridge becomes a point
+                    ridge_vertices = [[center_x, center_z]]
+                else:
+                    ridge_vertices = [
+                        [center_x, ridge_start_z],
+                        [center_x, ridge_end_z]
+                    ]
+
+            roof = Roof(
+                index=0,
+                roof_type='hip',
+                base_vertices=base_with_overhang,
+                ridge_vertices=ridge_vertices,
+                base_height=wall_height,
+                ridge_height=ridge_height,
+                pitch=pitch,
+                overhang=overhang,
+            )
+            self._roofs.append(roof)
+
+        elif roof_type == 'gable':
+            # Gable roof - ridge end to end, 2 sloping faces + 2 vertical gable ends
+            if ridge_dir == 'x':
+                ridge_vertices = [
+                    [min_x - overhang, center_z],
+                    [max_x + overhang, center_z]
+                ]
+            else:
+                ridge_vertices = [
+                    [center_x, min_z - overhang],
+                    [center_x, max_z + overhang]
+                ]
+
+            roof = Roof(
+                index=0,
+                roof_type='gable',
+                base_vertices=base_with_overhang,
+                ridge_vertices=ridge_vertices,
+                base_height=wall_height,
+                ridge_height=ridge_height,
+                pitch=pitch,
+                overhang=overhang,
+            )
+            self._roofs.append(roof)
+
+        elif roof_type == 'shed':
+            # Shed roof - single slope
+            # High edge on one side, low on opposite
+            if ridge_dir == 'x':
+                ridge_vertices = [
+                    [min_x - overhang, max_z],
+                    [max_x + overhang, max_z]
+                ]
+            else:
+                ridge_vertices = [
+                    [max_x, min_z - overhang],
+                    [max_x, max_z + overhang]
+                ]
+
+            roof = Roof(
+                index=0,
+                roof_type='shed',
+                base_vertices=base_with_overhang,
+                ridge_vertices=ridge_vertices,
+                base_height=wall_height,
+                ridge_height=ridge_height,
+                pitch=pitch,
+                overhang=overhang,
+            )
+            self._roofs.append(roof)
+
+        self._modified = True
+        print(f"[RoofGen] Created {len(self._roofs)} roof section(s)")
+        return len(self._roofs)
+
+    def _generate_roof_surfaces(self, roof: Roof) -> List[dict]:
+        """
+        Generate 3D roof surface polygons for rendering.
+
+        For hip roof: 4 trapezoidal/triangular faces
+        For gable roof: 2 rectangular faces + 2 triangular gable ends
+        For flat roof: 1 rectangular face
+        """
+        surfaces = []
+        base = roof.base_vertices
+        ridge = roof.ridge_vertices
+        base_y = roof.base_height
+        ridge_y = roof.ridge_height
+
+        if not base or len(base) < 3:
+            return surfaces
+
+        # Get bounding box
+        xs = [p[0] for p in base]
+        zs = [p[1] for p in base]
+        min_x, max_x = min(xs), max(xs)
+        min_z, max_z = min(zs), max(zs)
+
+        if roof.roof_type == 'flat':
+            # Single flat surface
+            surfaces.append({
+                'id': 'flat_top',
+                'name': 'top',
+                'pitch': 0,
+                'vertices': [
+                    [min_x, ridge_y, min_z],
+                    [max_x, ridge_y, min_z],
+                    [max_x, ridge_y, max_z],
+                    [min_x, ridge_y, max_z]
+                ]
+            })
+
+        elif roof.roof_type == 'hip':
+            if len(ridge) == 1:
+                # Pyramid roof (square building) - 4 triangular faces
+                apex = [ridge[0][0], ridge_y, ridge[0][1]]
+                corners = [
+                    [min_x, base_y, min_z],
+                    [max_x, base_y, min_z],
+                    [max_x, base_y, max_z],
+                    [min_x, base_y, max_z]
+                ]
+                names = ['south', 'east', 'north', 'west']
+                for i in range(4):
+                    surfaces.append({
+                        'id': f'hip_{names[i]}',
+                        'name': names[i],
+                        'pitch': roof.pitch,
+                        'vertices': [corners[i], corners[(i+1) % 4], apex]
+                    })
+            elif len(ridge) >= 2:
+                # Standard hip roof with ridge line - 4 faces (2 trapezoids, 2 triangles)
+                ridge_start = [ridge[0][0], ridge_y, ridge[0][1]]
+                ridge_end = [ridge[1][0], ridge_y, ridge[1][1]]
+
+                # Determine if ridge runs along X or Z
+                if abs(ridge[1][0] - ridge[0][0]) > abs(ridge[1][1] - ridge[0][1]):
+                    # Ridge along X axis
+                    # South face (trapezoid)
+                    surfaces.append({
+                        'id': 'hip_south',
+                        'name': 'south',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [min_x, base_y, min_z],
+                            [max_x, base_y, min_z],
+                            ridge_end,
+                            ridge_start
+                        ]
+                    })
+                    # North face (trapezoid)
+                    surfaces.append({
+                        'id': 'hip_north',
+                        'name': 'north',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [max_x, base_y, max_z],
+                            [min_x, base_y, max_z],
+                            ridge_start,
+                            ridge_end
+                        ]
+                    })
+                    # West face (triangle)
+                    surfaces.append({
+                        'id': 'hip_west',
+                        'name': 'west',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [min_x, base_y, max_z],
+                            [min_x, base_y, min_z],
+                            ridge_start
+                        ]
+                    })
+                    # East face (triangle)
+                    surfaces.append({
+                        'id': 'hip_east',
+                        'name': 'east',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [max_x, base_y, min_z],
+                            [max_x, base_y, max_z],
+                            ridge_end
+                        ]
+                    })
+                else:
+                    # Ridge along Z axis
+                    # West face (trapezoid)
+                    surfaces.append({
+                        'id': 'hip_west',
+                        'name': 'west',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [min_x, base_y, max_z],
+                            [min_x, base_y, min_z],
+                            ridge_start,
+                            ridge_end
+                        ]
+                    })
+                    # East face (trapezoid)
+                    surfaces.append({
+                        'id': 'hip_east',
+                        'name': 'east',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [max_x, base_y, min_z],
+                            [max_x, base_y, max_z],
+                            ridge_end,
+                            ridge_start
+                        ]
+                    })
+                    # South face (triangle)
+                    surfaces.append({
+                        'id': 'hip_south',
+                        'name': 'south',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [min_x, base_y, min_z],
+                            [max_x, base_y, min_z],
+                            ridge_start
+                        ]
+                    })
+                    # North face (triangle)
+                    surfaces.append({
+                        'id': 'hip_north',
+                        'name': 'north',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [max_x, base_y, max_z],
+                            [min_x, base_y, max_z],
+                            ridge_end
+                        ]
+                    })
+
+        elif roof.roof_type == 'gable':
+            if len(ridge) >= 2:
+                ridge_start = [ridge[0][0], ridge_y, ridge[0][1]]
+                ridge_end = [ridge[1][0], ridge_y, ridge[1][1]]
+
+                # Determine ridge direction
+                if abs(ridge[1][0] - ridge[0][0]) > abs(ridge[1][1] - ridge[0][1]):
+                    # Ridge along X - gable ends on East/West
+                    # South slope
+                    surfaces.append({
+                        'id': 'gable_south',
+                        'name': 'south',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [min_x, base_y, min_z],
+                            [max_x, base_y, min_z],
+                            ridge_end,
+                            ridge_start
+                        ]
+                    })
+                    # North slope
+                    surfaces.append({
+                        'id': 'gable_north',
+                        'name': 'north',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [max_x, base_y, max_z],
+                            [min_x, base_y, max_z],
+                            ridge_start,
+                            ridge_end
+                        ]
+                    })
+                else:
+                    # Ridge along Z - gable ends on North/South
+                    # West slope
+                    surfaces.append({
+                        'id': 'gable_west',
+                        'name': 'west',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [min_x, base_y, max_z],
+                            [min_x, base_y, min_z],
+                            ridge_start,
+                            ridge_end
+                        ]
+                    })
+                    # East slope
+                    surfaces.append({
+                        'id': 'gable_east',
+                        'name': 'east',
+                        'pitch': roof.pitch,
+                        'vertices': [
+                            [max_x, base_y, min_z],
+                            [max_x, base_y, max_z],
+                            ridge_end,
+                            ridge_start
+                        ]
+                    })
+
+        return surfaces
+
+    def _offset_polygon(self, vertices: List[List[float]], offset: float) -> List[List[float]]:
+        """
+        Offset polygon outward by a distance (for eave overhang).
+        Simple implementation using vertex normals.
+        """
+        if len(vertices) < 3:
+            return vertices
+
+        import math
+
+        n = len(vertices)
+        result = []
+
+        for i in range(n):
+            # Get adjacent vertices
+            prev_v = vertices[(i - 1) % n]
+            curr_v = vertices[i]
+            next_v = vertices[(i + 1) % n]
+
+            # Edge vectors
+            e1 = [curr_v[0] - prev_v[0], curr_v[1] - prev_v[1]]
+            e2 = [next_v[0] - curr_v[0], next_v[1] - curr_v[1]]
+
+            # Normalize
+            len1 = math.sqrt(e1[0]**2 + e1[1]**2)
+            len2 = math.sqrt(e2[0]**2 + e2[1]**2)
+            if len1 < 1 or len2 < 1:
+                result.append(curr_v)
+                continue
+
+            e1 = [e1[0]/len1, e1[1]/len1]
+            e2 = [e2[0]/len2, e2[1]/len2]
+
+            # Outward normals (rotate 90° clockwise for CCW polygon)
+            n1 = [e1[1], -e1[0]]
+            n2 = [e2[1], -e2[0]]
+
+            # Average normal (bisector)
+            avg_n = [n1[0] + n2[0], n1[1] + n2[1]]
+            avg_len = math.sqrt(avg_n[0]**2 + avg_n[1]**2)
+            if avg_len < 0.001:
+                avg_n = n1
+            else:
+                avg_n = [avg_n[0]/avg_len, avg_n[1]/avg_len]
+
+            # Offset vertex
+            # Adjust offset for corner angle
+            dot = n1[0]*n2[0] + n1[1]*n2[1]
+            corner_factor = 1.0 / max(0.5, (1 + dot) / 2)  # Miter-like adjustment
+            actual_offset = offset * min(corner_factor, 2.0)
+
+            new_v = [
+                curr_v[0] + avg_n[0] * actual_offset,
+                curr_v[1] + avg_n[1] * actual_offset
+            ]
+            result.append(new_v)
+
+        return result
 
     def _parse_furniture(self):
         """Parse furniture placements from data."""
@@ -1532,6 +2234,39 @@ class ArchDocument(QObject):
             windows.append(window_data)
         self._data['windows'] = windows
 
+        # Update floors - convert polygon to bounding box for kernel
+        floors_batch = []
+        for floor in self._floors:
+            if floor.vertices:
+                xs = [v[0] for v in floor.vertices]
+                zs = [v[1] for v in floor.vertices]
+                floor_data = {
+                    'start': [min(xs), floor.elevation, min(zs)],
+                    'end': [max(xs), floor.elevation, max(zs)],
+                    'thickness': floor.thickness,
+                    'room': floor.room_ids[0] if floor.room_ids else '',
+                    'vertices': floor.vertices  # Keep polygon for 2D view
+                }
+                floors_batch.append(floor_data)
+        self._data['floors_batch'] = floors_batch
+
+        # Update roofs - generate surface polygons for kernel
+        roofs = []
+        for roof in self._roofs:
+            roof_data = {
+                'id': f'roof_{roof.index}',
+                'type': roof.roof_type,
+                'pitch': roof.pitch,
+                'overhang': roof.overhang,
+                'ridge_height': roof.ridge_height - roof.base_height,
+                'base_height': roof.base_height,
+                'base_vertices': roof.base_vertices,
+                'ridge_vertices': roof.ridge_vertices,
+                'surfaces': self._generate_roof_surfaces(roof)
+            }
+            roofs.append(roof_data)
+        self._data['roofs'] = roofs
+
         # Update rooms
         rooms = {}
         for room_id, room in self._rooms.items():
@@ -1550,6 +2285,19 @@ class ArchDocument(QObject):
                 room_data['vertices'] = room.vertices
             rooms[room_id] = room_data
         self._data['rooms'] = rooms
+
+        # Update room connections
+        connections = []
+        for conn in self._room_connections:
+            conn_data = {
+                'room_a_id': conn.room_a_id,
+                'room_b_id': conn.room_b_id,
+                'connection_type': conn.connection_type,
+                'shared_edge': conn.shared_edge,
+                'wall_id': conn.wall_id
+            }
+            connections.append(conn_data)
+        self._data['room_connections'] = connections
 
     def get_data(self) -> dict:
         """Get current document data as JSON-serializable dict.

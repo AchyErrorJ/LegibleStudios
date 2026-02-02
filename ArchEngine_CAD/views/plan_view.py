@@ -2316,6 +2316,11 @@ class RoomResizeGrip(QGraphicsItem):
             painter.drawLine(QPointF(30, 0), QPointF(60, 0))
 
     def mousePressEvent(self, event):
+        # Ignore middle button - let it pass through for view panning
+        if event.button() == Qt.MouseButton.MiddleButton:
+            event.ignore()
+            return
+
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
             self._drag_start_pos = event.scenePos()
@@ -2330,6 +2335,11 @@ class RoomResizeGrip(QGraphicsItem):
             event.accept()
 
     def mouseMoveEvent(self, event):
+        # Ignore middle button moves - let them pass through for view panning
+        if event.buttons() & Qt.MouseButton.MiddleButton:
+            event.ignore()
+            return
+
         if self._dragging and self._drag_start_pos:
             delta = event.scenePos() - self._drag_start_pos
 
@@ -2361,16 +2371,23 @@ class RoomResizeGrip(QGraphicsItem):
             event.accept()
 
     def mouseReleaseEvent(self, event):
+        # Ignore middle button - let it pass through for view panning
+        if event.button() == Qt.MouseButton.MiddleButton:
+            event.ignore()
+            return
+
         if self._dragging:
             self._dragging = False
             self._drag_start_pos = None
             self._drag_start_v1 = None
             self._drag_start_v2 = None
-            # Recalculate adjacencies
+            # Recalculate adjacencies and regenerate walls
             if self.room_item.document:
                 self.room_item.document.detect_room_adjacencies()
-                if self.room_item._view and hasattr(self.room_item._view, 'refresh_connections'):
-                    self.room_item._view.refresh_connections()
+                self.room_item.document.generate_walls_from_rooms()
+                if self.room_item._view:
+                    # Refresh the entire view to show updated walls
+                    self.room_item._view.refresh()
                 event_bus.document_modified.emit()
             event.accept()
 
@@ -2399,6 +2416,7 @@ class RoomItem(QGraphicsItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.setZValue(-10)  # Draw rooms behind walls
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)  # Only accept left button, let middle pass through
 
         # Calculate center from vertices
         self._update_center()
@@ -2627,6 +2645,11 @@ class RoomItem(QGraphicsItem):
 
     def mousePressEvent(self, event):
         """Handle mouse press - prepare for potential drag at LOD 1."""
+        # Ignore middle button - let it pass through for view panning
+        if event.button() == Qt.MouseButton.MiddleButton:
+            event.ignore()
+            return
+
         # Only handle left button at LOD 1
         if self._view and self._view.lod_level == 1 and event.button() == Qt.MouseButton.LeftButton:
             self._drag_start_mouse_pos = event.scenePos()
@@ -2639,6 +2662,11 @@ class RoomItem(QGraphicsItem):
 
     def mouseMoveEvent(self, event):
         """Handle mouse move - drag room at LOD 1."""
+        # Ignore middle button moves - let them pass through for view panning
+        if event.buttons() & Qt.MouseButton.MiddleButton:
+            event.ignore()
+            return
+
         if self._drag_start_mouse_pos is not None and self._drag_start_item_pos is not None:
             delta = event.scenePos() - self._drag_start_mouse_pos
 
@@ -2686,6 +2714,11 @@ class RoomItem(QGraphicsItem):
 
     def mouseReleaseEvent(self, event):
         """Handle mouse release - finalize drag by updating vertices."""
+        # Ignore middle button - let it pass through for view panning
+        if event.button() == Qt.MouseButton.MiddleButton:
+            event.ignore()
+            return
+
         was_dragging = self._dragging
 
         if was_dragging and self._drag_start_item_pos is not None and self.room.vertices:
@@ -2708,11 +2741,13 @@ class RoomItem(QGraphicsItem):
             self.room.bounds['width'] = max(xs) - min(xs)
             self.room.bounds['height'] = max(zs) - min(zs)
 
-            # Recalculate adjacencies
+            # Recalculate adjacencies and regenerate walls
             if self.document:
                 self.document.detect_room_adjacencies()
-                if self._view and hasattr(self._view, 'refresh_connections'):
-                    self._view.refresh_connections()
+                self.document.generate_walls_from_rooms()
+                if self._view:
+                    # Refresh the entire view to show updated walls
+                    self._view.refresh()
             from core.events import event_bus
             event_bus.document_modified.emit()
 
