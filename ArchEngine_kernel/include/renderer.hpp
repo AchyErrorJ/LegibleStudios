@@ -259,7 +259,7 @@ public:
      *
      * Call before beginRenderPass() or beginHDRRenderPass().
      */
-    void renderShadowPass(const std::vector<StructuralElement>& elements, const vec3& buildingOffset = vec3(0.0f));
+    void renderShadowPass(const std::vector<StructuralElement>& elements);
     /// @}
 
     /// @name Camera
@@ -369,7 +369,7 @@ public:
      * @param color RGB color
      * @param stress Stress ratio [0-1+]
      */
-    void drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress = 0.0f, const vec3& offset = vec3(0.0f));
+    void drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress = 0.0f);
 
     /**
      * @brief Draw custom mesh with explicit material parameters
@@ -378,7 +378,7 @@ public:
      * @param stress Stress ratio
      * @param material Vec4 with (metallic, roughness, ao, emission)
      */
-    void drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, f32 stress, vec4 material, const vec3& offset = vec3(0.0f));
+    void drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, f32 stress, vec4 material);
 
     /**
      * @brief Draw mesh with explicit material parameters
@@ -423,23 +423,21 @@ public:
      * @param elements Vector of structural elements to draw
      * @param building Building data containing thermal/acoustic info for visualization
      * @param selectedIndices Set of element indices that are selected (highlighted)
-     * @param buildingOffset Translation offset to apply to all elements (in mm)
      *
      * This is the main function for rendering a complete structural frame.
      * Elements are colored based on the current visualization mode.
      */
-    void drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices = {}, const vec3& buildingOffset = vec3(0.0f));
+    void drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices = {});
 
     /**
      * @brief Draw terrain mesh with elevation-based coloring
      * @param terrain TerrainMesh data from building
      *
      * Renders the terrain mesh if it has data. Uses pre-computed vertex colors
-     * for elevation visualization.
-     *
-     * @param offset Translation offset to apply (in world units/feet)
+     * for elevation visualization. Terrain is rendered with identity transform
+     * (pre-positioned in world space).
      */
-    void drawTerrain(const TerrainMesh& terrain, const vec3& offset = vec3(0.0f));
+    void drawTerrain(const TerrainMesh& terrain);
 
     /**
      * @brief Invalidate terrain mesh cache
@@ -448,6 +446,13 @@ public:
      * to force the renderer to rebuild the GPU mesh on next draw.
      */
     void invalidateTerrainCache() { m_lastTerrainData = nullptr; m_terrainMesh.reset(); }
+
+    /**
+     * @brief Set terrain material/texture name
+     * @param materialName Material name (e.g., "polyhaven/grass_path_2") or empty for vertex colors
+     */
+    void setTerrainMaterial(const std::string& materialName) { m_terrainMaterialName = materialName; }
+    const std::string& getTerrainMaterial() const { return m_terrainMaterialName; }
 
     /**
      * @brief Draw material test scene (PBR validation)
@@ -626,6 +631,11 @@ public:
      */
     bool loadHdrEnvironment(const std::string& filepath);
 
+    /**
+     * @brief Switch back to procedural sky (from HDRI)
+     */
+    void useProceduralSky();
+
     /** @brief Enable or disable HDR environment map usage */
     void setUseHdrEnvMap(bool use) { m_useHdrEnvMap = use; }
 
@@ -634,6 +644,9 @@ public:
 
     /** @brief Check if an HDR environment map is loaded */
     bool hasHdrEnvMap() const { return m_envMap && m_envMap->isLoaded(); }
+
+    /** @brief Get the environment map (for path tracer integration) */
+    EnvironmentMap* getEnvironmentMap() const { return m_envMap.get(); }
     /// @}
 
     /// @name SSAO Settings
@@ -783,23 +796,23 @@ public:
     /// @name Section Clipping Settings
     /// @{
 
-    /** @brief Enable or disable section clipping plane */
-    void setClippingEnabled(bool enabled) { m_clippingEnabled = enabled; }
+    /** @brief Enable or disable section clipping (legacy single plane) */
+    void setClippingEnabled(bool enabled) { m_clippingEnabled = enabled ? 1u : 0u; }
 
-    /** @brief Check if clipping is enabled */
-    bool getClippingEnabled() const { return m_clippingEnabled; }
+    /** @brief Check if any clipping is enabled */
+    bool getClippingEnabled() const { return m_clippingEnabled != 0; }
 
     /**
-     * @brief Set the clipping plane directly
+     * @brief Set the clipping plane directly (legacy single plane, uses plane 0)
      * @param plane Plane equation (normal.xyz, distance.w)
      */
-    void setClipPlane(const vec4& plane) { m_clipPlane = plane; }
+    void setClipPlane(const vec4& plane) { m_clipPlanes[0] = plane; m_numClipPlanes = 1; }
 
-    /** @brief Get current clipping plane */
-    const vec4& getClipPlane() const { return m_clipPlane; }
+    /** @brief Get current clipping plane (legacy, returns plane 0) */
+    const vec4& getClipPlane() const { return m_clipPlanes[0]; }
 
     /**
-     * @brief Set clipping axis
+     * @brief Set clipping axis (legacy single plane)
      * @param axis 0=X, 1=Y, 2=Z
      */
     void setClipAxis(int axis) { m_clipAxis = axis; updateClipPlane(); }
@@ -808,7 +821,7 @@ public:
     int getClipAxis() const { return m_clipAxis; }
 
     /**
-     * @brief Set clipping plane height/position along axis
+     * @brief Set clipping plane height/position along axis (legacy single plane)
      * @param height Position along the clip axis
      */
     void setClipHeight(f32 height) { m_clipHeight = height; updateClipPlane(); }
@@ -817,13 +830,81 @@ public:
     f32 getClipHeight() const { return m_clipHeight; }
 
     /**
-     * @brief Flip the clipping direction
+     * @brief Flip the clipping direction (legacy single plane)
      * @param flipped True to clip below instead of above
      */
     void setClipFlipped(bool flipped) { m_clipFlipped = flipped; updateClipPlane(); }
 
     /** @brief Check if clipping is flipped */
     bool getClipFlipped() const { return m_clipFlipped; }
+
+    // ========== Multi-Plane Clipping (Section Box) ==========
+
+    /**
+     * @brief Set a specific clip plane directly
+     * @param index Plane index (0-5)
+     * @param plane Plane equation (normal.xyz, distance.w)
+     * @param enabled Whether this plane is active
+     */
+    void setClipPlaneAt(u32 index, const vec4& plane, bool enabled = true);
+
+    /**
+     * @brief Get a specific clip plane
+     * @param index Plane index (0-5)
+     * @return Plane equation
+     */
+    const vec4& getClipPlaneAt(u32 index) const;
+
+    /**
+     * @brief Enable or disable a specific clip plane
+     * @param index Plane index (0-5)
+     * @param enabled Whether the plane should be active
+     */
+    void setClipPlaneEnabled(u32 index, bool enabled);
+
+    /**
+     * @brief Check if a specific clip plane is enabled
+     * @param index Plane index (0-5)
+     */
+    bool getClipPlaneEnabled(u32 index) const;
+
+    /**
+     * @brief Set number of active clip planes
+     * @param count Number of planes (0-6)
+     */
+    void setNumClipPlanes(u32 count) { m_numClipPlanes = std::min(count, 6u); }
+
+    /** @brief Get number of active clip planes */
+    u32 getNumClipPlanes() const { return m_numClipPlanes; }
+
+    /**
+     * @brief Set up a section box (6 clip planes forming a 3D box)
+     * @param minBounds Minimum corner of the box (x, y, z)
+     * @param maxBounds Maximum corner of the box (x, y, z)
+     *
+     * Creates 6 clip planes that isolate geometry within the specified box.
+     * Fragments outside the box will be clipped.
+     */
+    void setSectionBox(const vec3& minBounds, const vec3& maxBounds);
+
+    /**
+     * @brief Clear section box (disable all clip planes)
+     */
+    void clearSectionBox();
+
+    /**
+     * @brief Check if section box is active
+     * @return True if all 6 planes are enabled
+     */
+    bool hasSectionBox() const { return m_numClipPlanes == 6 && m_clippingEnabled == 0x3F; }
+
+    /**
+     * @brief Get section box bounds (if active)
+     * @param outMin Output: minimum corner
+     * @param outMax Output: maximum corner
+     * @return True if section box is active
+     */
+    bool getSectionBoxBounds(vec3& outMin, vec3& outMax) const;
     /// @}
 
     /// @name Statistics
@@ -1429,10 +1510,7 @@ private:
     // Terrain mesh (separate from element meshes, recreated on terrain data change)
     std::unique_ptr<Mesh> m_terrainMesh;
     const TerrainMesh* m_lastTerrainData = nullptr;  // Track if terrain data changed
-    u64 m_lastTerrainVersion = 0;  // Track terrain version to detect changes
-
-    // Building placement offset (applied to all structural elements during drawing)
-    vec3 m_buildingOffset = vec3(0.0f);
+    std::string m_terrainMaterialName;  // Material/texture name for terrain (empty = use vertex colors)
 
     // Frame state
     u32 m_currentFrame = 0;
@@ -1494,14 +1572,22 @@ private:
     // Debug visualization modes
     MaterialDebugMode m_materialDebugMode = MaterialDebugMode::None;
 
-    // Section clipping
-    bool m_clippingEnabled = false;
-    vec4 m_clipPlane = vec4(0.0f, 1.0f, 0.0f, 0.0f);  // Default: Y-up plane at origin
+    // Section clipping (multi-plane for section box)
+    u32 m_clippingEnabled = 0;  // Bitmask: bit 0-5 = plane enabled
+    u32 m_numClipPlanes = 0;    // Number of active clip planes (0-6)
+    vec4 m_clipPlanes[6] = {    // Up to 6 planes for section box
+        vec4(0.0f, 1.0f, 0.0f, 0.0f),   // Default: Y-up plane at origin
+        vec4(0.0f), vec4(0.0f), vec4(0.0f), vec4(0.0f), vec4(0.0f)
+    };
+    // Legacy single-plane controls (update plane 0)
     int m_clipAxis = 1;      // 0=X, 1=Y, 2=Z
     f32 m_clipHeight = 0.0f; // Clip plane position along axis
     bool m_clipFlipped = false;
+    // Section box bounds (cached for getSectionBoxBounds)
+    vec3 m_sectionBoxMin = vec3(0.0f);
+    vec3 m_sectionBoxMax = vec3(0.0f);
 
-    void updateClipPlane();
+    void updateClipPlane();  // Updates plane 0 from axis/height/flipped
 
     // PBR Material defaults (general)
     f32 m_defaultMetallic = 0.0f;

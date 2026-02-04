@@ -35,6 +35,14 @@ extern "C" {
 ARCH_API int arch_init(void* hwnd, int width, int height);
 
 /**
+ * Initialize renderer in headless mode for offline rendering.
+ * Use this for path tracing without a display.
+ *
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_init_headless(void);
+
+/**
  * Shutdown the renderer and release all resources.
  */
 ARCH_API void arch_shutdown(void);
@@ -274,6 +282,82 @@ ARCH_API void arch_set_section_floor_plan(float y_height);
  * @param position Position along axis in feet
  */
 ARCH_API void arch_set_section_elevation(int axis, float position);
+
+// =============================================================================
+// Section Box API (Multi-Plane Clipping)
+// =============================================================================
+
+/**
+ * Set a section box to isolate a 3D region of the model.
+ * Uses 6 clip planes to show only geometry within the specified bounds.
+ *
+ * @param min_x Minimum X bound in feet
+ * @param min_y Minimum Y bound in feet
+ * @param min_z Minimum Z bound in feet
+ * @param max_x Maximum X bound in feet
+ * @param max_y Maximum Y bound in feet
+ * @param max_z Maximum Z bound in feet
+ */
+ARCH_API void arch_set_section_box(float min_x, float min_y, float min_z,
+                                   float max_x, float max_y, float max_z);
+
+/**
+ * Clear the section box (disable all clip planes).
+ */
+ARCH_API void arch_clear_section_box(void);
+
+/**
+ * Check if a section box is currently active.
+ *
+ * @return 1 if section box is active, 0 otherwise
+ */
+ARCH_API int arch_has_section_box(void);
+
+/**
+ * Get the current section box bounds.
+ *
+ * @param out_min_x Output: minimum X
+ * @param out_min_y Output: minimum Y
+ * @param out_min_z Output: minimum Z
+ * @param out_max_x Output: maximum X
+ * @param out_max_y Output: maximum Y
+ * @param out_max_z Output: maximum Z
+ * @return 0 on success, non-zero if no section box is active
+ */
+ARCH_API int arch_get_section_box(float* out_min_x, float* out_min_y, float* out_min_z,
+                                  float* out_max_x, float* out_max_y, float* out_max_z);
+
+/**
+ * Set a specific clip plane directly.
+ * Advanced API for custom clipping configurations.
+ *
+ * @param index Plane index (0-5)
+ * @param a Plane normal X component
+ * @param b Plane normal Y component
+ * @param c Plane normal Z component
+ * @param d Plane distance from origin
+ * @param enabled 1 to enable, 0 to disable
+ */
+ARCH_API void arch_set_clip_plane_at(int index, float a, float b, float c, float d, int enabled);
+
+/**
+ * Get a specific clip plane.
+ *
+ * @param index Plane index (0-5)
+ * @param out_a Output: normal X
+ * @param out_b Output: normal Y
+ * @param out_c Output: normal Z
+ * @param out_d Output: distance
+ * @return 1 if plane is enabled, 0 if disabled or invalid index
+ */
+ARCH_API int arch_get_clip_plane_at(int index, float* out_a, float* out_b, float* out_c, float* out_d);
+
+/**
+ * Get number of active clip planes.
+ *
+ * @return Number of active planes (0-6)
+ */
+ARCH_API int arch_get_num_clip_planes(void);
 
 // =============================================================================
 // Material Style API
@@ -894,84 +978,210 @@ ARCH_API void arch_set_terrain_material(float roughness, float metallic);
 ARCH_API void arch_set_terrain_color_mode(int mode);
 
 // =============================================================================
-// Building Placement API
+// Environment/HDRI API
 // =============================================================================
 
 /**
- * Set the building position offset.
- * The building will be rendered at this position (in mm).
+ * Load an HDR environment map for IBL lighting.
+ * Supports .hdr files (Radiance HDR format).
  *
- * @param x X position in mm
- * @param y Y position in mm (elevation)
- * @param z Z position in mm
+ * @param path Path to the .hdr file
+ * @return 0 on success, non-zero on failure
  */
-ARCH_API void arch_set_building_position(float x, float y, float z);
+ARCH_API int arch_load_hdri(const char* path);
 
 /**
- * Get the current building position.
+ * List available HDRI files in the hdri directory.
  *
- * @param out_x Output X position in mm
- * @param out_y Output Y position in mm
- * @param out_z Output Z position in mm
+ * @return Semicolon-separated list of .hdr filenames, or empty string if none found
  */
-ARCH_API void arch_get_building_position(float* out_x, float* out_y, float* out_z);
+ARCH_API const char* arch_list_hdris(void);
+
+// =============================================================================
+// Path Tracer API (Offline Rendering for V-Ray Quality Stills)
+// =============================================================================
 
 /**
- * Get terrain elevation at a given XZ position.
- * Samples the terrain mesh to find the Y value at that point.
+ * Configure path tracer parameters.
+ * Must be called before arch_pt_start_render().
  *
- * @param x X position in mm
- * @param z Z position in mm
- * @param out_elevation Output elevation in mm (Y value at that point)
- * @return 1 if point is within terrain bounds, 0 if outside or no terrain
+ * @param width Output image width in pixels
+ * @param height Output image height in pixels
+ * @param samples Total samples per pixel (higher = less noise, longer render)
+ * @param bounces Maximum path bounces (higher = more accurate GI)
+ * @return 0 on success, non-zero on failure
  */
-ARCH_API int arch_get_terrain_elevation_at(float x, float z, float* out_elevation);
+ARCH_API int arch_pt_set_config(int width, int height, int samples, int bounces);
 
 /**
- * Place building on terrain at the specified XZ position.
- * Automatically samples terrain elevation and sets building Y to match.
+ * Start path traced render.
+ * Begins progressive rendering of the current scene.
+ * Call arch_pt_render_frame() repeatedly until done.
  *
- * @param x X position in mm
- * @param z Z position in mm
- * @return 1 on success, 0 if position is outside terrain bounds
+ * @return 0 on success, non-zero on failure (e.g., no scene loaded)
  */
-ARCH_API int arch_place_building_on_terrain(float x, float z);
+ARCH_API int arch_pt_start_render(void);
 
 /**
- * Convert screen coordinates to world ray.
- * Returns the ray origin and direction for mouse picking.
+ * Render one progressive frame.
+ * Each call adds samples to the accumulation buffer.
  *
- * @param screen_x Screen X coordinate (pixels from left)
- * @param screen_y Screen Y coordinate (pixels from top)
- * @param out_origin_x Ray origin X
- * @param out_origin_y Ray origin Y
- * @param out_origin_z Ray origin Z
- * @param out_dir_x Ray direction X
- * @param out_dir_y Ray direction Y
- * @param out_dir_z Ray direction Z
+ * @return 1 if more frames needed, 0 if complete, -1 on error
  */
-ARCH_API void arch_screen_to_world_ray(int screen_x, int screen_y,
-                                        float* out_origin_x, float* out_origin_y, float* out_origin_z,
-                                        float* out_dir_x, float* out_dir_y, float* out_dir_z);
+ARCH_API int arch_pt_render_frame(void);
 
 /**
- * Raycast against terrain mesh.
- * Returns the world position where the ray intersects the terrain.
+ * Get render progress.
  *
- * @param origin_x Ray origin X
- * @param origin_y Ray origin Y
- * @param origin_z Ray origin Z
- * @param dir_x Ray direction X (normalized)
- * @param dir_y Ray direction Y (normalized)
- * @param dir_z Ray direction Z (normalized)
- * @param out_hit_x Hit position X (if hit)
- * @param out_hit_y Hit position Y (if hit)
- * @param out_hit_z Hit position Z (if hit)
- * @return 1 if ray hits terrain, 0 if no hit
+ * @param progress Output: progress value from 0.0 to 1.0
+ * @return 0 on success
  */
-ARCH_API int arch_raycast_terrain(float origin_x, float origin_y, float origin_z,
-                                   float dir_x, float dir_y, float dir_z,
-                                   float* out_hit_x, float* out_hit_y, float* out_hit_z);
+ARCH_API int arch_pt_get_progress(float* progress);
+
+/**
+ * Stop the current render early.
+ * Can be used to cancel a long render.
+ */
+ARCH_API void arch_pt_stop(void);
+
+/**
+ * Check if path tracer is currently rendering.
+ *
+ * @return 1 if rendering, 0 if idle or complete
+ */
+ARCH_API int arch_pt_is_rendering(void);
+
+/**
+ * Check if render is complete.
+ *
+ * @return 1 if complete, 0 if not started or still rendering
+ */
+ARCH_API int arch_pt_is_complete(void);
+
+/**
+ * Get current sample count.
+ *
+ * @return Number of samples completed
+ */
+ARCH_API int arch_pt_get_sample_count(void);
+
+/**
+ * Save path traced result as PNG.
+ * Applies tonemapping and gamma correction.
+ *
+ * @param path Output file path
+ * @param exposure Exposure adjustment (1.0 = default)
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_pt_save_png(const char* path, float exposure);
+
+/**
+ * Save path traced result as HDR (Radiance format).
+ * Preserves full dynamic range for post-processing.
+ *
+ * @param path Output file path (will use .hdr extension)
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_pt_save_hdr(const char* path);
+
+/**
+ * Apply denoising to the path traced result.
+ * Uses edge-aware spatial filtering to reduce noise.
+ *
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_pt_apply_denoise(void);
+
+/**
+ * Set path tracer exposure.
+ *
+ * @param exposure Exposure value (default 1.0)
+ */
+ARCH_API void arch_pt_set_exposure(float exposure);
+
+/**
+ * Get path tracer exposure.
+ *
+ * @return Current exposure value
+ */
+ARCH_API float arch_pt_get_exposure(void);
+
+/**
+ * Set path tracer tonemapping mode.
+ *
+ * @param mode 0=Reinhard, 1=ACES (default), 2=Uncharted2
+ */
+ARCH_API void arch_pt_set_tonemap_mode(int mode);
+
+/**
+ * Get path tracer tonemapping mode.
+ *
+ * @return Current tonemap mode (0-2)
+ */
+ARCH_API int arch_pt_get_tonemap_mode(void);
+
+/**
+ * Enable or disable Next Event Estimation (direct light sampling).
+ * NEE significantly reduces noise for direct lighting.
+ *
+ * @param enabled 1 to enable (default), 0 to disable
+ */
+ARCH_API void arch_pt_set_nee_enabled(int enabled);
+
+/**
+ * Enable or disable Russian Roulette path termination.
+ * RR improves efficiency by probabilistically terminating low-contribution paths.
+ *
+ * @param enabled 1 to enable (default), 0 to disable
+ */
+ARCH_API void arch_pt_set_rr_enabled(int enabled);
+
+// =============================================================================
+// Tessellation API
+// =============================================================================
+
+/**
+ * Enable or disable hardware tessellation for displacement mapping.
+ * When enabled, surfaces are subdivided and displaced by height maps.
+ *
+ * @param enabled 1 to enable, 0 to disable (default)
+ */
+ARCH_API void arch_set_tessellation_enabled(int enabled);
+
+/**
+ * Check if tessellation is enabled.
+ *
+ * @return 1 if enabled, 0 if disabled
+ */
+ARCH_API int arch_get_tessellation_enabled(void);
+
+/**
+ * Set tessellation subdivision level.
+ *
+ * @param level Subdivision level (1.0 = no subdivision, 64.0 = max)
+ */
+ARCH_API void arch_set_tessellation_level(float level);
+
+/**
+ * Get tessellation subdivision level.
+ *
+ * @return Current tessellation level
+ */
+ARCH_API float arch_get_tessellation_level(void);
+
+/**
+ * Set displacement scale for tessellated surfaces.
+ *
+ * @param scale Displacement scale in scene units (0.0 = no displacement)
+ */
+ARCH_API void arch_set_displacement_scale(float scale);
+
+/**
+ * Get displacement scale.
+ *
+ * @return Current displacement scale
+ */
+ARCH_API float arch_get_displacement_scale(void);
 
 #ifdef __cplusplus
 }

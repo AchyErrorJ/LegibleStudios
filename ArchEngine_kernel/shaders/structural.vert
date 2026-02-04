@@ -31,6 +31,9 @@ layout(location = 4) out vec4 fragLightSpacePos;
 layout(location = 5) out vec4 fragMaterial;
 layout(location = 6) out vec2 fragTexCoord;
 
+// Explicitly declare gl_ClipDistance array size for multi-plane clipping
+out float gl_ClipDistance[6];
+
 void main() {
     mat4 modelMatrix = push.model;
     vec4 colorData = push.color;
@@ -46,17 +49,18 @@ void main() {
 
     // Pass through data
     fragPosition = worldPos.xyz;
-    fragColor = inColor;
 
     // Extract stress from color data (stored in alpha)
     fragStress = colorData.a;
 
-    // Override color with push color if it's not default
+    // Set color from push constant or default white (will be multiplied with texture)
     if (colorData.r > 0.01 || colorData.g > 0.01 || colorData.b > 0.01) {
         fragColor = colorData.rgb;
+    } else {
+        fragColor = vec3(1.0);  // Default white so texture shows correctly
     }
 
-    // Light space position for shadow mapping (use first shadow map matrix)
+    // Light space position for shadow mapping (first shadow map layer, for compatibility)
     fragLightSpacePos = ubo.lightViewProj[0] * worldPos;
 
     // Pass material properties to fragment shader
@@ -65,11 +69,16 @@ void main() {
     // Pass texture coordinates (for material textures)
     fragTexCoord = inTexCoord;
 
-    // Clip distance for section clipping
-    // Always write a value to avoid undefined behavior
-    if (ubo.enableClipping != 0u) {
-        gl_ClipDistance[0] = dot(worldPos, ubo.clipPlane);
-    } else {
-        gl_ClipDistance[0] = 1.0;  // Positive = not clipped
+    // Clip distances for section clipping (up to 6 planes for section box)
+    // Each plane clips fragments on its negative side
+    // For section box: use 6 planes to define a 3D bounding region
+    for (uint i = 0u; i < MAX_CLIP_PLANES; i++) {
+        if (i < ubo.numClipPlanes && (ubo.enableClipping & (1u << i)) != 0u) {
+            // Plane equation: ax + by + cz + d = 0
+            // clipPlane.xyz = normal, clipPlane.w = -d (distance from origin)
+            gl_ClipDistance[i] = dot(worldPos, ubo.clipPlanes[i]);
+        } else {
+            gl_ClipDistance[i] = 1.0;  // Positive = not clipped (plane disabled)
+        }
     }
 }

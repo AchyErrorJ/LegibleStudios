@@ -9,8 +9,9 @@ layout(location = 4) in vec4 fragLightSpacePos;
 layout(location = 5) in vec4 fragMaterial;  // x=metallic, y=roughness, z=ao, w=emission
 layout(location = 6) in vec2 fragTexCoord;
 
-// Output
+// Outputs (MRT for SSR)
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec4 outNormal;  // xyz = world normal (packed), w = roughness
 
 // Shared UBO definition (includes override mask constants)
 #include "include/ubo.glsl"
@@ -28,6 +29,7 @@ layout(push_constant) uniform PushConstants {
 } push;
 
 // Shadow map sampler with depth comparison
+// Using 2D sampler for now (first layer only) until array sampling is debugged
 layout(set = 0, binding = 1) uniform sampler2DShadow shadowMap;
 
 // Material textures (set 1 = per-material)
@@ -40,19 +42,27 @@ layout(set = 1, binding = 5) uniform sampler2D emissiveMap;
 layout(set = 1, binding = 6) uniform sampler2D opacityMap;
 layout(set = 1, binding = 7) uniform sampler2D heightMap;  // For tessellation displacement
 
+// IBL textures (set 2 = environment-based lighting)
+layout(set = 2, binding = 0) uniform samplerCube irradianceMap;   // Diffuse IBL
+layout(set = 2, binding = 1) uniform samplerCube prefilteredMap;  // Specular IBL (with mip chain)
+layout(set = 2, binding = 2) uniform sampler2D brdfLUT;           // BRDF lookup table
+
+// IBL parameters (could be in UBO, hardcoded for now)
+const float MAX_REFLECTION_LOD = 5.0;  // Should match prefilteredMipLevels - 1
+
 // Stress color constants (matching types.hpp)
 const vec3 STRESS_SAFE     = vec3(0.133, 0.773, 0.369);  // Green
 const vec3 STRESS_WARNING  = vec3(0.918, 0.702, 0.031);  // Yellow
 const vec3 STRESS_CRITICAL = vec3(0.976, 0.451, 0.086);  // Orange
 const vec3 STRESS_FAILURE  = vec3(0.937, 0.267, 0.267);  // Red
 
-// Lighting constants
-const vec3 lightColor = vec3(1.0, 0.98, 0.95);
-const float lightIntensity = 3.0;
-const vec3 ambientColor = vec3(0.03);
-
 // PBR Constants
 const float PI = 3.14159265359;
+
+// Lighting constants
+const vec3 sunLightColor = vec3(1.0, 0.98, 0.95);
+const float sunLightIntensity = 3.0;
+const vec3 ambientColor = vec3(0.03);
 
 // ==================== PBR Functions ====================
 
@@ -99,6 +109,96 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
 // Fresnel-Schlick with roughness for ambient lighting
 vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// ==================== Multi-Light Functions ====================
+
+// Point light attenuation (inverse square with range cutoff)
+float getPointAttenuation(float distance, float range) {
+    // Smooth falloff to zero at range
+    float att = 1.0 / (1.0 + distance * distance);
+    float rangeFalloff = clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0);
+    return att * rangeFalloff * rangeFalloff;
+}
+
+// Spot light cone factor
+float getSpotCone(vec3 lightDir, vec3 spotDir, float innerCos, float outerCos) {
+    float theta = dot(lightDir, -spotDir);
+    // Smooth transition from inner to outer cone
+    return clamp((theta - outerCos) / max(innerCos - outerCos, 0.0001), 0.0, 1.0);
+}
+
+// Calculate contribution from a single light
+vec3 calculateLightContribution(GPULight light, vec3 N, vec3 V, vec3 fragPos,
+                                 vec3 albedo, float metallic, float roughness, vec3 F0) {
+    uint lightType = uint(light.positionType.w);
+    vec3 lightColor = light.colorIntensity.rgb;
+    float intensity = light.colorIntensity.a;
+
+    vec3 L;
+    float attenuation = 1.0;
+
+    if (lightType == LIGHT_TYPE_DIRECTIONAL) {
+        // Directional light - parallel rays
+        L = normalize(-light.directionRange.xyz);
+    }
+    else if (lightType == LIGHT_TYPE_POINT) {
+        // Point light - radial from position
+        vec3 lightPos = light.positionType.xyz;
+        vec3 toLight = lightPos - fragPos;
+        float distance = length(toLight);
+        L = toLight / distance;
+
+        float range = light.directionRange.w;
+        attenuation = getPointAttenuation(distance, range);
+    }
+    else if (lightType == LIGHT_TYPE_SPOT) {
+        // Spot light - radial with cone
+        vec3 lightPos = light.positionType.xyz;
+        vec3 toLight = lightPos - fragPos;
+        float distance = length(toLight);
+        L = toLight / distance;
+
+        float range = light.directionRange.w;
+        attenuation = getPointAttenuation(distance, range);
+
+        // Apply cone falloff
+        vec3 spotDir = normalize(light.directionRange.xyz);
+        float innerCos = light.spotParams.x;
+        float outerCos = light.spotParams.y;
+        attenuation *= getSpotCone(L, spotDir, innerCos, outerCos);
+    }
+    else {
+        return vec3(0.0);  // Unknown light type
+    }
+
+    // Skip if light contribution is negligible
+    if (attenuation < 0.001) {
+        return vec3(0.0);
+    }
+
+    // Standard PBR calculation
+    vec3 H = normalize(V + L);
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 0.0);
+
+    // Cook-Torrance BRDF
+    float NDF = DistributionGGX(N, H, roughness);
+    float G = GeometrySmith(N, V, L, roughness);
+    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+    vec3 numerator = NDF * G * F;
+    float denominator = 4.0 * NdotV * NdotL + 0.0001;
+    vec3 specular = numerator / denominator;
+
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
+    kD *= 1.0 - metallic;
+
+    // Calculate radiance with attenuation
+    vec3 radiance = lightColor * intensity * attenuation;
+
+    return (kD * albedo / PI + specular) * radiance * NdotL;
 }
 
 // Perturb normal using tangent space normal map
@@ -222,7 +322,11 @@ const vec2 poissonDisk[16] = vec2[](
 );
 
 // Soft shadow with slope-scaled bias for grazing angles
-float calculateShadow(vec4 lightSpacePos, vec3 normal, vec3 lightDir) {
+// Temporarily using single 2D shadow map until array sampling is debugged
+float calculateShadow(vec3 worldPos, vec3 normal, vec3 lightDir) {
+    // Use first shadow map matrix
+    vec4 lightSpacePos = ubo.lightViewProj[0] * vec4(worldPos, 1.0);
+
     // Perspective divide
     vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
 
@@ -245,9 +349,9 @@ float calculateShadow(vec4 lightSpacePos, vec3 normal, vec3 lightDir) {
     float shadow = 0.0;
 
     // Spread factor for shadow edges (lower = sharper, less bleeding)
-    float spread = 1.5;  // Slightly larger spread to compensate for fewer samples
+    float spread = 1.5;
 
-    // 3x3 PCF for smooth shadow edges (9 samples vs 25)
+    // 3x3 PCF for smooth shadow edges
     for (int x = -1; x <= 1; x++) {
         for (int y = -1; y <= 1; y++) {
             vec2 offset = vec2(float(x), float(y)) * texelSize * spread;
@@ -348,8 +452,8 @@ void main() {
     vec3 texEmissive = texture(emissiveMap, uv).rgb;
     float texOpacity = texture(opacityMap, uv).r;
 
-    // Perturb normal using normal map (only if not flat normal)
-    if (length(texNormal - vec3(0.5, 0.5, 1.0)) > 0.01) {
+    // Perturb normal using normal map (only if not flat normal and normal mapping is enabled)
+    if ((ubo.effectFlags & EFFECT_NORMAL_MAPPING) != 0u && length(texNormal - vec3(0.5, 0.5, 1.0)) > 0.01) {
         N = perturbNormal(N, V, uv, normalStrength);
     }
 
@@ -427,7 +531,7 @@ void main() {
     // Calculate shadow factor (with slope-scaled bias for grazing angles)
     float shadow = 1.0;
     if (ubo.enableShadows != 0u) {
-        shadow = calculateShadow(fragLightSpacePos, N, L);
+        shadow = calculateShadow(fragPosition, N, L);
     }
 
     // Calculate geometric ambient occlusion
@@ -453,26 +557,71 @@ void main() {
     vec3 kD = vec3(1.0) - kS;  // Diffuse contribution
     kD *= 1.0 - metallic;  // Metals have no diffuse
 
-    // Direct lighting (sun)
-    vec3 radiance = lightColor * lightIntensity;
-    vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL * shadow;
+    // Direct lighting (sun) - can be toggled via effect flags
+    vec3 Lo = vec3(0.0);
+    if ((ubo.effectFlags & EFFECT_DIRECT_LIGHT) != 0u) {
+        vec3 sunRadiance = sunLightColor * sunLightIntensity;
+        Lo = (kD * albedo / PI + specular) * sunRadiance * NdotL * shadow;
 
-    // Ambient lighting (simplified IBL approximation)
+        // Additional lights from UBO array
+        for (uint i = 0u; i < ubo.numLights && i < MAX_LIGHTS; i++) {
+            Lo += calculateLightContribution(ubo.lights[i], N, V, fragPosition, albedo, metallic, roughness, F0);
+        }
+    }
+
+    // ==================== Image-Based Lighting (IBL) ====================
+    // Split-sum approximation for the specular part of the rendering equation
+    // Intensity multipliers from ubo.iblParams: x=overall, y=diffuse, z=specular, w=fresnel
+
     vec3 kS_ambient = fresnelSchlickRoughness(NdotV, F0, roughness);
+    // Apply fresnel intensity adjustment
+    kS_ambient *= ubo.iblParams.w;
     vec3 kD_ambient = 1.0 - kS_ambient;
     kD_ambient *= 1.0 - metallic;
 
-    // Diffuse ambient with sky/ground gradient
-    vec3 skyAmbient = vec3(0.18, 0.22, 0.28);    // Slightly blue sky
-    vec3 groundAmbient = vec3(0.12, 0.10, 0.08); // Warm ground bounce
-    float skyBlend = N.y * 0.5 + 0.5;            // 0 = facing down, 1 = facing up
-    vec3 irradiance = ambientColor + mix(groundAmbient, skyAmbient, skyBlend);
-    vec3 diffuseAmbient = irradiance * albedo;
+    // Diffuse IBL: Sample irradiance map (pre-convolved for Lambertian)
+    vec3 irradiance = texture(irradianceMap, N).rgb;
+    // Fallback to simple gradient if irradiance map is not populated
+    if (length(irradiance) < 0.001) {
+        vec3 skyAmbient = vec3(0.18, 0.22, 0.28);
+        vec3 groundAmbient = vec3(0.12, 0.10, 0.08);
+        float skyBlend = N.y * 0.5 + 0.5;
+        irradiance = ambientColor + mix(groundAmbient, skyAmbient, skyBlend);
+    }
+    // Apply diffuse IBL intensity
+    vec3 diffuseIBL = irradiance * albedo * ubo.iblParams.y;
 
-    // Simple specular ambient (approximate)
-    vec3 specularAmbient = irradiance * F0 * (1.0 - roughness * 0.7);
+    // Specular IBL: Sample pre-filtered environment map + BRDF LUT
+    vec3 R = reflect(-V, N);  // Reflection direction
+    float mipLevel = roughness * MAX_REFLECTION_LOD;
+    vec3 prefilteredColor = textureLod(prefilteredMap, R, mipLevel).rgb;
 
-    vec3 ambient = (kD_ambient * diffuseAmbient + specularAmbient) * ao;
+    // Sample BRDF LUT (x = NdotV, y = roughness)
+    vec2 brdf = texture(brdfLUT, vec2(NdotV, roughness)).rg;
+
+    // Fallback for BRDF LUT (Schlick approximation if LUT not populated)
+    if (brdf.x < 0.001 && brdf.y < 0.001) {
+        brdf = vec2(1.0 - roughness * 0.5, roughness * 0.1);
+    }
+
+    // Specular IBL contribution: F0 * scale + bias
+    // Apply specular IBL intensity
+    vec3 specularIBL = prefilteredColor * (F0 * brdf.x + brdf.y) * ubo.iblParams.z;
+
+    // Fallback if prefiltered map not populated
+    if (length(prefilteredColor) < 0.001) {
+        specularIBL = irradiance * F0 * (1.0 - roughness * 0.7) * ubo.iblParams.z;
+    }
+
+    // IBL ambient - can be toggled via effect flags
+    // Apply overall IBL intensity multiplier
+    vec3 ambient = vec3(0.0);
+    if ((ubo.effectFlags & EFFECT_IBL) != 0u) {
+        ambient = (kD_ambient * diffuseIBL + specularIBL) * ao * ubo.iblParams.x;
+    } else {
+        // Minimal ambient when IBL is disabled (so objects aren't completely black)
+        ambient = albedo * 0.03;
+    }
 
     // Combine direct and ambient lighting
     vec3 result = ambient + Lo;
@@ -481,14 +630,68 @@ void main() {
     vec3 emissiveColor = (length(texEmissive) > 0.001) ? texEmissive : albedo;
     result += emissiveColor * emission;
 
-    // DEBUG: Uncomment one to visualize components
-    // outColor = vec4(N * 0.5 + 0.5, 1.0); return;  // Normals
-    // outColor = vec4(vec3(NdotL), 1.0); return;    // Light angle
-    // outColor = vec4(specular * 10.0, 1.0); return; // Specular (amplified)
-    // outColor = vec4(Lo, 1.0); return;              // Direct lighting only
-    // outColor = vec4(ambient, 1.0); return;         // Ambient only
-    // outColor = vec4(vec3(ao), 1.0); return;        // AO
-    // outColor = vec4(result, 1.0); return;          // Before tone mapping
+    // Material debug visualization modes (controlled via UI)
+    // Note: Still output normal for MRT consistency
+    if (ubo.materialDebugMode == 1u) {
+        // Displacement: show height map value as grayscale
+        float height = texture(heightMap, uv).r;
+        outColor = vec4(vec3(height), 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, roughness);
+        return;
+    } else if (ubo.materialDebugMode == 2u) {
+        // POM Depth: show parallax depth as blue gradient
+        // Compare original UV with POM-displaced UV
+        vec2 uvDiff = abs(uv - fragTexCoord * uvScale);
+        float pomDepth = length(uvDiff) * 10.0;  // Scale for visibility
+        outColor = vec4(0.0, pomDepth * 0.5, pomDepth, 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, roughness);
+        return;
+    } else if (ubo.materialDebugMode == 3u) {
+        // Normals: show world-space normals as RGB
+        outColor = vec4(N * 0.5 + 0.5, 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, roughness);
+        return;
+    } else if (ubo.materialDebugMode == 4u) {
+        // UVs: show UV coordinates as RG
+        outColor = vec4(fract(uv), 0.0, 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, roughness);
+        return;
+    } else if (ubo.materialDebugMode == 5u) {
+        // AO Map: show ambient occlusion texture
+        outColor = vec4(vec3(texAO), 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, roughness);
+        return;
+    } else if (ubo.materialDebugMode == 6u) {
+        // Specular IBL: show specular reflection contribution
+        outColor = vec4(specularIBL, 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, roughness);
+        return;
+    } else if (ubo.materialDebugMode == 7u) {
+        // Diffuse IBL: show diffuse ambient contribution
+        outColor = vec4(diffuseIBL, 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, roughness);
+        return;
+    } else if (ubo.materialDebugMode == 8u) {
+        // Total ambient: show combined ambient term
+        outColor = vec4(ambient, 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, roughness);
+        return;
+    } else if (ubo.materialDebugMode == 9u) {
+        // BRDF LUT values: show scale and bias from LUT
+        outColor = vec4(brdf.x, brdf.y, 0.0, 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, roughness);
+        return;
+    } else if (ubo.materialDebugMode == 10u) {
+        // Direct lighting only (sun + lights, no ambient)
+        outColor = vec4(Lo, 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, roughness);
+        return;
+    } else if (ubo.materialDebugMode == 11u) {
+        // Fresnel (kS_ambient): shows how reflective surfaces are
+        outColor = vec4(kS_ambient, 1.0);
+        outNormal = vec4(N * 0.5 + 0.5, roughness);
+        return;
+    }
 
     // SHADOW DEBUG: Uncomment one to diagnose shadow issues
     // outColor = vec4(vec3(shadow), 1.0); return;     // Shadow factor (white=lit, black=shadow)
@@ -506,6 +709,10 @@ void main() {
     }
     // Clamp opacity so glass doesn't vanish when opacity maps are too dark
     alpha *= clamp(texOpacity, 0.05, 1.0);
+
+    // Write normal + roughness to MRT 1 for SSR
+    // Pack world-space normal to [0,1] range, store roughness in alpha
+    outNormal = vec4(N * 0.5 + 0.5, roughness);
 
     // When rendering to HDR buffer, output linear values (tonemapping done in composite pass)
     if (ubo.outputLinearHDR != 0u) {

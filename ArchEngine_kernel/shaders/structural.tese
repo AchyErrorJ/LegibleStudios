@@ -23,6 +23,9 @@ layout(location = 4) out vec4 fragLightSpacePos;
 layout(location = 5) out vec4 fragMaterial;
 layout(location = 6) out vec2 fragTexCoord;
 
+// Explicitly declare gl_ClipDistance array size for multi-plane clipping
+out float gl_ClipDistance[6];
+
 // Shared UBO definition (includes override mask constants)
 #include "include/ubo.glsl"
 
@@ -62,6 +65,7 @@ void main() {
     // Interpolate vertex attributes using barycentric coordinates
     vec3 position = interpolate3(inFragPosition[0], inFragPosition[1], inFragPosition[2]);
     vec3 normal = normalize(interpolate3(inFragNormal[0], inFragNormal[1], inFragNormal[2]));
+    // Pass through the interpolated input color from TCS
     vec3 color = interpolate3(inFragColor[0], inFragColor[1], inFragColor[2]);
     vec2 texCoord = interpolate2(inFragTexCoord[0], inFragTexCoord[1], inFragTexCoord[2]);
     float stress = interpolate1(inFragStress[0], inFragStress[1], inFragStress[2]);
@@ -77,6 +81,7 @@ void main() {
     if ((push.overrideMask & OVERRIDE_UV_ROTATION) != 0u) {
         uvRotation = push.overrides3.w;  // Rotation in radians
     }
+
     vec2 scaledTexCoord = texCoord * uvScale;
 
     // Apply rotation around center if rotation is set
@@ -91,31 +96,36 @@ void main() {
         ) + center;
     }
 
-    // Sample height map (only if displacement is enabled)
-    if (ubo.displacementScale > 0.0) {
-        float height = texture(heightMap, scaledTexCoord).r;
+    // Sample height map and apply displacement
+    // Use UBO displacement scale (controlled via API)
+    float dispScale = ubo.displacementScale;
 
-        // Normalize height from 0-1 to -0.5 to 0.5 for centered displacement
-        height = height - 0.5;
+    if (dispScale > 0.001) {
+        // Sample height map at the scaled texture coordinates
+        float rawHeight = texture(heightMap, scaledTexCoord).r;
 
-        // Apply displacement along normal
-        float displacement = height * ubo.displacementScale;
-        position += normal * displacement;
+        // Displacement centered around 0.5:
+        // rawHeight = 0.0 (black/mortar) → disp = -dispScale (recessed)
+        // rawHeight = 0.5 (neutral)      → disp = 0 (no change)
+        // rawHeight = 1.0 (white/brick)  → disp = +dispScale (raised)
+        float disp = (rawHeight - 0.5) * dispScale * 2.0;
 
-        // Recompute normal using finite differences for better lighting
-        // Scale texel size with UV scale so gradients sample correctly when texture is tiled
-        float baseTexelSize = 1.0 / 1024.0; // Assume 1024x1024 height map
-        float texelSize = baseTexelSize * uvScale;
+        // Apply displacement along surface normal
+        position += normal * disp;
+
+        // Normal perturbation from height gradients for proper lighting
+        float texelSize = 1.0 / (1024.0 * uvScale);
         float heightL = texture(heightMap, scaledTexCoord + vec2(-texelSize, 0)).r;
         float heightR = texture(heightMap, scaledTexCoord + vec2(texelSize, 0)).r;
         float heightD = texture(heightMap, scaledTexCoord + vec2(0, -texelSize)).r;
         float heightU = texture(heightMap, scaledTexCoord + vec2(0, texelSize)).r;
 
-        // Compute displaced normal from height gradients
-        float dX = (heightR - heightL) * ubo.displacementScale * 2.0;
-        float dY = (heightU - heightD) * ubo.displacementScale * 2.0;
+        // Gradient-based normal perturbation
+        float normalStrength = dispScale * 4.0;
+        float dX = (heightR - heightL) * normalStrength;
+        float dY = (heightU - heightD) * normalStrength;
 
-        // Build tangent space (simplified - assumes Y-up world)
+        // Build tangent space
         vec3 tangent = normalize(cross(vec3(0, 1, 0), normal));
         if (length(tangent) < 0.001) {
             tangent = normalize(cross(vec3(1, 0, 0), normal));
@@ -126,7 +136,7 @@ void main() {
         normal = normalize(normal - tangent * dX - bitangent * dY);
 
         // Recalculate light space position after displacement
-        lightSpacePos = ubo.lightViewProj * vec4(position, 1.0);
+        lightSpacePos = ubo.lightViewProj[0] * vec4(position, 1.0);
     }
 
     // Output interpolated/displaced attributes
@@ -143,10 +153,13 @@ void main() {
     // Transform to clip space
     gl_Position = ubo.proj * ubo.view * vec4(position, 1.0);
 
-    // Clip distance for section clipping
-    if (ubo.enableClipping != 0u) {
-        gl_ClipDistance[0] = dot(vec4(position, 1.0), ubo.clipPlane);
-    } else {
-        gl_ClipDistance[0] = 1.0;
+    // Clip distances for section clipping (up to 6 planes for section box)
+    vec4 worldPos = vec4(position, 1.0);
+    for (uint i = 0u; i < MAX_CLIP_PLANES; i++) {
+        if (i < ubo.numClipPlanes && (ubo.enableClipping & (1u << i)) != 0u) {
+            gl_ClipDistance[i] = dot(worldPos, ubo.clipPlanes[i]);
+        } else {
+            gl_ClipDistance[i] = 1.0;  // Positive = not clipped
+        }
     }
 }

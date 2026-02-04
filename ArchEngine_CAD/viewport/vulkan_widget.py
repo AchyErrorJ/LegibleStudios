@@ -257,6 +257,33 @@ class VulkanViewportWidget(QWidget):
 
                 self._lib.arch_set_section_elevation.argtypes = [ctypes.c_int, ctypes.c_float]
                 self._lib.arch_set_section_elevation.restype = None
+
+                # Section box API (multi-plane clipping)
+                self._lib.arch_set_section_box.argtypes = [ctypes.c_float, ctypes.c_float, ctypes.c_float,
+                                                          ctypes.c_float, ctypes.c_float, ctypes.c_float]
+                self._lib.arch_set_section_box.restype = None
+
+                self._lib.arch_clear_section_box.argtypes = []
+                self._lib.arch_clear_section_box.restype = None
+
+                self._lib.arch_has_section_box.argtypes = []
+                self._lib.arch_has_section_box.restype = ctypes.c_int
+
+                self._lib.arch_get_section_box.argtypes = [ctypes.POINTER(ctypes.c_float)] * 6
+                self._lib.arch_get_section_box.restype = ctypes.c_int
+
+                self._lib.arch_set_clip_plane_at.argtypes = [ctypes.c_int, ctypes.c_float, ctypes.c_float,
+                                                            ctypes.c_float, ctypes.c_float, ctypes.c_int]
+                self._lib.arch_set_clip_plane_at.restype = None
+
+                self._lib.arch_get_clip_plane_at.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_float),
+                                                            ctypes.POINTER(ctypes.c_float),
+                                                            ctypes.POINTER(ctypes.c_float),
+                                                            ctypes.POINTER(ctypes.c_float)]
+                self._lib.arch_get_clip_plane_at.restype = ctypes.c_int
+
+                self._lib.arch_get_num_clip_planes.argtypes = []
+                self._lib.arch_get_num_clip_planes.restype = ctypes.c_int
             except AttributeError:
                 print("[VulkanWidget] Section clipping API not available")
 
@@ -269,6 +296,27 @@ class VulkanViewportWidget(QWidget):
                 self._lib.arch_get_material_style.restype = ctypes.c_int
             except AttributeError:
                 print("[VulkanWidget] Material style API not available")
+
+            # Material application API
+            try:
+                self._lib.arch_apply_material_to_element.argtypes = [ctypes.c_int, ctypes.c_char_p]
+                self._lib.arch_apply_material_to_element.restype = ctypes.c_int
+
+                self._lib.arch_apply_material_to_batch.argtypes = [
+                    ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_char_p
+                ]
+                self._lib.arch_apply_material_to_batch.restype = ctypes.c_int
+
+                self._lib.arch_get_element_material_name.argtypes = [
+                    ctypes.c_int, ctypes.c_char_p, ctypes.c_int
+                ]
+                self._lib.arch_get_element_material_name.restype = ctypes.c_int
+
+                self._has_material_api = True
+                print("[VulkanWidget] Material application API loaded")
+            except AttributeError:
+                self._has_material_api = False
+                print("[VulkanWidget] Material application API not available")
 
             # Try to load extended post-processing API (may not be in older DLLs)
             try:
@@ -1070,6 +1118,85 @@ class VulkanViewportWidget(QWidget):
             self._lib.arch_set_section_elevation(axis, ctypes.c_float(position))
 
     # =========================================================================
+    # Section Box (Multi-Plane Clipping)
+    # =========================================================================
+
+    def set_section_box(self, min_x: float, min_y: float, min_z: float,
+                        max_x: float, max_y: float, max_z: float):
+        """
+        Set a section box to isolate a 3D region of the model.
+
+        Args:
+            min_x, min_y, min_z: Minimum bounds in feet
+            max_x, max_y, max_z: Maximum bounds in feet
+
+        Only geometry within the specified bounds will be visible.
+        """
+        if self._initialized and self._lib and hasattr(self._lib, 'arch_set_section_box'):
+            self._lib.arch_set_section_box(
+                ctypes.c_float(min_x), ctypes.c_float(min_y), ctypes.c_float(min_z),
+                ctypes.c_float(max_x), ctypes.c_float(max_y), ctypes.c_float(max_z)
+            )
+
+    def clear_section_box(self):
+        """Clear the section box (disable all clip planes)."""
+        if self._initialized and self._lib and hasattr(self._lib, 'arch_clear_section_box'):
+            self._lib.arch_clear_section_box()
+
+    def has_section_box(self) -> bool:
+        """Check if a section box is currently active."""
+        if self._initialized and self._lib and hasattr(self._lib, 'arch_has_section_box'):
+            return self._lib.arch_has_section_box() != 0
+        return False
+
+    def get_section_box(self) -> tuple:
+        """
+        Get the current section box bounds.
+
+        Returns:
+            Tuple of (min_x, min_y, min_z, max_x, max_y, max_z) or None if no section box
+        """
+        if self._initialized and self._lib and hasattr(self._lib, 'arch_get_section_box'):
+            min_x = ctypes.c_float()
+            min_y = ctypes.c_float()
+            min_z = ctypes.c_float()
+            max_x = ctypes.c_float()
+            max_y = ctypes.c_float()
+            max_z = ctypes.c_float()
+
+            result = self._lib.arch_get_section_box(
+                ctypes.byref(min_x), ctypes.byref(min_y), ctypes.byref(min_z),
+                ctypes.byref(max_x), ctypes.byref(max_y), ctypes.byref(max_z)
+            )
+            if result == 0:
+                return (min_x.value, min_y.value, min_z.value,
+                        max_x.value, max_y.value, max_z.value)
+        return None
+
+    def set_clip_plane_at(self, index: int, a: float, b: float, c: float, d: float, enabled: bool = True):
+        """
+        Set a specific clip plane directly.
+
+        Args:
+            index: Plane index (0-5)
+            a, b, c: Plane normal components
+            d: Plane distance from origin
+            enabled: Whether this plane is active
+        """
+        if self._initialized and self._lib and hasattr(self._lib, 'arch_set_clip_plane_at'):
+            self._lib.arch_set_clip_plane_at(
+                index,
+                ctypes.c_float(a), ctypes.c_float(b), ctypes.c_float(c), ctypes.c_float(d),
+                1 if enabled else 0
+            )
+
+    def get_num_clip_planes(self) -> int:
+        """Get number of active clip planes."""
+        if self._initialized and self._lib and hasattr(self._lib, 'arch_get_num_clip_planes'):
+            return self._lib.arch_get_num_clip_planes()
+        return 0
+
+    # =========================================================================
     # Material Style
     # =========================================================================
 
@@ -1162,6 +1289,99 @@ class VulkanViewportWidget(QWidget):
         if self._initialized and self._lib:
             return self._lib.arch_get_ao_strength()
         return 1.0
+
+    # =========================================================================
+    # Material Application
+    # =========================================================================
+
+    def apply_material_to_element(self, element_index: int, material_name: str) -> bool:
+        """
+        Apply a material to a specific element.
+
+        Args:
+            element_index: Index of the element in the building
+            material_name: Name of the material (e.g., "polyhaven/brick_wall_006")
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self._initialized or not self._lib:
+            return False
+        if not getattr(self, '_has_material_api', False):
+            print("[VulkanWidget] Material application API not available")
+            return False
+
+        result = self._lib.arch_apply_material_to_element(
+            ctypes.c_int(element_index),
+            material_name.encode('utf-8')
+        )
+        return result == 0
+
+    def apply_material_to_elements(self, element_indices: list, material_name: str) -> int:
+        """
+        Apply a material to multiple elements at once.
+
+        Args:
+            element_indices: List of element indices
+            material_name: Name of the material
+
+        Returns:
+            Number of elements successfully updated
+        """
+        if not self._initialized or not self._lib:
+            print("[VulkanWidget] apply_material_to_elements: not initialized")
+            return 0
+        if not getattr(self, '_has_material_api', False):
+            print("[VulkanWidget] Material application API not available")
+            return 0
+
+        if not element_indices:
+            print("[VulkanWidget] apply_material_to_elements: no indices provided")
+            return 0
+
+        try:
+            print(f"[VulkanWidget] Applying material '{material_name}' to {len(element_indices)} elements: {element_indices[:5]}...")
+
+            # Create array of indices
+            indices_array = (ctypes.c_int * len(element_indices))(*element_indices)
+
+            result = self._lib.arch_apply_material_to_batch(
+                indices_array,
+                ctypes.c_int(len(element_indices)),
+                material_name.encode('utf-8')
+            )
+            print(f"[VulkanWidget] arch_apply_material_to_batch returned: {result}")
+            return result
+        except Exception as e:
+            print(f"[VulkanWidget] Error applying material: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0
+
+    def get_element_material(self, element_index: int) -> str:
+        """
+        Get the material name applied to an element.
+
+        Args:
+            element_index: Index of the element
+
+        Returns:
+            Material name, or empty string if none or error
+        """
+        if not self._initialized or not self._lib:
+            return ""
+        if not getattr(self, '_has_material_api', False):
+            return ""
+
+        buffer = ctypes.create_string_buffer(256)
+        result = self._lib.arch_get_element_material_name(
+            ctypes.c_int(element_index),
+            buffer,
+            ctypes.c_int(256)
+        )
+        if result == 0:
+            return buffer.value.decode('utf-8')
+        return ""
 
     # =========================================================================
     # Shadows & Lighting

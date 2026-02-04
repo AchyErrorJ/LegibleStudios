@@ -92,6 +92,9 @@ class ViewportPanel(QWidget):
         # Section Clipping Section
         self._create_clipping_group(content_layout)
 
+        # Section Box Section
+        self._create_section_box_group(content_layout)
+
         # Quick Presets Section
         self._create_presets_group(content_layout)
 
@@ -266,6 +269,98 @@ class ViewportPanel(QWidget):
 
         parent_layout.addWidget(group)
 
+    def _create_section_box_group(self, parent_layout):
+        """Create section box controls for 3D clipping region."""
+        group = QGroupBox("Section Box")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(5)
+
+        # Enable checkbox
+        self.section_box_enabled = QCheckBox("Enable Section Box")
+        self.section_box_enabled.toggled.connect(self._on_section_box_toggled)
+        layout.addWidget(self.section_box_enabled)
+
+        # Controls container (enabled only when section box is on)
+        self.section_box_controls = QWidget()
+        controls_layout = QFormLayout(self.section_box_controls)
+        controls_layout.setSpacing(5)
+        controls_layout.setContentsMargins(0, 5, 0, 0)
+
+        # Min X
+        self.box_min_x = QDoubleSpinBox()
+        self.box_min_x.setRange(-500, 500)
+        self.box_min_x.setDecimals(1)
+        self.box_min_x.setSuffix(" ft")
+        self.box_min_x.setValue(-20.0)
+        self.box_min_x.valueChanged.connect(self._on_section_box_changed)
+        controls_layout.addRow("Min X:", self.box_min_x)
+
+        # Max X
+        self.box_max_x = QDoubleSpinBox()
+        self.box_max_x.setRange(-500, 500)
+        self.box_max_x.setDecimals(1)
+        self.box_max_x.setSuffix(" ft")
+        self.box_max_x.setValue(50.0)
+        self.box_max_x.valueChanged.connect(self._on_section_box_changed)
+        controls_layout.addRow("Max X:", self.box_max_x)
+
+        # Min Y
+        self.box_min_y = QDoubleSpinBox()
+        self.box_min_y.setRange(-100, 500)
+        self.box_min_y.setDecimals(1)
+        self.box_min_y.setSuffix(" ft")
+        self.box_min_y.setValue(0.0)
+        self.box_min_y.valueChanged.connect(self._on_section_box_changed)
+        controls_layout.addRow("Min Y:", self.box_min_y)
+
+        # Max Y
+        self.box_max_y = QDoubleSpinBox()
+        self.box_max_y.setRange(-100, 500)
+        self.box_max_y.setDecimals(1)
+        self.box_max_y.setSuffix(" ft")
+        self.box_max_y.setValue(15.0)
+        self.box_max_y.valueChanged.connect(self._on_section_box_changed)
+        controls_layout.addRow("Max Y:", self.box_max_y)
+
+        # Min Z
+        self.box_min_z = QDoubleSpinBox()
+        self.box_min_z.setRange(-500, 500)
+        self.box_min_z.setDecimals(1)
+        self.box_min_z.setSuffix(" ft")
+        self.box_min_z.setValue(-20.0)
+        self.box_min_z.valueChanged.connect(self._on_section_box_changed)
+        controls_layout.addRow("Min Z:", self.box_min_z)
+
+        # Max Z
+        self.box_max_z = QDoubleSpinBox()
+        self.box_max_z.setRange(-500, 500)
+        self.box_max_z.setDecimals(1)
+        self.box_max_z.setSuffix(" ft")
+        self.box_max_z.setValue(50.0)
+        self.box_max_z.valueChanged.connect(self._on_section_box_changed)
+        controls_layout.addRow("Max Z:", self.box_max_z)
+
+        layout.addWidget(self.section_box_controls)
+        self.section_box_controls.setEnabled(False)
+
+        # Quick presets for section box
+        presets_layout = QHBoxLayout()
+        presets_layout.setSpacing(3)
+
+        btn_fit_model = QPushButton("Fit to Model")
+        btn_fit_model.setToolTip("Set section box to fit the current model bounds")
+        btn_fit_model.clicked.connect(self._fit_section_box_to_model)
+        presets_layout.addWidget(btn_fit_model)
+
+        btn_clear_box = QPushButton("Clear")
+        btn_clear_box.setToolTip("Clear section box")
+        btn_clear_box.clicked.connect(self._clear_section_box)
+        presets_layout.addWidget(btn_clear_box)
+
+        layout.addLayout(presets_layout)
+
+        parent_layout.addWidget(group)
+
     def _create_presets_group(self, parent_layout):
         """Create quick preset buttons."""
         group = QGroupBox("Quick Presets")
@@ -435,6 +530,24 @@ class ViewportPanel(QWidget):
         flipped = self._viewport.get_clip_flipped()
         self.flip_check.setChecked(flipped)
 
+        # Section box state
+        try:
+            has_box = self._viewport.has_section_box()
+            self.section_box_enabled.setChecked(has_box)
+            self.section_box_controls.setEnabled(has_box)
+
+            if has_box:
+                bounds = self._viewport.get_section_box()
+                if bounds:
+                    self.box_min_x.setValue(bounds[0])
+                    self.box_min_y.setValue(bounds[1])
+                    self.box_min_z.setValue(bounds[2])
+                    self.box_max_x.setValue(bounds[3])
+                    self.box_max_y.setValue(bounds[4])
+                    self.box_max_z.setValue(bounds[5])
+        except AttributeError:
+            pass  # Section box API not available
+
         self._updating = False
 
     def _on_style_changed(self, index: int):
@@ -562,6 +675,75 @@ class ViewportPanel(QWidget):
             self._viewport.set_clipping_enabled(False)
 
         self.clip_controls.setEnabled(False)
+        self.clipping_changed.emit()
+
+    # =========================================================================
+    # Section Box handlers
+    # =========================================================================
+
+    def _on_section_box_toggled(self, checked: bool):
+        """Handle section box enable/disable."""
+        self.section_box_controls.setEnabled(checked)
+
+        if self._updating:
+            return
+
+        if checked:
+            # Apply current bounds
+            self._apply_section_box()
+        else:
+            # Clear section box
+            if self._viewport:
+                self._viewport.clear_section_box()
+
+        self.clipping_changed.emit()
+
+    def _on_section_box_changed(self, value: float):
+        """Handle section box dimension change."""
+        if self._updating:
+            return
+
+        if self.section_box_enabled.isChecked():
+            self._apply_section_box()
+            self.clipping_changed.emit()
+
+    def _apply_section_box(self):
+        """Apply section box with current UI values."""
+        if self._viewport:
+            self._viewport.set_section_box(
+                self.box_min_x.value(), self.box_min_y.value(), self.box_min_z.value(),
+                self.box_max_x.value(), self.box_max_y.value(), self.box_max_z.value()
+            )
+
+    def _fit_section_box_to_model(self):
+        """Fit section box to the current model bounds with some padding."""
+        # Default bounds for a typical building
+        # TODO: Get actual model bounds from document
+        self._updating = True
+
+        self.box_min_x.setValue(-5.0)
+        self.box_max_x.setValue(60.0)
+        self.box_min_y.setValue(0.0)
+        self.box_max_y.setValue(20.0)
+        self.box_min_z.setValue(-5.0)
+        self.box_max_z.setValue(60.0)
+
+        self._updating = False
+
+        self.section_box_enabled.setChecked(True)
+        self._apply_section_box()
+        self.clipping_changed.emit()
+
+    def _clear_section_box(self):
+        """Clear section box."""
+        self._updating = True
+        self.section_box_enabled.setChecked(False)
+        self._updating = False
+
+        if self._viewport:
+            self._viewport.clear_section_box()
+
+        self.section_box_controls.setEnabled(False)
         self.clipping_changed.emit()
 
     def update_from_section(self, enabled: bool, axis: int, height: float, flipped: bool):

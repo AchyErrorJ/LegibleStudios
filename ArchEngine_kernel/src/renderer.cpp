@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <set>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -670,6 +671,7 @@ void Renderer::createDefaultMaterialDescriptorSet() {
     m_materialLibrary = std::make_unique<MaterialLibrary>(m_context);
     m_materialLibrary->createBuiltinMaterials();
     m_materialLibrary->loadMaterialsFromDirectory(m_materialRoot);
+    m_materialLibrary->createMaterialAliases();  // Map generic names to Poly Haven
 
     // Allocate descriptor set for default material
     VkDescriptorSetAllocateInfo allocInfo{};
@@ -1551,22 +1553,17 @@ void Renderer::beginCompositePass() {
     );
 }
 
-void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements, const vec3& buildingOffset) {
+void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements) {
     if (!m_shadowMap || !m_shadowsEnabled || elements.empty()) {
         return;
     }
 
-    // Store building offset for shadow calculations
-    m_buildingOffset = buildingOffset;
-
-    // Calculate scene bounds for light matrices (including offset)
+    // Calculate scene bounds for light matrices
     vec3 minBounds(FLT_MAX);
     vec3 maxBounds(-FLT_MAX);
     for (const auto& elem : elements) {
-        vec3 offsetStart = elem.start + buildingOffset;
-        vec3 offsetEnd = elem.end + buildingOffset;
-        minBounds = glm::min(minBounds, glm::min(offsetStart, offsetEnd));
-        maxBounds = glm::max(maxBounds, glm::max(offsetStart, offsetEnd));
+        minBounds = glm::min(minBounds, glm::min(elem.start, elem.end));
+        maxBounds = glm::max(maxBounds, glm::max(elem.start, elem.end));
     }
     vec3 sceneCenter = (minBounds + maxBounds) * 0.5f;
     f32 sceneRadius = glm::length(maxBounds - minBounds) * 0.5f;
@@ -1763,9 +1760,6 @@ void Renderer::renderShadowPass(const std::vector<StructuralElement>& elements, 
                 continue;  // Skip other types
         }
 
-        // Apply building offset to transform
-        transform = glm::translate(mat4(1.0f), m_buildingOffset) * transform;
-
         auto it = m_meshCache.find(key);
         if (it == m_meshCache.end()) {
             continue;  // Skip if mesh not cached
@@ -1848,9 +1842,12 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
         ubo.numShadowMaps = 0;
     }
 
-    // Section clipping data
-    ubo.clipPlane = m_clipPlane;
-    ubo.enableClipping = m_clippingEnabled ? 1 : 0;
+    // Section clipping data (multi-plane for section box)
+    for (u32 i = 0; i < MAX_CLIP_PLANES; i++) {
+        ubo.clipPlanes[i] = m_clipPlanes[i];
+    }
+    ubo.enableClipping = m_clippingEnabled;  // Bitmask of enabled planes
+    ubo.numClipPlanes = m_numClipPlanes;
 
     // HDR output mode (skip tonemapping in shader when rendering to HDR buffer)
     ubo.outputLinearHDR = m_outputLinearHDR ? 1 : 0;
@@ -1859,6 +1856,19 @@ void Renderer::updateUniformBuffer(u32 frameIndex) {
     // Tessellation parameters for displacement mapping
     ubo.tessellationLevel = m_tessellationEnabled ? m_tessellationLevel : 1.0f;
     ubo.displacementScale = m_tessellationEnabled ? m_displacementScale : 0.0f;
+
+    // Debug: Log tessellation state once when enabled
+    static bool lastTessState = false;
+    if (m_tessellationEnabled != lastTessState) {
+        if (m_tessellationEnabled) {
+            std::cout << "[Renderer] Tessellation ENABLED - Level: " << m_tessellationLevel
+                      << ", Displacement: " << m_displacementScale
+                      << ", Pipeline: " << (m_tessPipeline ? "OK" : "NULL") << std::endl;
+        } else {
+            std::cout << "[Renderer] Tessellation DISABLED" << std::endl;
+        }
+        lastTessState = m_tessellationEnabled;
+    }
 
     // Material params: uvScale, normalStrength, brightness, contrast
     ubo.materialParams = vec4(m_materialUVScale, m_normalStrength, m_materialBrightness, m_materialContrast);
@@ -2320,7 +2330,7 @@ void Renderer::drawRoof(vec3 position, f32 width, f32 depth, f32 height, vec3 co
     drawMesh(*m_meshCache[key], transform, color, stress);
 }
 
-void Renderer::drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress, const vec3& offset) {
+void Renderer::drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress) {
     if (!meshData.hasData()) return;
 
     // Check cache first to avoid recalculating hash
@@ -2345,17 +2355,33 @@ void Renderer::drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress, 
         // Convert MeshData to vertices with normals
         std::vector<Vertex> vertices;
         std::vector<u32> indices;
+        // Improved UV calculation that handles sloped surfaces (roofs) consistently
         auto calcWorldUV = [](vec3 pos, vec3 normal, f32 uvScale = 0.001f) -> vec2 {
             vec3 uAxis, vAxis;
-            if (std::abs(normal.y) > 0.9f) {
+
+            // For nearly horizontal surfaces (floors, flat roofs)
+            if (std::abs(normal.y) > 0.95f) {
                 uAxis = vec3(1, 0, 0);
                 vAxis = vec3(0, 0, 1);
-            } else if (std::abs(normal.x) > std::abs(normal.z)) {
-                uAxis = vec3(0, 0, 1);
-                vAxis = vec3(0, 1, 0);
-            } else {
-                uAxis = vec3(1, 0, 0);
-                vAxis = vec3(0, 1, 0);
+            }
+            // For nearly vertical surfaces (walls)
+            else if (std::abs(normal.y) < 0.1f) {
+                if (std::abs(normal.x) > std::abs(normal.z)) {
+                    uAxis = vec3(0, 0, 1);
+                    vAxis = vec3(0, 1, 0);
+                } else {
+                    uAxis = vec3(1, 0, 0);
+                    vAxis = vec3(0, 1, 0);
+                }
+            }
+            // For sloped surfaces (roofs) - use tangent space aligned to slope
+            else {
+                // Project normal onto XZ plane to get slope direction
+                vec3 slopeDir = glm::normalize(vec3(normal.x, 0.0f, normal.z));
+                // U axis runs horizontally along the roof ridge (perpendicular to slope fall)
+                uAxis = glm::normalize(glm::cross(vec3(0, 1, 0), slopeDir));
+                // V axis runs up/down the slope (negated to fix 180 degree rotation)
+                vAxis = -glm::normalize(glm::cross(normal, uAxis));
             }
             return vec2(glm::dot(pos, uAxis) * uvScale, glm::dot(pos, vAxis) * uvScale);
         };
@@ -2386,12 +2412,11 @@ void Renderer::drawCustomMesh(const MeshData& meshData, vec3 color, f32 stress, 
         m_meshCache[key] = std::make_unique<Mesh>(m_context, vertices, indices);
     }
 
-    // Apply offset as translation transform
-    mat4 transform = glm::translate(mat4(1.0f), offset);
+    mat4 transform = mat4(1.0f);  // Identity - vertices are already in world space
     drawMesh(*m_meshCache[key], transform, color, stress);
 }
 
-void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, f32 stress, vec4 material, const vec3& offset) {
+void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, f32 stress, vec4 material) {
     if (!meshData.hasData()) return;
 
     // Check cache first to avoid recalculating hash
@@ -2415,17 +2440,34 @@ void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, 
     if (m_meshCache.find(key) == m_meshCache.end()) {
         std::vector<Vertex> vertices;
         std::vector<u32> indices;
+
+        // Improved UV calculation that handles sloped surfaces (roofs) consistently
         auto calcWorldUV = [](vec3 pos, vec3 normal, f32 uvScale = 0.001f) -> vec2 {
             vec3 uAxis, vAxis;
-            if (std::abs(normal.y) > 0.9f) {
+
+            // For nearly horizontal surfaces (floors, flat roofs)
+            if (std::abs(normal.y) > 0.95f) {
                 uAxis = vec3(1, 0, 0);
                 vAxis = vec3(0, 0, 1);
-            } else if (std::abs(normal.x) > std::abs(normal.z)) {
-                uAxis = vec3(0, 0, 1);
-                vAxis = vec3(0, 1, 0);
-            } else {
-                uAxis = vec3(1, 0, 0);
-                vAxis = vec3(0, 1, 0);
+            }
+            // For nearly vertical surfaces (walls)
+            else if (std::abs(normal.y) < 0.1f) {
+                if (std::abs(normal.x) > std::abs(normal.z)) {
+                    uAxis = vec3(0, 0, 1);
+                    vAxis = vec3(0, 1, 0);
+                } else {
+                    uAxis = vec3(1, 0, 0);
+                    vAxis = vec3(0, 1, 0);
+                }
+            }
+            // For sloped surfaces (roofs) - use tangent space aligned to slope
+            else {
+                // Project normal onto XZ plane to get slope direction
+                vec3 slopeDir = glm::normalize(vec3(normal.x, 0.0f, normal.z));
+                // U axis runs horizontally along the roof ridge (perpendicular to slope fall)
+                uAxis = glm::normalize(glm::cross(vec3(0, 1, 0), slopeDir));
+                // V axis runs up/down the slope (negated to fix 180 degree rotation)
+                vAxis = -glm::normalize(glm::cross(normal, uAxis));
             }
             return vec2(glm::dot(pos, uAxis) * uvScale, glm::dot(pos, vAxis) * uvScale);
         };
@@ -2452,8 +2494,7 @@ void Renderer::drawCustomMeshWithMaterial(const MeshData& meshData, vec3 color, 
         m_meshCache[key] = std::make_unique<Mesh>(m_context, vertices, indices);
     }
 
-    // Apply offset as translation transform
-    mat4 transform = glm::translate(mat4(1.0f), offset);
+    mat4 transform = mat4(1.0f);
     drawMeshWithMaterial(*m_meshCache[key], transform, color, stress, material);
 }
 
@@ -2483,6 +2524,9 @@ VkDescriptorSet Renderer::createMaterialDescriptorSetForMaterial(const Material&
     if (!material.albedoMap) {
         std::cerr << "[Renderer] WARNING: Material " << material.name << " has no albedo map, using white fallback" << std::endl;
     }
+    // Debug: Log height map status for each material (use cerr for unbuffered output)
+    std::cerr << "[Renderer] Creating descriptor set for " << material.name
+              << " - heightMap: " << (material.heightMap ? "LOADED" : "default grey") << std::endl;
 
     std::array<VkDescriptorImageInfo, 8> imageInfos{};
     imageInfos[0] = {albedo->getSampler(), albedo->getImageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -2509,12 +2553,15 @@ VkDescriptorSet Renderer::createMaterialDescriptorSetForMaterial(const Material&
 }
 
 void Renderer::buildMaterialDescriptorSets() {
+    std::cerr << "[Renderer] buildMaterialDescriptorSets() called" << std::endl;
     m_materialDescriptorSets.clear();
     m_materialDescriptorSets["default"] = m_defaultMaterialDescriptorSet;
 
     if (!m_materialLibrary) {
+        std::cerr << "[Renderer] No material library, returning early" << std::endl;
         return;
     }
+    std::cerr << "[Renderer] Material library has " << m_materialLibrary->getMaterials().size() << " materials" << std::endl;
 
     for (const auto& [name, mat] : m_materialLibrary->getMaterials()) {
         if (!mat) continue;
@@ -2533,38 +2580,47 @@ void Renderer::bindIBLDescriptorSet() {
 void Renderer::bindMaterialDescriptorSet(const std::string& materialName) {
     VkDescriptorSet set = m_defaultMaterialDescriptorSet;
     auto it = m_materialDescriptorSets.find(materialName);
-    if (it != m_materialDescriptorSets.end() && it->second != VK_NULL_HANDLE) {
+    if (it != m_materialDescriptorSets.end()) {
         set = it->second;
+        // Debug: log when we find an exact material match
+        static std::set<std::string> loggedMaterials;
+        if (loggedMaterials.find(materialName) == loggedMaterials.end()) {
+            std::cerr << "[Renderer] Binding material: " << materialName << " (exact match)" << std::endl;
+            loggedMaterials.insert(materialName);
+        }
     } else if (!materialName.empty()) {
         std::string lowered = materialName;
         std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
             return static_cast<char>(std::tolower(c));
         });
 
-        // Helper lambda to safely get material descriptor set (returns default if not found)
-        auto getMaterialSet = [this](const std::string& name) -> VkDescriptorSet {
-            auto matIt = m_materialDescriptorSets.find(name);
-            if (matIt != m_materialDescriptorSets.end() && matIt->second != VK_NULL_HANDLE) {
-                return matIt->second;
-            }
-            return m_defaultMaterialDescriptorSet;
+        // Helper to safely get descriptor set with fallback to default
+        auto safeGet = [&](const std::string& key) -> VkDescriptorSet {
+            auto iter = m_materialDescriptorSets.find(key);
+            return (iter != m_materialDescriptorSets.end() && iter->second != VK_NULL_HANDLE)
+                   ? iter->second : m_defaultMaterialDescriptorSet;
         };
 
         if (lowered.find("wall") != std::string::npos) {
-            set = getMaterialSet("drywall");
+            set = safeGet("drywall");
         } else if (lowered.find("roof") != std::string::npos) {
-            set = getMaterialSet("shingle");
+            set = safeGet("shingle");
         } else if (lowered.find("window") != std::string::npos || lowered.find("glass") != std::string::npos) {
-            set = getMaterialSet("glass");
+            set = safeGet("glass");
         } else if (lowered.find("door") != std::string::npos || lowered.find("wood") != std::string::npos) {
-            set = getMaterialSet("wood");
+            set = safeGet("wood");
         } else if (lowered.find("metal") != std::string::npos || lowered.find("steel") != std::string::npos) {
-            set = getMaterialSet("metal");
+            set = safeGet("metal");
         } else if (lowered.find("concrete") != std::string::npos) {
-            set = getMaterialSet("concrete");
+            set = safeGet("concrete");
         } else if (lowered.find("brick") != std::string::npos) {
-            set = getMaterialSet("brick");
+            set = safeGet("brick");
         }
+    }
+
+    // Ensure we never bind a null descriptor set
+    if (set == VK_NULL_HANDLE) {
+        set = m_defaultMaterialDescriptorSet;
     }
 
     // Skip redundant descriptor set binds (reduces GPU state changes)
@@ -2606,65 +2662,97 @@ std::string Renderer::resolveMaterialName(const StructuralElement& element) cons
         return m_materialLibrary && m_materialLibrary->hasMaterial(name);
     };
 
+    // FORCE brick for all walls to test tessellation
+    if (element.type == ElementType::Wall && hasMaterial("polyhaven/brick_wall_006")) {
+        return "polyhaven/brick_wall_006";
+    }
+
     auto defaultForType = [&]() -> std::string {
         switch (element.type) {
             case ElementType::Wall:
-                if (m_materialStyle == MaterialStyle::Realistic && hasMaterial("brick_red_01")) {
-                    return "brick_red_01";
+                // Use Poly Haven brick for exterior walls
+                if (hasMaterial("polyhaven/brick_wall_006")) {
+                    return "polyhaven/brick_wall_006";
                 }
-                return "drywall";
-            case ElementType::Door: return "wood";
+                return "concrete";  // Falls back to alias
+            case ElementType::Door:
+                if (hasMaterial("polyhaven/wood_floor_deck")) {
+                    return "polyhaven/wood_floor_deck";
+                }
+                return "wood";
             case ElementType::Window: return "glass";
-            case ElementType::Floor: return "tile";
-            case ElementType::Roof: return "shingle";
+            case ElementType::Floor:
+                if (hasMaterial("polyhaven/concrete_floor_003")) {
+                    return "polyhaven/concrete_floor_003";
+                }
+                return "concrete";
+            case ElementType::Roof:
+                if (hasMaterial("polyhaven/roof_slates_02")) {
+                    return "polyhaven/roof_slates_02";
+                }
+                return "shingle";
             case ElementType::Beam:
             case ElementType::Column:
-                return "metal";
+                if (hasMaterial("polyhaven/wood_floor_deck")) {
+                    return "polyhaven/wood_floor_deck";
+                }
+                return "wood";
             default:
-                return "default";
+                return "polyhaven/concrete_wall_008";
         }
     };
 
     auto mapKeyword = [&](const std::string& key) -> std::string {
         if (key.find("brick") != std::string::npos) {
-            if (m_materialStyle == MaterialStyle::Realistic && hasMaterial("brick_red_01")) {
-                return "brick_red_01";
-            }
+            if (hasMaterial("polyhaven/brick_wall_006")) return "polyhaven/brick_wall_006";
             return "brick";
         }
         if (key.find("concrete") != std::string::npos || key.find("cement") != std::string::npos ||
             key.find("stone") != std::string::npos) {
+            if (hasMaterial("polyhaven/concrete_wall_008")) return "polyhaven/concrete_wall_008";
             return "concrete";
         }
         if (key.find("drywall") != std::string::npos || key.find("plaster") != std::string::npos ||
             key.find("gypsum") != std::string::npos || key.find("paint") != std::string::npos ||
             key.find("stucco") != std::string::npos || key.find("poly") != std::string::npos ||
-            key.find("tyvek") != std::string::npos || key.find("membrane") != std::string::npos) {
+            key.find("tyvek") != std::string::npos || key.find("membrane") != std::string::npos ||
+            key.find("vapor") != std::string::npos) {
+            if (hasMaterial("polyhaven/concrete_wall_008")) return "polyhaven/concrete_wall_008";
             return "drywall";
         }
         if (key.find("wood") != std::string::npos || key.find("timber") != std::string::npos ||
             key.find("osb") != std::string::npos || key.find("plywood") != std::string::npos) {
+            if (hasMaterial("polyhaven/wood_floor_deck")) return "polyhaven/wood_floor_deck";
             return "wood";
         }
         if (key.find("vinyl") != std::string::npos || key.find("siding") != std::string::npos) {
-            if (m_materialStyle == MaterialStyle::Realistic && hasMaterial("brick_red_01")) {
-                return "brick_red_01";
-            }
-            return "brick";
+            if (hasMaterial("polyhaven/concrete_wall_008")) return "polyhaven/concrete_wall_008";
+            return "concrete";
         }
         if (key.find("glass") != std::string::npos || key.find("glazing") != std::string::npos) {
             return "glass";
         }
         if (key.find("metal") != std::string::npos || key.find("steel") != std::string::npos ||
             key.find("aluminum") != std::string::npos) {
+            if (hasMaterial("polyhaven/metal_plate_02")) return "polyhaven/metal_plate_02";
             return "metal";
         }
         if (key.find("tile") != std::string::npos || key.find("ceramic") != std::string::npos) {
+            if (hasMaterial("polyhaven/concrete_floor_003")) return "polyhaven/concrete_floor_003";
             return "tile";
         }
         if (key.find("shingle") != std::string::npos || key.find("asphalt") != std::string::npos ||
-            key.find("roof") != std::string::npos) {
+            key.find("roof") != std::string::npos || key.find("slate") != std::string::npos) {
+            if (hasMaterial("polyhaven/roof_slates_02")) return "polyhaven/roof_slates_02";
             return "shingle";
+        }
+        if (key.find("grass") != std::string::npos || key.find("lawn") != std::string::npos) {
+            if (hasMaterial("polyhaven/grass_path_2")) return "polyhaven/grass_path_2";
+            return "grass";
+        }
+        if (key.find("gravel") != std::string::npos || key.find("patio") != std::string::npos) {
+            if (hasMaterial("polyhaven/gravel_concrete")) return "polyhaven/gravel_concrete";
+            return "gravel";
         }
 
         return defaultForType();
@@ -2904,11 +2992,8 @@ void Renderer::drawLightIndicators(int selectedIndex) {
     m_context.endDebugLabel(m_currentCommandBuffer);
 }
 
-void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices, const vec3& buildingOffset) {
+void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& elements, const Building& building, const std::set<int>& selectedIndices) {
     m_context.beginDebugLabel(m_currentCommandBuffer, "Structural Frame", {0.2f, 0.6f, 0.9f, 1.0f});
-
-    // Store building offset for use by draw functions
-    m_buildingOffset = buildingOffset;
 
     // Bind IBL descriptor set (set 2) - only needs to be done once per frame
     bindIBLDescriptorSet();
@@ -2929,15 +3014,14 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
     m_culledCount = 0;  // Reset culled counter
     size_t index = 0;
     for (const auto& element : elements) {
-        // Frustum culling DISABLED - was causing buildings to disappear when rotating
-        // The frustum test appears to be incorrect, keeping culling off for now
-        // vec3 aabbMin, aabbMax;
-        // getElementAABB(element, aabbMin, aabbMax);
-        // if (!m_frustum.testAABB(aabbMin, aabbMax)) {
-        //     m_culledCount++;
-        //     index++;
-        //     continue;  // Skip this element
-        // }
+        // Frustum culling - skip elements outside view
+        vec3 aabbMin, aabbMax;
+        getElementAABB(element, aabbMin, aabbMax);
+        if (!m_frustum.testAABB(aabbMin, aabbMax)) {
+            m_culledCount++;
+            index++;
+            continue;  // Skip this element
+        }
 
         vec3 color = getElementColor(element, building, index);
 
@@ -2955,34 +3039,30 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
 
         // Only pass stress to shader for Structural mode; otherwise pass 0 so shader uses RGB color
         f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? element.stress : 0.0f;
-
-        // Apply building offset to element positions
-        vec3 offsetStart = element.start + m_buildingOffset;
-        vec3 offsetEnd = element.end + m_buildingOffset;
-
+        
         switch (element.type) {
             case ElementType::Beam:
-                drawBeam(offsetStart, offsetEnd, element.width, element.depth,
+                drawBeam(element.start, element.end, element.width, element.depth,
                         color, stressForShader, element.deflection);
                 break;
 
             case ElementType::Column:
-                drawColumn(offsetStart, element.width, element.depth,
-                          offsetEnd.y - offsetStart.y, color, stressForShader);
+                drawColumn(element.start, element.width, element.depth,
+                          element.end.y - element.start.y, color, stressForShader);
                 break;
 
             case ElementType::Floor: {
                 // Use IFC mesh if available
                 if (element.mesh.hasData()) {
-                    drawCustomMesh(element.mesh, color, stressForShader, m_buildingOffset);
+                    drawCustomMesh(element.mesh, color, stressForShader);
                 } else {
                     // Fall back to generated geometry
-                    glm::vec3 center = (offsetStart + offsetEnd) * 0.5f;
-                    center.y = offsetStart.y;
+                    glm::vec3 center = (element.start + element.end) * 0.5f;
+                    center.y = element.start.y;
                     drawFloor(center,
-                             offsetEnd.x - offsetStart.x,
-                             offsetEnd.z - offsetStart.z,
-                             offsetEnd.y - offsetStart.y, color, stressForShader);  // Use vertical extent as thickness
+                             element.end.x - element.start.x,
+                             element.end.z - element.start.z,
+                             element.end.y - element.start.y, color, stressForShader);  // Use vertical extent as thickness
                 }
                 break;
             }
@@ -2990,12 +3070,12 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             case ElementType::Wall: {
                 // Use custom mesh if available (e.g., gable wall)
                 if (element.mesh.hasData()) {
-                    drawCustomMesh(element.mesh, color, stressForShader, m_buildingOffset);
+                    drawCustomMesh(element.mesh, color, stressForShader);
                 } else {
                     // Generate wall geometry - supports diagonal walls
-                    float xExtent = offsetEnd.x - offsetStart.x;
-                    float zExtent = offsetEnd.z - offsetStart.z;
-                    float height = offsetEnd.y - offsetStart.y;
+                    float xExtent = element.end.x - element.start.x;
+                    float zExtent = element.end.z - element.start.z;
+                    float height = element.end.y - element.start.y;
 
                     // Check if this is a diagonal wall (both X and Z extents significant)
                     bool isDiagonal = std::abs(xExtent) > 0.1f && std::abs(zExtent) > 0.1f;
@@ -3006,9 +3086,9 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                     if (isDiagonal) {
                         // Diagonal wall - use beam geometry
                         // Beam is centered on start-end line, so offset to wall mid-height
-                        float midHeight = offsetStart.y + height * 0.5f;
-                        vec3 wallStart = vec3(offsetStart.x, midHeight, offsetStart.z);
-                        vec3 wallEnd = vec3(offsetEnd.x, midHeight, offsetEnd.z);
+                        float midHeight = element.start.y + height * 0.5f;
+                        vec3 wallStart = vec3(element.start.x, midHeight, element.start.z);
+                        vec3 wallEnd = vec3(element.end.x, midHeight, element.end.z);
 
                         // Calculate wall thickness (use depth or a default)
                         float thickness = element.depth > 0.01f ? element.depth : 0.5f;
@@ -3029,8 +3109,8 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                         drawMeshWithMaterial(*m_meshCache[key], mat4(1.0f), color, stressForShader, wallMat);
                     } else {
                         // Axis-aligned wall - use column geometry with wall material
-                        glm::vec3 center = (offsetStart + offsetEnd) * 0.5f;
-                        center.y = offsetStart.y;
+                        glm::vec3 center = (element.start + element.end) * 0.5f;
+                        center.y = element.start.y;
 
                         // Use element.depth for wall thickness, not the extent (which would be 0 for axis-aligned walls)
                         float wallThickness = element.depth > 0.01f ? element.depth : 0.5f;
@@ -3051,14 +3131,14 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
                 // If door has custom mesh, render it directly
                 if (element.mesh.hasData()) {
                     vec4 doorMat = vec4(0.0f, 0.75f, 1.0f, 0.0f);
-                    drawCustomMeshWithMaterial(element.mesh, color, stressForShader, doorMat, m_buildingOffset);
+                    drawCustomMeshWithMaterial(element.mesh, color, stressForShader, doorMat);
                     break;
                 }
 
                 // Generate door geometry
-                float xExtent = offsetEnd.x - offsetStart.x;
-                float zExtent = offsetEnd.z - offsetStart.z;
-                float doorHeight = offsetEnd.y - offsetStart.y;
+                float xExtent = element.end.x - element.start.x;
+                float zExtent = element.end.z - element.start.z;
+                float doorHeight = element.end.y - element.start.y;
                 float doorDepth = element.depth > 0.1f ? element.depth : 0.5f;
 
                 if (doorHeight <= 0.01f) break;
@@ -3071,9 +3151,9 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
 
                 // Calculate door position at bottom center of wall segment
                 vec3 doorPos = vec3(
-                    (offsetStart.x + offsetEnd.x) * 0.5f,
-                    offsetStart.y,  // Bottom of door
-                    (offsetStart.z + offsetEnd.z) * 0.5f
+                    (element.start.x + element.end.x) * 0.5f,
+                    element.start.y,  // Bottom of door
+                    (element.start.z + element.end.z) * 0.5f
                 );
 
                 // Calculate rotation from extents (which are set from host wall direction)
@@ -3114,16 +3194,16 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
 
                 // Use actual IFC mesh if available
                 if (element.mesh.hasData()) {
-                    drawCustomMeshWithMaterial(element.mesh, color, stressForShader, roofMat, m_buildingOffset);
+                    drawCustomMeshWithMaterial(element.mesh, color, stressForShader, roofMat);
                 } else {
                     // Fall back to generated geometry
-                    float roofWidth = std::abs(offsetEnd.x - offsetStart.x);
-                    float roofDepthZ = std::abs(offsetEnd.z - offsetStart.z);
-                    float roofThickness = offsetEnd.y - offsetStart.y;
+                    float roofWidth = std::abs(element.end.x - element.start.x);
+                    float roofDepthZ = std::abs(element.end.z - element.start.z);
+                    float roofThickness = element.end.y - element.start.y;
                     if (roofThickness < 0.1f) roofThickness = 0.5f;
 
-                    glm::vec3 center = (offsetStart + offsetEnd) * 0.5f;
-                    center.y = offsetStart.y;
+                    glm::vec3 center = (element.start + element.end) * 0.5f;
+                    center.y = element.start.y;
 
                     // Use roof material for generated roof geometry
                     std::string key = "roof_" + std::to_string(roofWidth) + "_" + std::to_string(roofDepthZ) + "_" + std::to_string(roofThickness);
@@ -3168,14 +3248,10 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
             }
             f32 stressForShader = (m_vizMode == VisualizationMode::Structural) ? element.stress : 0.0f;
 
-            // Apply building offset to window positions
-            vec3 offsetStart = element.start + m_buildingOffset;
-            vec3 offsetEnd = element.end + m_buildingOffset;
-
             // Generate window geometry
-            float xExtent = offsetEnd.x - offsetStart.x;
-            float zExtent = offsetEnd.z - offsetStart.z;
-            float windowHeight = offsetEnd.y - offsetStart.y;
+            float xExtent = element.end.x - element.start.x;
+            float zExtent = element.end.z - element.start.z;
+            float windowHeight = element.end.y - element.start.y;
             float windowDepth = element.depth > 0.01f ? element.depth : 0.3f;
 
             if (windowHeight <= 0.01f) {
@@ -3191,9 +3267,9 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
 
             // Calculate window position at bottom center of wall segment
             vec3 windowPos = vec3(
-                (offsetStart.x + offsetEnd.x) * 0.5f,
-                offsetStart.y,  // Bottom of window
-                (offsetStart.z + offsetEnd.z) * 0.5f
+                (element.start.x + element.end.x) * 0.5f,
+                element.start.y,  // Bottom of window
+                (element.start.z + element.end.z) * 0.5f
             );
 
             // Calculate rotation from extents (negate for proper alignment)
@@ -3245,43 +3321,23 @@ void Renderer::drawStructuralFrame(const std::vector<StructuralElement>& element
     m_context.endDebugLabel(m_currentCommandBuffer);
 }
 
-void Renderer::drawTerrain(const TerrainMesh& terrain, const vec3& offset) {
+void Renderer::drawTerrain(const TerrainMesh& terrain) {
     if (!terrain.hasData()) {
         return;
     }
 
     m_context.beginDebugLabel(m_currentCommandBuffer, "Terrain", {0.4f, 0.7f, 0.3f, 1.0f});
 
-    // Check if terrain data has changed (using version counter) and we need to rebuild the mesh
-    if (&terrain != m_lastTerrainData || !m_terrainMesh || terrain.version != m_lastTerrainVersion) {
+    // Check if terrain data has changed and we need to rebuild the mesh
+    if (&terrain != m_lastTerrainData || !m_terrainMesh) {
         m_lastTerrainData = &terrain;
-        m_lastTerrainVersion = terrain.version;
 
         // Create mesh from terrain vertices and indices
         m_terrainMesh = std::make_unique<Mesh>(m_context, terrain.vertices, terrain.indices);
 
         std::cout << "[Terrain] Created GPU mesh: " << terrain.vertices.size()
-                  << " vertices, " << (terrain.indices.size() / 3) << " triangles, version=" << terrain.version << "\n";
+                  << " vertices, " << (terrain.indices.size() / 3) << " triangles\n";
     }
-
-    // ALWAYS bind the appropriate solid pipeline for terrain (override wireframe mode)
-    // Terrain should always render as solid filled triangles
-    if (m_outputLinearHDR) {
-        if (m_tessellationEnabled && m_hdrTessPipeline) {
-            m_hdrTessPipeline->bind(m_currentCommandBuffer);
-        } else if (m_hdrPipeline) {
-            m_hdrPipeline->bind(m_currentCommandBuffer);
-        }
-    } else {
-        if (m_tessellationEnabled && m_tessPipeline) {
-            m_tessPipeline->bind(m_currentCommandBuffer);
-        } else if (m_pipeline) {
-            m_pipeline->bind(m_currentCommandBuffer);
-        }
-    }
-
-    // Use default material descriptor set (no texture, just vertex colors)
-    bindMaterialDescriptorSet("");
 
     // Clear per-element override (terrain has no element ID)
     m_currentDrawElementId = -1;
@@ -3289,12 +3345,16 @@ void Renderer::drawTerrain(const TerrainMesh& terrain, const vec3& offset) {
     // Terrain material: rough, non-metallic surface
     vec4 terrainMaterial = vec4(0.0f, 0.85f, 1.0f, 0.0f);  // metallic=0, roughness=0.85, ao=1, emission=0
 
-    // Create translation matrix from offset
-    mat4 transform = glm::translate(mat4(1.0f), offset);
-
-    // Draw with offset transform
-    // Use vec3(0.0f) for color to let vertex colors (elevation gradient) show through
-    drawMeshWithMaterial(*m_terrainMesh, transform, vec3(0.0f), 0.0f, terrainMaterial);
+    // Use material texture if specified, otherwise use vertex colors
+    if (!m_terrainMaterialName.empty()) {
+        bindMaterialDescriptorSet(m_terrainMaterialName);
+        // Use white color so texture shows through
+        drawMeshWithMaterial(*m_terrainMesh, mat4(1.0f), vec3(1.0f), 0.0f, terrainMaterial);
+    } else {
+        bindMaterialDescriptorSet("");
+        // Use vec3(0.0f) for color to let vertex colors (elevation gradient) show through
+        drawMeshWithMaterial(*m_terrainMesh, mat4(1.0f), vec3(0.0f), 0.0f, terrainMaterial);
+    }
 
     m_context.endDebugLabel(m_currentCommandBuffer);
 }
@@ -3383,7 +3443,7 @@ vec3 Renderer::getMaterialTestSceneCameraTarget() const {
 }
 
 void Renderer::updateClipPlane() {
-    // Create clip plane based on axis and height
+    // Create clip plane based on axis and height (updates plane 0 for legacy single-plane mode)
     // Clip plane equation: ax + by + cz + d = 0
     // Points with dot(pos, plane) > 0 are kept
     vec3 normal(0.0f);
@@ -3395,25 +3455,159 @@ void Renderer::updateClipPlane() {
     // d = -dot(normal, point_on_plane)
     // point_on_plane is (height, 0, 0) for X axis, etc.
     f32 d = -m_clipHeight * (m_clipFlipped ? -1.0f : 1.0f);
-    m_clipPlane = vec4(normal, d);
+    m_clipPlanes[0] = vec4(normal, d);
+    m_numClipPlanes = 1;
+    m_clippingEnabled = 1;  // Enable plane 0
+}
+
+void Renderer::setClipPlaneAt(u32 index, const vec4& plane, bool enabled) {
+    if (index >= MAX_CLIP_PLANES) return;
+    m_clipPlanes[index] = plane;
+    if (enabled) {
+        m_clippingEnabled |= (1u << index);
+    } else {
+        m_clippingEnabled &= ~(1u << index);
+    }
+    // Update numClipPlanes to include this plane if it's beyond current count
+    if (enabled && index >= m_numClipPlanes) {
+        m_numClipPlanes = index + 1;
+    }
+}
+
+const vec4& Renderer::getClipPlaneAt(u32 index) const {
+    static vec4 zero(0.0f);
+    if (index >= MAX_CLIP_PLANES) return zero;
+    return m_clipPlanes[index];
+}
+
+void Renderer::setClipPlaneEnabled(u32 index, bool enabled) {
+    if (index >= MAX_CLIP_PLANES) return;
+    if (enabled) {
+        m_clippingEnabled |= (1u << index);
+    } else {
+        m_clippingEnabled &= ~(1u << index);
+    }
+}
+
+bool Renderer::getClipPlaneEnabled(u32 index) const {
+    if (index >= MAX_CLIP_PLANES) return false;
+    return (m_clippingEnabled & (1u << index)) != 0;
+}
+
+void Renderer::setSectionBox(const vec3& minBounds, const vec3& maxBounds) {
+    // Create 6 clip planes to form a box
+    // Each plane's normal points INWARD (toward the center of the box)
+    // Fragments outside the box will have negative clip distance and be discarded
+
+    // Plane 0: +X face (normal pointing -X, clips fragments with x > maxBounds.x)
+    m_clipPlanes[0] = vec4(-1.0f, 0.0f, 0.0f, maxBounds.x);
+
+    // Plane 1: -X face (normal pointing +X, clips fragments with x < minBounds.x)
+    m_clipPlanes[1] = vec4(1.0f, 0.0f, 0.0f, -minBounds.x);
+
+    // Plane 2: +Y face (normal pointing -Y, clips fragments with y > maxBounds.y)
+    m_clipPlanes[2] = vec4(0.0f, -1.0f, 0.0f, maxBounds.y);
+
+    // Plane 3: -Y face (normal pointing +Y, clips fragments with y < minBounds.y)
+    m_clipPlanes[3] = vec4(0.0f, 1.0f, 0.0f, -minBounds.y);
+
+    // Plane 4: +Z face (normal pointing -Z, clips fragments with z > maxBounds.z)
+    m_clipPlanes[4] = vec4(0.0f, 0.0f, -1.0f, maxBounds.z);
+
+    // Plane 5: -Z face (normal pointing +Z, clips fragments with z < minBounds.z)
+    m_clipPlanes[5] = vec4(0.0f, 0.0f, 1.0f, -minBounds.z);
+
+    // Enable all 6 planes
+    m_numClipPlanes = 6;
+    m_clippingEnabled = 0x3F;  // Binary: 111111 = all 6 planes enabled
+
+    // Cache the bounds for getSectionBoxBounds()
+    m_sectionBoxMin = minBounds;
+    m_sectionBoxMax = maxBounds;
+
+    std::cout << "[Renderer] Section box set: min(" << minBounds.x << ", " << minBounds.y << ", " << minBounds.z
+              << ") max(" << maxBounds.x << ", " << maxBounds.y << ", " << maxBounds.z << ")" << std::endl;
+}
+
+void Renderer::clearSectionBox() {
+    m_numClipPlanes = 0;
+    m_clippingEnabled = 0;
+    m_sectionBoxMin = vec3(0.0f);
+    m_sectionBoxMax = vec3(0.0f);
+    std::cout << "[Renderer] Section box cleared" << std::endl;
+}
+
+bool Renderer::getSectionBoxBounds(vec3& outMin, vec3& outMax) const {
+    if (!hasSectionBox()) return false;
+    outMin = m_sectionBoxMin;
+    outMax = m_sectionBoxMax;
+    return true;
 }
 
 bool Renderer::loadHdrEnvironment(const std::string& filepath) {
+    // Wait for GPU to finish before modifying resources
+    m_context.waitIdle();
+
+    std::cout << "[Renderer] Loading HDRI: " << filepath << std::endl;
+
     if (!m_envMap) {
         m_envMap = std::make_unique<EnvironmentMap>(m_context);
     }
 
-    bool success = m_envMap->loadFromFile(filepath);
+    bool success = false;
+    try {
+        success = m_envMap->loadFromFile(filepath);
+    } catch (const std::exception& e) {
+        std::cerr << "[Renderer] Exception loading HDRI: " << e.what() << std::endl;
+        return false;
+    }
+
     if (success) {
         m_useHdrEnvMap = true;
+        std::cout << "[Renderer] HDRI loaded, generating IBL textures..." << std::endl;
 
         // Generate IBL textures
         IBLConfig iblConfig;
-        if (m_envMap->generateIBLTextures(iblConfig)) {
-            updateIBLDescriptorSet();
+        try {
+            if (m_envMap->generateIBLTextures(iblConfig)) {
+                updateIBLDescriptorSet();
+                std::cout << "[Renderer] HDRI ready: " << filepath << std::endl;
+            } else {
+                std::cerr << "[Renderer] Failed to generate IBL textures" << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[Renderer] Exception generating IBL: " << e.what() << std::endl;
+            return false;
         }
+    } else {
+        std::cerr << "[Renderer] Failed to load HDRI file" << std::endl;
     }
     return success;
+}
+
+void Renderer::useProceduralSky() {
+    // Wait for GPU to finish before modifying resources
+    m_context.waitIdle();
+
+    std::cout << "[Renderer] Switching to procedural sky..." << std::endl;
+
+    if (!m_envMap) {
+        m_envMap = std::make_unique<EnvironmentMap>(m_context);
+    }
+
+    try {
+        m_envMap->createProceduralSky();
+        m_useHdrEnvMap = false;
+
+        // Regenerate IBL textures for procedural sky
+        IBLConfig iblConfig;
+        if (m_envMap->generateIBLTextures(iblConfig)) {
+            updateIBLDescriptorSet();
+            std::cout << "[Renderer] Procedural sky ready" << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[Renderer] Exception creating procedural sky: " << e.what() << std::endl;
+    }
 }
 
 void Renderer::updateIBLDescriptorSet() {
@@ -4320,6 +4514,27 @@ void Renderer::copyHighResImageToBuffer() {
     // Copy image to buffer
     VkCommandBuffer cmd = m_context.beginSingleTimeCommands();
 
+    // Transition image from color attachment to transfer source
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = m_highResImage;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
     VkBufferImageCopy region{};
     region.bufferOffset = 0;
     region.bufferRowLength = 0;
@@ -4332,6 +4547,17 @@ void Renderer::copyHighResImageToBuffer() {
     region.imageExtent = { m_highResWidth, m_highResHeight, 1 };
 
     vkCmdCopyImageToBuffer(cmd, m_highResImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer, 1, &region);
+
+    // Transition back to color attachment for next sample
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     m_context.endSingleTimeCommands(cmd);
 
@@ -4480,10 +4706,14 @@ bool Renderer::renderHighRes(
             }
             ubo.numShadowMaps = m_activeShadowMaps;
             ubo.lightDirection = vec4(m_lightDirection, 0.0f);
-            ubo.clipPlane = m_clippingEnabled ? m_clipPlane : vec4(0.0f);
+            // Multi-plane clipping for section box
+            for (u32 ci = 0; ci < MAX_CLIP_PLANES; ci++) {
+                ubo.clipPlanes[ci] = m_clipPlanes[ci];
+            }
             ubo.time = m_time;
             ubo.shadowBias = m_shadowBias;
-            ubo.enableClipping = m_clippingEnabled ? 1 : 0;
+            ubo.enableClipping = m_clippingEnabled;  // Bitmask
+            ubo.numClipPlanes = m_numClipPlanes;
             ubo.enableShadows = m_shadowsEnabled ? 1 : 0;
             ubo.outputLinearHDR = 0;
             // Apply user-controlled brightness to compensate for missing bloom
@@ -4493,6 +4723,28 @@ bool Renderer::renderHighRes(
             ubo.materialParams2 = vec4(m_materialSaturation, m_materialRoughnessOffset, m_materialMetallicOffset, m_materialAOStrength);
             ubo.materialTint = vec4(m_materialTint, 1.0f);
             ubo.pomParams = vec4(m_pomEnabled ? 1.0f : 0.0f, m_pomHeightScale, m_pomMinLayers, m_pomMaxLayers);
+
+            // IBL intensity - CRITICAL for proper lighting!
+            ubo.iblParams = vec4(m_iblIntensity, m_iblDiffuseIntensity, m_iblSpecularIntensity, m_fresnelIntensity);
+
+            // Effect flags - enable IBL, direct light, normal mapping
+            ubo.effectFlags = 0;
+            if (m_iblEnabled) ubo.effectFlags |= EffectFlags::IBL;
+            if (m_directLightEnabled) ubo.effectFlags |= EffectFlags::DirectLight;
+            if (m_normalMappingEnabled) ubo.effectFlags |= EffectFlags::NormalMapping;
+
+            // Copy lights from the scene
+            u32 activeCount = 0;
+            for (size_t i = 0; i < m_lights.size() && activeCount < MAX_LIGHTS; ++i) {
+                const auto& light = m_lights[i];
+                if (!light.isEnabled()) continue;
+                ubo.lights[activeCount] = light;
+                activeCount++;
+            }
+            ubo.numLights = activeCount;
+            for (u32 i = activeCount; i < MAX_LIGHTS; ++i) {
+                ubo.lights[i] = GPULight{};
+            }
 
             memcpy(m_uniformBuffersMapped[0], &ubo, sizeof(ubo));
 
@@ -5542,10 +5794,14 @@ bool Renderer::renderMaterialPreview(const std::string& materialName) {
         }
         ubo.numShadowMaps = 0;
         ubo.lightDirection = vec4(lightDir, 0.0f);
-        ubo.clipPlane = vec4(0.0f);  // No clipping
+        // No clipping for preview
+        for (u32 ci = 0; ci < MAX_CLIP_PLANES; ci++) {
+            ubo.clipPlanes[ci] = vec4(0.0f);
+        }
         ubo.time = 0.0f;
         ubo.shadowBias = 0.0f;  // Disable shadows
         ubo.enableClipping = 0;  // No clipping
+        ubo.numClipPlanes = 0;
         ubo.enableShadows = 0;  // Disable shadows
         ubo.outputLinearHDR = 0;  // Apply tonemapping
         ubo.exposure = 0.5f;  // Lower exposure to prevent washout
@@ -5973,10 +6229,14 @@ bool Renderer::renderPreviewToTexture(const std::vector<StructuralElement>& elem
         }
         ubo.numShadowMaps = m_activeShadowMaps;
         ubo.lightDirection = vec4(m_lightDirection, 0.0f);
-        ubo.clipPlane = m_clippingEnabled ? m_clipPlane : vec4(0.0f);
+        // Multi-plane clipping for section box
+        for (u32 ci = 0; ci < MAX_CLIP_PLANES; ci++) {
+            ubo.clipPlanes[ci] = m_clipPlanes[ci];
+        }
         ubo.time = m_time;
         ubo.shadowBias = m_shadowBias;
-        ubo.enableClipping = m_clippingEnabled ? 1 : 0;
+        ubo.enableClipping = m_clippingEnabled;  // Bitmask
+        ubo.numClipPlanes = m_numClipPlanes;
         ubo.enableShadows = m_shadowsEnabled ? 1 : 0;
         ubo.outputLinearHDR = 0;
         ubo.exposure = getExposure();

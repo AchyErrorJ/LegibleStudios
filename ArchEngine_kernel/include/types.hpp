@@ -137,8 +137,6 @@ struct TerrainMesh {
     f32 min_elevation = 0.0f;      // Minimum elevation (feet)
     f32 max_elevation = 0.0f;      // Maximum elevation (feet)
 
-    u64 version = 0;               // Version counter to detect changes
-
     bool hasData() const { return !vertices.empty() && !indices.empty(); }
 
     /**
@@ -184,9 +182,9 @@ struct Camera {
     vec3 position   = {0.0f, 5.0f, 20.0f};
     vec3 target     = {0.0f, 0.0f, 0.0f};    // Look-at target
     vec3 up         = {0.0f, 1.0f, 0.0f};
-    f32 fov         = 60.0f;  // Wider FOV for better terrain visibility
+    f32 fov         = 45.0f;
     f32 nearPlane   = 0.1f;
-    f32 farPlane    = 100000.0f;  // Essentially unlimited for zoom through buildings
+    f32 farPlane    = 1000.0f;
     f32 speed       = 10.0f;
     f32 sensitivity = 0.1f;
     bool isOrthographic = false;
@@ -212,9 +210,9 @@ struct CameraState {
     vec3 position = {0.0f, 5.0f, 20.0f};
     vec3 target = {0.0f, 0.0f, 0.0f};
     vec3 up = {0.0f, 1.0f, 0.0f};
-    f32 fov = 60.0f;  // Wider FOV for better terrain visibility
+    f32 fov = 45.0f;
     f32 nearPlane = 0.1f;
-    f32 farPlane = 100000.0f;  // Essentially unlimited for zoom through buildings
+    f32 farPlane = 1000.0f;
     f32 speed = 10.0f;
     f32 sensitivity = 0.1f;
     bool isOrthographic = false;
@@ -262,6 +260,9 @@ constexpr u32 MAX_LIGHTS = 16;
 // Maximum number of shadow-casting lights (shadow map array size)
 constexpr u32 MAX_SHADOW_MAPS = 4;
 
+// Maximum number of clip planes for section box (6 planes = box)
+constexpr u32 MAX_CLIP_PLANES = 6;
+
 // Light types for the multi-light system
 enum class LightType : u32 {
     Directional = 0,  // Sun/moon light - parallel rays, no falloff
@@ -297,17 +298,18 @@ struct UniformBufferObject {
     mat4 proj;
     mat4 lightViewProj[MAX_SHADOW_MAPS];  // Shadow mapping matrices (up to 4 shadow-casting lights)
     vec4 lightDirection;    // Directional light direction (sun)
-    vec4 clipPlane;         // Section clipping plane (Phase 5)
+    vec4 clipPlanes[MAX_CLIP_PLANES];  // Section clipping planes (6 for section box)
     f32 time;
     f32 shadowBias;         // Shadow mapping bias
-    u32 enableClipping;     // Section clipping enabled flag
+    u32 enableClipping;     // Section clipping enabled flag (bitmask: bit 0-5 = plane enabled)
+    u32 numClipPlanes;      // Number of active clip planes (0-6)
     u32 enableShadows;      // Shadow mapping enabled flag
     u32 outputLinearHDR;    // Output linear HDR (skip tonemapping in shader)
     u32 numShadowMaps;      // Number of active shadow maps (0-4)
     f32 exposure;           // Exposure multiplier for tonemapping
     f32 tessellationLevel;  // Tessellation subdivision level (1-64)
     f32 displacementScale;  // Height map displacement scale
-    f32 _padAlign1, _padAlign2, _padAlign3;  // Padding to align vec4 to 16-byte boundary (std140)
+    f32 _padAlign1, _padAlign2;  // Padding to align vec4 to 16-byte boundary (std140)
     vec4 materialParams;    // x = UV scale, y = normal strength, z = brightness, w = contrast
     vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
     vec4 materialTint;      // RGB tint multiplier, w = unused
