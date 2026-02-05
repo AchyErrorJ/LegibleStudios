@@ -18,6 +18,13 @@
 #include <mutex>
 #include <iostream>
 #include <set>
+#include <map>
+#include <chrono>
+#include <atomic>
+#include <algorithm>
+#include <limits>
+#include <tuple>
+#include <cmath>
 
 #ifdef _WIN32
 #define VK_USE_PLATFORM_WIN32_KHR
@@ -268,6 +275,13 @@ ARCH_API int arch_load_json(const char* json_str) {
         }
 
         g_layout = *layoutOpt;  // Store layout for room access
+
+        // Debug: check if terrain was parsed
+        std::cout << "[ArchAPI] Layout terrain has data: " << (g_layout.terrain.hasData() ? "YES" : "NO") << std::endl;
+        if (g_layout.terrain.hasData()) {
+            std::cout << "[ArchAPI] Layout terrain: " << g_layout.terrain.vertices.size() << " vertices" << std::endl;
+        }
+
         g_building = qbd.toBuilding(g_layout);
         g_building.name = "Loaded Building";
 
@@ -283,7 +297,15 @@ ARCH_API int arch_load_json(const char* json_str) {
             }
         }
 
+        // Scale terrain vertices from mm to feet
+        for (auto& vert : g_building.terrainMesh.vertices) {
+            vert.position *= mmToFeet;
+        }
+
         std::cout << "[ArchAPI] Loaded building with " << g_building.elements.size() << " elements" << std::endl;
+        std::cout << "[ArchAPI] Terrain has data: " << (g_building.terrainMesh.hasData() ? "YES" : "NO")
+                  << ", vertices: " << g_building.terrainMesh.vertices.size()
+                  << ", indices: " << g_building.terrainMesh.indices.size() << std::endl;
 
         // Reset camera to fit
         arch_reset_camera();
@@ -1642,6 +1664,611 @@ ARCH_API void arch_set_terrain_texture(const char* material_name) {
 ARCH_API const char* arch_get_terrain_texture(void) {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_terrainTextureName.c_str();
+}
+
+// =============================================================================
+// High-Performance Terrain Generation
+// =============================================================================
+
+namespace {
+    // Progress tracking for terrain generation
+    std::atomic<float> g_terrainGenProgress{0.0f};
+    std::string g_terrainGenStatus = "";
+
+    // Point-in-polygon test (ray casting)
+    bool pointInPolygon(float px, float pz, const std::vector<std::pair<float, float>>& poly) {
+        if (poly.empty()) return true;  // No boundary = always inside
+
+        bool inside = false;
+        size_t n = poly.size();
+        for (size_t i = 0, j = n - 1; i < n; j = i++) {
+            float xi = poly[i].first, zi = poly[i].second;
+            float xj = poly[j].first, zj = poly[j].second;
+
+            if (((zi > pz) != (zj > pz)) &&
+                (px < (xj - xi) * (pz - zi) / (zj - zi) + xi)) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    // KD-tree-like spatial index for fast nearest neighbor
+    struct ElevationIndex {
+        struct Point {
+            float lat, lng, elev;
+        };
+        std::vector<Point> points;
+        float latMin, latMax, lngMin, lngMax;
+
+        void build(const ArchElevationPoint* pts, int count,
+                   float latMin_, float latMax_, float lngMin_, float lngMax_) {
+            latMin = latMin_; latMax = latMax_;
+            lngMin = lngMin_; lngMax = lngMax_;
+            points.resize(count);
+            for (int i = 0; i < count; i++) {
+                points[i] = {pts[i].lat, pts[i].lng, pts[i].elevation_m};
+            }
+        }
+
+        // Find nearest elevation using simple grid search (fast enough for this use case)
+        float findNearest(float lat, float lng) const {
+            if (points.empty()) return 0.0f;
+
+            float bestDist = std::numeric_limits<float>::max();
+            float bestElev = points[0].elev;
+
+            // For large point sets, we could use a spatial hash here
+            // For now, linear search works for up to ~1M points
+            for (const auto& p : points) {
+                float dlat = p.lat - lat;
+                float dlng = p.lng - lng;
+                float dist = dlat * dlat + dlng * dlng;
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestElev = p.elev;
+                }
+            }
+            return bestElev;
+        }
+
+        // Inverse distance weighted interpolation from K nearest
+        float interpolate(float lat, float lng, int k = 4) const {
+            if (points.empty()) return 0.0f;
+            if (points.size() == 1) return points[0].elev;
+
+            // Find k nearest points
+            struct Neighbor { float dist; float elev; };
+            std::vector<Neighbor> neighbors;
+            neighbors.reserve(k);
+
+            for (const auto& p : points) {
+                float dlat = p.lat - lat;
+                float dlng = p.lng - lng;
+                float dist = std::sqrt(dlat * dlat + dlng * dlng);
+
+                if (dist < 1e-9f) return p.elev;  // Exact match
+
+                if (neighbors.size() < static_cast<size_t>(k)) {
+                    neighbors.push_back({dist, p.elev});
+                    std::push_heap(neighbors.begin(), neighbors.end(),
+                        [](const Neighbor& a, const Neighbor& b) { return a.dist < b.dist; });
+                } else if (dist < neighbors[0].dist) {
+                    std::pop_heap(neighbors.begin(), neighbors.end(),
+                        [](const Neighbor& a, const Neighbor& b) { return a.dist < b.dist; });
+                    neighbors.back() = {dist, p.elev};
+                    std::push_heap(neighbors.begin(), neighbors.end(),
+                        [](const Neighbor& a, const Neighbor& b) { return a.dist < b.dist; });
+                }
+            }
+
+            // Inverse distance weighting
+            float sumWeights = 0.0f;
+            float sumElev = 0.0f;
+            for (const auto& n : neighbors) {
+                float w = 1.0f / (n.dist * n.dist);  // IDW with power 2
+                sumWeights += w;
+                sumElev += w * n.elev;
+            }
+            return sumElev / sumWeights;
+        }
+    };
+}
+
+ARCH_API int arch_generate_terrain_from_points(
+    const ArchElevationPoint* points,
+    int point_count,
+    const float* boundary_ft,
+    int boundary_vertex_count,
+    float bounds_lat_min, float bounds_lat_max,
+    float bounds_lng_min, float bounds_lng_max,
+    float width_ft, float depth_ft,
+    int grid_resolution,
+    float origin_x_ft, float origin_z_ft,
+    float rotation_deg
+) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+
+    if (!points || point_count <= 0) {
+        setError("No elevation points provided");
+        return -1;
+    }
+
+    if (grid_resolution < 10 || grid_resolution > 2000) {
+        setError("Grid resolution must be between 10 and 2000");
+        return -2;
+    }
+
+    std::cout << "[TerrainGen] Starting C++ terrain generation..." << std::endl;
+    std::cout << "[TerrainGen] Input: " << point_count << " elevation points" << std::endl;
+    std::cout << "[TerrainGen] Grid: " << grid_resolution << "x" << grid_resolution
+              << " (~" << (2 * grid_resolution * grid_resolution) << " triangles)" << std::endl;
+    std::cout << "[TerrainGen] Property: " << width_ft << "ft x " << depth_ft << "ft" << std::endl;
+    std::cout << "[TerrainGen] Lat bounds: [" << bounds_lat_min << ", " << bounds_lat_max << "]" << std::endl;
+    std::cout << "[TerrainGen] Lng bounds: [" << bounds_lng_min << ", " << bounds_lng_max << "]" << std::endl;
+    std::cout << "[TerrainGen] Origin: (" << origin_x_ft << ", " << origin_z_ft << ") ft, rotation: " << rotation_deg << " deg" << std::endl;
+
+    // Debug: verify first few elevation points
+    std::cout << "[TerrainGen] First 5 elevation points received:" << std::endl;
+    for (int i = 0; i < std::min(5, point_count); i++) {
+        std::cout << "[TerrainGen]   [" << i << "] lat=" << points[i].lat
+                  << ", lng=" << points[i].lng
+                  << ", elev=" << points[i].elevation_m << "m" << std::endl;
+    }
+
+    g_terrainGenProgress = 0.0f;
+    g_terrainGenStatus = "Building spatial index...";
+
+    auto startTime = std::chrono::high_resolution_clock::now();
+
+    // Build spatial index for fast elevation lookup
+    ElevationIndex elevIndex;
+    elevIndex.build(points, point_count, bounds_lat_min, bounds_lat_max,
+                    bounds_lng_min, bounds_lng_max);
+
+    // Check actual elevation point ranges
+    float ptLatMin = points[0].lat, ptLatMax = points[0].lat;
+    float ptLngMin = points[0].lng, ptLngMax = points[0].lng;
+    for (int i = 0; i < point_count; i++) {
+        ptLatMin = std::min(ptLatMin, points[i].lat);
+        ptLatMax = std::max(ptLatMax, points[i].lat);
+        ptLngMin = std::min(ptLngMin, points[i].lng);
+        ptLngMax = std::max(ptLngMax, points[i].lng);
+    }
+    std::cout << "[TerrainGen] Actual elevation point ranges:" << std::endl;
+    std::cout << "[TerrainGen]   Lat: [" << ptLatMin << ", " << ptLatMax << "]" << std::endl;
+    std::cout << "[TerrainGen]   Lng: [" << ptLngMin << ", " << ptLngMax << "]" << std::endl;
+    if (std::abs(ptLatMin - bounds_lat_min) > 0.0001f || std::abs(ptLatMax - bounds_lat_max) > 0.0001f ||
+        std::abs(ptLngMin - bounds_lng_min) > 0.0001f || std::abs(ptLngMax - bounds_lng_max) > 0.0001f) {
+        std::cout << "[TerrainGen] WARNING: Elevation point range differs from provided bounds!" << std::endl;
+    }
+
+    // Find elevation range
+    float minElev = std::numeric_limits<float>::max();
+    float maxElev = std::numeric_limits<float>::lowest();
+    for (int i = 0; i < point_count; i++) {
+        minElev = std::min(minElev, points[i].elevation_m);
+        maxElev = std::max(maxElev, points[i].elevation_m);
+    }
+    float elevRange = maxElev - minElev;
+    if (elevRange < 0.001f) elevRange = 1.0f;
+
+    std::cout << "[TerrainGen] Elevation: " << minElev << "m to " << maxElev << "m (range: "
+              << elevRange << "m / " << (elevRange * 3.28084f) << "ft)" << std::endl;
+
+    g_terrainGenProgress = 0.1f;
+    g_terrainGenStatus = "Generating grid vertices...";
+
+    // Parse boundary polygon (convert from feet to mm)
+    std::vector<std::pair<float, float>> boundary;
+    if (boundary_ft && boundary_vertex_count >= 3) {
+        std::cout << "[TerrainGen] Boundary polygon: " << boundary_vertex_count << " vertices" << std::endl;
+        for (int i = 0; i < boundary_vertex_count; i++) {
+            // Convert from feet to mm
+            float x_mm = boundary_ft[i * 2] * 304.8f;
+            float z_mm = boundary_ft[i * 2 + 1] * 304.8f;
+            boundary.push_back({x_mm, z_mm});
+        }
+    }
+
+    // All coordinates are in mm from here on
+    // Grid spans the property size, centered at origin
+    float widthMm = width_ft * 304.8f;
+    float depthMm = depth_ft * 304.8f;
+    float minX = 0.0f;
+    float maxX = widthMm;
+    float minZ = 0.0f;
+    float maxZ = depthMm;
+
+    // If boundary polygon is provided, use its bounding box instead
+    if (!boundary.empty()) {
+        minX = maxX = boundary[0].first;
+        minZ = maxZ = boundary[0].second;
+        for (const auto& v : boundary) {
+            minX = std::min(minX, v.first);
+            maxX = std::max(maxX, v.first);
+            minZ = std::min(minZ, v.second);
+            maxZ = std::max(maxZ, v.second);
+        }
+        widthMm = maxX - minX;
+        depthMm = maxZ - minZ;
+    }
+
+    std::cout << "[TerrainGen] Grid extents (mm): [" << minX << ", " << maxX << "] x [" << minZ << ", " << maxZ << "]" << std::endl;
+    std::cout << "[TerrainGen] Grid size: " << widthMm << " x " << depthMm << " mm" << std::endl;
+    float stepX = widthMm / grid_resolution;
+    float stepZ = depthMm / grid_resolution;
+
+    // Lat/lng range for coordinate mapping
+    float latRange = bounds_lat_max - bounds_lat_min;
+    float lngRange = bounds_lng_max - bounds_lng_min;
+    std::cout << "[TerrainGen] Lat range: " << latRange << " deg, Lng range: " << lngRange << " deg" << std::endl;
+
+    // Debug: show corner mappings
+    std::cout << "[TerrainGen] Corner coord mapping:" << std::endl;
+    std::cout << "[TerrainGen]   Grid (0,0) -> lat=" << bounds_lat_min << ", lng=" << bounds_lng_min << std::endl;
+    std::cout << "[TerrainGen]   Grid (1,0) -> lat=" << bounds_lat_min << ", lng=" << bounds_lng_max << std::endl;
+    std::cout << "[TerrainGen]   Grid (0,1) -> lat=" << bounds_lat_max << ", lng=" << bounds_lng_min << std::endl;
+    std::cout << "[TerrainGen]   Grid (1,1) -> lat=" << bounds_lat_max << ", lng=" << bounds_lng_max << std::endl;
+
+    // NOTE: rotation_deg is not used for terrain (terrain doesn't rotate)
+    // But origin_x/z_ft IS used to sample terrain elevation at building position
+    (void)rotation_deg;
+    float buildingOriginXmm = origin_x_ft * 304.8f;
+    float buildingOriginZmm = origin_z_ft * 304.8f;
+
+    // Elevation offset so lowest point is at Y=0
+    float elevOffsetM = -minElev - 0.01f;  // Slight offset below ground
+
+    // Generate grid vertices (using Vertex type from types.hpp)
+    std::vector<Vertex> vertices;
+    std::vector<u32> indices;
+    std::vector<std::tuple<int, int, int>> gridPoints;  // (gridX, gridZ, vertexIndex)
+
+    vertices.reserve((grid_resolution + 1) * (grid_resolution + 1));
+
+    for (int iz = 0; iz <= grid_resolution; iz++) {
+        if (iz % 50 == 0) {
+            g_terrainGenProgress = 0.1f + 0.6f * (float(iz) / grid_resolution);
+        }
+
+        for (int ix = 0; ix <= grid_resolution; ix++) {
+            float px = minX + ix * stepX;
+            float pz = minZ + iz * stepZ;
+
+            // Check if inside boundary polygon
+            if (!boundary.empty() && !pointInPolygon(px, pz, boundary)) {
+                continue;
+            }
+
+            // Map local coords to lat/lng
+            float fracX = (widthMm > 0) ? (px - minX) / widthMm : 0;
+            float fracZ = (depthMm > 0) ? (pz - minZ) / depthMm : 0;
+            float lat = bounds_lat_min + fracZ * latRange;
+            float lng = bounds_lng_min + fracX * lngRange;
+
+            // Get interpolated elevation
+            float elevM = elevIndex.interpolate(lat, lng, 4);
+            float elevMm = (elevM + elevOffsetM) * 1000.0f;  // Convert m to mm
+
+            // Terrain stays in world coordinates (0 to width, 0 to depth)
+            // Building is rotated by QBD, but terrain (real-world ground) does NOT rotate
+            float x = px;
+            float z = pz;
+
+            // NOTE: We intentionally do NOT rotate terrain - only the building rotates
+            // The terrain represents the actual ground which stays fixed
+            // The building is rotated by QBD to match user's placement orientation
+
+            // UV coordinates
+            float u = float(ix) / grid_resolution;
+            float v = float(iz) / grid_resolution;
+
+            int vertIdx = static_cast<int>(vertices.size());
+            Vertex vert;
+            vert.position = vec3(x, elevMm, z);
+            vert.normal = vec3(0, 1, 0);  // Computed later
+            vert.color = vec3(1, 1, 1);   // Computed later
+            vert.texCoord = vec2(u, v);
+            vert.stress = 0.0f;
+            vertices.push_back(vert);
+            gridPoints.push_back({ix, iz, vertIdx});
+        }
+    }
+
+    if (vertices.size() < 3) {
+        setError("Not enough vertices inside boundary");
+        return -3;
+    }
+
+    // Debug: show vertex position range
+    if (!vertices.empty()) {
+        float vMinX = vertices[0].position.x, vMaxX = vertices[0].position.x;
+        float vMinY = vertices[0].position.y, vMaxY = vertices[0].position.y;
+        float vMinZ = vertices[0].position.z, vMaxZ = vertices[0].position.z;
+        for (const auto& v : vertices) {
+            vMinX = std::min(vMinX, v.position.x);
+            vMaxX = std::max(vMaxX, v.position.x);
+            vMinY = std::min(vMinY, v.position.y);
+            vMaxY = std::max(vMaxY, v.position.y);
+            vMinZ = std::min(vMinZ, v.position.z);
+            vMaxZ = std::max(vMaxZ, v.position.z);
+        }
+        std::cout << "[TerrainGen] Vertex bounds (mm):" << std::endl;
+        std::cout << "[TerrainGen]   X: [" << vMinX << ", " << vMaxX << "] (" << (vMaxX-vMinX)/304.8f << " ft)" << std::endl;
+        std::cout << "[TerrainGen]   Y: [" << vMinY << ", " << vMaxY << "] (elev range: " << (vMaxY-vMinY)/1000.0f << " m)" << std::endl;
+        std::cout << "[TerrainGen]   Z: [" << vMinZ << ", " << vMaxZ << "] (" << (vMaxZ-vMinZ)/304.8f << " ft)" << std::endl;
+    }
+
+    g_terrainGenProgress = 0.7f;
+    g_terrainGenStatus = "Building triangles...";
+
+    // Build lookup map for grid connectivity
+    std::map<std::pair<int, int>, int> gridMap;
+    for (const auto& gp : gridPoints) {
+        gridMap[{std::get<0>(gp), std::get<1>(gp)}] = std::get<2>(gp);
+    }
+
+    // Generate triangles
+    indices.reserve(grid_resolution * grid_resolution * 6);
+    for (const auto& gp : gridPoints) {
+        int ix = std::get<0>(gp);
+        int iz = std::get<1>(gp);
+        int idx = std::get<2>(gp);
+
+        auto right = gridMap.find({ix + 1, iz});
+        auto bottom = gridMap.find({ix, iz + 1});
+        auto diag = gridMap.find({ix + 1, iz + 1});
+
+        if (right != gridMap.end() && bottom != gridMap.end()) {
+            if (diag != gridMap.end()) {
+                // Two triangles for quad
+                indices.push_back(idx);
+                indices.push_back(bottom->second);
+                indices.push_back(right->second);
+
+                indices.push_back(right->second);
+                indices.push_back(bottom->second);
+                indices.push_back(diag->second);
+            } else {
+                // Single triangle
+                indices.push_back(idx);
+                indices.push_back(bottom->second);
+                indices.push_back(right->second);
+            }
+        }
+    }
+
+    g_terrainGenProgress = 0.85f;
+    g_terrainGenStatus = "Computing normals and colors...";
+
+    // Compute normals using finite differences
+    for (auto& gp : gridPoints) {
+        int ix = std::get<0>(gp);
+        int iz = std::get<1>(gp);
+        int idx = std::get<2>(gp);
+
+        Vertex& v = vertices[idx];
+
+        // Get neighbor heights
+        auto left = gridMap.find({ix - 1, iz});
+        auto right = gridMap.find({ix + 1, iz});
+        auto up = gridMap.find({ix, iz - 1});
+        auto down = gridMap.find({ix, iz + 1});
+
+        float hL = (left != gridMap.end()) ? vertices[left->second].position.y : v.position.y;
+        float hR = (right != gridMap.end()) ? vertices[right->second].position.y : v.position.y;
+        float hU = (up != gridMap.end()) ? vertices[up->second].position.y : v.position.y;
+        float hD = (down != gridMap.end()) ? vertices[down->second].position.y : v.position.y;
+
+        // Normal from height gradient
+        float nx = (hL - hR) / (2.0f * stepX);
+        float nz = (hU - hD) / (2.0f * stepZ);
+        float ny = 1.0f;
+        float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (len > 0.0001f) {
+            v.normal = vec3(nx / len, ny / len, nz / len);
+        }
+
+        // Elevation-based color (green to brown gradient)
+        float t = (v.position.y - vertices[0].position.y) / (elevRange * 1000.0f + 1.0f);
+        t = std::clamp(t, 0.0f, 1.0f);
+        // Low = green (0.3, 0.5, 0.2), High = brown (0.6, 0.4, 0.25)
+        v.color = vec3(
+            0.3f + t * 0.3f,
+            0.5f - t * 0.1f,
+            0.2f + t * 0.05f
+        );
+    }
+
+    g_terrainGenProgress = 0.95f;
+    g_terrainGenStatus = "Storing terrain data...";
+
+    // Store in global building terrain mesh
+    // The renderer will auto-upload on next render when it detects changed data
+    g_building.terrainMesh.vertices = std::move(vertices);
+    g_building.terrainMesh.indices = std::move(indices);
+    g_building.terrainMesh.width_ft = width_ft;
+    g_building.terrainMesh.depth_ft = depth_ft;
+    g_building.terrainMesh.min_elevation = minElev * 3.28084f;  // Convert to feet
+    g_building.terrainMesh.max_elevation = maxElev * 3.28084f;
+
+    auto endTime = std::chrono::high_resolution_clock::now();
+    auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+
+    g_terrainGenProgress = 1.0f;
+    g_terrainGenStatus = "Complete";
+
+    std::cout << "[TerrainGen] Complete: " << g_building.terrainMesh.vertices.size()
+              << " vertices, " << (g_building.terrainMesh.indices.size() / 3)
+              << " triangles in " << durationMs << "ms" << std::endl;
+
+    // Debug: Compare terrain bounds with building bounds to check alignment
+    // NOTE: At this point terrain is in mm, building is already in feet (scaled by arch_load_json)
+    {
+        // Terrain bounds in mm (will convert to feet for comparison)
+        float terrainMinXmm = 1e9f, terrainMaxXmm = -1e9f;
+        float terrainMinZmm = 1e9f, terrainMaxZmm = -1e9f;
+        for (const auto& v : g_building.terrainMesh.vertices) {
+            terrainMinXmm = std::min(terrainMinXmm, v.position.x);
+            terrainMaxXmm = std::max(terrainMaxXmm, v.position.x);
+            terrainMinZmm = std::min(terrainMinZmm, v.position.z);
+            terrainMaxZmm = std::max(terrainMaxZmm, v.position.z);
+        }
+
+        // Convert terrain bounds to feet for proper comparison
+        float terrainMinXft = terrainMinXmm / 304.8f;
+        float terrainMaxXft = terrainMaxXmm / 304.8f;
+        float terrainMinZft = terrainMinZmm / 304.8f;
+        float terrainMaxZft = terrainMaxZmm / 304.8f;
+
+        // Building bounds are already in feet
+        float buildingMinXft = 1e9f, buildingMaxXft = -1e9f;
+        float buildingMinZft = 1e9f, buildingMaxZft = -1e9f;
+        for (const auto& elem : g_building.elements) {
+            for (const auto& v : elem.mesh.vertices) {
+                buildingMinXft = std::min(buildingMinXft, v.x);
+                buildingMaxXft = std::max(buildingMaxXft, v.x);
+                buildingMinZft = std::min(buildingMinZft, v.z);
+                buildingMaxZft = std::max(buildingMaxZft, v.z);
+            }
+        }
+
+        // Building origin in feet (convert from mm)
+        float buildingOriginXft = buildingOriginXmm / 304.8f;
+        float buildingOriginZft = buildingOriginZmm / 304.8f;
+
+        std::cout << "\n[ALIGNMENT CHECK] (all values in feet)" << std::endl;
+        std::cout << "  Terrain X: [" << terrainMinXft << ", " << terrainMaxXft << "] ft" << std::endl;
+        std::cout << "  Terrain Z: [" << terrainMinZft << ", " << terrainMaxZft << "] ft" << std::endl;
+        std::cout << "  Building X: [" << buildingMinXft << ", " << buildingMaxXft << "] ft" << std::endl;
+        std::cout << "  Building Z: [" << buildingMinZft << ", " << buildingMaxZft << "] ft" << std::endl;
+        std::cout << "  Building Origin: (" << buildingOriginXft << ", " << buildingOriginZft << ") ft" << std::endl;
+
+        // Check if building is inside terrain bounds (all in feet)
+        bool originInsideTerrain = (buildingOriginXft >= terrainMinXft && buildingOriginXft <= terrainMaxXft &&
+                                    buildingOriginZft >= terrainMinZft && buildingOriginZft <= terrainMaxZft);
+        bool buildingOverlapsTerrain = (buildingMaxXft >= terrainMinXft && buildingMinXft <= terrainMaxXft &&
+                                        buildingMaxZft >= terrainMinZft && buildingMinZft <= terrainMaxZft);
+
+        std::cout << "  Building origin inside terrain: " << (originInsideTerrain ? "YES" : "NO") << std::endl;
+        std::cout << "  Building overlaps terrain: " << (buildingOverlapsTerrain ? "YES" : "NO") << std::endl;
+
+        if (!buildingOverlapsTerrain) {
+            std::cout << "  [!] WARNING: Building and terrain DO NOT OVERLAP!" << std::endl;
+            std::cout << "  [!] This explains why they appear far apart in the viewport." << std::endl;
+        }
+        std::cout << std::endl;
+    }
+
+    // Sample terrain elevation at building origin and lift building to sit on terrain
+    // The building was loaded at Y=0, but the terrain at that XZ position may be higher
+    float buildingElevMm = 0.0f;
+
+    // Find the terrain elevation at the building origin position by interpolating nearby vertices
+    float searchRadius = 5000.0f;  // 5m search radius
+    float totalWeight = 0.0f;
+
+    for (const auto& v : g_building.terrainMesh.vertices) {
+        float dx = v.position.x - buildingOriginXmm;
+        float dz = v.position.z - buildingOriginZmm;
+        float dist = std::sqrt(dx * dx + dz * dz);
+
+        if (dist < searchRadius) {
+            float weight = 1.0f / (dist + 1.0f);  // Inverse distance weighting
+            buildingElevMm += v.position.y * weight;
+            totalWeight += weight;
+        }
+    }
+
+    if (totalWeight > 0.0f) {
+        buildingElevMm = buildingElevMm / totalWeight;
+        std::cout << "[TerrainGen] Terrain elevation at building origin: " << buildingElevMm << " mm ("
+                  << (buildingElevMm / 304.8f) << " ft)" << std::endl;
+
+        // Convert elevation to feet (building elements are already in feet from arch_load_json)
+        float buildingElevFt = buildingElevMm / 304.8f;
+
+        // Offset all building elements to sit on terrain (in feet)
+        for (auto& elem : g_building.elements) {
+            elem.start.y += buildingElevFt;
+            elem.end.y += buildingElevFt;
+            for (auto& v : elem.mesh.vertices) {
+                v.y += buildingElevFt;
+            }
+        }
+
+        // Offset parametric walls (in feet)
+        for (auto& pw : g_building.parametricWalls) {
+            pw.baseHeight += buildingElevFt;
+            pw.topHeight += buildingElevFt;
+        }
+
+        std::cout << "[TerrainGen] Building lifted by " << buildingElevFt << " ft to sit on terrain" << std::endl;
+    } else {
+        std::cout << "[TerrainGen] WARNING: Could not sample terrain at building origin ("
+                  << buildingOriginXmm << ", " << buildingOriginZmm << ")" << std::endl;
+    }
+
+    // Debug: Show terrain bounds BEFORE scaling
+    {
+        float minX = 1e9f, maxX = -1e9f, minZ = 1e9f, maxZ = -1e9f;
+        for (const auto& v : g_building.terrainMesh.vertices) {
+            minX = std::min(minX, v.position.x);
+            maxX = std::max(maxX, v.position.x);
+            minZ = std::min(minZ, v.position.z);
+            maxZ = std::max(maxZ, v.position.z);
+        }
+        std::cout << "[TerrainGen] BEFORE scaling - Terrain bounds:" << std::endl;
+        std::cout << "[TerrainGen]   X: [" << minX << ", " << maxX << "] (should be mm)" << std::endl;
+        std::cout << "[TerrainGen]   Z: [" << minZ << ", " << maxZ << "] (should be mm)" << std::endl;
+        std::cout << "[TerrainGen]   Width: " << (maxX - minX) << ", Depth: " << (maxZ - minZ) << std::endl;
+    }
+
+    // Scale terrain vertices from mm to feet (building elements are in feet)
+    const float mmToFeet = 1.0f / 304.8f;
+    for (auto& vert : g_building.terrainMesh.vertices) {
+        vert.position *= mmToFeet;
+    }
+
+    // Debug: Show terrain bounds AFTER scaling
+    {
+        float minX = 1e9f, maxX = -1e9f, minZ = 1e9f, maxZ = -1e9f;
+        for (const auto& v : g_building.terrainMesh.vertices) {
+            minX = std::min(minX, v.position.x);
+            maxX = std::max(maxX, v.position.x);
+            minZ = std::min(minZ, v.position.z);
+            maxZ = std::max(maxZ, v.position.z);
+        }
+        std::cout << "[TerrainGen] AFTER scaling - Terrain bounds:" << std::endl;
+        std::cout << "[TerrainGen]   X: [" << minX << ", " << maxX << "] ft" << std::endl;
+        std::cout << "[TerrainGen]   Z: [" << minZ << ", " << maxZ << "] ft" << std::endl;
+        std::cout << "[TerrainGen]   Width: " << (maxX - minX) << " ft, Depth: " << (maxZ - minZ) << " ft" << std::endl;
+    }
+
+    // Also show building bounds for comparison
+    {
+        float minX = 1e9f, maxX = -1e9f, minZ = 1e9f, maxZ = -1e9f;
+        for (const auto& elem : g_building.elements) {
+            for (const auto& v : elem.mesh.vertices) {
+                minX = std::min(minX, v.x);
+                maxX = std::max(maxX, v.x);
+                minZ = std::min(minZ, v.z);
+                maxZ = std::max(maxZ, v.z);
+            }
+        }
+        std::cout << "[TerrainGen] Building bounds (should be feet):" << std::endl;
+        std::cout << "[TerrainGen]   X: [" << minX << ", " << maxX << "] ft" << std::endl;
+        std::cout << "[TerrainGen]   Z: [" << minZ << ", " << maxZ << "] ft" << std::endl;
+    }
+
+    return 0;
+}
+
+ARCH_API int arch_get_terrain_generation_progress(float* out_progress, const char** out_status) {
+    if (out_progress) *out_progress = g_terrainGenProgress.load();
+    if (out_status) *out_status = g_terrainGenStatus.c_str();
+    return (g_terrainGenProgress < 1.0f && g_terrainGenProgress > 0.0f) ? 1 : 0;
 }
 
 // =============================================================================
