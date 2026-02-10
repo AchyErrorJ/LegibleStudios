@@ -59,14 +59,21 @@ float interpolate1(float v0, float v1, float v2) {
 }
 
 void main() {
+    // Check if this is a roof/floor surface by looking at input normals
+    vec3 avgNormal = normalize(inFragNormal[0] + inFragNormal[1] + inFragNormal[2]);
+    bool isRoofOrFloor = abs(avgNormal.y) > 0.3;
+
+    // For roofs, swap vertex order to fix inside-out winding
+    int i0 = 0, i1 = isRoofOrFloor ? 2 : 1, i2 = isRoofOrFloor ? 1 : 2;
+
     // Interpolate vertex attributes using barycentric coordinates
-    vec3 position = interpolate3(inFragPosition[0], inFragPosition[1], inFragPosition[2]);
-    vec3 normal = normalize(interpolate3(inFragNormal[0], inFragNormal[1], inFragNormal[2]));
-    vec3 color = interpolate3(inFragColor[0], inFragColor[1], inFragColor[2]);
-    vec2 texCoord = interpolate2(inFragTexCoord[0], inFragTexCoord[1], inFragTexCoord[2]);
-    float stress = interpolate1(inFragStress[0], inFragStress[1], inFragStress[2]);
-    vec4 lightSpacePos = interpolate4(inFragLightSpacePos[0], inFragLightSpacePos[1], inFragLightSpacePos[2]);
-    vec4 material = interpolate4(inFragMaterial[0], inFragMaterial[1], inFragMaterial[2]);
+    vec3 position = gl_TessCoord.x * inFragPosition[i0] + gl_TessCoord.y * inFragPosition[i1] + gl_TessCoord.z * inFragPosition[i2];
+    vec3 normal = normalize(gl_TessCoord.x * inFragNormal[i0] + gl_TessCoord.y * inFragNormal[i1] + gl_TessCoord.z * inFragNormal[i2]);
+    vec3 color = gl_TessCoord.x * inFragColor[i0] + gl_TessCoord.y * inFragColor[i1] + gl_TessCoord.z * inFragColor[i2];
+    vec2 texCoord = gl_TessCoord.x * inFragTexCoord[i0] + gl_TessCoord.y * inFragTexCoord[i1] + gl_TessCoord.z * inFragTexCoord[i2];
+    float stress = gl_TessCoord.x * inFragStress[i0] + gl_TessCoord.y * inFragStress[i1] + gl_TessCoord.z * inFragStress[i2];
+    vec4 lightSpacePos = gl_TessCoord.x * inFragLightSpacePos[i0] + gl_TessCoord.y * inFragLightSpacePos[i1] + gl_TessCoord.z * inFragLightSpacePos[i2];
+    vec4 material = gl_TessCoord.x * inFragMaterial[i0] + gl_TessCoord.y * inFragMaterial[i1] + gl_TessCoord.z * inFragMaterial[i2];
 
     // Apply UV scale with override support (replacement, not additive)
     float uvScale = ubo.materialParams.x;
@@ -77,7 +84,42 @@ void main() {
     if ((push.overrideMask & OVERRIDE_UV_ROTATION) != 0u) {
         uvRotation = push.overrides3.w;  // Rotation in radians
     }
-    vec2 scaledTexCoord = texCoord * uvScale;
+
+    // Calculate world-space UVs from world position (not mesh UVs)
+    // This ensures displacement aligns with visible texture on each unique surface
+    vec2 worldUV;
+    if (abs(normal.y) > 0.3) {
+        // Sloped or horizontal surface (roof/floor/ceiling)
+        // UV.x runs along the horizontal edge (eave), UV.y runs up the slope
+        // This ensures materials like shingles are perpendicular to the front edge
+        vec3 tangentRaw = cross(normal, vec3(0.0, 1.0, 0.0));
+        float tangentLen = length(tangentRaw);
+        vec3 tangent;
+        vec3 bitangent;
+        if (tangentLen < 0.001) {
+            // Nearly horizontal - use world axes
+            tangent = vec3(1.0, 0.0, 0.0);
+            bitangent = vec3(0.0, 0.0, 1.0);
+        } else {
+            tangent = tangentRaw / tangentLen;
+            vec3 bitangentRaw = cross(tangent, normal);
+            float bitangentLen = length(bitangentRaw);
+            bitangent = bitangentLen > 0.001 ? bitangentRaw / bitangentLen : vec3(0.0, 0.0, 1.0);
+        }
+        // Project position onto tangent space
+        // Shingles run parallel to front edge (eave), flip bitangent for correct direction
+        worldUV = vec2(dot(position, tangent), dot(position, bitangent));
+    } else if (abs(normal.x) > abs(normal.z)) {
+        // Wall facing X direction - use ZY plane
+        worldUV = vec2(normal.x > 0.0 ? -position.z : position.z, position.y);
+    } else {
+        // Wall facing Z direction - use XY plane
+        worldUV = vec2(normal.z > 0.0 ? position.x : -position.x, position.y);
+    }
+
+    // Apply world-space to UV conversion (same as fragment shader should use)
+    // Scale factor converts world units (feet) to texture tiles
+    vec2 scaledTexCoord = worldUV * uvScale;
 
     // Apply rotation around center if rotation is set
     if (uvRotation != 0.0) {
@@ -92,7 +134,8 @@ void main() {
     }
 
     // Sample height map (only if displacement is enabled)
-    if (ubo.displacementScale > 0.0) {
+    // Skip displacement for roofs/floors to debug visibility issue
+    if (ubo.displacementScale > 0.0 && !isRoofOrFloor) {
         float height = texture(heightMap, scaledTexCoord).r;
 
         // Normalize height from 0-1 to -0.5 to 0.5 for centered displacement
@@ -115,18 +158,26 @@ void main() {
         float dX = (heightR - heightL) * ubo.displacementScale * 2.0;
         float dY = (heightU - heightD) * ubo.displacementScale * 2.0;
 
-        // Build tangent space (simplified - assumes Y-up world)
-        vec3 tangent = normalize(cross(vec3(0, 1, 0), normal));
-        if (length(tangent) < 0.001) {
-            tangent = normalize(cross(vec3(1, 0, 0), normal));
-        }
-        vec3 bitangent = normalize(cross(normal, tangent));
+        // Build tangent space safely - MUST match UV tangent space calculation
+        vec3 origNormal = normal;
+        vec3 tangentRaw = cross(normal, vec3(0.0, 1.0, 0.0));  // Same order as UV calc
+        float tangentLen = length(tangentRaw);
+        vec3 dispTangent = tangentLen > 0.001 ? tangentRaw / tangentLen : vec3(1.0, 0.0, 0.0);
+        vec3 bitangentRaw = cross(dispTangent, normal);  // Same order as UV calc
+        float bitangentLen = length(bitangentRaw);
+        vec3 dispBitangent = bitangentLen > 0.001 ? bitangentRaw / bitangentLen : vec3(0.0, 0.0, 1.0);
 
         // Perturb normal based on height gradients
-        normal = normalize(normal - tangent * dX - bitangent * dY);
+        vec3 perturbedNormal = normalize(normal - dispTangent * dX - dispBitangent * dY);
+
+        // Ensure normal doesn't flip (stays on same side as original)
+        if (dot(perturbedNormal, origNormal) < 0.0) {
+            perturbedNormal = -perturbedNormal;
+        }
+        normal = perturbedNormal;
 
         // Recalculate light space position after displacement
-        lightSpacePos = ubo.lightViewProj * vec4(position, 1.0);
+        lightSpacePos = ubo.lightViewProj[0] * vec4(position, 1.0);
     }
 
     // Output interpolated/displaced attributes

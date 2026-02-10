@@ -395,8 +395,40 @@ void main() {
         uvRotation = push.overrides3.w;  // Rotation in radians
     }
 
-    // Apply scale first
-    vec2 uv = fragTexCoord * uvScale;
+    // Calculate world-space UVs from world position
+    // This ensures each surface has unique UVs based on its world location
+    vec2 worldUV;
+    if (abs(N.y) > 0.3) {
+        // Sloped or horizontal surface (roof/floor/ceiling)
+        // UV.x runs along the horizontal edge (eave), UV.y runs up the slope
+        // This ensures materials like shingles are perpendicular to the front edge
+        vec3 tangentRaw = cross(N, vec3(0.0, 1.0, 0.0));
+        float tangentLen = length(tangentRaw);
+        vec3 tangent;
+        vec3 bitangent;
+        if (tangentLen < 0.001) {
+            // Nearly horizontal - use world axes
+            tangent = vec3(1.0, 0.0, 0.0);
+            bitangent = vec3(0.0, 0.0, 1.0);
+        } else {
+            tangent = tangentRaw / tangentLen;
+            vec3 bitangentRaw = cross(tangent, N);
+            float bitangentLen = length(bitangentRaw);
+            bitangent = bitangentLen > 0.001 ? bitangentRaw / bitangentLen : vec3(0.0, 0.0, 1.0);
+        }
+        // Project position onto tangent space
+        // Shingles run parallel to front edge (eave)
+        worldUV = vec2(dot(fragPosition, tangent), dot(fragPosition, bitangent));
+    } else if (abs(N.x) > abs(N.z)) {
+        // Wall facing X direction - use ZY plane
+        worldUV = vec2(N.x > 0.0 ? -fragPosition.z : fragPosition.z, fragPosition.y);
+    } else {
+        // Wall facing Z direction - use XY plane
+        worldUV = vec2(N.z > 0.0 ? fragPosition.x : -fragPosition.x, fragPosition.y);
+    }
+
+    // Apply world-space to UV conversion
+    vec2 uv = worldUV * uvScale;
 
     // Apply rotation around center (0.5, 0.5) if rotation is set
     if (uvRotation != 0.0) {

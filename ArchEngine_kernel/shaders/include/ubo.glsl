@@ -8,6 +8,9 @@
 // Maximum number of lights (must match C++ MAX_LIGHTS)
 const uint MAX_LIGHTS = 16u;
 
+// Maximum number of shadow maps (must match C++ MAX_SHADOW_MAPS)
+const uint MAX_SHADOW_MAPS = 4u;
+
 // Light type constants
 const uint LIGHT_TYPE_DIRECTIONAL = 0u;
 const uint LIGHT_TYPE_POINT = 1u;
@@ -21,10 +24,10 @@ struct GPULight {
     vec4 spotParams;        // x = innerAngle (cos), y = outerAngle (cos), z = shadowIndex, w = reserved
 };
 
-layout(set = 0, binding = 0) uniform UniformBufferObject {
+layout(std140, set = 0, binding = 0) uniform UniformBufferObject {
     mat4 view;
     mat4 proj;
-    mat4 lightViewProj;         // Shadow mapping light space transform
+    mat4 lightViewProj[MAX_SHADOW_MAPS];  // Shadow mapping light space transforms (up to 4)
     vec4 lightDirection;        // Directional light direction (sun), xyz = direction, w unused
     vec4 clipPlane;             // Section clipping plane (xyz = normal, w = distance)
     float time;                 // Animation time
@@ -32,18 +35,23 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     uint enableClipping;        // Section clipping enabled flag
     uint enableShadows;         // Shadow mapping enabled flag
     uint outputLinearHDR;       // Output linear HDR (skip tonemapping in shader)
+    uint numShadowMaps;         // Number of active shadow maps (0-4)
     float exposure;             // Exposure multiplier for tonemapping
     float tessellationLevel;    // Tessellation subdivision level (1-64)
     float displacementScale;    // Height map displacement scale
+    float _padAlign1, _padAlign2, _padAlign3;  // Explicit padding to match C++ struct (align vec4 to 16 bytes)
     vec4 materialParams;        // x = UV scale, y = normal strength, z = brightness, w = contrast
     vec4 materialParams2;       // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
     vec4 materialTint;          // RGB tint multiplier, w = unused
     vec4 pomParams;             // x = enabled (0/1), y = heightScale, z = minLayers, w = maxLayers
+    vec4 iblParams;             // x = overall intensity, y = diffuse intensity, z = specular intensity, w = fresnel intensity
     // Debug visualization
-    uint materialDebugMode;     // 0=None, 1=Displacement, 2=POMDepth, 3=Normals, 4=UVs, 5=AO
+    uint materialDebugMode;     // 0=None, 1=Displacement, 2=POMDepth, 3=Normals, 4=UVs, 5=AO, 6-11=IBL debug
     // Per-element material overrides
     uint overrideMask;          // Bitfield for which element overrides are active
-    float _pad1, _pad2;         // Padding to maintain 16-byte alignment
+    // Shader effect flags
+    uint effectFlags;           // Bitfield: bit0=IBL, bit1=directLight, bit2=normalMapping
+    float _pad1;                // Padding to maintain 16-byte alignment
     vec4 elementOverride1;      // x = uvScale, y = normalStrength, z = brightness, w = contrast
     vec4 elementOverride2;      // x = saturation, y = roughness, z = metallic, w = aoStrength
     vec4 elementOverride3;      // RGB = tint, w = uvRotation (radians)
@@ -64,5 +72,10 @@ const uint OVERRIDE_ROUGHNESS       = (1u << 6);
 const uint OVERRIDE_METALLIC        = (1u << 7);
 const uint OVERRIDE_AO_STRENGTH     = (1u << 8);
 const uint OVERRIDE_TINT            = (1u << 9);
+
+// Effect flags (must match C++ EffectFlags)
+const uint EFFECT_IBL               = (1u << 0);  // Image-Based Lighting
+const uint EFFECT_DIRECT_LIGHT      = (1u << 1);  // Direct sun/light contribution
+const uint EFFECT_NORMAL_MAPPING    = (1u << 2);  // Normal mapping
 
 #endif // UBO_GLSL
