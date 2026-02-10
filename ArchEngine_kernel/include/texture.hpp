@@ -31,6 +31,11 @@ public:
     static Texture* getGrey();           // Mid-grey (0.5) for height maps - no displacement
     static Texture* getNormalDefault();  // Flat normal (0.5, 0.5, 1.0)
 
+    // Default cubemap for IBL fallback (1x1 black cubemap)
+    static VkImage getBlackCubeImage();
+    static VkImageView getBlackCubeImageView();
+    static VkSampler getBlackCubeSampler();
+
     VkImageView getImageView() const { return m_imageView; }
     VkSampler getSampler() const { return m_sampler; }
 
@@ -58,6 +63,13 @@ private:
     static std::unique_ptr<Texture> s_black;
     static std::unique_ptr<Texture> s_grey;
     static std::unique_ptr<Texture> s_normalDefault;
+
+    // Static black cubemap for IBL fallback
+    static VkImage s_blackCubeImage;
+    static VkDeviceMemory s_blackCubeMemory;
+    static VkImageView s_blackCubeImageView;
+    static VkSampler s_blackCubeSampler;
+    static void createBlackCubemap(VulkanContext& context);
 };
 
 // PBR Material definition
@@ -112,7 +124,13 @@ public:
         return m_materials;
     }
     bool hasMaterial(const std::string& name) const {
-        return m_materials.find(name) != m_materials.end();
+        if (m_materials.find(name) != m_materials.end()) return true;
+        // Check aliases
+        auto aliasIt = m_materialAliases.find(name);
+        if (aliasIt != m_materialAliases.end()) {
+            return m_materials.find(aliasIt->second) != m_materials.end();
+        }
+        return false;
     }
 
     // Create material with solid colors
@@ -127,6 +145,9 @@ public:
     // Create built-in architectural materials
     void createBuiltinMaterials();
 
+    // Create aliases mapping generic names to Poly Haven materials
+    void createMaterialAliases();
+
     // Load/save per-material settings from/to JSON
     void loadMaterialSettings(const std::string& settingsPath);
     void saveMaterialSettings(const std::string& settingsPath);
@@ -136,6 +157,7 @@ private:
     VulkanContext& m_context;
     std::unordered_map<std::string, std::unique_ptr<Material>> m_materials;
     std::unordered_map<std::string, std::unique_ptr<Texture>> m_textures;
+    std::unordered_map<std::string, std::string> m_materialAliases;  // Maps generic names to Poly Haven
     Material m_defaultMaterial;
 };
 

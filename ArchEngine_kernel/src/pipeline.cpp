@@ -16,7 +16,7 @@ PipelineConfig PipelineConfig::defaultConfig() {
     config.rasterization.rasterizerDiscardEnable = VK_FALSE;
     config.rasterization.polygonMode = VK_POLYGON_MODE_FILL;
     config.rasterization.lineWidth = 1.0f;
-    config.rasterization.cullMode = VK_CULL_MODE_NONE;  // Disable culling to test flickering
+    config.rasterization.cullMode = VK_CULL_MODE_BACK_BIT;  // Enable back-face culling
     config.rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     config.rasterization.depthBiasEnable = VK_FALSE;
 
@@ -78,6 +78,22 @@ PipelineConfig PipelineConfig::tessellationConfig() {
     return config;
 }
 
+// PipelineConfig for multiple render targets (MRT)
+PipelineConfig PipelineConfig::mrtConfig(u32 colorAttachmentCount) {
+    PipelineConfig config = defaultConfig();
+
+    // Set up multiple color blend attachments (all with same settings as default)
+    config.colorBlendAttachments.resize(colorAttachmentCount);
+    for (u32 i = 0; i < colorAttachmentCount; i++) {
+        config.colorBlendAttachments[i].colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        config.colorBlendAttachments[i].blendEnable = VK_FALSE;
+    }
+
+    return config;
+}
+
 // Pipeline implementation
 Pipeline::Pipeline(VulkanContext& context, const std::string& vertPath,
                    const std::string& fragPath, const PipelineConfig& config)
@@ -120,12 +136,19 @@ Pipeline::Pipeline(VulkanContext& context, const std::string& vertPath,
     viewportState.viewportCount = 1;
     viewportState.scissorCount = 1;
 
-    // Color blending
+    // Color blending - support multiple attachments for MRT
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &config.colorBlendAttachment;
+
+    // Use colorBlendAttachments vector if provided, otherwise use single attachment
+    if (!config.colorBlendAttachments.empty()) {
+        colorBlending.attachmentCount = static_cast<u32>(config.colorBlendAttachments.size());
+        colorBlending.pAttachments = config.colorBlendAttachments.data();
+    } else {
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments = &config.colorBlendAttachment;
+    }
 
     // Dynamic state
     VkPipelineDynamicStateCreateInfo dynamicState{};
@@ -232,12 +255,19 @@ Pipeline::Pipeline(VulkanContext& context, const std::string& vertPath,
     viewportState.viewportCount = 1;
     viewportState.scissorCount = 1;
 
-    // Color blending
+    // Color blending - support multiple attachments for MRT
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &config.colorBlendAttachment;
+
+    // Use colorBlendAttachments vector if provided, otherwise use single attachment
+    if (!config.colorBlendAttachments.empty()) {
+        colorBlending.attachmentCount = static_cast<u32>(config.colorBlendAttachments.size());
+        colorBlending.pAttachments = config.colorBlendAttachments.data();
+    } else {
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments = &config.colorBlendAttachment;
+    }
 
     // Dynamic state
     VkPipelineDynamicStateCreateInfo dynamicState{};

@@ -243,8 +243,10 @@ createBeam(vec3 start, vec3 end, f32 width, f32 height, vec3 color) {
     return {vertices, indices};
 }
 
-// Helper function to calculate UV from world position
-static vec2 calcWorldUV(vec3 pos, vec3 normal, f32 uvScale = 0.001f) {
+// Helper function to calculate UV from position relative to a reference point
+// UV scale of 1.0 means 1 world unit = 1 texture tile (good for 1m textures like brick)
+// Using fract() to keep UVs in 0-1 range avoids precision issues with large world coordinates
+static vec2 calcWorldUV(vec3 pos, vec3 normal, f32 uvScale = 1.0f) {
     vec3 uAxis, vAxis;
     if (std::abs(normal.y) > 0.9f) {
         // Horizontal face (floor/ceiling) - use XZ
@@ -259,7 +261,11 @@ static vec2 calcWorldUV(vec3 pos, vec3 normal, f32 uvScale = 0.001f) {
         uAxis = vec3(1, 0, 0);
         vAxis = vec3(0, 1, 0);
     }
-    return vec2(glm::dot(pos, uAxis) * uvScale, glm::dot(pos, vAxis) * uvScale);
+    // Keep full UV values - don't use fract() here as that breaks interpolation
+    // The shader will handle wrapping via texture repeat mode
+    f32 u = glm::dot(pos, uAxis) * uvScale;
+    f32 v = glm::dot(pos, vAxis) * uvScale;
+    return vec2(u, v);
 }
 
 std::pair<std::vector<Vertex>, std::vector<u32>>

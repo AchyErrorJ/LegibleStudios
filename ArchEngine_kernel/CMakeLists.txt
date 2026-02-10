@@ -67,6 +67,21 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
+# cpp-httplib - header-only HTTP library for LLM integration
+# We fetch it but only use it header-only (don't use the CMake target to avoid OpenSSL detection)
+FetchContent_Declare(
+    httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG        v0.15.3
+)
+FetchContent_GetProperties(httplib)
+if(NOT httplib_POPULATED)
+    FetchContent_Populate(httplib)
+endif()
+# Create interface library for header-only usage without SSL
+add_library(httplib_no_ssl INTERFACE)
+target_include_directories(httplib_no_ssl INTERFACE ${httplib_SOURCE_DIR})
+
 # ImGui doesn't have CMake, so we add sources manually
 set(IMGUI_SOURCES
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -102,6 +117,10 @@ set(ENGINE_SOURCES
     src/post_process.cpp
     src/texture.cpp
     src/project.cpp
+    src/llm_assistant.cpp
+    src/memory_test.cpp
+    src/bvh.cpp
+    src/path_tracer.cpp
 )
 
 # Header files
@@ -127,6 +146,9 @@ set(ENGINE_HEADERS
     include/post_process.hpp
     include/texture.hpp
     include/project.hpp
+    include/llm_assistant.hpp
+    include/bvh.hpp
+    include/path_tracer.hpp
 )
 
 # Library sources (excludes main.cpp, includes arch_api.cpp)
@@ -153,6 +175,10 @@ set(LIB_SOURCES
     src/arch_api.cpp
     src/texture.cpp
     src/project.cpp
+    src/llm_assistant.cpp
+    src/memory_test.cpp
+    src/bvh.cpp
+    src/path_tracer.cpp
 )
 
 # Shared library (DLL) for embedding in Qt/Python
@@ -172,6 +198,7 @@ target_link_libraries(ArchEngineLib PRIVATE
     glm
     nlohmann_json::nlohmann_json
     archgeometry
+    httplib_no_ssl
 )
 
 target_compile_definitions(ArchEngineLib PRIVATE ARCHENGINE_EXPORTS)
@@ -193,6 +220,7 @@ target_link_libraries(ArchEngine PRIVATE
     glm
     nlohmann_json::nlohmann_json
     archgeometry
+    httplib_no_ssl
 )
 
 # Shader compilation

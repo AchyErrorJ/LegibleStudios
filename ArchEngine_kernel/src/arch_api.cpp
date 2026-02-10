@@ -45,6 +45,10 @@ namespace {
     float g_cameraFOV = 45.0f;
     bool g_cameraOrthographic = false;
 
+    // Free-look camera mode (for arch_set_camera_pose)
+    bool g_freeLookMode = false;
+    vec3 g_freeLookCameraPosition = {0.0f, 10.0f, 60.0f};
+
     // State
     bool g_initialized = false;
     int g_width = 800;
@@ -55,7 +59,7 @@ namespace {
 
     // Error handling
     std::string g_lastError;
-    std::mutex g_mutex;
+    std::recursive_mutex g_mutex;
 
     // Vulkan handles for embedded mode
     VkInstance g_instance = VK_NULL_HANDLE;
@@ -70,9 +74,15 @@ namespace {
         if (!g_renderer) return;
 
         Camera camera;
-        camera.position.x = g_cameraTarget.x + g_cameraDistance * cos(g_cameraPitch) * sin(g_cameraYaw);
-        camera.position.y = g_cameraTarget.y + g_cameraDistance * sin(g_cameraPitch);
-        camera.position.z = g_cameraTarget.z + g_cameraDistance * cos(g_cameraPitch) * cos(g_cameraYaw);
+        if (g_freeLookMode) {
+            // Free-look mode: use direct camera position
+            camera.position = g_freeLookCameraPosition;
+        } else {
+            // Orbit mode: calculate position from yaw/pitch/distance
+            camera.position.x = g_cameraTarget.x + g_cameraDistance * cos(g_cameraPitch) * sin(g_cameraYaw);
+            camera.position.y = g_cameraTarget.y + g_cameraDistance * sin(g_cameraPitch);
+            camera.position.z = g_cameraTarget.z + g_cameraDistance * cos(g_cameraPitch) * cos(g_cameraYaw);
+        }
         camera.target = g_cameraTarget;
         camera.up = vec3(0, 1, 0);
         camera.fov = g_cameraFOV;
@@ -88,7 +98,7 @@ namespace {
 extern "C" {
 
 ARCH_API int arch_init(void* hwnd, int width, int height) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (g_initialized) {
         setError("Already initialized");
@@ -174,7 +184,7 @@ ARCH_API int arch_init(void* hwnd, int width, int height) {
 }
 
 ARCH_API int arch_init_headless(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (g_initialized) {
         setError("Already initialized");
@@ -205,7 +215,7 @@ ARCH_API int arch_init_headless(void) {
 }
 
 ARCH_API void arch_shutdown(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_initialized) return;
 
@@ -236,7 +246,7 @@ ARCH_API int arch_is_initialized(void) {
 }
 
 ARCH_API int arch_load_json(const char* json_str) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_initialized) {
         setError("Not initialized");
@@ -287,7 +297,7 @@ ARCH_API int arch_load_json(const char* json_str) {
 }
 
 ARCH_API int arch_load_file(const char* file_path) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_initialized) {
         setError("Not initialized");
@@ -336,7 +346,7 @@ ARCH_API int arch_load_file(const char* file_path) {
 }
 
 ARCH_API int arch_render_frame(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_initialized || !g_renderer) {
         return -1;
@@ -381,7 +391,7 @@ ARCH_API int arch_render_frame(void) {
 }
 
 ARCH_API void arch_resize(int width, int height) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_initialized || width <= 0 || height <= 0) return;
 
@@ -403,6 +413,38 @@ ARCH_API void arch_set_camera(float yaw, float pitch, float distance) {
 
 ARCH_API void arch_set_camera_target(float x, float y, float z) {
     g_cameraTarget = vec3(x, y, z);
+}
+
+ARCH_API void arch_set_camera_pose(float cam_x, float cam_y, float cam_z,
+                                   float target_x, float target_y, float target_z) {
+    // Direct camera positioning for free-look mode
+    g_freeLookMode = true;
+    g_freeLookCameraPosition = vec3(cam_x, cam_y, cam_z);
+
+    vec3 targetPos(target_x, target_y, target_z);
+    g_cameraTarget = targetPos;
+
+    // Calculate distance (for zoom consistency)
+    vec3 offset = g_freeLookCameraPosition - targetPos;
+    g_cameraDistance = glm::length(offset);
+
+    // Calculate yaw and pitch from offset vector
+    if (g_cameraDistance > 0.001f) {
+        vec3 dir = offset / g_cameraDistance;
+        g_cameraPitch = glm::asin(dir.y);  // Vertical angle
+        g_cameraYaw = glm::atan(dir.z, dir.x);  // Horizontal angle
+    }
+
+    std::cout << "[FreeLook] Set camera pose: pos=(" << g_freeLookCameraPosition.x << ", "
+              << g_freeLookCameraPosition.y << ", " << g_freeLookCameraPosition.z << ") target=("
+              << g_cameraTarget.x << ", " << g_cameraTarget.y << ", " << g_cameraTarget.z << ")\n";
+}
+
+ARCH_API void arch_get_camera_state(float* out_target_x, float* out_target_y, float* out_target_z, float* out_distance) {
+    if (out_target_x) *out_target_x = g_cameraTarget.x;
+    if (out_target_y) *out_target_y = g_cameraTarget.y;
+    if (out_target_z) *out_target_z = g_cameraTarget.z;
+    if (out_distance) *out_distance = g_cameraDistance;
 }
 
 ARCH_API void arch_reset_camera(void) {
@@ -464,7 +506,7 @@ ARCH_API int arch_get_selected_element(void) {
 }
 
 ARCH_API int arch_pick_element(int screen_x, int screen_y) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_initialized || g_building.elements.empty()) {
         return -1;
@@ -555,55 +597,55 @@ ARCH_API const char* arch_get_error(void) {
 // =============================================================================
 
 ARCH_API void arch_set_clipping_enabled(int enabled) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setClippingEnabled(enabled != 0);
     }
 }
 
 ARCH_API int arch_get_clipping_enabled(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return (g_renderer && g_renderer->getClippingEnabled()) ? 1 : 0;
 }
 
 ARCH_API void arch_set_clip_axis(int axis) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer && axis >= 0 && axis <= 2) {
         g_renderer->setClipAxis(axis);
     }
 }
 
 ARCH_API int arch_get_clip_axis(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? g_renderer->getClipAxis() : 1;
 }
 
 ARCH_API void arch_set_clip_height(float height) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setClipHeight(height);
     }
 }
 
 ARCH_API float arch_get_clip_height(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? g_renderer->getClipHeight() : 0.0f;
 }
 
 ARCH_API void arch_set_clip_flipped(int flipped) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setClipFlipped(flipped != 0);
     }
 }
 
 ARCH_API int arch_get_clip_flipped(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return (g_renderer && g_renderer->getClipFlipped()) ? 1 : 0;
 }
 
 ARCH_API void arch_set_section_floor_plan(float y_height) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setClipAxis(1);  // Y axis
         g_renderer->setClipHeight(y_height);
@@ -613,7 +655,7 @@ ARCH_API void arch_set_section_floor_plan(float y_height) {
 }
 
 ARCH_API void arch_set_section_elevation(int axis, float position) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer && (axis == 0 || axis == 2)) {
         g_renderer->setClipAxis(axis);
         g_renderer->setClipHeight(position);
@@ -627,19 +669,19 @@ ARCH_API void arch_set_section_elevation(int axis, float position) {
 // =============================================================================
 
 ARCH_API void arch_set_material_style(int style) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer && style >= 0 && style <= 3) {
         g_renderer->setMaterialStyle(static_cast<MaterialStyle>(style));
     }
 }
 
 ARCH_API int arch_get_material_style(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? static_cast<int>(g_renderer->getMaterialStyle()) : 1; // Default: Clean
 }
 
 ARCH_API void arch_set_uv_scale(float scale_u, float scale_v) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         // Use average of U and V for now (renderer uses single scale)
         g_renderer->setMaterialUVScale((scale_u + scale_v) * 0.5f);
@@ -647,7 +689,7 @@ ARCH_API void arch_set_uv_scale(float scale_u, float scale_v) {
 }
 
 ARCH_API void arch_get_uv_scale(float* out_u, float* out_v) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer && out_u && out_v) {
         float scale = g_renderer->getMaterialUVScale();
         *out_u = scale;
@@ -656,7 +698,7 @@ ARCH_API void arch_get_uv_scale(float* out_u, float* out_v) {
 }
 
 ARCH_API void arch_set_roughness_multiplier(float multiplier) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         // Use offset: multiplier 1.0 = offset 0, multiplier 0.5 = offset -0.5, etc.
         g_renderer->setMaterialRoughnessOffset(multiplier - 1.0f);
@@ -664,31 +706,31 @@ ARCH_API void arch_set_roughness_multiplier(float multiplier) {
 }
 
 ARCH_API float arch_get_roughness_multiplier(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? (g_renderer->getMaterialRoughnessOffset() + 1.0f) : 1.0f;
 }
 
 ARCH_API void arch_set_metallic_multiplier(float multiplier) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setMaterialMetallicOffset(multiplier - 1.0f);
     }
 }
 
 ARCH_API float arch_get_metallic_multiplier(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? (g_renderer->getMaterialMetallicOffset() + 1.0f) : 1.0f;
 }
 
 ARCH_API void arch_set_ao_strength(float strength) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setMaterialAOStrength(strength);
     }
 }
 
 ARCH_API float arch_get_ao_strength(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? g_renderer->getMaterialAOStrength() : 1.0f;
 }
 
@@ -697,26 +739,26 @@ ARCH_API float arch_get_ao_strength(void) {
 // =============================================================================
 
 ARCH_API void arch_set_shadows_enabled(int enabled) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setShadowsEnabled(enabled != 0);
     }
 }
 
 ARCH_API int arch_get_shadows_enabled(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return (g_renderer && g_renderer->getShadowsEnabled()) ? 1 : 0;
 }
 
 ARCH_API void arch_set_light_direction(float x, float y, float z) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setLightDirection(vec3(x, y, z));
     }
 }
 
 ARCH_API void arch_get_light_direction(float* out_x, float* out_y, float* out_z) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer && out_x && out_y && out_z) {
         const vec3& dir = g_renderer->getLightDirection();
         *out_x = dir.x;
@@ -730,38 +772,38 @@ ARCH_API void arch_get_light_direction(float* out_x, float* out_y, float* out_z)
 // =============================================================================
 
 ARCH_API void arch_set_ssao_enabled(int enabled) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setSSAOEnabled(enabled != 0);
     }
 }
 
 ARCH_API int arch_get_ssao_enabled(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return (g_renderer && g_renderer->getSSAOEnabled()) ? 1 : 0;
 }
 
 ARCH_API void arch_set_ssao_radius(float radius) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setSSAORadius(radius);
     }
 }
 
 ARCH_API float arch_get_ssao_radius(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? g_renderer->getSSAORadius() : 0.5f;
 }
 
 ARCH_API void arch_set_ssao_intensity(float intensity) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setSSAOIntensity(intensity);
     }
 }
 
 ARCH_API float arch_get_ssao_intensity(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? g_renderer->getSSAOIntensity() : 1.0f;
 }
 
@@ -770,38 +812,38 @@ ARCH_API float arch_get_ssao_intensity(void) {
 // =============================================================================
 
 ARCH_API void arch_set_bloom_enabled(int enabled) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setBloomEnabled(enabled != 0);
     }
 }
 
 ARCH_API int arch_get_bloom_enabled(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return (g_renderer && g_renderer->getBloomEnabled()) ? 1 : 0;
 }
 
 ARCH_API void arch_set_bloom_threshold(float threshold) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setBloomThreshold(threshold);
     }
 }
 
 ARCH_API float arch_get_bloom_threshold(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? g_renderer->getBloomThreshold() : 1.0f;
 }
 
 ARCH_API void arch_set_bloom_intensity(float intensity) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setBloomIntensity(intensity);
     }
 }
 
 ARCH_API float arch_get_bloom_intensity(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? g_renderer->getBloomIntensity() : 0.5f;
 }
 
@@ -810,26 +852,26 @@ ARCH_API float arch_get_bloom_intensity(void) {
 // =============================================================================
 
 ARCH_API void arch_set_exposure(float exposure) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->setExposure(exposure);
     }
 }
 
 ARCH_API float arch_get_exposure(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? g_renderer->getExposure() : 1.0f;
 }
 
 ARCH_API void arch_set_tonemap_mode(int mode) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer && mode >= 0 && mode <= 2) {
         g_renderer->setTonemapMode(static_cast<u32>(mode));
     }
 }
 
 ARCH_API int arch_get_tonemap_mode(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_renderer ? static_cast<int>(g_renderer->getTonemapMode()) : 1; // Default: ACES
 }
 
@@ -838,12 +880,12 @@ ARCH_API int arch_get_tonemap_mode(void) {
 // =============================================================================
 
 ARCH_API int arch_get_room_count(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return static_cast<int>(g_layout.rooms.size());
 }
 
 ARCH_API int arch_get_room_data(int index, ArchRoomData* out_room) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!out_room) return -1;
     if (index < 0 || index >= static_cast<int>(g_layout.rooms.size())) return -2;
@@ -881,7 +923,7 @@ ARCH_API int arch_get_room_data(int index, ArchRoomData* out_room) {
 }
 
 ARCH_API int arch_get_all_rooms(ArchRoomData* out_rooms, int max_rooms) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!out_rooms || max_rooms <= 0) return 0;
 
@@ -924,7 +966,7 @@ ARCH_API int arch_set_element_material(int element_index,
                                        float normal_strength,
                                        float brightness,
                                        float contrast) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         setError("Renderer not initialized");
@@ -950,7 +992,7 @@ ARCH_API int arch_set_element_material(int element_index,
 }
 
 ARCH_API int arch_clear_element_material(int element_index) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         setError("Renderer not initialized");
@@ -967,14 +1009,14 @@ ARCH_API int arch_clear_element_material(int element_index) {
 }
 
 ARCH_API void arch_clear_all_material_overrides(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_renderer) {
         g_renderer->clearAllElementOverrides();
     }
 }
 
 ARCH_API int arch_has_material_override(int element_index) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer || element_index < 0 || element_index >= static_cast<int>(g_building.elements.size())) {
         return 0;
@@ -988,7 +1030,7 @@ ARCH_API int arch_get_element_material(int element_index,
                                       float* out_normal_strength,
                                       float* out_brightness,
                                       float* out_contrast) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         setError("Renderer not initialized");
@@ -1021,7 +1063,7 @@ ARCH_API int arch_apply_material_batch(const int* indices, int count,
                                        float normal_strength,
                                        float brightness,
                                        float contrast) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         setError("Renderer not initialized");
@@ -1053,7 +1095,7 @@ ARCH_API int arch_apply_material_batch(const int* indices, int count,
 }
 
 ARCH_API int arch_get_override_count(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         return 0;
@@ -1063,7 +1105,7 @@ ARCH_API int arch_get_override_count(void) {
 }
 
 ARCH_API int arch_get_override_indices(int* out_indices, int max_indices) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         return 0;
@@ -1081,7 +1123,7 @@ ARCH_API int arch_get_override_indices(int* out_indices, int max_indices) {
 // =============================================================================
 
 ARCH_API int arch_get_material_count(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         return 0;
@@ -1091,7 +1133,7 @@ ARCH_API int arch_get_material_count(void) {
 }
 
 ARCH_API const char* arch_get_material_name(int index) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         setError("Renderer not initialized");
@@ -1111,7 +1153,7 @@ ARCH_API const char* arch_get_material_name(int index) {
 }
 
 ARCH_API const char* arch_get_material_category(int index) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         setError("Renderer not initialized");
@@ -1139,7 +1181,7 @@ ARCH_API const char* arch_get_material_category(int index) {
 ARCH_API int arch_get_materials_by_category(const char* category,
                                             int* out_indices,
                                             int max_indices) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         setError("Renderer not initialized");
@@ -1166,7 +1208,7 @@ ARCH_API int arch_get_materials_by_category(const char* category,
 }
 
 ARCH_API int arch_find_material(const char* name) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         return -1;
@@ -1187,7 +1229,7 @@ ARCH_API int arch_find_material(const char* name) {
 }
 
 ARCH_API int arch_apply_material_to_element(int element_index, const char* material_name) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         setError("Renderer not initialized");
@@ -1233,7 +1275,7 @@ ARCH_API int arch_apply_material_to_element(int element_index, const char* mater
 }
 
 ARCH_API int arch_apply_material_to_batch(const int* indices, int count, const char* material_name) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         setError("Renderer not initialized");
@@ -1271,7 +1313,7 @@ ARCH_API int arch_apply_material_to_batch(const int* indices, int count, const c
 }
 
 ARCH_API int arch_get_element_material_name(int element_index, char* out_name, int max_length) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_renderer) {
         setError("Renderer not initialized");
@@ -1344,7 +1386,7 @@ ARCH_API int arch_set_terrain_data(const ArchTerrainVertex* vertices, int vertex
                                    const unsigned int* indices, int index_count,
                                    float width_ft, float depth_ft,
                                    float min_elevation, float max_elevation) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!vertices || vertex_count <= 0) {
         setError("Invalid vertices array");
@@ -1430,7 +1472,7 @@ ARCH_API int arch_set_terrain_data(const ArchTerrainVertex* vertices, int vertex
 }
 
 ARCH_API void arch_clear_terrain(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     g_building.terrainMesh.vertices.clear();
     g_building.terrainMesh.indices.clear();
@@ -1447,14 +1489,14 @@ ARCH_API void arch_clear_terrain(void) {
 }
 
 ARCH_API int arch_has_terrain(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_building.terrainMesh.hasData() ? 1 : 0;
 }
 
 ARCH_API int arch_get_terrain_info(float* out_width_ft, float* out_depth_ft,
                                    float* out_min_elev, float* out_max_elev,
                                    int* out_vertex_count, int* out_triangle_count) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_building.terrainMesh.hasData()) {
         return -1;
@@ -1471,17 +1513,17 @@ ARCH_API int arch_get_terrain_info(float* out_width_ft, float* out_depth_ft,
 }
 
 ARCH_API void arch_set_terrain_enabled(int enabled) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     g_terrainEnabled = (enabled != 0);
 }
 
 ARCH_API int arch_get_terrain_enabled(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_terrainEnabled ? 1 : 0;
 }
 
 ARCH_API void arch_set_terrain_offset(float offset_x, float offset_y, float offset_z) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     g_terrainOffset = vec3(offset_x, offset_y, offset_z);
 
     // If terrain exists, we need to rebuild it with the new offset
@@ -1490,25 +1532,25 @@ ARCH_API void arch_set_terrain_offset(float offset_x, float offset_y, float offs
 }
 
 ARCH_API void arch_get_terrain_offset(float* out_x, float* out_y, float* out_z) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (out_x) *out_x = g_terrainOffset.x;
     if (out_y) *out_y = g_terrainOffset.y;
     if (out_z) *out_z = g_terrainOffset.z;
 }
 
 ARCH_API void arch_set_terrain_material(float roughness, float metallic) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     g_terrainRoughness = glm::clamp(roughness, 0.0f, 1.0f);
     g_terrainMetallic = glm::clamp(metallic, 0.0f, 1.0f);
 }
 
 ARCH_API void arch_set_terrain_color_mode(int mode) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     g_terrainColorMode = mode;
 }
 
 ARCH_API void arch_set_terrain_texture(const char* material_name) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (material_name && strlen(material_name) > 0) {
         g_terrainTextureName = material_name;
         g_terrainColorMode = 1;  // Switch to textured mode
@@ -1527,7 +1569,7 @@ ARCH_API void arch_set_terrain_texture(const char* material_name) {
 }
 
 ARCH_API const char* arch_get_terrain_texture(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_terrainTextureName.c_str();
 }
 
@@ -1536,7 +1578,7 @@ ARCH_API const char* arch_get_terrain_texture(void) {
 // =============================================================================
 
 ARCH_API int arch_load_hdri(const char* path) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_initialized || !g_renderer) {
         setError("Not initialized");
@@ -1585,7 +1627,7 @@ ARCH_API const char* arch_list_hdris(void) {
 // =============================================================================
 
 ARCH_API int arch_pt_set_config(int width, int height, int samples, int bounces) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (width <= 0 || height <= 0 || samples <= 0 || bounces <= 0) {
         setError("Invalid path tracer configuration");
@@ -1604,7 +1646,7 @@ ARCH_API int arch_pt_set_config(int width, int height, int samples, int bounces)
 }
 
 ARCH_API int arch_pt_start_render(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_initialized || !g_context) {
         setError("Not initialized");
@@ -1683,7 +1725,7 @@ ARCH_API int arch_pt_start_render(void) {
 }
 
 ARCH_API int arch_pt_render_frame(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_pathTracer) {
         return -1;
@@ -1698,7 +1740,7 @@ ARCH_API int arch_pt_render_frame(void) {
 }
 
 ARCH_API int arch_pt_get_progress(float* progress) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!progress) {
         return -1;
@@ -1714,7 +1756,7 @@ ARCH_API int arch_pt_get_progress(float* progress) {
 }
 
 ARCH_API void arch_pt_stop(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (g_pathTracer) {
         g_pathTracer->stopRender();
@@ -1722,17 +1764,17 @@ ARCH_API void arch_pt_stop(void) {
 }
 
 ARCH_API int arch_pt_is_rendering(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return (g_pathTracer && g_pathTracer->isRendering()) ? 1 : 0;
 }
 
 ARCH_API int arch_pt_is_complete(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return (g_pathTracer && g_pathTracer->isComplete()) ? 1 : 0;
 }
 
 ARCH_API int arch_pt_get_sample_count(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_pathTracer) {
         return 0;
@@ -1742,7 +1784,7 @@ ARCH_API int arch_pt_get_sample_count(void) {
 }
 
 ARCH_API int arch_pt_save_png(const char* path, float exposure) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_pathTracer) {
         setError("Path tracer not initialized");
@@ -1763,7 +1805,7 @@ ARCH_API int arch_pt_save_png(const char* path, float exposure) {
 }
 
 ARCH_API int arch_pt_save_hdr(const char* path) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_pathTracer) {
         setError("Path tracer not initialized");
@@ -1784,7 +1826,7 @@ ARCH_API int arch_pt_save_hdr(const char* path) {
 }
 
 ARCH_API int arch_pt_apply_denoise(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (!g_pathTracer) {
         setError("Path tracer not initialized");
@@ -1796,7 +1838,7 @@ ARCH_API int arch_pt_apply_denoise(void) {
 }
 
 ARCH_API void arch_pt_set_exposure(float exposure) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     g_ptConfig.exposure = exposure;
 
     if (g_pathTracer) {
@@ -1805,12 +1847,12 @@ ARCH_API void arch_pt_set_exposure(float exposure) {
 }
 
 ARCH_API float arch_pt_get_exposure(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return g_ptConfig.exposure;
 }
 
 ARCH_API void arch_pt_set_tonemap_mode(int mode) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
     if (mode >= 0 && mode <= 2) {
         g_ptConfig.tonemapMode = static_cast<u32>(mode);
@@ -1821,12 +1863,12 @@ ARCH_API void arch_pt_set_tonemap_mode(int mode) {
 }
 
 ARCH_API int arch_pt_get_tonemap_mode(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return static_cast<int>(g_ptConfig.tonemapMode);
 }
 
 ARCH_API void arch_pt_set_nee_enabled(int enabled) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     g_ptConfig.enableNEE = (enabled != 0);
 
     if (g_pathTracer) {
@@ -1835,12 +1877,61 @@ ARCH_API void arch_pt_set_nee_enabled(int enabled) {
 }
 
 ARCH_API void arch_pt_set_rr_enabled(int enabled) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     g_ptConfig.enableRR = (enabled != 0);
 
     if (g_pathTracer) {
         g_pathTracer->setConfig(g_ptConfig);
     }
+}
+
+// =============================================================================
+// Tessellation API Implementation
+// =============================================================================
+
+ARCH_API void arch_set_tessellation_enabled(int enabled) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setTessellationEnabled(enabled != 0);
+    }
+}
+
+ARCH_API int arch_get_tessellation_enabled(void) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    if (g_renderer) {
+        return g_renderer->getTessellationEnabled() ? 1 : 0;
+    }
+    return 0;
+}
+
+ARCH_API void arch_set_tessellation_level(float level) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setTessellationLevel(level);
+    }
+}
+
+ARCH_API float arch_get_tessellation_level(void) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    if (g_renderer) {
+        return g_renderer->getTessellationLevel();
+    }
+    return 1.0f;
+}
+
+ARCH_API void arch_set_displacement_scale(float scale) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    if (g_renderer) {
+        g_renderer->setDisplacementScale(scale);
+    }
+}
+
+ARCH_API float arch_get_displacement_scale(void) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    if (g_renderer) {
+        return g_renderer->getDisplacementScale();
+    }
+    return 0.0f;
 }
 
 } // extern "C"

@@ -138,6 +138,18 @@ struct TerrainMesh {
     f32 max_elevation = 0.0f;      // Maximum elevation (feet)
 
     bool hasData() const { return !vertices.empty() && !indices.empty(); }
+
+    /**
+     * @brief Generate a procedural test terrain
+     * @param width_ft Width in feet
+     * @param depth_ft Depth in feet
+     * @param grid_size Number of vertices per side (e.g., 64 = 64x64 grid)
+     * @param base_elevation Base elevation in feet
+     * @param height_range Height variation in feet
+     * @return TerrainMesh with procedural hills
+     */
+    static TerrainMesh generateTestTerrain(f32 width_ft, f32 depth_ft, u32 grid_size = 64,
+                                           f32 base_elevation = 100.0f, f32 height_range = 50.0f);
 };
 
 // Structural element for rendering
@@ -245,6 +257,9 @@ struct CameraState {
 // Maximum number of lights supported in a single frame
 constexpr u32 MAX_LIGHTS = 16;
 
+// Maximum number of shadow-casting lights (shadow map array size)
+constexpr u32 MAX_SHADOW_MAPS = 4;
+
 // Light types for the multi-light system
 enum class LightType : u32 {
     Directional = 0,  // Sun/moon light - parallel rays, no falloff
@@ -278,7 +293,7 @@ struct PushConstants {
 struct UniformBufferObject {
     mat4 view;
     mat4 proj;
-    mat4 lightViewProj;     // Shadow mapping (Phase 4)
+    mat4 lightViewProj[MAX_SHADOW_MAPS];  // Shadow mapping matrices (up to 4 shadow-casting lights)
     vec4 lightDirection;    // Directional light direction (sun)
     vec4 clipPlane;         // Section clipping plane (Phase 5)
     f32 time;
@@ -286,18 +301,23 @@ struct UniformBufferObject {
     u32 enableClipping;     // Section clipping enabled flag
     u32 enableShadows;      // Shadow mapping enabled flag
     u32 outputLinearHDR;    // Output linear HDR (skip tonemapping in shader)
+    u32 numShadowMaps;      // Number of active shadow maps (0-4)
     f32 exposure;           // Exposure multiplier for tonemapping
     f32 tessellationLevel;  // Tessellation subdivision level (1-64)
     f32 displacementScale;  // Height map displacement scale
+    f32 _padAlign1, _padAlign2, _padAlign3;  // Padding to align vec4 to 16-byte boundary (std140)
     vec4 materialParams;    // x = UV scale, y = normal strength, z = brightness, w = contrast
     vec4 materialParams2;   // x = saturation, y = roughnessOffset, z = metallicOffset, w = aoStrength
     vec4 materialTint;      // RGB tint multiplier, w = unused
     vec4 pomParams;         // x = enabled (0/1), y = heightScale, z = minLayers, w = maxLayers
+    vec4 iblParams;         // x = overall intensity, y = diffuse intensity, z = specular intensity, w = fresnel intensity
     // Debug visualization
-    u32 materialDebugMode;  // 0=None, 1=Displacement, 2=POMDepth, 3=Normals, 4=UVs, 5=AO
+    u32 materialDebugMode;  // 0=None, 1=Displacement, 2=POMDepth, 3=Normals, 4=UVs, 5=AO, 6-11=IBL debug
     // Per-element material overrides (added to global values when override mask bit is set)
     u32 overrideMask;       // Bitfield for which element overrides are active
-    f32 _pad1, _pad2;       // Padding to maintain 16-byte alignment for next vec4
+    // Shader effect flags (for debugging/toggling individual effects)
+    u32 effectFlags;        // Bitfield: bit0=IBL, bit1=directLight, bit2=normalMapping
+    f32 _pad1;              // Padding to maintain 16-byte alignment for next vec4
     vec4 elementOverride1;  // x = uvScale, y = normalStrength, z = brightness, w = contrast
     vec4 elementOverride2;  // x = saturation, y = roughness, z = metallic, w = aoStrength
     vec4 elementOverride3;  // RGB = tint, w = unused
@@ -319,6 +339,14 @@ namespace MaterialOverrideBits {
     constexpr u32 Metallic      = (1u << 7);  // Bit 7: Metallic override
     constexpr u32 AOStrength    = (1u << 8);  // Bit 8: AO strength override
     constexpr u32 Tint          = (1u << 9);  // Bit 9: Tint override
+}
+
+// Effect flags (for UBO effectFlags - toggles shader features for debugging)
+namespace EffectFlags {
+    constexpr u32 IBL           = (1u << 0);  // Image-Based Lighting enabled
+    constexpr u32 DirectLight   = (1u << 1);  // Direct sun/light contribution enabled
+    constexpr u32 NormalMapping = (1u << 2);  // Normal mapping enabled
+    constexpr u32 All           = IBL | DirectLight | NormalMapping;  // All effects enabled
 }
 
 // Visualization modes

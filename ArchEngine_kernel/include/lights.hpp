@@ -5,12 +5,27 @@
 namespace arch {
 
 /**
+ * @brief Light group categories for organizing scene lighting
+ */
+enum class LightGroup : u32 {
+    Interior = 0,   // Indoor lights (rooms, hallways)
+    Exterior = 1,   // Outdoor lights (sun, street lights)
+    Accent = 2,     // Decorative/highlight lights
+    Custom = 3      // User-defined group
+};
+
+/**
  * @brief Light wrapper with convenient helper methods
  *
  * Extends GPULight (defined in types.hpp) with factory methods and getters/setters.
  * The underlying data layout matches the GPU struct exactly for direct UBO transfer.
+ * Additional CPU-only fields (group, enabled) are stored separately.
  */
 struct Light : public GPULight {
+    // CPU-only fields (not sent to GPU)
+    LightGroup group = LightGroup::Interior;
+    bool enabled = true;
+    bool castShadow = false;  // Whether this light casts shadows
     /**
      * @brief Create a point light
      * @param position World position of the light
@@ -94,6 +109,14 @@ struct Light : public GPULight {
     // Get inner/outer angles in degrees (for UI)
     f32 getInnerAngleDeg() const { return glm::degrees(glm::acos(spotParams.x)); }
     f32 getOuterAngleDeg() const { return glm::degrees(glm::acos(spotParams.y)); }
+
+    // Group management
+    LightGroup getGroup() const { return group; }
+    void setGroup(LightGroup g) { group = g; }
+    bool isEnabled() const { return enabled; }
+    void setEnabled(bool e) { enabled = e; }
+    bool isCastingShadow() const { return castShadow; }
+    void setCastShadow(bool cast) { castShadow = cast; }
 };
 
 /**

@@ -10,9 +10,16 @@ namespace arch {
 ShadowMap::ShadowMap(VulkanContext& context, u32 resolution)
     : m_context(context), m_resolution(resolution) {
 
+    // Initialize matrices to identity
+    for (u32 i = 0; i < MAX_SHADOW_MAPS; i++) {
+        m_lightView[i] = mat4(1.0f);
+        m_lightProj[i] = mat4(1.0f);
+        m_lightViewProj[i] = mat4(1.0f);
+    }
+
     createDepthResources();
     createRenderPass();
-    createFramebuffer();
+    createFramebuffers();
     createSampler();
     createDescriptorSetLayout();
     createPipeline();
@@ -46,15 +53,30 @@ ShadowMap::~ShadowMap() {
     if (m_sampler != VK_NULL_HANDLE) {
         vkDestroySampler(device, m_sampler, nullptr);
     }
-    if (m_framebuffer != VK_NULL_HANDLE) {
-        vkDestroyFramebuffer(device, m_framebuffer, nullptr);
+
+    // Cleanup per-layer framebuffers
+    for (u32 i = 0; i < MAX_SHADOW_MAPS; i++) {
+        if (m_framebuffers[i] != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device, m_framebuffers[i], nullptr);
+        }
     }
+
     if (m_renderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(device, m_renderPass, nullptr);
     }
-    if (m_depthImageView != VK_NULL_HANDLE) {
-        vkDestroyImageView(device, m_depthImageView, nullptr);
+
+    // Cleanup per-layer image views
+    for (u32 i = 0; i < MAX_SHADOW_MAPS; i++) {
+        if (m_depthLayerImageViews[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, m_depthLayerImageViews[i], nullptr);
+        }
     }
+
+    // Cleanup array image view
+    if (m_depthArrayImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, m_depthArrayImageView, nullptr);
+    }
+
     if (m_depthImage != VK_NULL_HANDLE) {
         vkDestroyImage(device, m_depthImage, nullptr);
     }
@@ -66,7 +88,7 @@ ShadowMap::~ShadowMap() {
 void ShadowMap::createDepthResources() {
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
 
-    // Create depth image
+    // Create depth image array (MAX_SHADOW_MAPS layers)
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -74,7 +96,7 @@ void ShadowMap::createDepthResources() {
     imageInfo.extent.height = m_resolution;
     imageInfo.extent.depth = 1;
     imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
+    imageInfo.arrayLayers = MAX_SHADOW_MAPS;  // Array of shadow maps
     imageInfo.format = depthFormat;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -83,7 +105,7 @@ void ShadowMap::createDepthResources() {
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateImage(m_context.getDevice(), &imageInfo, nullptr, &m_depthImage) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create shadow map depth image");
+        throw std::runtime_error("Failed to create shadow map depth image array");
     }
 
     // Allocate memory
@@ -102,21 +124,46 @@ void ShadowMap::createDepthResources() {
 
     vkBindImageMemory(m_context.getDevice(), m_depthImage, m_depthImageMemory, 0);
 
-    // Create image view
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = m_depthImage;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = depthFormat;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
+    // Create array image view (for shader sampling all layers)
+    VkImageViewCreateInfo arrayViewInfo{};
+    arrayViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    arrayViewInfo.image = m_depthImage;
+    arrayViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;  // Array view for sampling
+    arrayViewInfo.format = depthFormat;
+    arrayViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    arrayViewInfo.subresourceRange.baseMipLevel = 0;
+    arrayViewInfo.subresourceRange.levelCount = 1;
+    arrayViewInfo.subresourceRange.baseArrayLayer = 0;
+    arrayViewInfo.subresourceRange.layerCount = MAX_SHADOW_MAPS;
 
-    if (vkCreateImageView(m_context.getDevice(), &viewInfo, nullptr, &m_depthImageView) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create shadow map image view");
+    if (vkCreateImageView(m_context.getDevice(), &arrayViewInfo, nullptr, &m_depthArrayImageView) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create shadow map array image view");
     }
+
+    // Create per-layer image views (for framebuffer attachments)
+    for (u32 i = 0; i < MAX_SHADOW_MAPS; i++) {
+        VkImageViewCreateInfo layerViewInfo{};
+        layerViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        layerViewInfo.image = m_depthImage;
+        layerViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;  // Single layer view
+        layerViewInfo.format = depthFormat;
+        layerViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        layerViewInfo.subresourceRange.baseMipLevel = 0;
+        layerViewInfo.subresourceRange.levelCount = 1;
+        layerViewInfo.subresourceRange.baseArrayLayer = i;
+        layerViewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_context.getDevice(), &layerViewInfo, nullptr, &m_depthLayerImageViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create shadow map layer image view");
+        }
+    }
+
+    // Transition all layers to SHADER_READ_ONLY_OPTIMAL so they're valid for sampling
+    // (even if not all are rendered to)
+    m_context.transitionImageLayout(m_depthImage, depthFormat,
+                                    VK_IMAGE_LAYOUT_UNDEFINED,
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                    1, MAX_SHADOW_MAPS);
 }
 
 void ShadowMap::createRenderPass() {
@@ -172,18 +219,21 @@ void ShadowMap::createRenderPass() {
     }
 }
 
-void ShadowMap::createFramebuffer() {
-    VkFramebufferCreateInfo framebufferInfo{};
-    framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    framebufferInfo.renderPass = m_renderPass;
-    framebufferInfo.attachmentCount = 1;
-    framebufferInfo.pAttachments = &m_depthImageView;
-    framebufferInfo.width = m_resolution;
-    framebufferInfo.height = m_resolution;
-    framebufferInfo.layers = 1;
+void ShadowMap::createFramebuffers() {
+    // Create one framebuffer per shadow map layer
+    for (u32 i = 0; i < MAX_SHADOW_MAPS; i++) {
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = m_renderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = &m_depthLayerImageViews[i];
+        framebufferInfo.width = m_resolution;
+        framebufferInfo.height = m_resolution;
+        framebufferInfo.layers = 1;
 
-    if (vkCreateFramebuffer(m_context.getDevice(), &framebufferInfo, nullptr, &m_framebuffer) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create shadow map framebuffer");
+        if (vkCreateFramebuffer(m_context.getDevice(), &framebufferInfo, nullptr, &m_framebuffers[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create shadow map framebuffer for layer " + std::to_string(i));
+        }
     }
 }
 
@@ -363,11 +413,16 @@ void ShadowMap::createPipeline() {
     vkDestroyShaderModule(m_context.getDevice(), vertShaderModule, nullptr);
 }
 
-void ShadowMap::beginShadowPass(VkCommandBuffer cmd) {
+void ShadowMap::beginShadowPass(VkCommandBuffer cmd, u32 layerIndex) {
+    if (layerIndex >= MAX_SHADOW_MAPS) {
+        layerIndex = 0;
+    }
+    m_currentLayer = layerIndex;
+
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = m_renderPass;
-    renderPassInfo.framebuffer = m_framebuffer;
+    renderPassInfo.framebuffer = m_framebuffers[layerIndex];
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = {m_resolution, m_resolution};
 
@@ -384,7 +439,11 @@ void ShadowMap::endShadowPass(VkCommandBuffer cmd) {
     vkCmdEndRenderPass(cmd);
 }
 
-void ShadowMap::updateLightMatrix(const vec3& lightDir, const vec3& sceneCenter, f32 sceneRadius) {
+void ShadowMap::updateLightMatrix(u32 layerIndex, const vec3& lightDir, const vec3& sceneCenter, f32 sceneRadius) {
+    if (layerIndex >= MAX_SHADOW_MAPS) {
+        return;
+    }
+
     // Normalize light direction
     vec3 lightDirNorm = glm::normalize(lightDir);
 
@@ -398,18 +457,18 @@ void ShadowMap::updateLightMatrix(const vec3& lightDir, const vec3& sceneCenter,
     }
 
     // Create view matrix
-    m_lightView = glm::lookAt(lightPos, sceneCenter, up);
+    m_lightView[layerIndex] = glm::lookAt(lightPos, sceneCenter, up);
 
     // Tighter orthographic projection for better shadow resolution
     f32 orthoSize = sceneRadius * 1.1f;
-    m_lightProj = glm::ortho(-orthoSize, orthoSize, -orthoSize, orthoSize,
+    m_lightProj[layerIndex] = glm::ortho(-orthoSize, orthoSize, -orthoSize, orthoSize,
                               0.1f, sceneRadius * 4.0f);
 
     // Vulkan clip space correction
-    m_lightProj[1][1] *= -1.0f;
+    m_lightProj[layerIndex][1][1] *= -1.0f;
 
     // Build the shadow matrix
-    m_lightViewProj = m_lightProj * m_lightView;
+    m_lightViewProj[layerIndex] = m_lightProj[layerIndex] * m_lightView[layerIndex];
 }
 
 void ShadowMap::createTessPipeline() {

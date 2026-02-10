@@ -74,6 +74,35 @@ VulkanContext::VulkanContext(VkInstance instance, VkSurfaceKHR surface, u32 widt
     std::cout << "VulkanContext initialized in embedded mode (" << width << "x" << height << ")" << std::endl;
 }
 
+// Private headless constructor
+VulkanContext::VulkanContext(const VulkanConfig& config, bool /*headless*/)
+    : m_config(config), m_window(nullptr), m_ownsInstance(true), m_ownsSurface(false) {
+
+    m_config.headless = true;  // Ensure headless flag is set
+    m_surface = VK_NULL_HANDLE;  // No surface in headless mode
+
+    createInstanceHeadless();
+    if (m_config.enableValidation) {
+        setupDebugMessenger();
+    }
+    // No surface creation
+    pickPhysicalDevice();
+    createLogicalDevice();
+    // No swapchain in headless mode
+    createCommandPool();
+    createPipelineCache();
+
+    std::cout << "VulkanContext initialized in headless mode (compute-only)" << std::endl;
+}
+
+// Static factory for headless mode
+std::unique_ptr<VulkanContext> VulkanContext::createHeadless(const VulkanConfig& config) {
+    VulkanConfig headlessConfig = config;
+    headlessConfig.headless = true;
+    headlessConfig.enableMsaa = false;  // No MSAA in headless mode
+    return std::unique_ptr<VulkanContext>(new VulkanContext(headlessConfig, true));
+}
+
 VulkanContext::~VulkanContext() {
     savePipelineCache();
     cleanupSwapchain();
@@ -128,6 +157,37 @@ void VulkanContext::createInstance() {
 
     if (vkCreateInstance(&createInfo, nullptr, &m_instance) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create Vulkan instance");
+    }
+}
+
+void VulkanContext::createInstanceHeadless() {
+    VkApplicationInfo appInfo{};
+    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    appInfo.pApplicationName = "ArchEngine";
+    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.pEngineName = "ArchEngine";
+    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.apiVersion = VK_API_VERSION_1_2;
+
+    // Headless mode: no window extensions needed
+    std::vector<const char*> extensions;
+    if (m_config.enableValidation) {
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
+
+    VkInstanceCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    createInfo.pApplicationInfo = &appInfo;
+    createInfo.enabledExtensionCount = static_cast<u32>(extensions.size());
+    createInfo.ppEnabledExtensionNames = extensions.data();
+
+    if (m_config.enableValidation) {
+        createInfo.enabledLayerCount = static_cast<u32>(m_validationLayers.size());
+        createInfo.ppEnabledLayerNames = m_validationLayers.data();
+    }
+
+    if (vkCreateInstance(&createInfo, nullptr, &m_instance) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create Vulkan instance (headless)");
     }
 }
 
@@ -238,8 +298,15 @@ void VulkanContext::createLogicalDevice() {
     createInfo.queueCreateInfoCount = static_cast<u32>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pEnabledFeatures = &deviceFeatures;
-    createInfo.enabledExtensionCount = static_cast<u32>(m_deviceExtensions.size());
-    createInfo.ppEnabledExtensionNames = m_deviceExtensions.data();
+
+    // In headless mode, we don't need swapchain extension
+    if (m_config.headless) {
+        createInfo.enabledExtensionCount = 0;
+        createInfo.ppEnabledExtensionNames = nullptr;
+    } else {
+        createInfo.enabledExtensionCount = static_cast<u32>(m_deviceExtensions.size());
+        createInfo.ppEnabledExtensionNames = m_deviceExtensions.data();
+    }
 
     if (vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create logical device");
@@ -349,14 +416,32 @@ void VulkanContext::cleanupSwapchain() {
         m_msaaColorMemory = VK_NULL_HANDLE;
     }
 
-    vkDestroyImageView(m_device, m_depthImageView, nullptr);
-    vkDestroyImage(m_device, m_depthImage, nullptr);
-    vkFreeMemory(m_device, m_depthImageMemory, nullptr);
-
-    for (auto imageView : m_swapchainImageViews) {
-        vkDestroyImageView(m_device, imageView, nullptr);
+    // Depth resources (not present in headless mode)
+    if (m_depthImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device, m_depthImageView, nullptr);
+        m_depthImageView = VK_NULL_HANDLE;
     }
-    vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+    if (m_depthImage != VK_NULL_HANDLE) {
+        vkDestroyImage(m_device, m_depthImage, nullptr);
+        m_depthImage = VK_NULL_HANDLE;
+    }
+    if (m_depthImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(m_device, m_depthImageMemory, nullptr);
+        m_depthImageMemory = VK_NULL_HANDLE;
+    }
+
+    // Swapchain resources (not present in headless mode)
+    for (auto imageView : m_swapchainImageViews) {
+        if (imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(m_device, imageView, nullptr);
+        }
+    }
+    m_swapchainImageViews.clear();
+
+    if (m_swapchain != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+        m_swapchain = VK_NULL_HANDLE;
+    }
 }
 
 void VulkanContext::recreateSwapchain() {
@@ -397,10 +482,16 @@ QueueFamilyIndices VulkanContext::findQueueFamilies(VkPhysicalDevice device) {
             indices.graphicsFamily = i;
         }
 
-        VkBool32 presentSupport = false;
-        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_surface, &presentSupport);
-        if (presentSupport) {
-            indices.presentFamily = i;
+        // In headless mode, we don't have a surface, so skip present support check
+        if (m_config.headless) {
+            // For headless mode, use graphics queue for "present" as well
+            indices.presentFamily = indices.graphicsFamily;
+        } else if (m_surface != VK_NULL_HANDLE) {
+            VkBool32 presentSupport = false;
+            vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_surface, &presentSupport);
+            if (presentSupport) {
+                indices.presentFamily = i;
+            }
         }
 
         if (indices.isComplete()) break;
@@ -433,6 +524,12 @@ SwapchainSupportDetails VulkanContext::querySwapchainSupport(VkPhysicalDevice de
 
 bool VulkanContext::isDeviceSuitable(VkPhysicalDevice device) {
     QueueFamilyIndices indices = findQueueFamilies(device);
+
+    // In headless mode, we only need a graphics queue (compute uses graphics queue)
+    if (m_config.headless) {
+        return indices.graphicsFamily.has_value();
+    }
+
     bool extensionsSupported = checkDeviceExtensionSupport(device);
 
     bool swapchainAdequate = false;
@@ -699,6 +796,75 @@ void VulkanContext::transitionImageLayout(VkImage image, VkFormat format,
         barrier.srcAccessMask = 0;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else {
+        throw std::invalid_argument("Unsupported layout transition");
+    }
+
+    vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage, 0,
+                         0, nullptr, 0, nullptr, 1, &barrier);
+
+    endSingleTimeCommands(commandBuffer);
+}
+
+void VulkanContext::transitionImageLayout(VkImage image, VkFormat format,
+                                          VkImageLayout oldLayout, VkImageLayout newLayout,
+                                          u32 mipLevels, u32 layerCount) {
+    VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = oldLayout;
+    barrier.newLayout = newLayout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    // Use depth aspect for depth formats, color aspect for others
+    if (format == VK_FORMAT_D32_SFLOAT || format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+        format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D16_UNORM) {
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        if (format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT) {
+            barrier.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+        }
+    } else {
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    }
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = mipLevels;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = layerCount;
+
+    VkPipelineStageFlags sourceStage;
+    VkPipelineStageFlags destinationStage;
+
+    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+               newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED &&
+               newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED &&
+               newLayout == VK_IMAGE_LAYOUT_GENERAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        destinationStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_GENERAL &&
+               newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        sourceStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
         destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     } else {
         throw std::invalid_argument("Unsupported layout transition");

@@ -35,6 +35,14 @@ extern "C" {
 ARCH_API int arch_init(void* hwnd, int width, int height);
 
 /**
+ * Initialize renderer in headless mode for offline rendering.
+ * Use this for path tracing without a display.
+ *
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_init_headless(void);
+
+/**
  * Shutdown the renderer and release all resources.
  */
 ARCH_API void arch_shutdown(void);
@@ -97,9 +105,33 @@ ARCH_API void arch_set_camera(float yaw, float pitch, float distance);
 ARCH_API void arch_set_camera_target(float x, float y, float z);
 
 /**
+ * Set camera position and target directly (for free-look mode).
+ *
+ * @param cam_x Camera position X
+ * @param cam_y Camera position Y
+ * @param cam_z Camera position Z
+ * @param target_x Target X
+ * @param target_y Target Y
+ * @param target_z Target Z
+ */
+ARCH_API void arch_set_camera_pose(float cam_x, float cam_y, float cam_z,
+                                   float target_x, float target_y, float target_z);
+
+/**
  * Reset camera to fit the current building.
  */
 ARCH_API void arch_reset_camera(void);
+
+/**
+ * Get current camera state after reset.
+ * Use this to sync Python state with C++ calculated values.
+ *
+ * @param out_target_x Target X (or NULL to skip)
+ * @param out_target_y Target Y (or NULL to skip)
+ * @param out_target_z Target Z (or NULL to skip)
+ * @param out_distance Distance from target (or NULL to skip)
+ */
+ARCH_API void arch_get_camera_state(float* out_target_x, float* out_target_y, float* out_target_z, float* out_distance);
 
 /**
  * Set camera field of view.
@@ -868,6 +900,212 @@ ARCH_API void arch_set_terrain_material(float roughness, float metallic);
  * @param mode 0=Elevation gradient (default), 1=Uniform gray, 2=Satellite texture (future)
  */
 ARCH_API void arch_set_terrain_color_mode(int mode);
+
+// =============================================================================
+// Environment/HDRI API
+// =============================================================================
+
+/**
+ * Load an HDR environment map for IBL lighting.
+ * Supports .hdr files (Radiance HDR format).
+ *
+ * @param path Path to the .hdr file
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_load_hdri(const char* path);
+
+/**
+ * List available HDRI files in the hdri directory.
+ *
+ * @return Semicolon-separated list of .hdr filenames, or empty string if none found
+ */
+ARCH_API const char* arch_list_hdris(void);
+
+// =============================================================================
+// Path Tracer API (Offline Rendering for V-Ray Quality Stills)
+// =============================================================================
+
+/**
+ * Configure path tracer parameters.
+ * Must be called before arch_pt_start_render().
+ *
+ * @param width Output image width in pixels
+ * @param height Output image height in pixels
+ * @param samples Total samples per pixel (higher = less noise, longer render)
+ * @param bounces Maximum path bounces (higher = more accurate GI)
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_pt_set_config(int width, int height, int samples, int bounces);
+
+/**
+ * Start path traced render.
+ * Begins progressive rendering of the current scene.
+ * Call arch_pt_render_frame() repeatedly until done.
+ *
+ * @return 0 on success, non-zero on failure (e.g., no scene loaded)
+ */
+ARCH_API int arch_pt_start_render(void);
+
+/**
+ * Render one progressive frame.
+ * Each call adds samples to the accumulation buffer.
+ *
+ * @return 1 if more frames needed, 0 if complete, -1 on error
+ */
+ARCH_API int arch_pt_render_frame(void);
+
+/**
+ * Get render progress.
+ *
+ * @param progress Output: progress value from 0.0 to 1.0
+ * @return 0 on success
+ */
+ARCH_API int arch_pt_get_progress(float* progress);
+
+/**
+ * Stop the current render early.
+ * Can be used to cancel a long render.
+ */
+ARCH_API void arch_pt_stop(void);
+
+/**
+ * Check if path tracer is currently rendering.
+ *
+ * @return 1 if rendering, 0 if idle or complete
+ */
+ARCH_API int arch_pt_is_rendering(void);
+
+/**
+ * Check if render is complete.
+ *
+ * @return 1 if complete, 0 if not started or still rendering
+ */
+ARCH_API int arch_pt_is_complete(void);
+
+/**
+ * Get current sample count.
+ *
+ * @return Number of samples completed
+ */
+ARCH_API int arch_pt_get_sample_count(void);
+
+/**
+ * Save path traced result as PNG.
+ * Applies tonemapping and gamma correction.
+ *
+ * @param path Output file path
+ * @param exposure Exposure adjustment (1.0 = default)
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_pt_save_png(const char* path, float exposure);
+
+/**
+ * Save path traced result as HDR (Radiance format).
+ * Preserves full dynamic range for post-processing.
+ *
+ * @param path Output file path (will use .hdr extension)
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_pt_save_hdr(const char* path);
+
+/**
+ * Apply denoising to the path traced result.
+ * Uses edge-aware spatial filtering to reduce noise.
+ *
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_pt_apply_denoise(void);
+
+/**
+ * Set path tracer exposure.
+ *
+ * @param exposure Exposure value (default 1.0)
+ */
+ARCH_API void arch_pt_set_exposure(float exposure);
+
+/**
+ * Get path tracer exposure.
+ *
+ * @return Current exposure value
+ */
+ARCH_API float arch_pt_get_exposure(void);
+
+/**
+ * Set path tracer tonemapping mode.
+ *
+ * @param mode 0=Reinhard, 1=ACES (default), 2=Uncharted2
+ */
+ARCH_API void arch_pt_set_tonemap_mode(int mode);
+
+/**
+ * Get path tracer tonemapping mode.
+ *
+ * @return Current tonemap mode (0-2)
+ */
+ARCH_API int arch_pt_get_tonemap_mode(void);
+
+/**
+ * Enable or disable Next Event Estimation (direct light sampling).
+ * NEE significantly reduces noise for direct lighting.
+ *
+ * @param enabled 1 to enable (default), 0 to disable
+ */
+ARCH_API void arch_pt_set_nee_enabled(int enabled);
+
+/**
+ * Enable or disable Russian Roulette path termination.
+ * RR improves efficiency by probabilistically terminating low-contribution paths.
+ *
+ * @param enabled 1 to enable (default), 0 to disable
+ */
+ARCH_API void arch_pt_set_rr_enabled(int enabled);
+
+// =============================================================================
+// Tessellation API
+// =============================================================================
+
+/**
+ * Enable or disable hardware tessellation for displacement mapping.
+ * When enabled, surfaces are subdivided and displaced by height maps.
+ *
+ * @param enabled 1 to enable, 0 to disable (default)
+ */
+ARCH_API void arch_set_tessellation_enabled(int enabled);
+
+/**
+ * Check if tessellation is enabled.
+ *
+ * @return 1 if enabled, 0 if disabled
+ */
+ARCH_API int arch_get_tessellation_enabled(void);
+
+/**
+ * Set tessellation subdivision level.
+ *
+ * @param level Subdivision level (1.0 = no subdivision, 64.0 = max)
+ */
+ARCH_API void arch_set_tessellation_level(float level);
+
+/**
+ * Get tessellation subdivision level.
+ *
+ * @return Current tessellation level
+ */
+ARCH_API float arch_get_tessellation_level(void);
+
+/**
+ * Set displacement scale for tessellated surfaces.
+ *
+ * @param scale Displacement scale in scene units (0.0 = no displacement)
+ */
+ARCH_API void arch_set_displacement_scale(float scale);
+
+/**
+ * Get displacement scale.
+ *
+ * @return Current displacement scale
+ */
+ARCH_API float arch_get_displacement_scale(void);
 
 #ifdef __cplusplus
 }

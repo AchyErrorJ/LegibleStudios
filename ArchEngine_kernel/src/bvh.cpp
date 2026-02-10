@@ -729,22 +729,70 @@ static int getTextureIndexForMaterial(const std::string& materialName, ElementTy
 }
 
 /**
- * @brief Resolve material name similar to how renderer does it
+ * @brief Map material keyword to Poly Haven texture (matching renderer's resolveMaterialName)
  */
-static std::string resolvePathTracerMaterial(const StructuralElement& elem) {
-    const std::string& matName = elem.material;
+static std::string mapMaterialKeyword(const std::string& key, ElementType type) {
+    // Convert to lowercase for matching
+    std::string lower = key;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 
-    // If material is already specified and non-empty, use it
-    if (!matName.empty() && matName != "default") {
-        return matName;
+    // Keyword-based mapping (same as renderer)
+    if (lower.find("brick") != std::string::npos) {
+        return "polyhaven/brick_wall_006";
+    }
+    if (lower.find("concrete") != std::string::npos || lower.find("cement") != std::string::npos ||
+        lower.find("stone") != std::string::npos) {
+        return "polyhaven/concrete_wall_008";
+    }
+    if (lower.find("drywall") != std::string::npos || lower.find("plaster") != std::string::npos ||
+        lower.find("gypsum") != std::string::npos || lower.find("paint") != std::string::npos ||
+        lower.find("stucco") != std::string::npos || lower.find("interior") != std::string::npos ||
+        lower.find("tyvek") != std::string::npos || lower.find("membrane") != std::string::npos ||
+        lower.find("poly") != std::string::npos || lower.find("vapor") != std::string::npos) {
+        return "polyhaven/concrete_wall_008";  // Use concrete for interior walls and membranes
+    }
+    if (lower.find("tile") != std::string::npos || lower.find("ceramic") != std::string::npos) {
+        return "polyhaven/concrete_floor_003";  // Use floor concrete for tiles
+    }
+    if (lower.find("wood") != std::string::npos || lower.find("timber") != std::string::npos ||
+        lower.find("osb") != std::string::npos || lower.find("plywood") != std::string::npos) {
+        return "polyhaven/wood_floor_deck";
+    }
+    if (lower.find("vinyl") != std::string::npos || lower.find("siding") != std::string::npos) {
+        return "polyhaven/concrete_wall_008";
+    }
+    if (lower.find("glass") != std::string::npos || lower.find("glazing") != std::string::npos) {
+        return "glass";
+    }
+    if (lower.find("metal") != std::string::npos || lower.find("steel") != std::string::npos ||
+        lower.find("aluminum") != std::string::npos) {
+        return "polyhaven/metal_plate_02";
+    }
+    if (lower.find("shingle") != std::string::npos || lower.find("asphalt") != std::string::npos ||
+        lower.find("roof") != std::string::npos || lower.find("slate") != std::string::npos) {
+        return "polyhaven/roof_slates_02";
+    }
+    if (lower.find("grass") != std::string::npos || lower.find("lawn") != std::string::npos) {
+        return "polyhaven/grass_path_2";
+    }
+    if (lower.find("gravel") != std::string::npos || lower.find("patio") != std::string::npos) {
+        return "polyhaven/gravel_concrete";
+    }
+    if (lower.find("asphalt") != std::string::npos || lower.find("pavement") != std::string::npos) {
+        return "polyhaven/asphalt_04";
     }
 
-    // Default materials based on element type (matching renderer's resolveMaterialName)
-    switch (elem.type) {
+    // Generic "wall" without specific material - use concrete for interior appearance
+    if (lower == "wall" || lower == "interior" || lower == "partition") {
+        return "polyhaven/concrete_wall_008";
+    }
+
+    // Default based on element type
+    switch (type) {
         case ElementType::Wall:
             return "polyhaven/brick_wall_006";
         case ElementType::Floor:
-            return "polyhaven/concrete_floor_003";  // Use floor texture, not wall
+            return "polyhaven/concrete_floor_003";
         case ElementType::Roof:
             return "polyhaven/roof_slates_02";
         case ElementType::Door:
@@ -756,6 +804,30 @@ static std::string resolvePathTracerMaterial(const StructuralElement& elem) {
         default:
             return "polyhaven/concrete_wall_008";
     }
+}
+
+/**
+ * @brief Resolve material name similar to how renderer does it
+ */
+static std::string resolvePathTracerMaterial(const StructuralElement& elem) {
+    const std::string& matName = elem.material;
+
+    // If material already specifies a polyhaven texture, use it directly
+    if (matName.find("polyhaven/") != std::string::npos) {
+        return matName;
+    }
+
+    // If material is specified, map it using keywords
+    if (!matName.empty() && matName != "default") {
+        std::string resolved = mapMaterialKeyword(matName, elem.type);
+        std::cout << "[BVH] Material mapping: '" << matName << "' -> '" << resolved << "'\n";
+        return resolved;
+    }
+
+    // Default materials based on element type
+    std::string defaultMat = mapMaterialKeyword("", elem.type);
+    std::cout << "[BVH] Using default material for type " << static_cast<int>(elem.type) << ": '" << defaultMat << "'\n";
+    return defaultMat;
 }
 
 /**
@@ -841,9 +913,11 @@ static GPUPTMaterial getMaterialForElement(const StructuralElement& elem) {
                 mat.properties.x = 0.75f;
                 break;
             case ElementType::Window:
-                mat.albedo = vec4(0.7f, 0.85f, 0.95f, 0.3f);
-                mat.properties.x = 0.05f;
-                mat.properties.w = 0.8f;  // Transmission
+                mat.albedo = vec4(0.9f, 0.95f, 1.0f, 0.2f);
+                mat.properties.x = 0.02f;  // Very smooth glass
+                mat.properties.y = 0.0f;   // Non-metallic
+                mat.properties.z = 1.5f;   // IOR for glass
+                mat.properties.w = 0.95f;  // High transmission
                 break;
             default:
                 mat.albedo = vec4(0.5f, 0.5f, 0.5f, 1.0f);
@@ -889,6 +963,178 @@ bool buildSceneBVH(
 
     if (outTriangles.empty()) {
         std::cerr << "[BVH] No triangles generated from " << elements.size() << " elements\n";
+        return false;
+    }
+
+    // Build BVH
+    BVHBuilder builder;
+    if (!builder.build(outTriangles)) {
+        return false;
+    }
+
+    // Copy nodes
+    outNodes = builder.getNodes();
+
+    // Reorder triangles according to BVH
+    const auto& orderedIndices = builder.getOrderedPrimIndices();
+    std::vector<GPUTriangle> reorderedTriangles;
+    reorderedTriangles.reserve(outTriangles.size());
+    for (u32 idx : orderedIndices) {
+        reorderedTriangles.push_back(outTriangles[idx]);
+    }
+    outTriangles = std::move(reorderedTriangles);
+
+    std::cout << "[BVH] Scene built: " << outTriangles.size() << " triangles, "
+              << outNodes.size() << " nodes, " << outMaterials.size() << " materials\n";
+    std::cout << "[BVH] Geometry: " << g_customMeshCount << " custom meshes, "
+              << g_fallbackCount << " fallback generated\n";
+
+    return true;
+}
+
+/**
+ * @brief Generate terrain material for path tracing
+ */
+static GPUPTMaterial getTerrainMaterial(const std::string& materialName) {
+    GPUPTMaterial mat;
+    mat.setDefault();
+
+    // Load material map if not already loaded
+    loadMaterialMap("materials");
+
+    // Get texture index for this material
+    int texIndex = -1;
+    if (!materialName.empty()) {
+        // Check for direct polyhaven material
+        auto it = g_materialTextureIndices.find(materialName);
+        if (it != g_materialTextureIndices.end()) {
+            texIndex = it->second;
+        } else {
+            // Try with polyhaven prefix
+            std::string fullName = "polyhaven/" + materialName;
+            auto it2 = g_materialTextureIndices.find(fullName);
+            if (it2 != g_materialTextureIndices.end()) {
+                texIndex = it2->second;
+            }
+        }
+    }
+
+    mat.texIndices.x = static_cast<f32>(texIndex);
+
+    // Set terrain material properties based on name
+    std::string lower = materialName;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    if (lower.find("grass") != std::string::npos) {
+        mat.albedo = vec4(0.25f, 0.35f, 0.15f, 1.0f);
+        mat.properties.x = 0.9f;  // Rough
+    } else if (lower.find("gravel") != std::string::npos) {
+        mat.albedo = vec4(0.45f, 0.42f, 0.4f, 1.0f);
+        mat.properties.x = 0.95f;
+    } else if (lower.find("asphalt") != std::string::npos) {
+        mat.albedo = vec4(0.15f, 0.15f, 0.15f, 1.0f);
+        mat.properties.x = 0.9f;
+    } else if (lower.find("sand") != std::string::npos) {
+        mat.albedo = vec4(0.76f, 0.70f, 0.50f, 1.0f);
+        mat.properties.x = 0.95f;
+    } else if (lower.find("mud") != std::string::npos || lower.find("dirt") != std::string::npos) {
+        mat.albedo = vec4(0.35f, 0.25f, 0.18f, 1.0f);
+        mat.properties.x = 0.9f;
+    } else if (lower.find("rock") != std::string::npos || lower.find("stone") != std::string::npos) {
+        mat.albedo = vec4(0.4f, 0.38f, 0.35f, 1.0f);
+        mat.properties.x = 0.85f;
+    } else if (lower.find("snow") != std::string::npos) {
+        mat.albedo = vec4(0.95f, 0.95f, 0.98f, 1.0f);
+        mat.properties.x = 0.7f;
+    } else if (lower.find("concrete") != std::string::npos) {
+        mat.albedo = vec4(0.5f, 0.48f, 0.45f, 1.0f);
+        mat.properties.x = 0.9f;
+    } else {
+        // Default terrain - greenish brown
+        mat.albedo = vec4(0.35f, 0.32f, 0.22f, 1.0f);
+        mat.properties.x = 0.85f;
+    }
+
+    mat.properties.y = 0.0f;  // Non-metallic
+
+    // Set terrain flag in texIndices.w for shader to use simple XZ UV projection
+    mat.texIndices.w = 1.0f;
+
+    return mat;
+}
+
+/**
+ * @brief Generate triangles from terrain mesh
+ */
+static void generateTerrainTriangles(
+    const TerrainMesh& terrain,
+    u32 materialIndex,
+    std::vector<GPUTriangle>& triangles)
+{
+    const auto& vertices = terrain.vertices;
+    const auto& indices = terrain.indices;
+
+    if (indices.size() < 3) return;
+
+    // Process triangles
+    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+        u32 i0 = indices[i];
+        u32 i1 = indices[i + 1];
+        u32 i2 = indices[i + 2];
+
+        if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size()) {
+            continue;
+        }
+
+        GPUTriangle tri;
+        tri.set(vertices[i0].position, vertices[i1].position, vertices[i2].position, materialIndex);
+        triangles.push_back(tri);
+    }
+}
+
+bool buildSceneBVH(
+    const std::vector<StructuralElement>& elements,
+    const TerrainMesh* terrain,
+    const std::string& terrainMaterialName,
+    std::vector<GPUTriangle>& outTriangles,
+    std::vector<GPUBVHNode>& outNodes,
+    std::vector<GPUPTMaterial>& outMaterials)
+{
+    // Reset debug counters
+    g_customMeshCount = 0;
+    g_fallbackCount = 0;
+
+    outTriangles.clear();
+    outMaterials.clear();
+
+    std::cout << "[BVH] Building scene from " << elements.size() << " elements";
+    if (terrain && terrain->hasData()) {
+        std::cout << " + terrain (" << terrain->indices.size() / 3 << " triangles)";
+    }
+    std::cout << "\n";
+
+    // Generate triangles and materials from elements
+    for (size_t i = 0; i < elements.size(); ++i) {
+        const auto& elem = elements[i];
+        u32 matIndex = static_cast<u32>(outMaterials.size());
+
+        // Add material
+        outMaterials.push_back(getMaterialForElement(elem));
+
+        // Generate triangles
+        generateElementTriangles(elem, matIndex, outTriangles);
+    }
+
+    // Add terrain if present
+    if (terrain && terrain->hasData()) {
+        u32 terrainMatIndex = static_cast<u32>(outMaterials.size());
+        outMaterials.push_back(getTerrainMaterial(terrainMaterialName));
+        generateTerrainTriangles(*terrain, terrainMatIndex, outTriangles);
+        std::cout << "[BVH] Added terrain with material '" << terrainMaterialName << "'\n";
+    }
+
+    if (outTriangles.empty()) {
+        std::cerr << "[BVH] No triangles generated\n";
         return false;
     }
 

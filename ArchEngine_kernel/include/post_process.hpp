@@ -28,7 +28,7 @@ struct BloomConfig {
 
 // Composite/Tonemapping configuration
 struct CompositeConfig {
-    f32 exposure = 1.0f;
+    f32 exposure = 0.8f;        // Slightly lower to prevent over-brightness
     u32 tonemapMode = 1;        // 0=Reinhard, 1=ACES, 2=Uncharted2
     bool enabled = true;
 };
@@ -41,7 +41,7 @@ struct SSRConfig {
     u32 iterations = 64;          // Max ray march iterations
     f32 fadeStart = 0.8f;         // Screen edge fade start (0-1)
     f32 fadeEnd = 1.0f;           // Screen edge fade end (0-1)
-    bool enabled = true;
+    bool enabled = false;         // Disabled by default (experimental)
 };
 
 // Debug visualization modes for post-processing
@@ -51,6 +51,8 @@ enum class PostProcessDebugMode : u32 {
     BloomOnly = 2,      // Show bloom buffer
     HDRScene = 3,       // Show HDR scene without effects
     Depth = 4,          // Show linearized depth buffer
+    SSROnly = 5,        // Show screen-space reflections
+    Normals = 6,        // Show normal buffer
 };
 
 // Debug visualization modes for material/displacement effects
@@ -61,6 +63,12 @@ enum class MaterialDebugMode : u32 {
     Normals = 3,        // Show surface normals
     UVs = 4,            // Show UV coordinates
     AO = 5,             // Show ambient occlusion from texture
+    SpecularIBL = 6,    // Show specular IBL contribution only
+    DiffuseIBL = 7,     // Show diffuse IBL contribution only
+    TotalAmbient = 8,   // Show combined ambient (diffuse + specular IBL)
+    BRDFLut = 9,        // Show BRDF lookup table values (R=scale, G=bias)
+    DirectLight = 10,   // Show direct lighting only (sun + lights, no ambient)
+    Fresnel = 11,       // Show fresnel reflectivity term
 };
 
 // JSON serialization declarations for post-process configs

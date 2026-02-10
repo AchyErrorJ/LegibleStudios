@@ -65,6 +65,7 @@ struct VulkanConfig {
     bool enableValidation = true;       ///< Enable Vulkan validation layers
     bool enableDebugMarkers = true;     ///< Enable debug markers for RenderDoc/NSight
     u32 maxFramesInFlight = 2;          ///< Number of frames that can be in-flight
+    bool headless = false;              ///< Headless mode (no surface/swapchain)
 
     /// @name MSAA Settings
     /// @{
@@ -138,6 +139,16 @@ public:
      * that already has a Vulkan instance and surface.
      */
     VulkanContext(VkInstance instance, VkSurfaceKHR surface, u32 width, u32 height, const VulkanConfig& config = {});
+
+    /**
+     * @brief Create a headless VulkanContext for compute-only operations
+     * @param config Configuration options (headless flag will be set)
+     * @return Unique pointer to headless VulkanContext
+     *
+     * Use this for offline rendering (path tracing) without a display.
+     * Does not create a surface or swapchain.
+     */
+    static std::unique_ptr<VulkanContext> createHeadless(const VulkanConfig& config = {});
 
     /**
      * @brief Destructor - cleans up all Vulkan resources
@@ -223,6 +234,9 @@ public:
 
     /** @brief Check if shader clip distance is supported */
     bool supportsShaderClipDistance() const { return m_deviceFeatures.shaderClipDistance == VK_TRUE; }
+
+    /** @brief Check if running in headless mode */
+    bool isHeadless() const { return m_config.headless; }
     /// @}
 
     /// @name Configuration
@@ -383,6 +397,19 @@ public:
      */
     void transitionImageLayout(VkImage image, VkFormat format,
                               VkImageLayout oldLayout, VkImageLayout newLayout);
+
+    /**
+     * @brief Transition image layout for multiple mip levels and array layers
+     * @param image Image to transition
+     * @param format Image format
+     * @param oldLayout Current layout
+     * @param newLayout Target layout
+     * @param mipLevels Number of mip levels to transition
+     * @param layerCount Number of array layers to transition
+     */
+    void transitionImageLayout(VkImage image, VkFormat format,
+                              VkImageLayout oldLayout, VkImageLayout newLayout,
+                              u32 mipLevels, u32 layerCount);
     /// @}
 
     /// @name Debug Markers
@@ -412,7 +439,11 @@ public:
     /// @}
 
 private:
+    // Private constructor for headless mode
+    VulkanContext(const VulkanConfig& config, bool headless);
+
     void createInstance();
+    void createInstanceHeadless();
     void setupDebugMessenger();
     void createSurface();
     void pickPhysicalDevice();
