@@ -1964,6 +1964,7 @@ class PlanView(BaseView):
     """
 
     selection_changed = pyqtSignal(list)  # List of selected item indices
+    lod_level_changed = pyqtSignal(int)  # LOD level 1-5
 
     def __init__(self, document: ArchDocument, config: Config, parent=None):
         super().__init__(document, config, parent)
@@ -2000,6 +2001,14 @@ class PlanView(BaseView):
     def set_tool_manager(self, tool_manager):
         """Set the tool manager."""
         self._tool_manager = tool_manager
+
+    def set_lod_level(self, level: int):
+        """Set LOD level for 2D view (stub for viewport sync)."""
+        pass
+
+    def set_view_mode(self, mode: str):
+        """Set view mode from tetrahedron navigation (stub)."""
+        pass
 
     @property
     def tool_manager(self):

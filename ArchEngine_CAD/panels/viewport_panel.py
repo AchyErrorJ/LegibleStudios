@@ -37,11 +37,15 @@ class ViewportPanel(QWidget):
     # Signals for when settings change
     material_style_changed = pyqtSignal(int)  # 0-3
     clipping_changed = pyqtSignal()
+    gravity_changed = pyqtSignal(float, float, float)  # design, client, build
+    lod_changed = pyqtSignal(int, float)  # level, transition
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._viewport = None
         self._updating = False
+        self._lod_level = 1
+        self._gravity = (0.33, 0.33, 0.34)
 
         self._setup_ui()
 
@@ -331,6 +335,19 @@ class ViewportPanel(QWidget):
         # Sync current state from viewport if available
         if viewport and viewport.is_initialized:
             self._sync_from_viewport()
+
+    def set_lod_level(self, level: int):
+        """Set the current LOD level (1-5)."""
+        self._lod_level = level
+
+    def set_gravity_weights(self, design: float, client: float, build: float):
+        """Set gravity weights from external source."""
+        self._gravity = (design, client, build)
+
+    def center_gravity(self):
+        """Reset gravity to centered (equal weights)."""
+        self._gravity = (0.33, 0.33, 0.34)
+        self.gravity_changed.emit(0.33, 0.33, 0.34)
 
     def _sync_from_viewport(self):
         """Sync UI state from viewport."""

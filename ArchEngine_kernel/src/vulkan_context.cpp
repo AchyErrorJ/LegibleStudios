@@ -269,32 +269,23 @@ void VulkanContext::createLogicalDevice() {
     VkPhysicalDeviceFeatures supportedFeatures{};
     vkGetPhysicalDeviceFeatures(m_physicalDevice, &supportedFeatures);
 
-    // Only enable features that are actually supported by the GPU
-    // AMD integrated GPUs often lack wideLines support
     VkPhysicalDeviceFeatures deviceFeatures{};
-    deviceFeatures.fillModeNonSolid = supportedFeatures.fillModeNonSolid;   // For wireframe
-    deviceFeatures.wideLines = supportedFeatures.wideLines;                  // For thick lines (often unsupported on AMD)
-    deviceFeatures.sampleRateShading = supportedFeatures.sampleRateShading;  // For MSAA sample shading
-    deviceFeatures.shaderClipDistance = supportedFeatures.shaderClipDistance; // For section clipping
+    deviceFeatures.fillModeNonSolid = VK_TRUE;   // For wireframe
+    deviceFeatures.wideLines = VK_TRUE;          // For thick lines
+    deviceFeatures.sampleRateShading = VK_TRUE;  // For MSAA sample shading
+    deviceFeatures.shaderClipDistance = VK_TRUE; // For section clipping
     deviceFeatures.samplerAnisotropy = supportedFeatures.samplerAnisotropy;
-    deviceFeatures.tessellationShader = supportedFeatures.tessellationShader; // For displacement mapping
+    deviceFeatures.tessellationShader = VK_TRUE; // For displacement mapping
 
-    // Log which features were disabled due to lack of support
-    if (!supportedFeatures.fillModeNonSolid) {
-        std::cout << "[Warning] GPU does not support fillModeNonSolid - wireframe mode disabled" << std::endl;
-    }
-    if (!supportedFeatures.wideLines) {
-        std::cout << "[Warning] GPU does not support wideLines - thick lines disabled" << std::endl;
-    }
-    if (!supportedFeatures.tessellationShader) {
-        std::cout << "[Warning] GPU does not support tessellation - displacement mapping disabled" << std::endl;
-    }
-    if (!supportedFeatures.shaderClipDistance) {
-        std::cout << "[Warning] GPU does not support shaderClipDistance - section clipping disabled" << std::endl;
-    }
+    // Enable descriptor indexing features for UPDATE_AFTER_BIND (used by post-processing)
+    VkPhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures{};
+    descriptorIndexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+    descriptorIndexingFeatures.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    descriptorIndexingFeatures.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    createInfo.pNext = &descriptorIndexingFeatures;
     createInfo.queueCreateInfoCount = static_cast<u32>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pEnabledFeatures = &deviceFeatures;
