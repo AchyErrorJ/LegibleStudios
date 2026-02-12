@@ -3,32 +3,10 @@
 The mathematical foundation that sits between the LLM and the output schema.
 It guarantees consistency, validity, and determinism.
 
-EXPANDED ARCHITECTURE:
-    The system has evolved from pure logic (graph relationships) to reality modeling.
-
-    LAYER 1 - LOGIC (Original):
-        Rooms touch each other correctly
-        → Fragments, State, Validation, Derivation, Solver
-
-    LAYER 2 - ENVIRONMENT (Physics):
-        Building responds to sun, air, gravity, sound
-        → SolarAnalysis, ThermalAnalysis, AcousticAnalysis
-
-    LAYER 3 - MATERIALITY (Economics):
-        Building respects cost, labor, materials
-        → CostAnalysis, ConstructionSystem, MaterialLibrary
-
-    LAYER 4 - PERCEPTION (Psychology):
-        Building serves human needs, comfort, delight
-        → WayfindingAnalysis, ComfortAnalysis, DelightAnalysis
-
-    TOTAL REALITY = Logic + Physics + Economics + Psychology
-
 The LLM proposes. The formal system validates and solves.
 
 Usage:
     from qbd import QBDState, Fragment, solve_state
-    from qbd.layers import EnvironmentLayer, MaterialityLayer, PerceptionLayer
 
     # Create state
     state = QBDState()
@@ -38,16 +16,6 @@ Usage:
     result = state.apply_fragment(add_room("Kitchen", "kitchen"))
     result = state.apply_fragment(set_adjacency("room-xxx", "room-yyy", "required", "open"))
     result = state.apply_fragment(set_constraint("footprint_max", 150))
-
-    # Run reality layers
-    environment = EnvironmentLayer(site_data)
-    env_result = environment.analyze(rooms, adjacencies, separations, layout)
-
-    materiality = MaterialityLayer(region="northeast")
-    mat_result = materiality.analyze(rooms, site, construction_system, quality)
-
-    perception = PerceptionLayer()
-    perc_result = perception.analyze(rooms, adjacencies, separations, layout, env_result)
 
     # Solve
     solution = solve_state(state)
@@ -63,7 +31,7 @@ from .fragments import (
     Fragment,
     FragmentAction,
     FragmentParser,
-    # Fragment factories (original)
+    # Fragment factories
     add_room,
     remove_room,
     update_room,
@@ -77,20 +45,6 @@ from .fragments import (
     set_style,
     pin_room,
     unpin_room,
-    # Fragment factories (reality layers)
-    set_window_area,
-    set_orientation,
-    set_insulation,
-    set_thermal_mass,
-    set_finishes,
-    set_construction_system,
-    set_quality_level,
-    set_material,
-    set_budget,
-    set_privacy_level,
-    set_affect_quality,
-    add_biophilic_element,
-    set_spatial_sequence,
 )
 
 # Templates
@@ -136,21 +90,6 @@ from .defaults import (
     sqm_to_sqft,
 )
 
-# Reality Layers
-from .layers import (
-    EnvironmentLayer,
-    MaterialityLayer,
-    PerceptionLayer,
-    SolarAnalysis,
-    ThermalAnalysis,
-    AcousticAnalysis,
-    CostAnalysis,
-    ConstructionSystemAnalysis,
-    WayfindingAnalysis,
-    ComfortAnalysis,
-    DelightAnalysis,
-)
-
 __all__ = [
     # State
     "QBDState",
@@ -173,20 +112,6 @@ __all__ = [
     "set_style",
     "pin_room",
     "unpin_room",
-    # Reality layer fragments
-    "set_window_area",
-    "set_orientation",
-    "set_insulation",
-    "set_thermal_mass",
-    "set_finishes",
-    "set_construction_system",
-    "set_quality_level",
-    "set_material",
-    "set_budget",
-    "set_privacy_level",
-    "set_affect_quality",
-    "add_biophilic_element",
-    "set_spatial_sequence",
 
     # Templates
     "create_master_template",
@@ -222,17 +147,4 @@ __all__ = [
     "get_room_defaults",
     "get_furniture_dimensions",
     "sqft_to_sqm",
-
-    # Reality Layers
-    "EnvironmentLayer",
-    "MaterialityLayer",
-    "PerceptionLayer",
-    "SolarAnalysis",
-    "ThermalAnalysis",
-    "AcousticAnalysis",
-    "CostAnalysis",
-    "ConstructionSystemAnalysis",
-    "WayfindingAnalysis",
-    "ComfortAnalysis",
-    "DelightAnalysis",
 ]

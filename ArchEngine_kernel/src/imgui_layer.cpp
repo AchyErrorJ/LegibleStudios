@@ -348,6 +348,81 @@ void ImGuiLayer::drawPerformancePanel(f32 fps, u32 drawCalls, u32 triangles, u32
     ImGui::End();
 }
 
+void ImGuiLayer::drawCompassOverlay(float cameraYaw) {
+    if (!m_showCompass) return;
+
+    // Compass in bottom-left corner
+    const float compassSize = 80.0f;
+    const float margin = 20.0f;
+    const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    const ImVec2 center(margin + compassSize / 2, displaySize.y - margin - compassSize / 2);
+
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+
+    // Background circle
+    drawList->AddCircleFilled(center, compassSize / 2, IM_COL32(30, 30, 30, 200), 32);
+    drawList->AddCircle(center, compassSize / 2, IM_COL32(100, 100, 100, 255), 32, 2.0f);
+
+    // Cardinal direction labels and arrows
+    // Camera yaw: 0 = looking north (+Z), PI/2 = looking east (+X)
+    // We rotate the compass so N always points to where north actually is in view
+    const float arrowLength = compassSize * 0.35f;
+    const float labelRadius = compassSize * 0.42f;
+
+    // Directions: N=+Z, E=+X, S=-Z, W=-X
+    // In our coordinate system: +Z is north, +X is east
+    // Camera yaw 0 = looking along +Z (north)
+    struct Direction {
+        const char* label;
+        float angle;  // Angle from north (0 = N, PI/2 = E, PI = S, 3*PI/2 = W)
+        ImU32 color;
+    };
+
+    Direction dirs[] = {
+        {"N", 0.0f, IM_COL32(220, 50, 50, 255)},             // North - Red
+        {"E", 3.14159f / 2.0f, IM_COL32(200, 200, 200, 255)}, // East
+        {"S", 3.14159f, IM_COL32(200, 200, 200, 255)},        // South
+        {"W", 3.0f * 3.14159f / 2.0f, IM_COL32(200, 200, 200, 255)}  // West
+    };
+
+    for (const auto& dir : dirs) {
+        // Rotate by negative camera yaw so compass shows world directions
+        float displayAngle = dir.angle - cameraYaw;
+
+        // Arrow endpoint (pointing outward from center)
+        // In screen space: up is -Y, so we need to flip
+        float dx = std::sin(displayAngle) * arrowLength;
+        float dy = -std::cos(displayAngle) * arrowLength;  // Negative because screen Y is down
+
+        ImVec2 arrowEnd(center.x + dx, center.y + dy);
+
+        // Draw arrow line
+        float lineWidth = (dir.label[0] == 'N') ? 3.0f : 1.5f;
+        drawList->AddLine(center, arrowEnd, dir.color, lineWidth);
+
+        // Draw arrowhead for North
+        if (dir.label[0] == 'N') {
+            float headSize = 8.0f;
+            float headAngle = 0.4f;  // Arrowhead spread
+            ImVec2 head1(arrowEnd.x - headSize * std::sin(displayAngle - headAngle),
+                         arrowEnd.y + headSize * std::cos(displayAngle - headAngle));
+            ImVec2 head2(arrowEnd.x - headSize * std::sin(displayAngle + headAngle),
+                         arrowEnd.y + headSize * std::cos(displayAngle + headAngle));
+            drawList->AddTriangleFilled(arrowEnd, head1, head2, dir.color);
+        }
+
+        // Label position (beyond arrow)
+        float labelDx = std::sin(displayAngle) * labelRadius;
+        float labelDy = -std::cos(displayAngle) * labelRadius;
+        ImVec2 labelPos(center.x + labelDx - 4, center.y + labelDy - 7);  // Offset for text centering
+
+        drawList->AddText(labelPos, dir.color, dir.label);
+    }
+
+    // Center dot
+    drawList->AddCircleFilled(center, 3.0f, IM_COL32(150, 150, 150, 255));
+}
+
 bool ImGuiLayer::wantCaptureMouse() const {
     return ImGui::GetIO().WantCaptureMouse;
 }
@@ -779,6 +854,178 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                     int minute = static_cast<int>((hours - hour) * 60.0f) % 60;
                     ImGui::Text("Time: %02d:%02d", (hour + 6) % 24, minute);
                 }
+            }
+        }
+
+        ImGui::Separator();
+
+        // Environment Settings (HDRI, Sky)
+        if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
+            static std::vector<std::string> hdriFiles;
+            static int selectedHdri = -1;
+            static bool hdriScanned = false;
+            static std::string hdriError;
+
+            if (!hdriScanned) {
+                // Scan for HDRI files
+                std::string hdriDir = "hdri";
+                if (!std::filesystem::exists(hdriDir)) {
+                    hdriDir = "../../hdri";
+                }
+                if (std::filesystem::exists(hdriDir)) {
+                    try {
+                        for (const auto& entry : std::filesystem::directory_iterator(hdriDir)) {
+                            if (entry.path().extension() == ".hdr") {
+                                hdriFiles.push_back(entry.path().string());
+                            }
+                        }
+                    } catch (...) {
+                        // Ignore filesystem errors
+                    }
+                }
+                hdriScanned = true;
+            }
+
+            ImGui::Text("Sky / Environment Map:");
+
+            if (!hdriFiles.empty()) {
+                const char* currentLabel = selectedHdri >= 0
+                    ? std::filesystem::path(hdriFiles[selectedHdri]).filename().string().c_str()
+                    : "Procedural Sky";
+
+                if (ImGui::BeginCombo("##Environment", currentLabel)) {
+                    // Procedural sky option
+                    if (ImGui::Selectable("Procedural Sky", selectedHdri < 0)) {
+                        selectedHdri = -1;
+                        hdriError.clear();
+                        try {
+                            renderer.useProceduralSky();
+                        } catch (const std::exception& e) {
+                            hdriError = std::string("Error: ") + e.what();
+                        } catch (...) {
+                            hdriError = "Unknown error switching to procedural sky";
+                        }
+                    }
+                    ImGui::Separator();
+                    // HDRI files
+                    for (int i = 0; i < static_cast<int>(hdriFiles.size()); i++) {
+                        std::string filename = std::filesystem::path(hdriFiles[i]).filename().string();
+                        if (ImGui::Selectable(filename.c_str(), selectedHdri == i)) {
+                            selectedHdri = i;
+                            hdriError.clear();
+                            try {
+                                if (!renderer.loadHdrEnvironment(hdriFiles[i])) {
+                                    hdriError = "Failed to load HDRI";
+                                }
+                            } catch (const std::exception& e) {
+                                hdriError = std::string("Error: ") + e.what();
+                            } catch (...) {
+                                hdriError = "Unknown error loading HDRI";
+                            }
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip("Select environment map for sky and lighting");
+            } else {
+                ImGui::TextDisabled("No HDRI files found in hdri/ folder");
+                ImGui::TextDisabled("Place .hdr files there to enable");
+            }
+
+            if (!hdriError.empty()) {
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", hdriError.c_str());
+            }
+
+            // Rescan button
+            if (ImGui::Button("Rescan HDRIs")) {
+                hdriScanned = false;
+                hdriFiles.clear();
+                selectedHdri = -1;
+            }
+            ImGui::SetItemTooltip("Rescan hdri/ folder for new files");
+        }
+
+        ImGui::Separator();
+
+        // Terrain Settings
+        if (ImGui::CollapsingHeader("Terrain")) {
+            static std::vector<std::string> terrainMaterials;
+            static bool terrainMatsScanned = false;
+            static int selectedTerrainMat = 0;  // 0 = Elevation Colors
+
+            if (!terrainMatsScanned) {
+                terrainMaterials.clear();
+                terrainMaterials.push_back("");  // Empty = elevation colors
+
+                // Scan for terrain-suitable materials in polyhaven folder
+                std::string matDir = "materials/polyhaven";
+                if (!std::filesystem::exists(matDir)) {
+                    matDir = "../../materials/polyhaven";
+                }
+                if (std::filesystem::exists(matDir)) {
+                    try {
+                        for (const auto& entry : std::filesystem::directory_iterator(matDir)) {
+                            if (entry.is_directory()) {
+                                std::string name = entry.path().filename().string();
+                                // Include terrain-like materials
+                                if (name.find("grass") != std::string::npos ||
+                                    name.find("ground") != std::string::npos ||
+                                    name.find("mud") != std::string::npos ||
+                                    name.find("sand") != std::string::npos ||
+                                    name.find("rock") != std::string::npos ||
+                                    name.find("snow") != std::string::npos ||
+                                    name.find("gravel") != std::string::npos ||
+                                    name.find("dirt") != std::string::npos ||
+                                    name.find("forest") != std::string::npos ||
+                                    name.find("path") != std::string::npos) {
+                                    terrainMaterials.push_back("polyhaven/" + name);
+                                }
+                            }
+                        }
+                    } catch (...) {}
+                }
+                terrainMatsScanned = true;
+            }
+
+            ImGui::Text("Terrain Material:");
+            const char* currentLabel = selectedTerrainMat == 0 ? "Elevation Colors" :
+                terrainMaterials[selectedTerrainMat].c_str();
+
+            if (ImGui::BeginCombo("##TerrainMat", currentLabel)) {
+                // Elevation colors option
+                if (ImGui::Selectable("Elevation Colors", selectedTerrainMat == 0)) {
+                    selectedTerrainMat = 0;
+                    renderer.setTerrainMaterial("");
+                }
+
+                if (terrainMaterials.size() > 1) {
+                    ImGui::Separator();
+                    for (int i = 1; i < static_cast<int>(terrainMaterials.size()); i++) {
+                        std::string displayName = terrainMaterials[i];
+                        size_t pos = displayName.find('/');
+                        if (pos != std::string::npos) {
+                            displayName = displayName.substr(pos + 1);
+                        }
+                        if (ImGui::Selectable(displayName.c_str(), selectedTerrainMat == i)) {
+                            selectedTerrainMat = i;
+                            renderer.setTerrainMaterial(terrainMaterials[i]);
+                        }
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip("Select material texture for terrain");
+
+            if (terrainMaterials.size() <= 1) {
+                ImGui::TextDisabled("No terrain materials found");
+                ImGui::TextDisabled("Run: python scripts/download_polyhaven.py --preset terrain");
+            }
+
+            // Rescan button
+            if (ImGui::Button("Rescan Materials")) {
+                terrainMatsScanned = false;
+                terrainMaterials.clear();
+                selectedTerrainMat = 0;
             }
         }
 
@@ -1750,14 +1997,32 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
         if (ImGui::CollapsingHeader("High-Resolution Render")) {
             ImGui::TextDisabled("Render high-quality images for presentations");
 
+            // Render mode selector (Rasterizer vs Path Tracer)
+            const char* renderModeItems[] = { "Rasterizer (Fast)", "Path Tracer (Quality)" };
+            ImGui::Combo("Render Mode", &m_renderMode, renderModeItems, 2);
+            ImGui::SetItemTooltip("Rasterizer: Fast real-time rendering\nPath Tracer: Physically accurate global illumination");
+
+            ImGui::Separator();
+
             // Resolution selector
             const char* resolutionItems[] = { "4K (3840x2160)", "6K (6144x3456)", "8K (7680x4320)" };
             ImGui::Combo("Resolution", &m_renderResolution, resolutionItems, 3);
 
-            // Samples selector (for accumulation/AA)
-            const char* sampleItems[] = { "1 (Fast)", "16 (Good)", "64 (High)", "256 (Best)" };
-            ImGui::Combo("Samples", &m_renderSamples, sampleItems, 4);
-            ImGui::SetItemTooltip("Higher samples = less noise, longer render time");
+            // Path tracer specific settings
+            if (m_renderMode == 1) {
+                ImGui::SliderInt("PT Samples", &m_ptSamples, 16, 512);
+                ImGui::SetItemTooltip("Samples per pixel. Higher = less noise, longer render time.\n64-128 for preview, 256-512 for final.");
+
+                ImGui::SliderInt("PT Bounces", &m_ptBounces, 2, 12);
+                ImGui::SetItemTooltip("Max light bounces. Higher = more accurate indirect lighting.\n4-6 for interiors, 6-8 for complex scenes.");
+            }
+
+            // Samples selector (for rasterizer accumulation/AA)
+            if (m_renderMode == 0) {
+                const char* sampleItems[] = { "1 (Fast)", "16 (Good)", "64 (High)", "256 (Best)" };
+                ImGui::Combo("Samples", &m_renderSamples, sampleItems, 4);
+                ImGui::SetItemTooltip("Higher samples = less noise, longer render time");
+            }
 
             // Format selector
             const char* formatItems[] = { "PNG (8-bit)", "EXR (HDR 32-bit)" };
@@ -1927,6 +2192,11 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                 m_highResRenderRequest.postVibrance = m_postVibrance;
                 m_highResRenderRequest.postSharpness = m_postSharpness;
                 m_highResRenderRequest.postVignette = m_postVignette;
+
+                // Path tracer settings
+                m_highResRenderRequest.renderMode = m_renderMode;
+                m_highResRenderRequest.ptSamples = m_ptSamples;
+                m_highResRenderRequest.ptBounces = m_ptBounces;
 
                 m_highResRenderRequested = true;
             }

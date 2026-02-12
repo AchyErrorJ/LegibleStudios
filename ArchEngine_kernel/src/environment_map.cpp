@@ -4,9 +4,19 @@
 #include <cmath>
 #include <vector>
 #include <iostream>
+#include <fstream>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "../external/stb_image.h"
+
+// Debug logging to file (for crash diagnosis)
+static void logToFile(const std::string& msg) {
+    std::ofstream f("hdri_debug.log", std::ios::app);
+    if (f.is_open()) {
+        f << msg << std::endl;
+        f.flush();
+    }
+}
 
 namespace arch {
 
@@ -67,20 +77,29 @@ void EnvironmentMap::createSampler() {
 }
 
 bool EnvironmentMap::loadFromFile(const std::string& filepath) {
-    // Enable HDR loading
-    stbi_set_flip_vertically_on_load(true);
+    logToFile("=== loadFromFile START: " + filepath);
 
+    // Don't flip - equirectangular HDRIs use standard orientation
+    stbi_set_flip_vertically_on_load(false);
+
+    logToFile("Loading HDR file...");
     int width, height, channels;
     float* hdrData = stbi_loadf(filepath.c_str(), &width, &height, &channels, 3);
 
     if (!hdrData) {
+        logToFile("ERROR: Failed to load HDR file");
         return false;
     }
+    logToFile("HDR loaded: " + std::to_string(width) + "x" + std::to_string(height));
 
+    logToFile("Creating cubemap from equirectangular...");
     createCubemapFromEquirectangular(hdrData, width, height);
+    logToFile("Cubemap created");
+
     stbi_image_free(hdrData);
 
     m_loaded = true;
+    logToFile("=== loadFromFile SUCCESS");
     return true;
 }
 
@@ -244,7 +263,9 @@ void EnvironmentMap::createProceduralSky() {
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+    // Make visible to both fragment and compute shaders (for IBL generation)
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     m_context.endSingleTimeCommands(cmd);
@@ -421,7 +442,9 @@ void EnvironmentMap::createCubemapFromEquirectangular(const float* hdrData, int 
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+    // Make visible to both fragment and compute shaders (for IBL generation)
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     m_context.endSingleTimeCommands(cmd);
@@ -473,6 +496,11 @@ VkDescriptorImageInfo EnvironmentMap::getDescriptorInfo() const {
 
 void EnvironmentMap::cleanupIBL() {
     auto device = m_context.getDevice();
+
+    // Reset descriptor pool to free all allocated descriptor sets
+    if (m_computeDescriptorPool != VK_NULL_HANDLE) {
+        vkResetDescriptorPool(device, m_computeDescriptorPool, 0);
+    }
 
     if (m_iblSampler) {
         vkDestroySampler(device, m_iblSampler, nullptr);
@@ -543,7 +571,10 @@ void EnvironmentMap::createIBLSampler() {
 }
 
 bool EnvironmentMap::generateIBLTextures(const IBLConfig& config) {
+    logToFile("=== generateIBLTextures START");
+
     if (!m_loaded) {
+        logToFile("ERROR: No environment map loaded");
         std::cerr << "[EnvironmentMap] Cannot generate IBL: no environment map loaded" << std::endl;
         return false;
     }
@@ -551,53 +582,70 @@ bool EnvironmentMap::generateIBLTextures(const IBLConfig& config) {
     std::cout << "[EnvironmentMap] Generating IBL textures..." << std::endl;
 
     // Clean up any existing IBL resources
+    logToFile("Cleaning up IBL...");
     cleanupIBL();
 
     m_prefilteredMipLevels = config.prefilteredMipLevels;
 
     // Create IBL sampler first
+    logToFile("Creating IBL sampler...");
     createIBLSampler();
 
     // Create compute pipelines if not already created
+    logToFile("Creating compute pipelines...");
     try {
         createComputePipelines();
+        logToFile("Compute pipelines created");
     } catch (const std::exception& e) {
+        logToFile("ERROR creating compute pipelines: " + std::string(e.what()));
         std::cerr << "[EnvironmentMap] Failed to create compute pipelines: " << e.what() << std::endl;
         cleanupIBL();
         return false;
     }
 
     // Create texture resources
+    logToFile("Creating irradiance map...");
     if (!createIrradianceMap(config)) {
+        logToFile("ERROR: Failed to create irradiance map");
         std::cerr << "[EnvironmentMap] Failed to create irradiance map" << std::endl;
         cleanupIBL();
         return false;
     }
 
+    logToFile("Creating prefiltered map...");
     if (!createPrefilteredMap(config)) {
+        logToFile("ERROR: Failed to create prefiltered map");
         std::cerr << "[EnvironmentMap] Failed to create prefiltered map" << std::endl;
         cleanupIBL();
         return false;
     }
 
+    logToFile("Creating BRDF LUT...");
     if (!createBRDFLut(config)) {
+        logToFile("ERROR: Failed to create BRDF LUT");
         std::cerr << "[EnvironmentMap] Failed to create BRDF LUT" << std::endl;
         cleanupIBL();
         return false;
     }
 
     // Run compute shaders to generate IBL textures
+    logToFile("Running BRDF LUT compute...");
     try {
         runBRDFLutCompute(config);
+        logToFile("Running irradiance compute...");
         runIrradianceCompute(config);
+        logToFile("Running prefilter compute...");
         runPrefilterCompute(config);
+        logToFile("All compute shaders completed");
     } catch (const std::exception& e) {
+        logToFile("ERROR in IBL compute: " + std::string(e.what()));
         std::cerr << "[EnvironmentMap] Failed to run IBL compute: " << e.what() << std::endl;
         cleanupIBL();
         return false;
     }
 
     m_iblGenerated = true;
+    logToFile("=== generateIBLTextures SUCCESS");
     std::cout << "[EnvironmentMap] IBL textures generated successfully" << std::endl;
     return true;
 }
@@ -814,8 +862,10 @@ VkDescriptorImageInfo EnvironmentMap::getBRDFLutDescriptorInfo() const {
 // ============================================================================
 
 VkShaderModule EnvironmentMap::loadShaderModule(const std::string& filename) {
+    logToFile("Loading shader: " + filename);
     std::ifstream file(filename, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
+        logToFile("ERROR: Failed to open shader file: " + filename);
         throw std::runtime_error("Failed to open shader file: " + filename);
     }
 

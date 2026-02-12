@@ -5,8 +5,16 @@ Provides UI for selecting and assigning materials from the material library
 to walls, floors, roofs, and other building elements.
 """
 import json
+import sys
 from pathlib import Path
 from typing import Optional, Dict, List
+
+
+def _get_app_dir() -> Path:
+    """Get application directory for both frozen and dev modes."""
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent.parent
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
@@ -18,32 +26,35 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QPixmap, QIcon, QColor
 
 
-# Material categories
+# Material categories - organized by use case with actual polyhaven material IDs
 MATERIAL_CATEGORIES = {
-    "Exterior Walls": [
-        "brick_red_01", "brick_brown_01", "brick_gray_01", "brick_old_01",
-        "brick_buff_01", "brick_white_01", "brick_red_dark",
-        "siding_vinyl_light", "siding_vinyl_dark", "siding_vinyl_slate",
-        "siding_wood_cedar", "siding_wood_clapboard", "siding_wood_shingle",
-        "siding_fiber_cement_smooth", "siding_fiber_cement_woodgrain",
+    "Walls": [
+        "polyhaven/brick_wall_006",
+        "polyhaven/brick_wall_008",
+        "polyhaven/concrete_wall_008",
     ],
-    "Interior Walls": [
-        "paint_white_flat", "paint_offwhite_matte", "paint_gray_eggshell",
-        "paint_beige_satin",
+    "Floors": [
+        "polyhaven/wood_floor_deck",
+        "polyhaven/concrete_floor_003",
+        "polyhaven/gravel_concrete",
     ],
     "Roofing": [
-        "roof_shingle_asphalt_gray", "roof_shingle_asphalt_brown", "roof_shingle_asphalt_black",
-        "roof_shingle_cedar_fresh", "roof_shingle_cedar_weathered",
-        "roof_metal_standing_seam", "roof_metal_corrugated", "roof_metal_ribbed_galv",
+        "polyhaven/roof_slates_02",
+        "polyhaven/metal_plate_02",
+        "polyhaven/asphalt_04",
     ],
-    "Flooring": [
-        "wood_floor_oak", "wood_floor_maple", "wood_floor_walnut",
-    ],
-    "Metal": [
-        "metal_brushed", "metal_galvanized",
-    ],
-    "Structural": [
-        "wood_structural_fir", "wood_structural_oak",
+    "Ground": [
+        "polyhaven/grass_path_2",
+        "polyhaven/gravel_concrete",
+        "polyhaven/asphalt_04",
+        "polyhaven/forest_ground_04",
+        "polyhaven/leaves_forest_ground",
+        "polyhaven/sandy_gravel",
+        "polyhaven/rock_ground_02",
+        "polyhaven/brown_mud_03",
+        "polyhaven/coast_sand_rocks_02",
+        "polyhaven/dried_clay_ground",
+        "polyhaven/snow_03",
     ],
 }
 
@@ -78,10 +89,10 @@ class MaterialPreviewWidget(QLabel):
     def _load_preview(self):
         """Load material preview thumbnail."""
         # Look for albedo texture in materials directory
-        materials_dir = Path(__file__).parent.parent / "materials"
+        materials_dir = _get_app_dir() / "materials"
 
-        # Try different image formats
-        for ext in ["png", "jpg", "jpeg"]:
+        # Try different image formats - material_id can be "polyhaven/brick_wall_006"
+        for ext in ["jpg", "jpeg", "png"]:
             preview_path = materials_dir / self.material_id / f"albedo.{ext}"
             if preview_path.exists():
                 pixmap = QPixmap(str(preview_path))
@@ -140,6 +151,7 @@ class MaterialsPanel(QWidget):
     roughness_changed = pyqtSignal(float)  # multiplier
     metallic_changed = pyqtSignal(float)  # multiplier
     ao_strength_changed = pyqtSignal(float)  # strength
+    terrain_material_changed = pyqtSignal(str)  # material_id (empty = elevation colors)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -154,7 +166,7 @@ class MaterialsPanel(QWidget):
 
     def _load_material_map(self):
         """Load material definitions from material_map.json."""
-        materials_dir = Path(__file__).parent.parent / "materials"
+        materials_dir = _get_app_dir() / "materials"
         map_path = materials_dir / "material_map.json"
 
         if map_path.exists():
@@ -192,6 +204,9 @@ class MaterialsPanel(QWidget):
 
         # Default materials section
         self._create_defaults_group(content_layout)
+
+        # Terrain material section
+        self._create_terrain_group(content_layout)
 
         # Material browser tabs
         self._create_browser_tabs(content_layout)
@@ -244,17 +259,11 @@ class MaterialsPanel(QWidget):
         layout = QFormLayout(group)
         layout.setSpacing(5)
 
-        # Exterior walls default
-        self.ext_wall_combo = QComboBox()
-        self.ext_wall_combo.addItems([self._get_material_name(m) for m in MATERIAL_CATEGORIES["Exterior Walls"]])
-        self.ext_wall_combo.currentIndexChanged.connect(lambda i: self._on_default_changed("Walls_Exterior", i))
-        layout.addRow("Ext. Walls:", self.ext_wall_combo)
-
-        # Interior walls default
-        self.int_wall_combo = QComboBox()
-        self.int_wall_combo.addItems([self._get_material_name(m) for m in MATERIAL_CATEGORIES["Interior Walls"]])
-        self.int_wall_combo.currentIndexChanged.connect(lambda i: self._on_default_changed("Walls_Interior", i))
-        layout.addRow("Int. Walls:", self.int_wall_combo)
+        # Walls default
+        self.wall_combo = QComboBox()
+        self.wall_combo.addItems([self._get_material_name(m) for m in MATERIAL_CATEGORIES["Walls"]])
+        self.wall_combo.currentIndexChanged.connect(lambda i: self._on_default_changed("Walls", i))
+        layout.addRow("Walls:", self.wall_combo)
 
         # Roof default
         self.roof_combo = QComboBox()
@@ -264,11 +273,63 @@ class MaterialsPanel(QWidget):
 
         # Floor default
         self.floor_combo = QComboBox()
-        self.floor_combo.addItems([self._get_material_name(m) for m in MATERIAL_CATEGORIES["Flooring"]])
-        self.floor_combo.currentIndexChanged.connect(lambda i: self._on_default_changed("Floors_Wood", i))
+        self.floor_combo.addItems([self._get_material_name(m) for m in MATERIAL_CATEGORIES["Floors"]])
+        self.floor_combo.currentIndexChanged.connect(lambda i: self._on_default_changed("Floors", i))
         layout.addRow("Floors:", self.floor_combo)
 
+        # Ground default
+        self.ground_combo = QComboBox()
+        self.ground_combo.addItems([self._get_material_name(m) for m in MATERIAL_CATEGORIES["Ground"]])
+        self.ground_combo.currentIndexChanged.connect(lambda i: self._on_default_changed("Ground", i))
+        layout.addRow("Ground:", self.ground_combo)
+
         parent_layout.addWidget(group)
+
+    def _create_terrain_group(self, parent_layout):
+        """Create terrain material section."""
+        group = QGroupBox("Terrain Material")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(5)
+
+        info_label = QLabel("Change terrain surface appearance:")
+        info_label.setStyleSheet("color: #888; font-size: 10px;")
+        layout.addWidget(info_label)
+
+        # Terrain material dropdown
+        self.terrain_combo = QComboBox()
+        self.terrain_combo.addItem("Elevation Colors (default)", "")
+
+        # Add ground materials for terrain
+        for mat_id in MATERIAL_CATEGORIES.get("Ground", []):
+            name = self._get_material_name(mat_id)
+            self.terrain_combo.addItem(name, mat_id)
+
+        self.terrain_combo.currentIndexChanged.connect(self._on_terrain_material_changed)
+        layout.addWidget(self.terrain_combo)
+
+        # Apply terrain button
+        self.apply_terrain_btn = QPushButton("Apply to Terrain")
+        self.apply_terrain_btn.setToolTip("Apply selected material to terrain surface")
+        self.apply_terrain_btn.clicked.connect(self._apply_terrain_material)
+        layout.addWidget(self.apply_terrain_btn)
+
+        parent_layout.addWidget(group)
+
+    def _on_terrain_material_changed(self, index: int):
+        """Handle terrain material selection change."""
+        mat_id = self.terrain_combo.itemData(index)
+        print(f"[MaterialsPanel] Terrain material selected: {mat_id or '(elevation colors)'}")
+
+    def _apply_terrain_material(self):
+        """Apply selected material to terrain."""
+        mat_id = self.terrain_combo.currentData()
+        print(f"[MaterialsPanel] Applying terrain material: {mat_id or '(elevation colors)'}")
+
+        self.terrain_material_changed.emit(mat_id or "")
+
+        # Apply directly to viewport if available
+        if self._viewport:
+            self._viewport.set_terrain_texture(mat_id or "")
 
     def _create_browser_tabs(self, parent_layout):
         """Create material browser with category tabs."""
@@ -337,23 +398,23 @@ class MaterialsPanel(QWidget):
         # Apply to all of type buttons
         type_row = QHBoxLayout()
 
-        self.apply_all_ext_btn = QPushButton("All Ext")
-        self.apply_all_ext_btn.setToolTip("Apply to all exterior walls")
-        self.apply_all_ext_btn.setEnabled(False)
-        self.apply_all_ext_btn.clicked.connect(lambda: self._apply_to_type("exterior_wall"))
-        type_row.addWidget(self.apply_all_ext_btn)
+        self.apply_all_walls_btn = QPushButton("All Walls")
+        self.apply_all_walls_btn.setToolTip("Apply to all walls")
+        self.apply_all_walls_btn.setEnabled(False)
+        self.apply_all_walls_btn.clicked.connect(lambda: self._apply_to_type("wall"))
+        type_row.addWidget(self.apply_all_walls_btn)
 
-        self.apply_all_int_btn = QPushButton("All Int")
-        self.apply_all_int_btn.setToolTip("Apply to all interior walls")
-        self.apply_all_int_btn.setEnabled(False)
-        self.apply_all_int_btn.clicked.connect(lambda: self._apply_to_type("interior_wall"))
-        type_row.addWidget(self.apply_all_int_btn)
-
-        self.apply_all_roof_btn = QPushButton("All Roof")
+        self.apply_all_roof_btn = QPushButton("All Roofs")
         self.apply_all_roof_btn.setToolTip("Apply to all roofs")
         self.apply_all_roof_btn.setEnabled(False)
         self.apply_all_roof_btn.clicked.connect(lambda: self._apply_to_type("roof"))
         type_row.addWidget(self.apply_all_roof_btn)
+
+        self.apply_all_floor_btn = QPushButton("All Floors")
+        self.apply_all_floor_btn.setToolTip("Apply to all floors")
+        self.apply_all_floor_btn.setEnabled(False)
+        self.apply_all_floor_btn.clicked.connect(lambda: self._apply_to_type("floor"))
+        type_row.addWidget(self.apply_all_floor_btn)
 
         layout.addLayout(type_row)
 
@@ -500,6 +561,7 @@ class MaterialsPanel(QWidget):
 
     def _on_material_clicked(self, material_id: str):
         """Handle material selection."""
+        print(f"[MaterialsPanel] _on_material_clicked: {material_id}")
         # Update selection state
         if self._selected_material:
             old_widget = self._material_widgets.get(self._selected_material)
@@ -516,9 +578,9 @@ class MaterialsPanel(QWidget):
         self.selected_name.setText(name)
         self.selected_type.setText(material_id)
 
-        # Try to load preview
-        materials_dir = Path(__file__).parent.parent / "materials"
-        for ext in ["png", "jpg", "jpeg"]:
+        # Try to load preview - material_id can be "polyhaven/brick_wall_006"
+        materials_dir = _get_app_dir() / "materials"
+        for ext in ["jpg", "jpeg", "png"]:
             preview_path = materials_dir / material_id / f"albedo.{ext}"
             if preview_path.exists():
                 pixmap = QPixmap(str(preview_path))
@@ -535,18 +597,18 @@ class MaterialsPanel(QWidget):
 
         # Enable apply buttons
         self.apply_selection_btn.setEnabled(True)
-        self.apply_all_ext_btn.setEnabled(True)
-        self.apply_all_int_btn.setEnabled(True)
+        self.apply_all_walls_btn.setEnabled(True)
         self.apply_all_roof_btn.setEnabled(True)
+        self.apply_all_floor_btn.setEnabled(True)
 
     def _on_default_changed(self, category: str, index: int):
         """Handle default material change."""
         # Map category to material list
         category_map = {
-            "Walls_Exterior": MATERIAL_CATEGORIES["Exterior Walls"],
-            "Walls_Interior": MATERIAL_CATEGORIES["Interior Walls"],
+            "Walls": MATERIAL_CATEGORIES["Walls"],
             "Roofs": MATERIAL_CATEGORIES["Roofing"],
-            "Floors_Wood": MATERIAL_CATEGORIES["Flooring"],
+            "Floors": MATERIAL_CATEGORIES["Floors"],
+            "Ground": MATERIAL_CATEGORIES["Ground"],
         }
 
         materials = category_map.get(category, [])
@@ -564,9 +626,12 @@ class MaterialsPanel(QWidget):
 
     def _apply_to_type(self, element_type: str):
         """Apply selected material to all elements of a type."""
+        print(f"[MaterialsPanel] _apply_to_type called: type={element_type}, selected={self._selected_material}")
         if not self._selected_material:
+            print("[MaterialsPanel] No material selected, returning")
             return
 
+        print(f"[MaterialsPanel] Emitting material_assigned signal: {element_type}, {self._selected_material}")
         self.material_assigned.emit(element_type, self._selected_material)
 
     def set_viewport(self, viewport):

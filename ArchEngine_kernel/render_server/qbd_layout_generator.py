@@ -53,11 +53,16 @@ def create_spatial_graph_from_qbd(answers: Dict) -> SpatialGraph:
     """
     graph = SpatialGraph()
 
-    # Parse answers
-    sqft = int(answers.get("sqft", answers.get("com_sqft", answers.get("mixed_sqft", "1200"))))
-    bedrooms = int(answers.get("bedrooms", "2").replace("+", ""))
-    bathrooms_str = answers.get("bathrooms", "1")
-    bathrooms = int(float(bathrooms_str.replace("+", "")))
+    # Parse answers - handle both string and int/float inputs
+    sqft_val = answers.get("sqft", answers.get("com_sqft", answers.get("mixed_sqft", 1200)))
+    sqft = int(sqft_val) if isinstance(sqft_val, (int, float)) else int(sqft_val)
+
+    bedrooms_val = answers.get("bedrooms", 2)
+    bedrooms = int(bedrooms_val) if isinstance(bedrooms_val, (int, float)) else int(str(bedrooms_val).replace("+", ""))
+
+    bathrooms_val = answers.get("bathrooms", 1)
+    bathrooms = int(float(bathrooms_val)) if isinstance(bathrooms_val, (int, float)) else int(float(str(bathrooms_val).replace("+", "")))
+
     garage = answers.get("garage", "none")
     special_rooms = answers.get("special_rooms", [])
     if isinstance(special_rooms, str):
@@ -99,11 +104,9 @@ def create_spatial_graph_from_qbd(answers: Dict) -> SpatialGraph:
         graph.add_room(f"bedroom_{i}", "bedroom",
                       name=f"Bedroom {i}",
                       min_area=max(120, int(sqft * 0.10)))
-        # Only add closets for larger buildings (>2000 sqft)
-        if sqft > 2000:
-            graph.add_room(f"closet_{i}", "closet",
-                          name=f"Closet {i}",
-                          min_area=max(15, int(sqft * 0.015)))
+        graph.add_room(f"closet_{i}", "closet",
+                      name=f"Closet {i}",
+                      min_area=max(15, int(sqft * 0.015)))
 
     # Additional bathrooms
     if bathrooms > 1:
@@ -116,9 +119,8 @@ def create_spatial_graph_from_qbd(answers: Dict) -> SpatialGraph:
         graph.add_room("powder_room", "powder_room",
                       min_area=max(25, int(sqft * 0.02)))
 
-    # Laundry (optional for smaller buildings)
-    if sqft > 1500:
-        graph.add_room("laundry", "laundry", min_area=max(35, int(sqft * 0.025)))
+    # Laundry
+    graph.add_room("laundry", "laundry", min_area=max(35, int(sqft * 0.025)))
 
     # Garage + mudroom
     if garage != "none":
@@ -171,26 +173,22 @@ def create_spatial_graph_from_qbd(answers: Dict) -> SpatialGraph:
             graph.connect("hallway", "bathroom_2")
 
         # Laundry often off hallway
-        if "laundry" in graph.rooms:
-            graph.connect("hallway", "laundry")
+        graph.connect("hallway", "laundry")
 
     else:
         # Single bedroom - connect directly to living
         if "primary_bedroom" in graph.rooms:
             graph.connect("living", "primary_bedroom")
-        if "laundry" in graph.rooms:
-            graph.connect("living", "laundry")
+        graph.connect("living", "laundry")
 
     # Primary suite connections
     if "primary_bedroom" in graph.rooms:
         graph.attached("primary_bedroom", "primary_bath")
-        if "primary_closet" in graph.rooms:
-            graph.attached("primary_bedroom", "primary_closet")
+        graph.attached("primary_bedroom", "primary_closet")
 
-    # Secondary bedroom closets (only if they exist)
+    # Secondary bedroom closets
     for i in range(2, bedrooms + 1):
-        if f"closet_{i}" in graph.rooms:
-            graph.attached(f"bedroom_{i}", f"closet_{i}")
+        graph.attached(f"bedroom_{i}", f"closet_{i}")
 
     # Powder room near entry
     if "powder_room" in graph.rooms:
@@ -198,13 +196,8 @@ def create_spatial_graph_from_qbd(answers: Dict) -> SpatialGraph:
 
     # Garage + mudroom connections
     if "garage" in graph.rooms:
-        # Garage connects to entry (primary access from garage to house)
-        graph.connect("garage", "entry")
-
-        # Mudroom connection (if present)
-        if "mudroom" in graph.rooms:
-            graph.connect("entry", "mudroom")
-            graph.connect("mudroom", "kitchen")
+        graph.connect("garage", "mudroom")
+        graph.connect("mudroom", "kitchen")
 
         # Isolate garage from bedrooms (noise, fumes)
         if "primary_bedroom" in graph.rooms:
@@ -227,9 +220,7 @@ def create_spatial_graph_from_qbd(answers: Dict) -> SpatialGraph:
     # GROUPINGS (for plumbing efficiency)
     # =========================================================================
 
-    wet_rooms = ["kitchen"]
-    if "laundry" in graph.rooms:
-        wet_rooms.append("laundry")
+    wet_rooms = ["kitchen", "laundry"]
     if "primary_bath" in graph.rooms:
         wet_rooms.append("primary_bath")
     if "bathroom_2" in graph.rooms:
@@ -747,8 +738,7 @@ def generate_floor_plan_from_qbd(answers: Dict,
                                  grid_size: float = 2.0,
                                  max_nodes: int = 50000,
                                  output_format: OutputFormat = OutputFormat.REVIT,
-                                 creative_mode: bool = False,
-                                 config_overrides: Dict = None) -> Dict:
+                                 creative_mode: bool = False) -> Dict:
     """
     Generate a complete floor plan from QBD answers.
 
@@ -760,7 +750,6 @@ def generate_floor_plan_from_qbd(answers: Dict,
         max_nodes: Max solver nodes
         output_format: Target output format (REVIT or ARCHENGINE)
         creative_mode: If True, use organic growth for interesting non-rectangular shapes
-        config_overrides: Optional dict to override scoring config values
 
     Returns:
         Dict with walls_batch, doors, rooms, and metadata
@@ -789,9 +778,7 @@ def generate_floor_plan_from_qbd(answers: Dict,
         print(f"[QBD Layout] Validation issues: {issues}")
 
     # Step 2: Solve layout
-    layout = solve_layout(graph, width, depth, grid_size, max_nodes,
-                          creative_mode=creative_mode,
-                          config_overrides=config_overrides)
+    layout = solve_layout(graph, width, depth, grid_size, max_nodes, creative_mode=creative_mode)
 
     if not layout.rooms:
         return {
@@ -810,7 +797,8 @@ def generate_floor_plan_from_qbd(answers: Dict,
     walls_batch = layout_to_walls(layout, output_format)
     doors = layout_to_doors(layout, output_format, wall_list=walls_batch)
     rooms_data = layout_to_rooms_data(layout, output_format, level_name=level_name)
-    windows = layout_to_windows(layout, walls_batch, output_format, level_name=level_name)
+    # Windows disabled for now - will add room-based window placement later
+    windows = []
     levels = layout_to_levels(output_format)
     dimensions = layout_to_dimensions(layout, output_format, level_name=level_name)
 

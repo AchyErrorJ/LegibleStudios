@@ -220,40 +220,152 @@ def project_opening(opening: dict, wall: dict, direction: str,
     )
 
 def get_roof_profile(roof: dict, direction: str, building_bounds: dict) -> List[RoofEdge]:
-    """Extract the roof profile visible from the given direction."""
+    """
+    Extract the roof profile visible from the given direction.
+
+    For each direction, we filter to surfaces facing that direction,
+    then extract their silhouette edges.
+    """
     edges = []
 
-    if 'surfaces' not in roof:
-        return edges
+    # First, try to use surfaces if available
+    if 'surfaces' in roof and roof['surfaces']:
+        # Get surfaces that face this direction
+        facing_surfaces = []
+        for surface in roof['surfaces']:
+            surface_name = surface.get('name', '')
+            # Match surface name to direction (e.g., 'hip_south' faces south)
+            if direction in surface_name or surface_name == direction:
+                facing_surfaces.append(surface)
 
-    for surface in roof['surfaces']:
-        vertices = surface.get('vertices', [])
-        if len(vertices) < 3:
-            continue
+        # If no directly facing surfaces, use all surfaces (fallback)
+        if not facing_surfaces:
+            facing_surfaces = roof['surfaces']
 
-        # Find edges that would be visible from this direction
-        # For now, extract edges along the perimeter
-        for i in range(len(vertices)):
-            v1 = vertices[i]
-            v2 = vertices[(i + 1) % len(vertices)]
+        for surface in facing_surfaces:
+            vertices = surface.get('vertices', [])
+            if len(vertices) < 3:
+                continue
 
-            # Project vertices
-            if direction in ['south', 'north']:
-                x1, y1 = v1[0], v1[1]
-                x2, y2 = v2[0], v2[1]
-                if direction == 'north':
-                    x1 = building_bounds['width'] - x1
-                    x2 = building_bounds['width'] - x2
-            else:
-                x1, y1 = v1[2], v1[1]
-                x2, y2 = v2[2], v2[1]
-                if direction == 'east':
-                    x1 = building_bounds['depth'] - x1
-                    x2 = building_bounds['depth'] - x2
+            # Extract perimeter edges of this surface
+            for i in range(len(vertices)):
+                v1 = vertices[i]
+                v2 = vertices[(i + 1) % len(vertices)]
 
+                # Project vertices based on viewing direction
+                if direction in ['south', 'north']:
+                    # South/North elevation: X is horizontal, Y is vertical
+                    x1, y1 = v1[0], v1[1]
+                    x2, y2 = v2[0], v2[1]
+                    if direction == 'north':
+                        # Mirror for north view
+                        x1 = building_bounds['width'] - x1
+                        x2 = building_bounds['width'] - x2
+                else:
+                    # East/West elevation: Z is horizontal, Y is vertical
+                    x1, y1 = v1[2], v1[1]
+                    x2, y2 = v2[2], v2[1]
+                    if direction == 'east':
+                        # Mirror for east view
+                        x1 = building_bounds['depth'] - x1
+                        x2 = building_bounds['depth'] - x2
+
+                edges.append(RoofEdge(
+                    start=Point2D(x1, y1),
+                    end=Point2D(x2, y2)
+                ))
+    else:
+        # Fallback: Generate roof profile from base_vertices and ridge_vertices
+        base = roof.get('base_vertices', [])
+        ridge = roof.get('ridge_vertices', [])
+        base_height = roof.get('base_height', 2700)
+        ridge_height = base_height + roof.get('ridge_height', 1000)
+
+        if not base or len(base) < 3:
+            return edges
+
+        # Get bounding box of base
+        xs = [p[0] for p in base]
+        zs = [p[1] for p in base]
+        min_x, max_x = min(xs), max(xs)
+        min_z, max_z = min(zs), max(zs)
+        center_x = (min_x + max_x) / 2
+        center_z = (min_z + max_z) / 2
+
+        roof_type = roof.get('type', 'hip')
+
+        # Generate profile based on roof type and direction
+        if direction in ['south', 'north']:
+            # Looking at X dimension, Z is depth
+            if roof_type in ['gable', 'hip']:
+                # Ridge runs along longer dimension
+                if (max_x - min_x) >= (max_z - min_z):
+                    # Ridge along X - we see gable end from S/N
+                    profile_pts = [
+                        (min_x, base_height),
+                        (center_x, ridge_height),
+                        (max_x, base_height)
+                    ]
+                else:
+                    # Ridge along Z - we see slope from S/N
+                    profile_pts = [
+                        (min_x, base_height),
+                        (min_x, ridge_height),
+                        (max_x, ridge_height),
+                        (max_x, base_height)
+                    ]
+            elif roof_type == 'shed':
+                profile_pts = [
+                    (min_x, base_height),
+                    (max_x, ridge_height)
+                ]
+            else:  # flat
+                profile_pts = [
+                    (min_x, ridge_height),
+                    (max_x, ridge_height)
+                ]
+
+            # Apply mirror for north view
+            if direction == 'north':
+                profile_pts = [(building_bounds['width'] - x, y) for x, y in profile_pts]
+        else:
+            # Looking at Z dimension, X is depth
+            if roof_type in ['gable', 'hip']:
+                if (max_z - min_z) >= (max_x - min_x):
+                    # Ridge along Z - we see gable end from E/W
+                    profile_pts = [
+                        (min_z, base_height),
+                        (center_z, ridge_height),
+                        (max_z, base_height)
+                    ]
+                else:
+                    # Ridge along X - we see slope from E/W
+                    profile_pts = [
+                        (min_z, base_height),
+                        (min_z, ridge_height),
+                        (max_z, ridge_height),
+                        (max_z, base_height)
+                    ]
+            elif roof_type == 'shed':
+                profile_pts = [
+                    (min_z, base_height),
+                    (max_z, ridge_height)
+                ]
+            else:  # flat
+                profile_pts = [
+                    (min_z, ridge_height),
+                    (max_z, ridge_height)
+                ]
+
+            # Apply mirror for east view
+            if direction == 'east':
+                profile_pts = [(building_bounds['depth'] - x, y) for x, y in profile_pts]
+
+        # Convert points to edges
+        for i in range(len(profile_pts) - 1):
             edges.append(RoofEdge(
-                start=Point2D(x1, y1),
-                end=Point2D(x2, y2)
+                start=Point2D(profile_pts[i][0], profile_pts[i][1]),
+                end=Point2D(profile_pts[i+1][0], profile_pts[i+1][1])
             ))
 
     return edges

@@ -20,15 +20,9 @@ import sys
 import uuid
 import math
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Optional, Tuple, Any
+from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 from enum import Enum
-
-# Import QBD state and reality layers
-sys.path.insert(0, str(Path(__file__).parent))
-from qbd import QBDState
-from qbd.layers import EnvironmentLayer, MaterialityLayer, PerceptionLayer
-from qbd.layers.materiality import ConstructionSystem, QualityLevel
 
 
 class RoomType(Enum):
@@ -131,11 +125,6 @@ class PlacedRoom:
     depth: float
     zone: str
     level: str = "Level 1"
-
-    @property
-    def area_sqm(self) -> float:
-        """Area in square meters."""
-        return (self.width * self.depth) / 1_000_000
 
 
 @dataclass
@@ -825,167 +814,6 @@ class LayoutGenerator:
                         room=interior_room
                     ))
 
-    def _analyze_reality_layers(self) -> Dict[str, Any]:
-        """Run reality layer analysis on the generated layout."""
-        try:
-            # Create QBD state from placed rooms
-            state = QBDState()
-
-            # Add rooms to state schema
-            for placed in self.placed_rooms:
-                # Skip dead space rooms
-                if placed.id.startswith('dead_space_'):
-                    continue
-
-                area_sqm = placed.area_sqm
-                state._schema["rooms"].append({
-                    "id": placed.id,
-                    "name": placed.name,
-                    "type": placed.room_type,
-                    "area_min": area_sqm,
-                    "area_max": area_sqm * 1.2,
-                    "width_min": placed.width / 1000.0,  # mm to m
-                    "length_min": placed.depth / 1000.0,
-                })
-
-            # Set site data (defaults)
-            state._schema["site"] = {
-                "width": self.building_width / 1000.0,  # mm to m
-                "depth": self.building_depth / 1000.0,
-                "latitude": 40.7,  # Default NYC
-                "climate_zone": "4A",
-                "orientation": {"front_faces": "S"}
-            }
-
-            # Set constraints
-            total_area_sqm = sum(r.area_sqm for r in self.placed_rooms if not r.id.startswith('dead_space_'))
-            state._schema["constraints"] = {
-                "footprint_max": total_area_sqm * 1.1,
-            }
-
-            # Build adjacencies from wall sharing
-            for i, wall in enumerate(self.walls):
-                if wall.category in ["interior", "wet_wall"] and len(wall.rooms) >= 2:
-                    room_a, room_b = wall.rooms[0], wall.rooms[1]
-                    if room_a != "exterior" and room_b != "exterior":
-                        state._schema["adjacencies"].append({
-                            "room_a": room_a,
-                            "room_b": room_b,
-                            "strength": "required",
-                            "connection": "open"
-                        })
-
-            # Run Environment Layer (Physics)
-            env_layer = EnvironmentLayer(state.site)
-            env_result = env_layer.analyze(
-                rooms=state.rooms,
-                adjacencies=state.adjacencies,
-                separations=state.separations,
-                building_layout={}
-            )
-
-            # Run Materiality Layer (Economics)
-            mat_layer = MaterialityLayer(region="northeast")
-            mat_result = mat_layer.analyze(
-                rooms=state.rooms,
-                site=state.site,
-                construction_system=ConstructionSystem.WOOD_LIGHT_FRAME,
-                quality_level=QualityLevel.STANDARD
-            )
-
-            # Run Perception Layer (Psychology)
-            perc_layer = PerceptionLayer()
-            perc_result = perc_layer.analyze(
-                rooms=state.rooms,
-                adjacencies=state.adjacencies,
-                separations=state.separations,
-                layout={},
-                environmental_result=env_result
-            )
-
-            # Build reality analysis dict
-            reality_analysis = {
-                "environment": {
-                    "thermal_load_kw": round(env_result.thermal.total_heating_load, 1),
-                    "cooling_load_kw": round(env_result.thermal.total_cooling_load, 1),
-                    "peak_heating_month": env_result.thermal.peak_heating_month,
-                    "passive_strategies": env_result.thermal.passive_strategy_potential,
-                    "daylight_factors": {
-                        rid: round(d.daylight_factor, 2)
-                        for rid, d in env_result.solar.items()
-                    },
-                    "acoustic_privacy": {
-                        rid: a.privacy_level
-                        for rid, a in env_result.acoustic.items()
-                    },
-                    "physics_violations": env_result.critical_issues
-                },
-                "materiality": {
-                    "total_cost": mat_result.cost.total_cost,
-                    "cost_per_sqft": round(mat_result.cost.cost_per_sqft, 2),
-                    "budget_status": mat_result.cost.budget_status,
-                    "construction_weeks": mat_result.complexity.duration_weeks,
-                    "crew_size": mat_result.complexity.crew_size,
-                    "carbon_footprint_kg": round(mat_result.carbon_footprint, 0),
-                    "lifecycle_cost_30yr": round(mat_result.lifecycle_cost_30yr, 0),
-                    "risk_factors": mat_result.complexity.risk_factors
-                },
-                "perception": {
-                    "wayfinding_score": round(perc_result.wayfinding.overall_legibility, 2),
-                    "comfort_scores": {
-                        rid: round(c.overall_comfort, 2)
-                        for rid, c in perc_result.comfort.items()
-                    },
-                    "delight_scores": {
-                        rid: round(d.delight_score, 2)
-                        for rid, d in perc_result.delight.items()
-                    },
-                    "overall_experience": round(perc_result.overall_experience_score, 2),
-                    "critical_issues": perc_result.critical_issues,
-                    "enhancement_opportunities": perc_result.enhancement_opportunities
-                },
-                "overall_score": round((
-                    (1.0 - len(env_result.critical_issues) * 0.2) +
-                    (1.0 if mat_result.cost.budget_status == "under" else 0.7) +
-                    perc_result.overall_experience_score
-                ) / 3, 2)
-            }
-
-            return reality_analysis
-
-        except Exception as e:
-            # Return minimal data if analysis fails
-            import traceback
-            return {
-                "environment": {
-                    "thermal_load_kw": 0,
-                    "cooling_load_kw": 0,
-                    "daylight_factors": {},
-                    "acoustic_privacy": {},
-                    "passive_strategies": [],
-                    "physics_violations": [f"Analysis error: {e}"]
-                },
-                "materiality": {
-                    "total_cost": 0,
-                    "cost_per_sqft": 0,
-                    "budget_status": "unknown",
-                    "construction_weeks": 0,
-                    "crew_size": 0,
-                    "carbon_footprint_kg": 0,
-                    "lifecycle_cost_30yr": 0,
-                    "risk_factors": []
-                },
-                "perception": {
-                    "wayfinding_score": 0,
-                    "comfort_scores": {},
-                    "delight_scores": {},
-                    "overall_experience": 0,
-                    "critical_issues": [],
-                    "enhancement_opportunities": []
-                },
-                "overall_score": 0
-            }
-
     def _to_json(self) -> Dict:
         """Convert layout to JSON structure"""
         # Calculate total area
@@ -1059,9 +887,6 @@ class LayoutGenerator:
         # Generate floor slabs
         floors_array = self._generate_floors()
 
-        # Run reality layer analysis
-        reality_analysis = self._analyze_reality_layers()
-
         return {
             "success": True,
             "building_id": str(uuid.uuid4())[:8],
@@ -1100,8 +925,7 @@ class LayoutGenerator:
                 "windows": len(windows_array),
                 "rooms_placed": len(rooms_dict),
                 "roofs": len(roofs_array)
-            },
-            "reality_analysis": reality_analysis
+            }
         }
 
     def _generate_floors(self) -> List[Dict]:

@@ -3,7 +3,6 @@
 #include "types.hpp"
 #include "obc_engine.hpp"
 #include "slicer_2d.hpp"
-#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -181,6 +180,7 @@ struct QBDWall {
     WallCategory category = WallCategory::Interior;
     std::string room1;          // Room on one side
     std::string room2;          // Room on other side
+    std::string materialOverride;  // Optional material override (e.g., "polyhaven/brick_wall_006")
 
     f32 length() const {
         return glm::length(vec2(end.x - start.x, end.y - start.y));
@@ -202,6 +202,7 @@ struct QBDFloor {
     f32 thickness = 300.0f;     // Floor thickness in mm (default 300mm = ~12")
     std::string levelName;
     std::string room;           // Room this floor belongs to (optional)
+    std::string material;       // Optional material override (e.g., "polyhaven/wood_floor_deck")
 
     f32 area() const {
         return std::abs((end.x - start.x) * (end.z - start.z));
@@ -291,6 +292,7 @@ struct QBDRoof {
     std::vector<QBDRoofRidge> ridges;
     std::vector<QBDDormer> dormers;
     std::vector<QBDSkylight> skylights;
+    std::string material;       // Optional material override (e.g., "polyhaven/roof_slates_02")
 };
 
 // Room bounds
@@ -359,8 +361,12 @@ struct QBDLayout {
     std::vector<std::string> unplacedRooms;
     std::vector<WallType> wallTypes;
 
-    // Terrain mesh from Python (stored as raw JSON to defer parsing)
-    nlohmann::json terrain_mesh_json;
+    // Terrain mesh (from elevation API)
+    TerrainMesh terrain;
+
+    // Building placement (center position on terrain in mm, from SW corner of property)
+    vec3 buildingCenter = vec3(0.0f);  // x, 0, z position of building center
+    f32 buildingRotation = 0.0f;       // Rotation in radians (0 = north-aligned)
 
     QBDSummary summary;
     QBDAnswers answers;

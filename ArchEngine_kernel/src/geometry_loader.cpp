@@ -8,30 +8,30 @@ namespace arch {
 constexpr f32 FT_TO_MM = 304.8f;
 
 // Compute terrain elevation color based on normalized height [0-1]
-// Returns a topographic gradient: green -> tan -> gray -> white
+// Returns darker earth tones that contrast well with building materials
 static vec3 getElevationColor(f32 normalizedElevation) {
     // Clamp to [0, 1]
     f32 t = glm::clamp(normalizedElevation, 0.0f, 1.0f);
 
-    // Color stops for topographic map
-    const vec3 lowGreen  = vec3(0.34f, 0.55f, 0.30f);   // Grass green
-    const vec3 midTan    = vec3(0.72f, 0.60f, 0.40f);   // Tan/brown
-    const vec3 highGray  = vec3(0.55f, 0.55f, 0.55f);   // Rock gray
-    const vec3 peakWhite = vec3(0.95f, 0.95f, 0.95f);   // Snow white
+    // Darker earth tones that contrast with light building materials
+    const vec3 lowDark   = vec3(0.15f, 0.20f, 0.10f);   // Dark earth/mud
+    const vec3 lowGreen  = vec3(0.20f, 0.35f, 0.15f);   // Dark grass green
+    const vec3 midOlive  = vec3(0.35f, 0.40f, 0.20f);   // Olive green
+    const vec3 highTan   = vec3(0.50f, 0.45f, 0.30f);   // Muted tan
 
-    // Four-stop gradient
+    // Four-stop gradient with muted colors
     if (t < 0.25f) {
-        // Low elevation: deep green to grass green
-        return glm::mix(vec3(0.2f, 0.4f, 0.2f), lowGreen, t * 4.0f);
+        // Low elevation: dark earth to dark green
+        return glm::mix(lowDark, lowGreen, t * 4.0f);
     } else if (t < 0.50f) {
-        // Lower-mid: green to tan
-        return glm::mix(lowGreen, midTan, (t - 0.25f) * 4.0f);
+        // Lower-mid: dark green to olive
+        return glm::mix(lowGreen, midOlive, (t - 0.25f) * 4.0f);
     } else if (t < 0.75f) {
-        // Upper-mid: tan to gray
-        return glm::mix(midTan, highGray, (t - 0.50f) * 4.0f);
+        // Upper-mid: olive to tan
+        return glm::mix(midOlive, highTan, (t - 0.50f) * 4.0f);
     } else {
-        // High: gray to white (snow caps)
-        return glm::mix(highGray, peakWhite, (t - 0.75f) * 4.0f);
+        // High: muted tan (no bright colors that compete with buildings)
+        return glm::mix(highTan, vec3(0.55f, 0.50f, 0.35f), (t - 0.75f) * 4.0f);
     }
 }
 
@@ -575,14 +575,6 @@ void from_json(const json& j, Building& b) {
     b.name = j.value("name", "Unnamed Building");
     b.elements.clear();
 
-    // DEBUG: Check if terrain_mesh is in JSON
-    std::cout << "[from_json] Building JSON keys: ";
-    for (auto it = j.begin(); it != j.end(); ++it) {
-        std::cout << it.key() << " ";
-    }
-    std::cout << "\n";
-    std::cout << "[from_json] Has terrain_mesh: " << j.contains("terrain_mesh") << "\n";
-
     if (j.contains("elements")) {
         for (const auto& e : j["elements"]) {
             StructuralElement elem;
@@ -640,6 +632,7 @@ void from_json(const json& j, Building& b) {
     // Parse terrain mesh
     if (j.contains("terrain_mesh")) {
         const auto& tm = j["terrain_mesh"];
+        std::cout << "[Terrain] Found terrain_mesh in JSON\n";
 
         // Get elevation range for color computation
         f32 minElev = tm.value("min_elevation", 0.0f);
@@ -652,39 +645,35 @@ void from_json(const json& j, Building& b) {
         b.terrainMesh.depth_ft = tm.value("depth_ft", 0.0f);
         b.terrainMesh.min_elevation = minElev;
         b.terrainMesh.max_elevation = maxElev;
-        b.terrainMesh.version++;  // Increment version to trigger GPU rebuild
 
-        // Parse vertices - Python terrain.py already converts to mm with Y-up coordinate system
-        // No conversion needed: x=east-west, y=elevation (up), z=north-south, all in mm
+        // Convert min/max elevation from feet to mm for coloring comparison
+        f32 minElevMm = minElev * FT_TO_MM;
+        f32 maxElevMm = maxElev * FT_TO_MM;
+        f32 elevRangeMm = maxElevMm - minElevMm;
+        if (elevRangeMm < 0.001f) elevRangeMm = 1.0f;
+
+        // Parse vertices - positions are already in mm from Python
         if (tm.contains("vertices")) {
-            // Elevation range in mm for color computation
-            f32 elevRangeMM = elevRange * FT_TO_MM;
-
-            int vertexIdx = 0;
+            std::cout << "[Terrain] Parsing " << tm["vertices"].size() << " vertices\n";
             for (const auto& v : tm["vertices"]) {
                 Vertex vert;
 
-                // Position: already in mm from Python, Y is elevation (up)
+                // Position: already in millimeters from Python
+                // JSON format: position is [x_mm, y_mm (elevation/up), z_mm (depth)]
                 if (v.contains("position") && v["position"].size() >= 3) {
-                    f32 x = v["position"][0].get<f32>();  // Already in mm
-                    f32 y = v["position"][1].get<f32>();  // Elevation in mm (Y-up)
-                    f32 z = v["position"][2].get<f32>();  // Already in mm
+                    f32 x_mm = v["position"][0].get<f32>();
+                    f32 y_mm = v["position"][1].get<f32>();  // Elevation (Y is up)
+                    f32 z_mm = v["position"][2].get<f32>();  // Depth
 
-                    vert.position = vec3(x, y, z);
+                    // Direct mapping - Python uses Y-up coordinate system, same as renderer
+                    vert.position = vec3(x_mm, y_mm, z_mm);
 
-                    // DEBUG: Print first few vertices
-                    if (vertexIdx < 3) {
-                        std::cout << "[Terrain] Vertex " << vertexIdx << ": Y=" << y << " mm\n";
-                    }
-                    vertexIdx++;
-
-                    // Compute color from elevation (y position)
-                    // Python offsets elevation so min is near 0, so y/elevRangeMM gives ~0-1 range
-                    f32 normalizedElev = std::clamp(y / elevRangeMM, 0.0f, 1.0f);
+                    // Compute color from elevation (Y component)
+                    f32 normalizedElev = (y_mm - minElevMm) / elevRangeMm;
                     vert.color = getElevationColor(normalizedElev);
                 }
 
-                // Normal: already in correct coordinate system from Python
+                // Normal - Python uses Y-up, same as renderer
                 if (v.contains("normal") && v["normal"].size() >= 3) {
                     f32 nx = v["normal"][0].get<f32>();
                     f32 ny = v["normal"][1].get<f32>();
@@ -694,11 +683,14 @@ void from_json(const json& j, Building& b) {
                     vert.normal = vec3(0.0f, 1.0f, 0.0f);  // Default up
                 }
 
-                // UV coordinates
+                // UV coordinates - use from JSON if provided, otherwise compute world-space UV
                 if (v.contains("uv") && v["uv"].size() >= 2) {
                     vert.texCoord = vec2(v["uv"][0].get<f32>(), v["uv"][1].get<f32>());
                 } else {
-                    vert.texCoord = vec2(0.0f, 0.0f);
+                    // Compute world-space UV from position (after conversion to mm)
+                    // Path tracer uses: worldPos.xz * 0.001 * uvScale
+                    // So base texCoord = position.xz * 0.001
+                    vert.texCoord = vec2(vert.position.x, vert.position.z) * 0.001f;
                 }
 
                 vert.stress = 0.0f;  // Terrain has no stress
@@ -1095,9 +1087,10 @@ TerrainMesh TerrainMesh::generateTestTerrain(f32 width_ft, f32 depth_ft, u32 gri
             // Compute normal (will be refined after all vertices are created)
             vert.normal = vec3(0.0f, 1.0f, 0.0f);
 
-            // UV coordinates
-            vert.texCoord = vec2(static_cast<f32>(x) / (grid_size - 1),
-                                 static_cast<f32>(z) / (grid_size - 1));
+            // UV coordinates - use world-space projection with base scale 0.001
+            // This matches building elements and path tracer for consistent texturing
+            // Fragment shader will multiply by uvScale to get final UV
+            vert.texCoord = vec2(vert.position.x, vert.position.z) * 0.001f;
 
             // Color will be set after we know the elevation range
             vert.color = vec3(1.0f);
@@ -1150,15 +1143,15 @@ TerrainMesh TerrainMesh::generateTestTerrain(f32 width_ft, f32 depth_ft, u32 gri
             u32 bottomLeft = topLeft + grid_size;
             u32 bottomRight = bottomLeft + 1;
 
-            // Triangle 1
+            // Triangle 1 (counter-clockwise for upward-pointing normal)
             terrain.indices.push_back(topLeft);
-            terrain.indices.push_back(bottomLeft);
             terrain.indices.push_back(topRight);
+            terrain.indices.push_back(bottomLeft);
 
-            // Triangle 2
+            // Triangle 2 (counter-clockwise for upward-pointing normal)
             terrain.indices.push_back(topRight);
-            terrain.indices.push_back(bottomLeft);
             terrain.indices.push_back(bottomRight);
+            terrain.indices.push_back(bottomLeft);
         }
     }
 

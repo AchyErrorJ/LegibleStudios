@@ -1,15 +1,45 @@
 #!/usr/bin/env python3
 """
-ArchEngine 2D CAD Application
+Legible Studio - Architectural Design Application
 Main entry point
 """
 import sys
+import traceback
 from pathlib import Path
 
+# Handle frozen (PyInstaller) vs development mode
+def _get_app_dir() -> Path:
+    """Get application directory for both frozen and dev modes."""
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent
+
 # Add the package directory to path for imports
-_package_dir = Path(__file__).parent
+_package_dir = _get_app_dir()
 if str(_package_dir) not in sys.path:
     sys.path.insert(0, str(_package_dir))
+
+# Global exception handler for frozen apps
+def _exception_hook(exc_type, exc_value, exc_tb):
+    """Handle uncaught exceptions - keep console open to see errors."""
+    print("\n" + "=" * 60)
+    print("CRASH REPORT - Legible Studio")
+    print("=" * 60)
+    traceback.print_exception(exc_type, exc_value, exc_tb)
+    print("=" * 60)
+    if getattr(sys, 'frozen', False):
+        input("\nPress Enter to close...")
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+sys.excepthook = _exception_hook
+
+# IMPORTANT: QtWebEngineWidgets must be imported BEFORE QApplication is created
+# This is required for the embedded map widget to work
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+    print("[Main] QtWebEngineWidgets imported successfully")
+except ImportError as e:
+    print(f"[Main] QtWebEngineWidgets not available: {e}")
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
@@ -27,9 +57,9 @@ def main():
 
     # Create Qt application
     app = QApplication(sys.argv)
-    app.setApplicationName("ArchEngine CAD")
-    app.setOrganizationName("ArchEngine")
-    app.setOrganizationDomain("archengine.dev")
+    app.setApplicationName("Legible Studio")
+    app.setOrganizationName("Legible Studios")
+    app.setOrganizationDomain("legiblestudios.com")
 
     # Set default font
     font = QFont("Segoe UI", 9)
@@ -39,7 +69,7 @@ def main():
     config = Config()
 
     # Load stylesheet if exists
-    style_path = Path(__file__).parent / "resources" / "styles" / "archengine.qss"
+    style_path = _get_app_dir() / "resources" / "styles" / "archengine.qss"
     if style_path.exists():
         app.setStyleSheet(style_path.read_text())
 
@@ -62,4 +92,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print("\n" + "=" * 60)
+        print("STARTUP CRASH - Legible Studio")
+        print("=" * 60)
+        traceback.print_exc()
+        print("=" * 60)
+        if getattr(sys, 'frozen', False):
+            input("\nPress Enter to close...")
+        raise

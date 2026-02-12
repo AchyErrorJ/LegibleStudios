@@ -313,6 +313,11 @@ public:
     void setLLMAssistantWindowVisibility(bool show) { m_showLLMAssistantWindow = show; }
     bool getLLMAssistantWindowVisibility() const { return m_showLLMAssistantWindow; }
 
+    // Compass overlay (shows N/S/E/W directions)
+    void drawCompassOverlay(float cameraYaw);
+    void setCompassVisibility(bool show) { m_showCompass = show; }
+    bool getCompassVisibility() const { return m_showCompass; }
+
     // Memory test
     bool shouldRunMemoryTest() {
         bool run = m_runMemoryTest;
@@ -492,6 +497,9 @@ private:
 
     // Memory test flag
     bool m_runMemoryTest = false;
+
+    // Compass overlay
+    bool m_showCompass = true;  // Show by default
 
     // Improved Material Library state
     bool m_showMaterialLibrary = false;

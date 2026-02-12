@@ -314,6 +314,8 @@ class ArchDocument(QObject):
     @property
     def walls(self) -> List[Wall]:
         """Get parsed walls."""
+        if len(self._walls) == 0:
+            print("[Document] WARNING: walls property accessed but _walls is empty!")
         return self._walls
 
     @property
@@ -762,7 +764,24 @@ class ArchDocument(QObject):
             'rooms': {},
             'roofs': [],
             'wall_types': [],
-            'onboarding_completed': False  # Track if this file has completed onboarding
+            'onboarding_completed': False,  # Track if this file has completed onboarding
+            # Dimension settings for smart auto-dimensioning
+            'dimension_settings': {
+                # Auto-dimension rules
+                'auto_exterior_walls': True,      # Dimension exterior wall chains
+                'auto_openings': True,            # Dimension door/window widths
+                'auto_rooms': True,               # Dimension room overall dims
+                'auto_heights': True,             # Heights on elevations/sections
+                # Display settings
+                'unit': 'mm',                     # Internal unit
+                'display_format': 'metric',       # 'imperial' (3'-6") or 'metric' (1067)
+                'text_size': 300,
+                'line_width': 3,
+                'tick_length': 150,
+                'offset_from_wall': 600,          # First chain offset
+                'chain_spacing': 400,             # Between stacked chains
+            },
+            'dimension_overrides': []             # List of override objects
         }
 
         # Add test terrain for development
@@ -938,6 +957,8 @@ class ArchDocument(QObject):
             )
             self._walls.append(wall)
 
+        print(f"[Document] Parsed {len(self._walls)} walls from walls_batch")
+
         # Parse doors
         for i, d in enumerate(self._data.get('doors', [])):
             door = Door(
@@ -1017,10 +1038,99 @@ class ArchDocument(QObject):
 
         # Regenerate walls from room relationships to ensure consistency
         # This ensures walls match connection types (open connections = no wall)
+        # BUT skip if walls were already loaded from JSON (e.g., from QBD generator)
         if len(self._rooms) > 0:
-            self.generate_walls_from_rooms()
+            if len(self._walls) == 0:
+                # No walls loaded - generate from room edges
+                print(f"[Document] No walls loaded - generating from room edges")
+                self.generate_walls_from_rooms()
+            else:
+                print(f"[Document] Walls already loaded ({len(self._walls)}) - skipping regeneration")
             self.generate_floors_from_rooms()
+            print(f"[Document] After floor gen: {len(self._walls)} walls, {len(self._floors)} floors")
             self.generate_roof(roof_type='hip', pitch=30.0)
+
+        # Validate and regenerate terrain if it has buggy data
+        # Old terrain data has all Z values = 0 (was a bug in terrain generation)
+        self._validate_and_regenerate_terrain()
+
+    def _validate_and_regenerate_terrain(self):
+        """Check if terrain data is valid, regenerate if buggy."""
+        print("[Document] _validate_and_regenerate_terrain called", flush=True)
+
+        # Check if C++ terrain generation is requested (LiDAR data available)
+        terrain_settings = self._data.get('terrain_generation_settings', {})
+        use_cpp = terrain_settings.get('use_cpp_generation', False)
+        google_maps = self._data.get('google_maps', {})
+        elevation_grid = google_maps.get('elevation_grid', {})
+
+        if use_cpp and elevation_grid:
+            print(f"[Document] C++ terrain generation enabled ({len(elevation_grid)} elevation points)", flush=True)
+            print("[Document] Skipping Python terrain - viewport will use C++", flush=True)
+            # Remove any existing terrain_mesh so viewport uses C++ generation
+            if 'terrain_mesh' in self._data:
+                del self._data['terrain_mesh']
+            return
+
+        terrain_data = self._data.get('terrain_mesh')
+        if not terrain_data:
+            # No terrain and no C++ generation, use test terrain
+            print("[Document] No terrain data, generating test terrain", flush=True)
+            self._regenerate_terrain()
+            return
+
+        print(f"[Document] terrain_mesh keys: {list(terrain_data.keys())}", flush=True)
+        vertices = terrain_data.get('vertices', [])
+        if not vertices:
+            print("[Document] Empty terrain vertices, regenerating", flush=True)
+            self._regenerate_terrain()
+            return
+        print(f"[Document] terrain has {len(vertices)} vertices", flush=True)
+
+        # Check if terrain needs regeneration:
+        # 1. All Y values (elevation) are 0 (old buggy data)
+        # 2. Missing 'version' field (pre-winding-fix terrain)
+        # Position format: [x, y (elevation), z]
+
+        # Force regeneration if no version field (old terrain with wrong winding order)
+        if 'version' not in terrain_data:
+            print(f"[Document] Old terrain format (no version), regenerating with correct winding", flush=True)
+            self._regenerate_terrain()
+            return
+
+        y_values = set()
+        for v in vertices[:min(20, len(vertices))]:  # Check first 20 vertices
+            pos = v.get('position', [0, 0, 0])
+            if len(pos) >= 3:
+                y_values.add(round(pos[1], 1))  # pos[1] is Y (elevation)
+
+        if len(y_values) == 1 and 0.0 in y_values:
+            print(f"[Document] Detected buggy terrain (all elevations=0), regenerating", flush=True)
+            self._regenerate_terrain()
+        else:
+            print(f"[Document] Loaded terrain mesh: {len(vertices)} vertices, {terrain_data.get('triangle_count', 0)} triangles")
+
+    def _regenerate_terrain(self):
+        """Regenerate terrain using test terrain generator."""
+        print("[Document] _regenerate_terrain called", flush=True)
+        try:
+            test_terrain = generate_test_terrain(width_ft=100, depth_ft=100, grid_size=15)
+            if test_terrain:
+                terrain_dict = test_terrain.to_dict()
+                self._data['terrain_mesh'] = terrain_dict
+                print(f"[Document] Regenerated terrain: {len(test_terrain.vertices)} vertices, {len(test_terrain.indices)//3} triangles", flush=True)
+                print(f"[Document] Terrain elevation range: {test_terrain.min_elevation:.1f} to {test_terrain.max_elevation:.1f} mm", flush=True)
+                print(f"[Document] terrain_mesh stored with keys: {list(terrain_dict.keys())}", flush=True)
+                # Print first vertex to verify format
+                verts = terrain_dict.get('vertices', [])
+                if verts:
+                    print(f"[Document] First vertex: {verts[0]}", flush=True)
+            else:
+                print("[Document] generate_test_terrain returned None!", flush=True)
+        except Exception as e:
+            print(f"[Document] Could not regenerate terrain: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
 
     def _auto_bind_walls_to_rooms(self):
         """
@@ -2245,10 +2355,13 @@ class ArchDocument(QObject):
                     'end': [max(xs), floor.elevation, max(zs)],
                     'thickness': floor.thickness,
                     'room': floor.room_ids[0] if floor.room_ids else '',
-                    'vertices': floor.vertices  # Keep polygon for 2D view
+                    'vertices': floor.vertices,  # Keep polygon for 2D view
+                    'material': floor.material
                 }
+                print(f"[Floor] start={floor_data['start']}, end={floor_data['end']}, thickness={floor.thickness}")
                 floors_batch.append(floor_data)
         self._data['floors_batch'] = floors_batch
+        print(f"[Floor] Generated {len(floors_batch)} floors in floors_batch")
 
         # Update roofs - generate surface polygons for kernel
         roofs = []
@@ -2262,7 +2375,8 @@ class ArchDocument(QObject):
                 'base_height': roof.base_height,
                 'base_vertices': roof.base_vertices,
                 'ridge_vertices': roof.ridge_vertices,
-                'surfaces': self._generate_roof_surfaces(roof)
+                'surfaces': self._generate_roof_surfaces(roof),
+                'material': roof.material
             }
             roofs.append(roof_data)
         self._data['roofs'] = roofs

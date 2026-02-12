@@ -10,6 +10,7 @@
 #include "ipc_server.hpp"
 #include "lights.hpp"
 #include "memory_test.hpp"
+#include "path_tracer.hpp"
 #include <iostream>
 #include <algorithm>
 #include <chrono>
@@ -1327,6 +1328,7 @@ int main(int argc, char* argv[]) {
                 imgui.drawRenderPreviewPanel(renderer);
                 imgui.drawMaterialTestWindow(renderer, camera);
                 imgui.drawLLMAssistantWindow(renderer);
+                imgui.drawCompassOverlay(cameraYaw);
 
                 // Apply material to selection (button)
                 if (imgui.wasApplyMaterialRequested()) {
@@ -1664,16 +1666,109 @@ int main(int argc, char* argv[]) {
                     // Wait for GPU to be idle before high-res render
                     context.waitIdle();
 
-                    highResRenderStatus = useUpscale ? "Rendering at 4K..." : "Rendering...";
-                    imgui.setHighResRenderState(true, highResRenderStatus, 0.1f);
+                    bool success = false;
+                    std::unique_ptr<PathTracer> pathTracer;
 
-                    // Render synchronously (blocks UI but avoids threading issues)
-                    float renderBrightness = request.brightness;
-                    bool success = renderer.renderHighRes(
-                        renderElements, renderBuilding,
-                        renderWidth, renderHeight,
-                        samples, renderBrightness, nullptr  // No progress callback for sync render
-                    );
+                    if (request.renderMode == 1) {
+                        // Path Tracer rendering
+                        highResRenderStatus = "Path Tracer: Building BVH...";
+                        imgui.setHighResRenderState(true, highResRenderStatus, 0.05f);
+
+                        pathTracer = std::make_unique<PathTracer>(context);
+
+                        // Configure path tracer
+                        PathTracerConfig ptConfig;
+                        ptConfig.width = renderWidth;
+                        ptConfig.height = renderHeight;
+                        ptConfig.samplesPerPixel = request.ptSamples;
+                        ptConfig.maxBounces = request.ptBounces;
+                        ptConfig.samplesPerFrame = 1;
+                        ptConfig.exposure = request.brightness;
+                        ptConfig.enableNEE = true;
+                        ptConfig.enableRR = true;
+                        pathTracer->setConfig(ptConfig);
+
+                        // Set camera from current view
+                        pathTracer->setCamera(renderer.getCamera());
+
+                        // Set section clipping from renderer
+                        pathTracer->setClipPlane(renderer.getClipPlane(), renderer.getClippingEnabled());
+                        std::cout << "[PathTracer] Clipping: enabled=" << renderer.getClippingEnabled()
+                                  << ", plane=(" << renderer.getClipPlane().x << ", " << renderer.getClipPlane().y
+                                  << ", " << renderer.getClipPlane().z << ", " << renderer.getClipPlane().w << ")\n";
+
+                        // Set environment map if available
+                        if (renderer.hasHdrEnvMap()) {
+                            pathTracer->setEnvironmentMap(renderer.getEnvironmentMap());
+                        }
+
+                        // Build scene with terrain if available
+                        highResRenderStatus = "Path Tracer: Uploading scene...";
+                        imgui.setHighResRenderState(true, highResRenderStatus, 0.08f);
+
+                        // Get terrain from building if it has data
+                        const TerrainMesh* terrain = nullptr;
+                        std::string terrainMatName = "";
+                        if (renderBuilding.terrainMesh.hasData()) {
+                            terrain = &renderBuilding.terrainMesh;
+                            terrainMatName = renderer.getTerrainMaterial();
+                            // Use default grass material if none selected
+                            if (terrainMatName.empty()) {
+                                terrainMatName = "polyhaven/grass_path_2";
+                            }
+                            std::cout << "[PathTracer] Including terrain: "
+                                      << renderBuilding.terrainMesh.indices.size() / 3
+                                      << " triangles, material='" << terrainMatName << "'\n";
+                        }
+
+                        // Pass UV scale from renderer to path tracer
+                        pathTracer->setUVScale(renderer.getMaterialUVScale());
+
+                        if (!pathTracer->setScene(renderElements, terrain, terrainMatName)) {
+                            highResRenderStatus = "Path Tracer: Failed to build scene";
+                            imgui.setHighResRenderState(false, highResRenderStatus, 1.0f);
+                        } else {
+                            // Load PBR textures from materials folder
+                            highResRenderStatus = "Path Tracer: Loading textures...";
+                            imgui.setHighResRenderState(true, highResRenderStatus, 0.12f);
+                            pathTracer->loadMaterialTextures("materials");
+
+                            // Update material texture indices after textures are loaded
+                            pathTracer->updateMaterialTextureIndices(renderElements);
+
+                            // Start progressive render
+                            highResRenderStatus = "Path Tracer: Rendering...";
+                            pathTracer->startRender();
+
+                            // Render all frames with safety limit
+                            int maxPtFrames = request.ptSamples * 2;  // Safety limit
+                            int ptFrameCount = 0;
+                            while (!pathTracer->isComplete() && ptFrameCount < maxPtFrames) {
+                                pathTracer->renderFrame();
+                                float progress = pathTracer->getProgress();
+                                highResRenderStatus = "Path Tracer: " + std::to_string(int(progress * 100)) + "%";
+                                imgui.setHighResRenderState(true, highResRenderStatus, 0.15f + progress * 0.65f);
+                                ptFrameCount++;
+                            }
+
+                            if (ptFrameCount >= maxPtFrames) {
+                                std::cerr << "[PathTracer] Safety limit reached - forcing completion\n";
+                            }
+                            success = pathTracer->isComplete();
+                        }
+                    } else {
+                        // Rasterizer rendering
+                        highResRenderStatus = useUpscale ? "Rendering at 4K..." : "Rendering...";
+                        imgui.setHighResRenderState(true, highResRenderStatus, 0.1f);
+
+                        // Render synchronously (blocks UI but avoids threading issues)
+                        float renderBrightness = request.brightness;
+                        success = renderer.renderHighRes(
+                            renderElements, renderBuilding,
+                            renderWidth, renderHeight,
+                            samples, renderBrightness, nullptr  // No progress callback for sync render
+                        );
+                    }
 
                     if (success) {
                         std::string savePath = outputPath;
@@ -1685,9 +1780,18 @@ int main(int argc, char* argv[]) {
                         highResRenderStatus = "Saving...";
                         imgui.setHighResRenderState(true, highResRenderStatus, 0.8f);
 
-                        bool saved = (format == 1) ?
-                            renderer.saveHighResEXR(savePath) :
-                            renderer.saveHighResPNG(savePath);
+                        bool saved = false;
+                        if (request.renderMode == 1 && pathTracer) {
+                            // Save path tracer output
+                            saved = (format == 1) ?
+                                pathTracer->saveEXR(savePath) :
+                                pathTracer->savePNG(savePath, request.brightness);
+                        } else {
+                            // Save rasterizer output
+                            saved = (format == 1) ?
+                                renderer.saveHighResEXR(savePath) :
+                                renderer.saveHighResPNG(savePath);
+                        }
 
                         if (saved && useUpscale) {
                             highResRenderStatus = "Upscaling...";

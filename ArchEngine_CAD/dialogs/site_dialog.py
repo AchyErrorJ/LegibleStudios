@@ -11,43 +11,266 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from core.terrain import generate_terrain_from_site, TerrainMesh
 
-# Google Maps integration disabled due to QWebEngine crashes
-# Using custom site editor widget instead
-HAS_GOOGLE_MAPS_WIDGET = False
-GoogleMapsWidget = None
-
-# Embedded map widget - lazy import to avoid crashes
-HAS_EMBEDDED_MAP = True  # Will check on actual use
-
-# Import static map widget (satellite imagery with drawing, no QWebEngine)
+# LiDAR extraction library
 try:
-    from widgets.static_map_widget import StaticMapWidget
-    HAS_STATIC_MAP = True
-    print("[SiteDialog] Static map widget imported successfully")
-except ImportError as e:
-    HAS_STATIC_MAP = False
-    print(f"[SiteDialog] Static map widget not available: {e}")
-
-# Import site editor widget
-try:
-    from widgets.site_editor_widget import SiteEditorWidget
-    HAS_SITE_EDITOR = True
+    from tools.lidar import LidarExtractor, PropertyBounds, ElevationData
+    HAS_LIDAR_LIB = True
 except ImportError:
-    HAS_SITE_EDITOR = False
-    print("[SiteDialog] Site editor widget not available")
+    HAS_LIDAR_LIB = False
+    LidarExtractor = None
+    print("[SiteDialog] LiDAR library not available, using fallback")
+
+# Numpy for LiDAR processing
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+    np = None
+
+# Embedded map widget - lazy import to avoid crashes at startup
+HAS_EMBEDDED_MAP = True  # Will check on actual use
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QSpinBox, QDoubleSpinBox, QComboBox, QPushButton, QGroupBox,
     QFormLayout, QTabWidget, QWidget, QFileDialog, QMessageBox,
-    QGridLayout, QCheckBox, QTextEdit, QSlider, QProgressBar, QApplication
+    QGridLayout, QCheckBox, QTextEdit, QSlider, QProgressBar, QApplication,
+    QDialogButtonBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QSettings
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QSettings, QTimer
 from PyQt6.QtGui import QDoubleValidator
 from pathlib import Path
 import json
 import os
 import requests
+
+
+class TerrainGeneratorWorker(QThread):
+    """Worker thread for terrain mesh generation to prevent UI freezing."""
+
+    # Signals
+    progress = pyqtSignal(int, str)  # (percent, status_message)
+    finished = pyqtSignal(object)    # terrain_mesh or None
+    error = pyqtSignal(str)          # error message
+
+    def __init__(self, site_data: dict, parent=None):
+        super().__init__(parent)
+        self._site_data = site_data
+        self._cancelled = False
+
+    def cancel(self):
+        """Cancel the generation."""
+        self._cancelled = True
+
+    def run(self):
+        """Generate terrain in background thread."""
+        try:
+            from core.terrain import generate_terrain_from_site
+
+            self.progress.emit(10, "Preparing elevation data...")
+
+            if self._cancelled:
+                self.finished.emit(None)
+                return
+
+            self.progress.emit(30, "Generating mesh vertices...")
+
+            # Run the terrain generation
+            mesh = generate_terrain_from_site(self._site_data)
+
+            if self._cancelled:
+                self.finished.emit(None)
+                return
+
+            self.progress.emit(90, "Finalizing mesh...")
+
+            if mesh:
+                self.progress.emit(100, "Complete")
+                self.finished.emit(mesh)
+            else:
+                self.error.emit("Terrain generation returned no mesh")
+                self.finished.emit(None)
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.error.emit(str(e))
+            self.finished.emit(None)
+
+
+class LidarImportSettingsDialog(QDialog):
+    """Dialog for configuring LiDAR import quality settings."""
+
+    # Quality presets: (max_points, grid_resolution, description)
+    QUALITY_PRESETS = {
+        "Draft": (50000, 100, "Fast preview (~20k triangles)"),
+        "Low": (100000, 150, "Quick import (~45k triangles)"),
+        "Medium": (200000, 250, "Balanced quality (~125k triangles)"),
+        "High": (500000, 350, "High detail (~245k triangles)"),
+        "Ultra": (1000000, 500, "Maximum detail (~500k triangles)"),
+        "Custom": (None, None, "Custom settings"),
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("LiDAR Import Settings")
+        self.setMinimumWidth(400)
+
+        self._setup_ui()
+        self._load_settings()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Info
+        info = QLabel(
+            "Configure terrain quality and performance.\n"
+            "Higher quality = more detail but slower generation."
+        )
+        info.setStyleSheet("color: #888;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        # Quality preset
+        preset_group = QGroupBox("Quality Preset")
+        preset_layout = QVBoxLayout(preset_group)
+
+        self._preset_combo = QComboBox()
+        for name, (pts, res, desc) in self.QUALITY_PRESETS.items():
+            self._preset_combo.addItem(f"{name} - {desc}", name)
+        self._preset_combo.setCurrentIndex(2)  # Default to Medium
+        self._preset_combo.currentIndexChanged.connect(self._on_preset_changed)
+        preset_layout.addWidget(self._preset_combo)
+
+        layout.addWidget(preset_group)
+
+        # Advanced settings
+        advanced_group = QGroupBox("Advanced Settings")
+        advanced_layout = QFormLayout(advanced_group)
+
+        # Max elevation points
+        self._max_points_spin = QSpinBox()
+        self._max_points_spin.setRange(10000, 2000000)
+        self._max_points_spin.setSingleStep(50000)
+        self._max_points_spin.setValue(200000)
+        self._max_points_spin.valueChanged.connect(self._on_custom_changed)
+        points_layout = QHBoxLayout()
+        points_layout.addWidget(self._max_points_spin)
+        points_label = QLabel("(surface detail)")
+        points_label.setStyleSheet("color: #888; font-size: 10px;")
+        points_layout.addWidget(points_label)
+        advanced_layout.addRow("Max Elevation Points:", points_layout)
+
+        # Mesh resolution (grid_res)
+        self._grid_res_spin = QSpinBox()
+        self._grid_res_spin.setRange(50, 1000)
+        self._grid_res_spin.setSingleStep(50)
+        self._grid_res_spin.setValue(250)
+        self._grid_res_spin.valueChanged.connect(self._on_custom_changed)
+        res_layout = QHBoxLayout()
+        res_layout.addWidget(self._grid_res_spin)
+        res_label = QLabel("(mesh smoothness)")
+        res_label.setStyleSheet("color: #888; font-size: 10px;")
+        res_layout.addWidget(res_label)
+        advanced_layout.addRow("Mesh Resolution:", res_layout)
+
+        # Expected output
+        self._estimate_label = QLabel()
+        self._estimate_label.setStyleSheet("color: #0af; font-weight: bold;")
+        advanced_layout.addRow("Estimated:", self._estimate_label)
+
+        layout.addWidget(advanced_group)
+
+        # Remember settings checkbox
+        self._remember_check = QCheckBox("Remember these settings")
+        self._remember_check.setChecked(True)
+        layout.addWidget(self._remember_check)
+
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self._update_estimate()
+
+    def _on_preset_changed(self, index):
+        """Handle preset selection."""
+        preset_name = self._preset_combo.currentData()
+        pts, res, _ = self.QUALITY_PRESETS[preset_name]
+
+        if pts is not None and res is not None:
+            self._max_points_spin.blockSignals(True)
+            self._grid_res_spin.blockSignals(True)
+            self._max_points_spin.setValue(pts)
+            self._grid_res_spin.setValue(res)
+            self._max_points_spin.blockSignals(False)
+            self._grid_res_spin.blockSignals(False)
+
+        self._update_estimate()
+
+    def _on_custom_changed(self):
+        """Handle custom value changes - switch to Custom preset."""
+        # Check if values match any preset
+        pts = self._max_points_spin.value()
+        res = self._grid_res_spin.value()
+
+        for i, (name, (p, r, _)) in enumerate(self.QUALITY_PRESETS.items()):
+            if p == pts and r == res:
+                self._preset_combo.blockSignals(True)
+                self._preset_combo.setCurrentIndex(i)
+                self._preset_combo.blockSignals(False)
+                break
+        else:
+            # Switch to Custom
+            custom_idx = list(self.QUALITY_PRESETS.keys()).index("Custom")
+            self._preset_combo.blockSignals(True)
+            self._preset_combo.setCurrentIndex(custom_idx)
+            self._preset_combo.blockSignals(False)
+
+        self._update_estimate()
+
+    def _update_estimate(self):
+        """Update the estimated output label."""
+        grid_res = self._grid_res_spin.value()
+        triangles = 2 * grid_res * grid_res
+        vertices = (grid_res + 1) * (grid_res + 1)
+
+        self._estimate_label.setText(
+            f"~{triangles:,} triangles, ~{vertices:,} vertices"
+        )
+
+    def _load_settings(self):
+        """Load saved settings."""
+        settings = QSettings("ArchEngine", "CAD")
+        max_pts = settings.value("lidar/max_points", 200000, type=int)
+        grid_res = settings.value("lidar/grid_resolution", 250, type=int)
+
+        self._max_points_spin.setValue(max_pts)
+        self._grid_res_spin.setValue(grid_res)
+        self._on_custom_changed()  # Update preset if matches
+
+    def _save_settings(self):
+        """Save current settings."""
+        if self._remember_check.isChecked():
+            settings = QSettings("ArchEngine", "CAD")
+            settings.setValue("lidar/max_points", self._max_points_spin.value())
+            settings.setValue("lidar/grid_resolution", self._grid_res_spin.value())
+
+    def accept(self):
+        """Save settings and close."""
+        self._save_settings()
+        super().accept()
+
+    def get_settings(self) -> dict:
+        """Get the configured settings."""
+        return {
+            "max_points": self._max_points_spin.value(),
+            "grid_resolution": self._grid_res_spin.value(),
+        }
 
 
 # Sample sites for testing
@@ -295,6 +518,7 @@ class SiteDialog(QDialog):
         self._elevation_data = {}  # Store elevation grid from Google Maps
         self._elevation_fetcher = None  # Background thread
         self._map_boundary = None  # Boundary drawn on map
+        self._building_origin = None  # Building placement on terrain
         self._existing_site = self._load_existing_site()
 
         # Google Maps disabled - manual inputs only
@@ -351,7 +575,7 @@ class SiteDialog(QDialog):
         tabs = QTabWidget()
         tabs.addTab(self._create_boundary_tab(), "Boundaries")
         tabs.addTab(self._create_terrain_tab(), "Terrain & Features")
-        tabs.addTab(self._create_import_tab(), "Import Data")
+        tabs.addTab(self._create_import_tab(), "Location & Elevation")
         layout.addWidget(tabs)
 
         # Site preview
@@ -469,13 +693,27 @@ class SiteDialog(QDialog):
 
                 # Show elevation summary if data exists
                 if self._elevation_data:
-                    elevations_ft = [pt["elevation_ft"] for pt in self._elevation_data.values()]
-                    min_elev = min(elevations_ft)
-                    max_elev = max(elevations_ft)
-                    self._elevation_results.setText(
-                        f"✓ Loaded {len(self._elevation_data)} elevation points\n"
-                        f"  Elevation range: {min_elev:.1f}' to {max_elev:.1f}'"
-                    )
+                    try:
+                        # Handle different data formats
+                        elevations_ft = []
+                        for pt in self._elevation_data.values():
+                            if isinstance(pt, dict):
+                                if "elevation_ft" in pt:
+                                    elevations_ft.append(pt["elevation_ft"])
+                                elif "elevation_m" in pt:
+                                    elevations_ft.append(pt["elevation_m"] * 3.28084)
+                            elif isinstance(pt, (int, float)):
+                                elevations_ft.append(pt * 3.28084)  # Assume meters
+
+                        if elevations_ft:
+                            min_elev = min(elevations_ft)
+                            max_elev = max(elevations_ft)
+                            self._elevation_results.setText(
+                                f"✓ Loaded {len(self._elevation_data)} elevation points\n"
+                                f"  Elevation range: {min_elev:.1f}' to {max_elev:.1f}'"
+                            )
+                    except Exception as e:
+                        print(f"[SiteDialog] Error parsing elevation data: {e}")
 
             self._update_preview()
 
@@ -681,100 +919,22 @@ class SiteDialog(QDialog):
         return widget
 
     def _create_import_tab(self):
-        """Create the import data tab."""
+        """Create the location & elevation tab."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setSpacing(15)
 
-        # Import description
+        # Description
         desc = QLabel(
-            "Import site data from survey files, CAD drawings, or GIS data. "
-            "This helps accurately represent the site for building design."
+            "Define your site location using the interactive map. "
+            "Draw property boundaries and import elevation data from Google or LiDAR."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #666; font-size: 11px;")
         layout.addWidget(desc)
 
-        # Import buttons
-        import_group = QGroupBox("Import Site Data")
-        import_layout = QVBoxLayout()
-
-        # Survey import
-        survey_layout = QHBoxLayout()
-        survey_btn = QPushButton("Import Survey...")
-        survey_btn.clicked.connect(self._on_import_survey)
-        survey_layout.addWidget(survey_btn)
-        self._survey_label = QLabel("No survey loaded")
-        self._survey_label.setStyleSheet("color: #999; font-style: italic;")
-        survey_layout.addWidget(self._survey_label)
-        survey_layout.addStretch()
-        import_layout.addLayout(survey_layout)
-
-        # Topography import
-        topo_layout = QHBoxLayout()
-        topo_btn = QPushButton("Import Topography...")
-        topo_btn.clicked.connect(self._on_import_topo)
-        topo_layout.addWidget(topo_btn)
-        self._topo_label = QLabel("No topography loaded")
-        self._topo_label.setStyleSheet("color: #999; font-style: italic;")
-        topo_layout.addWidget(self._topo_label)
-        topo_layout.addStretch()
-        import_layout.addLayout(topo_layout)
-
-        # Map import
-        map_layout = QHBoxLayout()
-        map_btn = QPushButton("Import Map/Satellite...")
-        map_btn.clicked.connect(self._on_import_map)
-        map_layout.addWidget(map_btn)
-        self._map_label = QLabel("No map loaded")
-        self._map_label.setStyleSheet("color: #999; font-style: italic;")
-        map_layout.addWidget(self._map_label)
-        map_layout.addStretch()
-        import_layout.addLayout(map_layout)
-
-        # CAD import
-        cad_layout = QHBoxLayout()
-        cad_btn = QPushButton("Import CAD/DWG...")
-        cad_btn.clicked.connect(self._on_import_cad)
-        cad_layout.addWidget(cad_btn)
-        self._cad_label = QLabel("No CAD file loaded")
-        self._cad_label.setStyleSheet("color: #999; font-style: italic;")
-        cad_layout.addWidget(self._cad_label)
-        cad_layout.addStretch()
-        import_layout.addLayout(cad_layout)
-
-        import_group.setLayout(import_layout)
-        layout.addWidget(import_group)
-
-        # Sample sites (for testing)
-        sample_group = QGroupBox("Load Sample Site (for testing)")
-        sample_layout = QVBoxLayout()
-
-        sample_desc = QLabel(
-            "Load a pre-configured sample site to quickly test the building generator. "
-            "Choose a site type that matches your project."
-        )
-        sample_desc.setWordWrap(True)
-        sample_desc.setStyleSheet("color: #666; font-size: 10px;")
-        sample_layout.addWidget(sample_desc)
-
-        sample_combo_layout = QHBoxLayout()
-        sample_combo_layout.addWidget(QLabel("Sample Site:"))
-        self._sample_combo = QComboBox()
-        self._sample_combo.addItems(list(SAMPLE_SITES.keys()))
-        sample_combo_layout.addWidget(self._sample_combo)
-        sample_layout.addLayout(sample_combo_layout)
-
-        load_sample_btn = QPushButton("Load Sample Site")
-        load_sample_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 8px;")
-        load_sample_btn.clicked.connect(self._on_load_sample_site)
-        sample_layout.addWidget(load_sample_btn)
-
-        sample_group.setLayout(sample_layout)
-        layout.addWidget(sample_group)
-
-        # Google Maps with Elevation API
-        google_group = QGroupBox("Google Maps: Location & Elevation")
+        # Location & Elevation section
+        google_group = QGroupBox("Site Location & Elevation")
         google_layout = QVBoxLayout()
 
         # Instructions with "Get API Key" button
@@ -914,10 +1074,17 @@ class SiteDialog(QDialog):
         controls_row.addWidget(self._grid_density_combo)
         controls_row.addStretch()
 
-        self._fetch_elevation_btn = QPushButton("Fetch Elevation Data")
+        self._fetch_elevation_btn = QPushButton("Fetch Elevation (Google)")
         self._fetch_elevation_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 8px;")
         self._fetch_elevation_btn.clicked.connect(self._on_fetch_elevation)
         controls_row.addWidget(self._fetch_elevation_btn)
+
+        # LiDAR import button
+        self._import_lidar_btn = QPushButton("Import LiDAR (GeoTIFF)")
+        self._import_lidar_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 8px;")
+        self._import_lidar_btn.clicked.connect(self._on_import_lidar)
+        self._import_lidar_btn.setToolTip("Import high-resolution elevation from Ontario LiDAR GeoTIFF files (0.5m resolution)")
+        controls_row.addWidget(self._import_lidar_btn)
 
         google_layout.addLayout(controls_row)
 
@@ -935,16 +1102,6 @@ class SiteDialog(QDialog):
 
         google_group.setLayout(google_layout)
         layout.addWidget(google_group)
-
-        # Loaded files summary
-        files_group = QGroupBox("Loaded Site Files")
-        files_layout = QVBoxLayout()
-        self._files_summary = QLabel("No site files imported yet.")
-        self._files_summary.setWordWrap(True)
-        self._files_summary.setStyleSheet("color: #666; font-size: 10px;")
-        files_layout.addWidget(self._files_summary)
-        files_group.setLayout(files_layout)
-        layout.addWidget(files_group)
 
         layout.addStretch()
         return widget
@@ -980,71 +1137,6 @@ class SiteDialog(QDialog):
 <b>Max Coverage:</b> {self._max_coverage.value()}% = {max_building_area * self._max_coverage.value() / 100:.0f} sq ft building footprint
 """
         self._preview_label.setText(preview_text)
-
-    def _on_import_survey(self):
-        """Import survey data."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Import Survey", "", "Survey Files (*.pdf *.dxf *.dwg);;All Files (*)"
-        )
-        if file_path:
-            self._survey_label.setText(Path(file_path).name)
-            self._survey_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
-            self._update_files_summary()
-
-    def _on_import_topo(self):
-        """Import topography data."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Import Topography", "", "Topo Files (*.txt *.csv *.xyz *.dxf);;All Files (*)"
-        )
-        if file_path:
-            self._topo_label.setText(Path(file_path).name)
-            self._topo_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
-            self._update_files_summary()
-
-    def _on_import_map(self):
-        """Import map/satellite imagery."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Import Map", "", "Image Files (*.png *.jpg *.jpeg *.tif);;All Files (*)"
-        )
-        if file_path:
-            self._map_label.setText(Path(file_path).name)
-            self._map_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
-            self._update_files_summary()
-
-    def _on_import_cad(self):
-        """Import CAD drawing."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Import CAD", "", "CAD Files (*.dxf *.dwg);;All Files (*)"
-        )
-        if file_path:
-            self._cad_label.setText(Path(file_path).name)
-            self._cad_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
-            self._update_files_summary()
-
-    def _update_files_summary(self):
-        """Update the loaded files summary."""
-        files = []
-        if self._survey_label.text() != "No survey loaded":
-            files.append(f"• Survey: {self._survey_label.text()}")
-        if self._topo_label.text() != "No topography loaded":
-            files.append(f"• Topography: {self._topo_label.text()}")
-        if self._map_label.text() != "No map loaded":
-            files.append(f"• Map: {self._map_label.text()}")
-        if self._cad_label.text() != "No CAD file loaded":
-            files.append(f"• CAD: {self._cad_label.text()}")
-
-        if files:
-            self._files_summary.setText("\n".join(files))
-        else:
-            self._files_summary.setText("No site files imported yet.")
-
-    def _on_load_sample_site(self):
-        """Load a sample site for testing."""
-        sample_name = self._sample_combo.currentText()
-        if sample_name in SAMPLE_SITES:
-            sample_data = SAMPLE_SITES[sample_name]
-            self._load_site_to_ui(sample_data)
-            print(f"[SiteDialog] Loaded sample site: {sample_name}")
 
     def _on_get_api_key(self):
         """Open Google Cloud Console to help user create an API key."""
@@ -1323,49 +1415,80 @@ class SiteDialog(QDialog):
         lat = self._lat_input.value()
         lng = self._lng_input.value()
         zoom = self._map_zoom_spin.value()
+        api_key = self._api_key_input.text().strip()  # Get API key for elevation probing
 
         print(f"[SiteDialog] Opening interactive map at ({lat}, {lng}), zoom {zoom}")
+        if api_key:
+            print(f"[SiteDialog] Elevation probe enabled with API key")
 
         try:
             # Lazy import to avoid startup crashes
+            print("[SiteDialog] Attempting to import EmbeddedMapWidget...")
             from widgets.embedded_map_widget import EmbeddedMapWidget
-            print("[SiteDialog] EmbeddedMapWidget imported")
+            print("[SiteDialog] EmbeddedMapWidget imported successfully")
 
-            # Create embedded map widget as a dialog (so it shows properly)
+            # Create embedded map widget as a dialog (top-level window, not parented)
+            # This prevents the map from closing if SiteDialog closes or has issues
+            print("[SiteDialog] Creating map dialog...")
             from PyQt6.QtWidgets import QDialog
-            map_dialog = QDialog(self)
-            map_dialog.setWindowTitle("Property Boundary Map")
-            map_dialog.setMinimumSize(400, 100)
+            map_dialog = QDialog()  # Top-level window (no parent)
+            map_dialog.setWindowTitle("Property Boundary Map - Legible Studio")
+            map_dialog.setMinimumSize(900, 700)
+            map_dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)  # Don't auto-delete
+            print("[SiteDialog] Map dialog created")
 
-            layout = QVBoxLayout(map_dialog)
+            dialog_layout = QVBoxLayout(map_dialog)
+            dialog_layout.setContentsMargins(0, 0, 0, 0)
 
-            # Create embedded map widget
-            self._embedded_map = EmbeddedMapWidget(lat, lng, zoom)
-            layout.addWidget(self._embedded_map)
+            # Create embedded map widget with API key for elevation probing
+            print("[SiteDialog] Creating EmbeddedMapWidget...")
+            try:
+                self._embedded_map = EmbeddedMapWidget(lat, lng, zoom, api_key=api_key, parent=map_dialog)
+                print("[SiteDialog] EmbeddedMapWidget created successfully")
+            except Exception as widget_err:
+                print(f"[SiteDialog] ERROR creating EmbeddedMapWidget: {widget_err}")
+                import traceback
+                traceback.print_exc()
+                QMessageBox.critical(self, "Map Error",
+                    f"Failed to create map widget:\n{widget_err}")
+                return
 
-            print("[SiteDialog] EmbeddedMapWidget created")
+            print("[SiteDialog] Adding EmbeddedMapWidget to layout...")
+            dialog_layout.addWidget(self._embedded_map)
+            print("[SiteDialog] EmbeddedMapWidget added to layout")
 
-            # Connect boundary changed signal
+            # Connect signals
             self._embedded_map.boundary_changed.connect(self._on_map_boundary_changed_with_dims)
-            print("[SiteDialog] Boundary signal connected")
+            self._embedded_map.building_placed.connect(self._on_building_placed)
+            print("[SiteDialog] Signals connected")
 
-            # Show the dialog (non-modal so user can interact with main app too)
-            map_dialog.show()
-            print("[SiteDialog] Map dialog shown")
+            # Connect close signal to close the map dialog (accept for modal dialogs)
+            self._embedded_map.close_requested.connect(map_dialog.accept)
 
-            QMessageBox.information(self, "Map Opened",
-                f"A map window has opened!\n\n"
-                f"1. Draw your property boundary\n"
-                f"2. Click 'Save & Close'\n"
-                f"3. The dimensions will populate below")
+            # Store reference to dialog so it doesn't get garbage collected
+            self._map_dialog = map_dialog
+            self._embedded_map_ref = self._embedded_map  # Extra reference
+
+            # Show the dialog as a MODAL window so it stays open
+            # Using exec() instead of show() to ensure the dialog stays open
+            print("[SiteDialog] Showing map dialog (modal)...")
+
+            # Force process events before showing to ensure widget is fully initialized
+            QApplication.processEvents()
+
+            # Execute the dialog modally - this blocks until user closes it
+            result = map_dialog.exec()
+            print(f"[SiteDialog] Map dialog closed with result: {result}")
 
         except ImportError as e:
             QMessageBox.warning(self, "Not Available",
                 f"Interactive map is not available.\n\n"
                 f"Error: {str(e)}\n\n"
-                f"Please install pywebview:\n"
-                f"pip install pywebview")
+                f"Required: PyQt6-WebEngine\n"
+                f"pip install PyQt6-WebEngine")
             print(f"[SiteDialog] Cannot import embedded map: {e}")
+            import traceback
+            traceback.print_exc()
         except Exception as e:
             QMessageBox.critical(self, "Error",
                 f"Could not open map:\n{str(e)}")
@@ -1373,9 +1496,11 @@ class SiteDialog(QDialog):
             import traceback
             traceback.print_exc()
 
-    def _on_map_boundary_changed_with_dims(self, lat_min, lat_max, lng_min, lng_max, width_ft, depth_ft):
-        """Handle boundary changed with dimensions."""
-        print(f"[SiteDialog] Boundary received: {width_ft:.0f}' x {depth_ft:.0f}'")
+    def _on_map_boundary_changed_with_dims(self, lat_min, lat_max, lng_min, lng_max, width_ft, depth_ft, vertices=None, vertices_ft=None):
+        """Handle boundary changed with dimensions and polygon vertices."""
+        num_verts = len(vertices) if vertices else 0
+        print(f"[SiteDialog] Boundary received: {width_ft:.0f}' x {depth_ft:.0f}' ({num_verts} vertices)")
+        print(f"[SiteDialog] Lat/Lng bounds: lat=[{lat_min:.6f}, {lat_max:.6f}], lng=[{lng_min:.6f}, {lng_max:.6f}]")
 
         # Update UI with dimensions
         self._width_input.setValue(int(width_ft))
@@ -1385,27 +1510,45 @@ class SiteDialog(QDialog):
         if hasattr(self, '_map_boundary_info'):
             lat_center = (lat_min + lat_max) / 2
             lng_center = (lng_min + lng_max) / 2
+            shape_info = f" ({num_verts}-sided)" if num_verts > 0 else ""
             self._map_boundary_info.setText(
-                f"Boundary set: {width_ft:.0f}' x {depth_ft:.0f}' at "
+                f"Boundary set: {width_ft:.0f}' x {depth_ft:.0f}'{shape_info} at "
                 f"({lat_center:.4f}, {lng_center:.4f})"
             )
 
-        # Store boundary for elevation fetching
+        # Store boundary for elevation fetching (including actual polygon shape)
         self._map_boundary = {
             'lat_min': lat_min,
             'lat_max': lat_max,
             'lng_min': lng_min,
             'lng_max': lng_max,
             'width_ft': width_ft,
-            'depth_ft': depth_ft
+            'depth_ft': depth_ft,
+            'vertices': vertices,        # [[lat, lng], ...] - actual polygon
+            'vertices_ft': vertices_ft   # [[x_ft, z_ft], ...] - in local coords
         }
 
-        # Show confirmation
-        QMessageBox.information(self, "Boundary Received",
-            f"Property boundary set!\n\n"
-            f"Width: {width_ft:.0f}'\n"
-            f"Depth: {depth_ft:.0f}'\n\n"
-            f"The dimensions have been populated in the form.")
+        # Info label already shows the boundary - no popup needed
+
+    def _on_building_placed(self, lat: float, lng: float, x_ft: float, z_ft: float, rotation_deg: float):
+        """Handle building placement from map."""
+        print(f"[SiteDialog] Building center at ({x_ft:.0f}', {z_ft:.0f}'), rotation={rotation_deg:.0f}°")
+
+        # Store building origin (center position and rotation)
+        self._building_origin = {
+            'lat': lat,
+            'lng': lng,
+            'x_ft': x_ft,
+            'z_ft': z_ft,
+            'rotation_deg': rotation_deg
+        }
+
+        # Update info label - no popup needed, label shows current values
+        if hasattr(self, '_map_boundary_info') and self._map_boundary:
+            self._map_boundary_info.setText(
+                f"Boundary: {self._map_boundary['width_ft']:.0f}' x {self._map_boundary['depth_ft']:.0f}' | "
+                f"Building center: ({x_ft:.0f}', {z_ft:.0f}') rot={rotation_deg:.0f}°"
+            )
 
     def _on_navigate_to_location(self):
         """Navigate the map to the current coordinates."""
@@ -1618,12 +1761,32 @@ class SiteDialog(QDialog):
         # Generate terrain mesh
         print("[SiteDialog] Generating terrain mesh...")
         try:
+            # Build boundary data with polygon vertices if available
+            boundary_data = {}
+            if hasattr(self, '_map_boundary') and self._map_boundary:
+                boundary_data = {
+                    "lat_min": self._map_boundary.get("lat_min", 0),
+                    "lat_max": self._map_boundary.get("lat_max", 0),
+                    "lng_min": self._map_boundary.get("lng_min", 0),
+                    "lng_max": self._map_boundary.get("lng_max", 0),
+                    "width_ft": self._map_boundary.get("width_ft", 0),
+                    "depth_ft": self._map_boundary.get("depth_ft", 0),
+                }
+                # Include polygon vertices if available
+                if self._map_boundary.get("vertices_ft"):
+                    boundary_data["vertices_ft"] = self._map_boundary["vertices_ft"]
+                    boundary_data["vertices_mm"] = [
+                        [v[0] * 304.8, v[1] * 304.8] for v in self._map_boundary["vertices_ft"]
+                    ]
+                    print(f"[SiteDialog] Including polygon with {len(boundary_data['vertices_mm'])} vertices")
+
             # Create temporary site dict for terrain generation
             temp_site = {
                 "property_width_ft": self._width_input.value(),
                 "property_depth_ft": self._depth_input.value(),
                 "google_maps": {
-                    "elevation_grid": self._elevation_data
+                    "elevation_grid": self._elevation_data,
+                    "boundary": boundary_data
                 }
             }
 
@@ -1650,6 +1813,975 @@ class SiteDialog(QDialog):
             "• API key is correct\n"
             "• Elevation API is enabled\n"
             "• Internet connection is active")
+
+    def _on_import_lidar(self):
+        """Import elevation data from LiDAR GeoTIFF files."""
+        # Check for rasterio
+        try:
+            import rasterio
+            from pyproj import Transformer
+        except ImportError:
+            QMessageBox.critical(self, "Missing Libraries",
+                "LiDAR import requires additional libraries.\n\n"
+                "Please install them:\n"
+                "  pip install rasterio pyproj")
+            return
+
+        # Select folder with GeoTIFF files
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select LiDAR GeoTIFF Folder",
+            "",
+            QFileDialog.Option.ShowDirsOnly
+        )
+
+        if not folder:
+            return
+
+        # Show import settings dialog
+        settings_dialog = LidarImportSettingsDialog(self)
+        if settings_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        # Get user's quality settings
+        self._lidar_import_settings = settings_dialog.get_settings()
+        print(f"[SiteDialog] LiDAR import settings: {self._lidar_import_settings}")
+
+        print(f"[SiteDialog] LiDAR folder selected: {folder}")
+        self._elevation_results.setText("Scanning for GeoTIFF files...")
+
+        # Use new library if available for cleaner processing
+        if HAS_LIDAR_LIB:
+            QTimer.singleShot(100, lambda: self._import_lidar_with_library(folder))
+        else:
+            # Fallback to original implementation
+            QTimer.singleShot(100, lambda: self._preview_lidar_folder(folder))
+
+    def _import_lidar_with_library(self, folder):
+        """Import LiDAR using the lidar library (cleaner implementation)."""
+        try:
+            extractor = LidarExtractor()
+
+            # Scan folder with progress
+            self._elevation_results.setText("Scanning tiles...")
+            QApplication.processEvents()
+
+            count = extractor.scan_folder(folder)
+            if count == 0:
+                self._elevation_results.setText("No GeoTIFF tiles found in folder.")
+                return
+
+            # Get property bounds
+            if hasattr(self, '_map_boundary') and self._map_boundary:
+                bounds = PropertyBounds.from_bounds(
+                    lat_min=self._map_boundary['lat_min'],
+                    lat_max=self._map_boundary['lat_max'],
+                    lng_min=self._map_boundary['lng_min'],
+                    lng_max=self._map_boundary['lng_max'],
+                )
+            else:
+                # Use property dimensions to estimate bounds
+                # Default to a reasonable location if not set
+                QMessageBox.warning(self, "No Property Boundary",
+                    "Please draw a property boundary on the map first,\n"
+                    "or enter coordinates manually.")
+                return
+
+            # Find overlapping tiles
+            overlapping = extractor.find_overlapping_tiles(bounds)
+            if not overlapping:
+                self._elevation_results.setText(
+                    f"Found {count} tiles, but none overlap your property.\n"
+                    "Check that the property boundary is correct."
+                )
+                return
+
+            self._elevation_results.setText(
+                f"Found {len(overlapping)} tile(s) covering your property.\n"
+                "Extracting elevation data..."
+            )
+            QApplication.processEvents()
+
+            # Extract elevation
+            def progress_cb(current, total, msg):
+                self._elevation_results.setText(f"Processing {current}/{total}: {msg}")
+                QApplication.processEvents()
+
+            data = extractor.extract_elevation(
+                overlapping,
+                bounds,
+                max_points=150000,
+                progress_callback=progress_cb
+            )
+
+            if data.count == 0:
+                self._elevation_results.setText("No elevation data found in the property area.")
+                return
+
+            # Convert to internal format expected by terrain generator
+            # Format: {"lat,lng": {"lat": lat, "lng": lng, "elevation_m": m, "elevation_ft": ft}}
+            self._elevation_data = {}
+            for key, pt in data.points.items():
+                data_key = f"{pt.lat:.7f},{pt.lng:.7f}"
+                self._elevation_data[data_key] = {
+                    "lat": pt.lat,
+                    "lng": pt.lng,
+                    "elevation_m": pt.elevation_m,
+                    "elevation_ft": pt.elevation_ft
+                }
+
+            # Update UI
+            self._elevation_results.setText(
+                f"✓ LiDAR data imported!\n"
+                f"  Points: {data.count:,}\n"
+                f"  Elevation: {data.min_elevation_m:.1f}m to {data.max_elevation_m:.1f}m\n"
+                f"  Range: {data.elevation_range_m:.2f}m ({data.elevation_range_ft:.1f}ft)\n"
+                f"  Tiles: {len(data.source_tiles)}"
+            )
+
+            # Generate terrain mesh
+            self._generate_lidar_terrain_mesh(data.min_elevation_m)
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._elevation_results.setText(f"Error: {e}")
+
+    def _parse_ontario_lidar_filename(self, filename):
+        """
+        Parse Ontario LiDAR filename to extract approximate UTM coordinates.
+        Format: 1km{zone}{easting_km}{northing}...
+        Example: 1km175420512303030LLAKENIPISSING_DSM.tif
+                 -> zone 17, easting ~542000, northing ~5123030
+        Returns (easting, northing) or None if can't parse.
+        """
+        import re
+        basename = os.path.basename(filename)
+
+        # Try to match Ontario LiDAR naming pattern
+        # The format appears to be: 1km + zone(2) + easting(3-4) + northing(7+) + name
+        # Example: 1km 17 542 0512303 030 LLAKENIPISSING
+        match = re.match(r'1km(\d{2})(\d{3,4})(\d{7})', basename)
+        if match:
+            try:
+                zone = int(match.group(1))
+                easting_km = int(match.group(2))
+                northing_coded = int(match.group(3))
+
+                # Easting: multiply km by 1000 to get meters
+                easting = easting_km * 1000
+
+                # Northing: the 7-digit code represents the northing
+                # 0512303 -> 5123030 (shift decimal)
+                northing = northing_coded * 10
+
+                print(f"[SiteDialog] Parsed {basename}: zone={zone}, E={easting}, N={northing}")
+                return (easting, northing)
+            except Exception as e:
+                print(f"[SiteDialog] Parse error for {basename}: {e}")
+        else:
+            print(f"[SiteDialog] Could not parse filename: {basename}")
+        return None
+
+    def _preview_lidar_folder(self, folder):
+        """Preview available LiDAR tiles in folder."""
+        import os
+        try:
+            import rasterio
+            from pyproj import Transformer
+        except ImportError as e:
+            self._elevation_results.setText(f"Import error: {e}")
+            return
+
+        # Check if we have a boundary to filter by
+        has_boundary = hasattr(self, '_map_boundary') and self._map_boundary
+        property_utm = None
+
+        if has_boundary:
+            boundary = self._map_boundary
+            center_lat = (boundary['lat_min'] + boundary['lat_max']) / 2
+            center_lng = (boundary['lng_min'] + boundary['lng_max']) / 2
+            print(f"[SiteDialog] Property center: ({center_lat:.6f}, {center_lng:.6f})")
+
+            # Convert property center to UTM for quick filtering
+            try:
+                # Determine UTM zone (rough estimate for Ontario)
+                utm_zone = int((center_lng + 180) / 6) + 1
+                utm_crs = f"EPSG:{32600 + utm_zone}" if center_lat >= 0 else f"EPSG:{32700 + utm_zone}"
+                to_utm = Transformer.from_crs("EPSG:4326", utm_crs, always_xy=True)
+                prop_easting, prop_northing = to_utm.transform(center_lng, center_lat)
+                property_utm = (prop_easting, prop_northing, utm_zone)
+                print(f"[SiteDialog] Property UTM (zone {utm_zone}): E={prop_easting:.0f}, N={prop_northing:.0f}")
+            except Exception as e:
+                print(f"[SiteDialog] Could not convert property to UTM: {e}")
+
+        # Find all TIFF files
+        tiff_files = []
+        for root, dirs, files in os.walk(folder):
+            for f in files:
+                if f.lower().endswith(('.tif', '.tiff')):
+                    tiff_files.append(os.path.join(root, f))
+
+        if not tiff_files:
+            self._elevation_results.setText("No GeoTIFF files found in folder.")
+            return
+
+        print(f"[SiteDialog] Found {len(tiff_files)} TIFF files in folder")
+
+        # Quick filter: parse filenames to find potentially matching tiles
+        # This avoids opening every single file
+        candidate_files = []
+        parsed_count = 0
+        for tiff_path in tiff_files:
+            coords = self._parse_ontario_lidar_filename(tiff_path)
+            if coords:
+                parsed_count += 1
+                if property_utm:
+                    easting, northing = coords
+                    prop_e, prop_n, _ = property_utm
+                    # Check if within ~2km (tiles are 1km, property might be on edge)
+                    if abs(easting - prop_e) < 2000 and abs(northing - prop_n) < 2000:
+                        candidate_files.append(tiff_path)
+                        print(f"[SiteDialog] ✓ Candidate: {os.path.basename(tiff_path)} - E={easting}, N={northing} (dist: E={abs(easting-prop_e):.0f}, N={abs(northing-prop_n):.0f})")
+                    else:
+                        print(f"[SiteDialog]   Skipping {os.path.basename(tiff_path)} - too far (dist: E={abs(easting-prop_e):.0f}, N={abs(northing-prop_n):.0f})")
+                else:
+                    # No property UTM, can't filter, include all parsed
+                    candidate_files.append(tiff_path)
+            else:
+                # Can't parse filename, include as candidate to be safe
+                candidate_files.append(tiff_path)
+                print(f"[SiteDialog] Including unparseable file: {os.path.basename(tiff_path)}")
+
+        print(f"[SiteDialog] Parsed {parsed_count}/{len(tiff_files)} filenames, {len(candidate_files)} candidates")
+
+        # If we filtered down, use candidates; otherwise limit to first 100
+        if len(candidate_files) > 0 and len(candidate_files) < len(tiff_files):
+            files_to_scan = candidate_files
+            print(f"[SiteDialog] Filtered to {len(candidate_files)} candidate tiles")
+        elif len(candidate_files) > 0:
+            files_to_scan = candidate_files[:100]  # Limit if too many
+            if len(candidate_files) > 100:
+                print(f"[SiteDialog] Limited to first 100 of {len(candidate_files)} candidates")
+        else:
+            files_to_scan = tiff_files[:50]  # Fallback
+            print(f"[SiteDialog] No candidates, using first 50 tiles as fallback")
+
+        # Gather detailed info from candidate files
+        tile_info = []
+        for tiff_path in files_to_scan:
+            try:
+                with rasterio.open(tiff_path) as src:
+                    bounds = src.bounds
+                    crs = src.crs
+                    res = src.res[0]
+
+                    tile_lat_min = None
+                    tile_lat_max = None
+                    tile_lng_min = None
+                    tile_lng_max = None
+                    try:
+                        transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+                        tile_lng_min, tile_lat_min = transformer.transform(bounds.left, bounds.bottom)
+                        tile_lng_max, tile_lat_max = transformer.transform(bounds.right, bounds.top)
+                        bounds_str = f"({tile_lat_min:.4f}, {tile_lng_min:.4f}) to ({tile_lat_max:.4f}, {tile_lng_max:.4f})"
+                    except Exception as e:
+                        bounds_str = f"CRS: {crs}"
+                        print(f"[SiteDialog] Could not transform bounds for {os.path.basename(tiff_path)}: {e}")
+
+                    tile_info.append({
+                        'path': tiff_path,
+                        'name': os.path.basename(tiff_path),
+                        'resolution': res,
+                        'size': f"{src.width}x{src.height}",
+                        'bounds': bounds_str,
+                        'lat_min': tile_lat_min,
+                        'lat_max': tile_lat_max,
+                        'lng_min': tile_lng_min,
+                        'lng_max': tile_lng_max,
+                    })
+                    print(f"[SiteDialog] Tile: {os.path.basename(tiff_path)} - lat: {tile_lat_min:.6f} to {tile_lat_max:.6f}, lng: {tile_lng_min:.6f} to {tile_lng_max:.6f}")
+            except Exception as e:
+                print(f"[SiteDialog] Could not read {os.path.basename(tiff_path)}: {e}")
+                continue
+
+        if not tile_info:
+            self._elevation_results.setText("Could not read any GeoTIFF files.")
+            return
+
+        # Show dialog with available tiles
+        self._show_lidar_preview_dialog(folder, tile_info)
+
+    def _show_lidar_preview_dialog(self, folder, tile_info):
+        """Show dialog with available LiDAR tiles."""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QDialogButtonBox, QHBoxLayout
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Available LiDAR Tiles")
+        dialog.setMinimumSize(600, 400)
+
+        layout = QVBoxLayout(dialog)
+
+        # Header
+        header = QLabel(f"<b>Found {len(tile_info)} GeoTIFF files in:</b><br>{folder}")
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        # Check if we have a boundary
+        has_boundary = hasattr(self, '_map_boundary') and self._map_boundary
+        if has_boundary:
+            boundary = self._map_boundary
+            center_lat = (boundary['lat_min'] + boundary['lat_max']) / 2
+            center_lng = (boundary['lng_min'] + boundary['lng_max']) / 2
+            boundary_label = QLabel(f"<b>Your property:</b> ({center_lat:.5f}, {center_lng:.5f})")
+            layout.addWidget(boundary_label)
+        else:
+            boundary_label = QLabel("<span style='color: orange;'><b>Note:</b> Draw a property boundary first to auto-find the right tile.</span>")
+            boundary_label.setWordWrap(True)
+            layout.addWidget(boundary_label)
+
+        # Tile list
+        list_label = QLabel("<b>Available tiles:</b> (select one to import)")
+        layout.addWidget(list_label)
+
+        tile_list = QListWidget()
+        tile_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        overlapping_tiles = []
+
+        for idx, info in enumerate(tile_info):
+            # Check if this tile OVERLAPS with the property boundary (not just center)
+            overlaps_property = False
+            if has_boundary and info.get('lat_min') is not None:
+                try:
+                    # Check for rectangle overlap (tile overlaps property bounding box)
+                    prop_lat_min = boundary['lat_min']
+                    prop_lat_max = boundary['lat_max']
+                    prop_lng_min = boundary['lng_min']
+                    prop_lng_max = boundary['lng_max']
+
+                    # Two rectangles overlap if they intersect on both axes
+                    lat_overlap = info['lat_min'] <= prop_lat_max and info['lat_max'] >= prop_lat_min
+                    lng_overlap = info['lng_min'] <= prop_lng_max and info['lng_max'] >= prop_lng_min
+
+                    if lat_overlap and lng_overlap:
+                        overlaps_property = True
+                        overlapping_tiles.append(info['path'])
+                        print(f"[SiteDialog] ✓ MATCH: {info['name']} overlaps property")
+                except:
+                    pass
+
+            prefix = "✓ " if overlaps_property else "  "
+            item_text = f"{prefix}{info['name']} | {info['resolution']:.2f}m | {info['size']} | {info['bounds']}"
+            item = QListWidgetItem(item_text)
+            item.setData(Qt.ItemDataRole.UserRole, info['path'])
+            if overlaps_property:
+                item.setBackground(Qt.GlobalColor.green)
+                item.setSelected(True)  # Auto-select overlapping tiles
+            tile_list.addItem(item)
+
+        layout.addWidget(tile_list)
+
+        # Show info about overlapping tiles
+        if overlapping_tiles:
+            if len(overlapping_tiles) == 1:
+                info_label = QLabel("<span style='color: green;'><b>✓ Found 1 tile covering your property!</b></span>")
+            else:
+                info_label = QLabel(f"<span style='color: green;'><b>✓ Found {len(overlapping_tiles)} tiles covering your property!</b></span><br>"
+                                   f"All overlapping tiles are auto-selected and will be merged.")
+            info_label.setWordWrap(True)
+            layout.addWidget(info_label)
+        elif has_boundary:
+            # No overlapping tile - warn user
+            info_label = QLabel(
+                f"<span style='color: red;'><b>⚠ None of these tiles overlap your property!</b></span><br>"
+                f"Your property bounds: ({boundary['lat_min']:.5f}, {boundary['lng_min']:.5f}) to ({boundary['lat_max']:.5f}, {boundary['lng_max']:.5f}).<br>"
+                f"You need to download the correct LiDAR tile from Ontario GeoHub."
+            )
+            info_label.setWordWrap(True)
+            layout.addWidget(info_label)
+
+        # Store overlapping tiles for import
+        self._overlapping_lidar_tiles = overlapping_tiles
+
+        # Buttons
+        button_box = QDialogButtonBox()
+        import_btn = button_box.addButton("Import Selected", QDialogButtonBox.ButtonRole.AcceptRole)
+        cancel_btn = button_box.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+
+        import_btn.setEnabled(len(tile_list.selectedItems()) > 0)
+        tile_list.itemSelectionChanged.connect(lambda: import_btn.setEnabled(len(tile_list.selectedItems()) > 0))
+
+        layout.addWidget(button_box)
+
+        # Store for access in slot
+        self._lidar_tile_list = tile_list
+        self._lidar_folder = folder
+
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Get ALL selected tiles
+            selected_paths = []
+            for item in tile_list.selectedItems():
+                path = item.data(Qt.ItemDataRole.UserRole)
+                if path:
+                    selected_paths.append(path)
+
+            if selected_paths:
+                print(f"[SiteDialog] Selected {len(selected_paths)} tile(s): {[os.path.basename(p) for p in selected_paths]}")
+
+                # Check if we have boundary
+                if not has_boundary:
+                    QMessageBox.warning(self, "Boundary Required",
+                        "Please draw a property boundary on the map first.\n\n"
+                        "The LiDAR importer needs to know the area to extract.")
+                    return
+
+                if len(selected_paths) == 1:
+                    self._elevation_results.setText(f"Importing from {os.path.basename(selected_paths[0])}...")
+                else:
+                    self._elevation_results.setText(f"Importing from {len(selected_paths)} tiles...")
+
+                self._elevation_progress.setVisible(True)
+                self._elevation_progress.setRange(0, 0)
+                QTimer.singleShot(100, lambda: self._process_lidar_files(selected_paths))
+
+    def _process_lidar_files(self, tiff_paths):
+        """Process multiple LiDAR GeoTIFF files and merge elevation data."""
+        import os
+        import math
+        try:
+            import rasterio
+            from pyproj import Transformer
+            from core.terrain import TerrainMesh, TerrainVertex
+        except ImportError as e:
+            self._elevation_results.setText(f"Import error: {e}")
+            self._elevation_progress.setVisible(False)
+            return
+
+        if not tiff_paths:
+            return
+
+        # Get property boundary
+        boundary = self._map_boundary
+        prop_lat_min = boundary['lat_min']
+        prop_lat_max = boundary['lat_max']
+        prop_lng_min = boundary['lng_min']
+        prop_lng_max = boundary['lng_max']
+        center_lat = (prop_lat_min + prop_lat_max) / 2
+        center_lng = (prop_lng_min + prop_lng_max) / 2
+
+        # Calculate property size in meters
+        lat_range = prop_lat_max - prop_lat_min
+        lng_range = prop_lng_max - prop_lng_min
+        height_m = lat_range * 111000
+        width_m = lng_range * 111000 * math.cos(math.radians(center_lat))
+
+        print(f"[SiteDialog] Processing {len(tiff_paths)} tiles for property")
+        print(f"[SiteDialog] Property bounds: ({prop_lat_min:.6f}, {prop_lng_min:.6f}) to ({prop_lat_max:.6f}, {prop_lng_max:.6f})")
+        print(f"[SiteDialog] Property size: {width_m:.1f}m x {height_m:.1f}m")
+
+        # Merged elevation data from all tiles
+        merged_elevation_data = {}
+        min_elev_global = float('inf')
+        max_elev_global = float('-inf')
+        total_points = 0
+        resolution = None
+
+        for tiff_path in tiff_paths:
+            try:
+                print(f"[SiteDialog] Processing tile: {os.path.basename(tiff_path)}")
+
+                with rasterio.open(tiff_path) as src:
+                    raster_crs = src.crs
+                    resolution = src.res[0]
+                    transformer = Transformer.from_crs("EPSG:4326", raster_crs, always_xy=True)
+                    reverse_transformer = Transformer.from_crs(raster_crs, "EPSG:4326", always_xy=True)
+
+                    # Convert property bounds to raster CRS
+                    min_x, min_y = transformer.transform(prop_lng_min, prop_lat_min)
+                    max_x, max_y = transformer.transform(prop_lng_max, prop_lat_max)
+
+                    # Add small buffer
+                    buffer = 5
+                    min_x -= buffer
+                    max_x += buffer
+                    min_y -= buffer
+                    max_y += buffer
+
+                    # Check if this tile overlaps with property in raster CRS
+                    tile_bounds = src.bounds
+                    if (max_x < tile_bounds.left or min_x > tile_bounds.right or
+                        max_y < tile_bounds.bottom or min_y > tile_bounds.top):
+                        print(f"[SiteDialog]   Tile doesn't overlap property, skipping")
+                        continue
+
+                    # Clamp to tile bounds
+                    extract_min_x = max(min_x, tile_bounds.left)
+                    extract_max_x = min(max_x, tile_bounds.right)
+                    extract_min_y = max(min_y, tile_bounds.bottom)
+                    extract_max_y = min(max_y, tile_bounds.top)
+
+                    # Get pixel coordinates
+                    row_start, col_start = src.index(extract_min_x, extract_max_y)
+                    row_end, col_end = src.index(extract_max_x, extract_min_y)
+
+                    # Clamp to valid range
+                    row_start = max(0, min(row_start, src.height - 1))
+                    row_end = max(0, min(row_end + 1, src.height))
+                    col_start = max(0, min(col_start, src.width - 1))
+                    col_end = max(0, min(col_end + 1, src.width))
+
+                    if row_end <= row_start or col_end <= col_start:
+                        print(f"[SiteDialog]   No valid pixel range, skipping")
+                        continue
+
+                    # Read elevation window
+                    elevation = src.read(1)
+                    window_data = elevation[row_start:row_end, col_start:col_end]
+                    nodata = src.nodata
+
+                    print(f"[SiteDialog]   Extracted {window_data.shape[1]}x{window_data.shape[0]} pixels")
+
+                    # Subsample if needed
+                    max_points_per_tile = 75000
+                    tile_total = window_data.shape[0] * window_data.shape[1]
+                    step = max(1, int(math.sqrt(tile_total / max_points_per_tile)))
+
+                    # Extract elevation points
+                    tile_points = 0
+                    for row_idx in range(0, window_data.shape[0], step):
+                        for col_idx in range(0, window_data.shape[1], step):
+                            elev = float(window_data[row_idx, col_idx])
+                            if nodata is not None and elev == nodata:
+                                continue
+
+                            # Convert pixel to geographic coordinates
+                            px = extract_min_x + (col_idx + 0.5) * resolution
+                            py = extract_max_y - (row_idx + 0.5) * resolution
+                            plng, plat = reverse_transformer.transform(px, py)
+
+                            # Only include points within property bounds
+                            if prop_lat_min <= plat <= prop_lat_max and prop_lng_min <= plng <= prop_lng_max:
+                                key = f"{plat:.7f},{plng:.7f}"
+                                merged_elevation_data[key] = {
+                                    "lat": plat,
+                                    "lng": plng,
+                                    "elevation_m": elev,
+                                    "elevation_ft": elev * 3.28084
+                                }
+                                tile_points += 1
+                                min_elev_global = min(min_elev_global, elev)
+                                max_elev_global = max(max_elev_global, elev)
+
+                    print(f"[SiteDialog]   Added {tile_points} points from this tile")
+                    total_points += tile_points
+
+            except Exception as e:
+                print(f"[SiteDialog] Error processing {os.path.basename(tiff_path)}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+        # Check if we got any data
+        if not merged_elevation_data:
+            self._elevation_results.setText("No elevation data found in property area.")
+            self._elevation_progress.setVisible(False)
+            return
+
+        elev_range = max_elev_global - min_elev_global
+        print(f"[SiteDialog] Total merged: {len(merged_elevation_data)} elevation points")
+        print(f"[SiteDialog] Elevation range: {min_elev_global:.2f}m to {max_elev_global:.2f}m (range: {elev_range:.2f}m)")
+
+        # Store the merged elevation data
+        self._elevation_data = merged_elevation_data
+
+        # Update UI
+        self._elevation_progress.setVisible(False)
+        self._elevation_results.setText(
+            f"✓ LiDAR data imported from {len(tiff_paths)} tile(s)!\n"
+            f"  Resolution: {resolution:.2f}m\n"
+            f"  Points: {len(merged_elevation_data)}\n"
+            f"  Elevation: {min_elev_global:.1f}m to {max_elev_global:.1f}m\n"
+            f"  Range: {elev_range:.2f}m ({elev_range * 3.28084:.1f}ft)"
+        )
+
+        # Generate terrain mesh
+        self._generate_lidar_terrain_mesh(min_elev_global)
+
+    def _process_lidar_file(self, tiff_path):
+        """Process a specific LiDAR GeoTIFF file and extract elevation."""
+        # Delegate to multi-file processor
+        self._process_lidar_files([tiff_path])
+        return
+
+    def _process_lidar_file_old(self, tiff_path):
+        """Process a specific LiDAR GeoTIFF file and extract elevation (old single-file version)."""
+        import os
+        import math
+        try:
+            import rasterio
+            from pyproj import Transformer
+            from core.terrain import TerrainMesh, TerrainVertex
+        except ImportError as e:
+            self._elevation_results.setText(f"Import error: {e}")
+            self._elevation_progress.setVisible(False)
+            return
+
+        # Get property boundary
+        boundary = self._map_boundary
+        center_lat = (boundary['lat_min'] + boundary['lat_max']) / 2
+        center_lng = (boundary['lng_min'] + boundary['lng_max']) / 2
+
+        # Calculate property size in meters
+        lat_range = boundary['lat_max'] - boundary['lat_min']
+        lng_range = boundary['lng_max'] - boundary['lng_min']
+        height_m = lat_range * 111000
+        width_m = lng_range * 111000 * math.cos(math.radians(center_lat))
+
+        print(f"[SiteDialog] Extracting from: {os.path.basename(tiff_path)}")
+        print(f"[SiteDialog] Property center: ({center_lat:.6f}, {center_lng:.6f})")
+        print(f"[SiteDialog] Property size: {width_m:.1f}m x {height_m:.1f}m")
+
+        try:
+            print(f"[SiteDialog] Opening raster: {tiff_path}")
+            with rasterio.open(tiff_path) as src:
+                raster_crs = src.crs
+                resolution = src.res[0]
+                print(f"[SiteDialog] Raster CRS: {raster_crs}, resolution: {resolution}m")
+                print(f"[SiteDialog] Raster bounds: {src.bounds}")
+
+                transformer = Transformer.from_crs("EPSG:4326", raster_crs, always_xy=True)
+                reverse_transformer = Transformer.from_crs(raster_crs, "EPSG:4326", always_xy=True)
+
+                # Convert center to raster CRS
+                center_x, center_y = transformer.transform(center_lng, center_lat)
+                print(f"[SiteDialog] Center in raster CRS: ({center_x:.2f}, {center_y:.2f})")
+
+                # Calculate bounds with buffer
+                buffer = 5
+                half_w = (width_m / 2) + buffer
+                half_h = (height_m / 2) + buffer
+
+                min_x = center_x - half_w
+                max_x = center_x + half_w
+                min_y = center_y - half_h
+                max_y = center_y + half_h
+                print(f"[SiteDialog] Extract bounds: X=[{min_x:.2f}, {max_x:.2f}], Y=[{min_y:.2f}, {max_y:.2f}]")
+
+                # Get pixel coordinates
+                row_start, col_start = src.index(min_x, max_y)
+                row_end, col_end = src.index(max_x, min_y)
+                print(f"[SiteDialog] Pixel indices (raw): rows=[{row_start}, {row_end}], cols=[{col_start}, {col_end}]")
+
+                # Clamp to valid range
+                row_start = max(0, min(row_start, src.height - 1))
+                row_end = max(0, min(row_end, src.height))
+                col_start = max(0, min(col_start, src.width - 1))
+                col_end = max(0, min(col_end, src.width))
+                print(f"[SiteDialog] Pixel indices (clamped): rows=[{row_start}, {row_end}], cols=[{col_start}, {col_end}]")
+
+                if row_end <= row_start or col_end <= col_start:
+                    self._elevation_results.setText("Property area is outside the raster bounds.")
+                    self._elevation_progress.setVisible(False)
+                    return
+
+                # Read elevation window
+                elevation = src.read(1)
+                window_data = elevation[row_start:row_end, col_start:col_end]
+                nodata = src.nodata
+
+                print(f"[SiteDialog] Extracted {window_data.shape[1]}x{window_data.shape[0]} pixels")
+
+                # Calculate stats
+                if nodata is not None:
+                    valid_mask = window_data != nodata
+                else:
+                    valid_mask = np.ones_like(window_data, dtype=bool)
+                valid_data = window_data[valid_mask]
+
+                if len(valid_data) == 0:
+                    self._elevation_results.setText("No valid elevation data in property area.")
+                    self._elevation_progress.setVisible(False)
+                    return
+
+                min_elev = float(valid_data.min())
+                max_elev = float(valid_data.max())
+                elev_range = max_elev - min_elev
+
+                print(f"[SiteDialog] Elevation: {min_elev:.2f}m to {max_elev:.2f}m (range: {elev_range:.2f}m)")
+
+                # Convert to elevation grid format
+                self._elevation_data = {}
+                point_count = 0
+
+                # Subsample if too many points - use custom setting if available
+                # Higher max_points = more surface detail but slower processing
+                if hasattr(self, '_lidar_import_settings') and self._lidar_import_settings:
+                    max_points = self._lidar_import_settings.get("max_points", 200000)
+                else:
+                    max_points = 200000  # Default
+                total_points = window_data.shape[0] * window_data.shape[1]
+                step = max(1, int(math.sqrt(total_points / max_points)))
+                print(f"[SiteDialog] Total pixels: {total_points}, using step={step} for ~{total_points // (step*step)} points")
+
+                for row_idx in range(0, window_data.shape[0], step):
+                    for col_idx in range(0, window_data.shape[1], step):
+                        elev = float(window_data[row_idx, col_idx])
+                        if nodata is not None and elev == nodata:
+                            continue
+
+                        # Convert pixel to geographic coordinates
+                        px = min_x + (col_idx + 0.5) * resolution
+                        py = max_y - (row_idx + 0.5) * resolution
+                        plng, plat = reverse_transformer.transform(px, py)
+
+                        key = f"{plat:.7f},{plng:.7f}"
+                        self._elevation_data[key] = {
+                            "lat": plat,
+                            "lng": plng,
+                            "elevation_m": elev,
+                            "elevation_ft": elev * 3.28084
+                        }
+                        point_count += 1
+
+                print(f"[SiteDialog] Created {point_count} elevation points (step={step})")
+
+                # Update UI
+                self._elevation_progress.setVisible(False)
+                self._elevation_results.setText(
+                    f"✓ LiDAR data imported!\n"
+                    f"  Source: {os.path.basename(tiff_path)}\n"
+                    f"  Resolution: {resolution:.2f}m\n"
+                    f"  Points: {point_count}\n"
+                    f"  Elevation: {min_elev:.1f}m to {max_elev:.1f}m\n"
+                    f"  Range: {elev_range:.2f}m ({elev_range * 3.28084:.1f}ft)"
+                )
+
+                # Generate terrain mesh
+                self._generate_lidar_terrain_mesh(min_elev)
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._elevation_results.setText(f"Error reading LiDAR: {e}")
+            self._elevation_progress.setVisible(False)
+
+    def _process_lidar_folder(self, folder):
+        """Process LiDAR GeoTIFF folder and extract elevation."""
+        import os
+        try:
+            import rasterio
+            from pyproj import Transformer
+            from core.terrain import TerrainMesh, TerrainVertex
+        except ImportError as e:
+            self._elevation_results.setText(f"Import error: {e}")
+            self._elevation_progress.setVisible(False)
+            return
+
+        # Find all TIFF files
+        tiff_files = []
+        for root, dirs, files in os.walk(folder):
+            for f in files:
+                if f.lower().endswith(('.tif', '.tiff')):
+                    tiff_files.append(os.path.join(root, f))
+
+        if not tiff_files:
+            self._elevation_results.setText("No GeoTIFF files found in folder.")
+            self._elevation_progress.setVisible(False)
+            return
+
+        print(f"[SiteDialog] Found {len(tiff_files)} GeoTIFF files")
+        self._elevation_results.setText(f"Found {len(tiff_files)} GeoTIFF files. Searching for your property...")
+
+        # Get property center from boundary
+        boundary = self._map_boundary
+        center_lat = (boundary['lat_min'] + boundary['lat_max']) / 2
+        center_lng = (boundary['lng_min'] + boundary['lng_max']) / 2
+
+        # Calculate property size in meters (approximate)
+        lat_range = boundary['lat_max'] - boundary['lat_min']
+        lng_range = boundary['lng_max'] - boundary['lng_min']
+        # 1 degree lat ≈ 111,000m, 1 degree lng ≈ 111,000m * cos(lat)
+        import math
+        height_m = lat_range * 111000
+        width_m = lng_range * 111000 * math.cos(math.radians(center_lat))
+
+        print(f"[SiteDialog] Property center: ({center_lat:.6f}, {center_lng:.6f})")
+        print(f"[SiteDialog] Property size: {width_m:.1f}m x {height_m:.1f}m")
+
+        # Find tile containing property
+        found_tile = None
+        for tiff_path in tiff_files:
+            try:
+                with rasterio.open(tiff_path) as src:
+                    raster_crs = src.crs
+                    transformer = Transformer.from_crs("EPSG:4326", raster_crs, always_xy=True)
+                    x, y = transformer.transform(center_lng, center_lat)
+
+                    bounds = src.bounds
+                    if bounds.left <= x <= bounds.right and bounds.bottom <= y <= bounds.top:
+                        found_tile = tiff_path
+                        print(f"[SiteDialog] Found tile: {os.path.basename(tiff_path)}")
+                        print(f"[SiteDialog] Resolution: {src.res[0]:.2f}m")
+                        break
+            except Exception as e:
+                continue
+
+        if not found_tile:
+            self._elevation_results.setText(
+                f"No tile covers your property location.\n"
+                f"Center: ({center_lat:.6f}, {center_lng:.6f})\n"
+                f"Downloaded data may be for a different area.")
+            self._elevation_progress.setVisible(False)
+            return
+
+        # Extract elevation data
+        self._elevation_results.setText(f"Extracting elevation from {os.path.basename(found_tile)}...")
+
+        try:
+            with rasterio.open(found_tile) as src:
+                raster_crs = src.crs
+                transformer = Transformer.from_crs("EPSG:4326", raster_crs, always_xy=True)
+                reverse_transformer = Transformer.from_crs(raster_crs, "EPSG:4326", always_xy=True)
+
+                # Convert center to raster CRS
+                center_x, center_y = transformer.transform(center_lng, center_lat)
+
+                # Calculate bounds with some buffer
+                buffer = 5  # 5m buffer
+                half_w = (width_m / 2) + buffer
+                half_h = (height_m / 2) + buffer
+
+                min_x = center_x - half_w
+                max_x = center_x + half_w
+                min_y = center_y - half_h
+                max_y = center_y + half_h
+
+                # Get pixel coordinates
+                row_start, col_start = src.index(min_x, max_y)
+                row_end, col_end = src.index(max_x, min_y)
+
+                # Clamp to valid range
+                row_start = max(0, min(row_start, src.height - 1))
+                row_end = max(0, min(row_end, src.height))
+                col_start = max(0, min(col_start, src.width - 1))
+                col_end = max(0, min(col_end, src.width))
+
+                if row_end <= row_start or col_end <= col_start:
+                    self._elevation_results.setText("Property area is outside the raster bounds.")
+                    self._elevation_progress.setVisible(False)
+                    return
+
+                # Read elevation window
+                elevation = src.read(1)
+                window_data = elevation[row_start:row_end, col_start:col_end]
+                resolution = src.res[0]
+                nodata = src.nodata
+
+                print(f"[SiteDialog] Extracted {window_data.shape[1]}x{window_data.shape[0]} pixels")
+
+                # Calculate stats
+                valid_mask = window_data != nodata if nodata else np.ones_like(window_data, dtype=bool)
+                valid_data = window_data[valid_mask]
+
+                if len(valid_data) == 0:
+                    self._elevation_results.setText("No valid elevation data in property area.")
+                    self._elevation_progress.setVisible(False)
+                    return
+
+                min_elev = float(valid_data.min())
+                max_elev = float(valid_data.max())
+                elev_range = max_elev - min_elev
+
+                print(f"[SiteDialog] Elevation: {min_elev:.2f}m to {max_elev:.2f}m (range: {elev_range:.2f}m)")
+
+                # Convert to elevation grid format for terrain generator
+                self._elevation_data = {}
+                point_count = 0
+
+                # Subsample if too many points - use custom setting if available
+                if hasattr(self, '_lidar_import_settings') and self._lidar_import_settings:
+                    max_points = self._lidar_import_settings.get("max_points", 200000)
+                else:
+                    max_points = 200000  # Default
+                total_points = window_data.shape[0] * window_data.shape[1]
+                step = max(1, int(math.sqrt(total_points / max_points)))
+
+                for row_idx in range(0, window_data.shape[0], step):
+                    for col_idx in range(0, window_data.shape[1], step):
+                        elev = float(window_data[row_idx, col_idx])
+                        if nodata and elev == nodata:
+                            continue
+
+                        # Convert pixel to geographic coordinates
+                        px = min_x + (col_idx + 0.5) * resolution
+                        py = max_y - (row_idx + 0.5) * resolution
+                        plng, plat = reverse_transformer.transform(px, py)
+
+                        key = f"{plat:.7f},{plng:.7f}"
+                        self._elevation_data[key] = {
+                            "lat": plat,
+                            "lng": plng,
+                            "elevation_m": elev,
+                            "elevation_ft": elev * 3.28084
+                        }
+                        point_count += 1
+
+                print(f"[SiteDialog] Created {point_count} elevation points (step={step})")
+
+                # Update UI
+                self._elevation_progress.setVisible(False)
+                self._elevation_results.setText(
+                    f"✓ LiDAR data imported!\n"
+                    f"  Source: {os.path.basename(found_tile)}\n"
+                    f"  Resolution: {resolution:.2f}m\n"
+                    f"  Points: {point_count}\n"
+                    f"  Elevation: {min_elev:.1f}m to {max_elev:.1f}m\n"
+                    f"  Range: {elev_range:.2f}m ({elev_range * 3.28084:.1f}ft)"
+                )
+
+                # Generate terrain mesh
+                self._generate_lidar_terrain_mesh(min_elev)
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._elevation_results.setText(f"Error reading LiDAR: {e}")
+            self._elevation_progress.setVisible(False)
+
+    def _generate_lidar_terrain_mesh(self, min_elevation_m):
+        """
+        Prepare terrain data for C++ generation (skips slow Python preview).
+
+        The actual mesh generation happens in the viewport using fast C++ code
+        when the project is loaded.
+        """
+        num_points = len(self._elevation_data) if self._elevation_data else 0
+        grid_res = 250
+        if hasattr(self, '_lidar_import_settings') and self._lidar_import_settings:
+            grid_res = self._lidar_import_settings.get("grid_resolution", 250)
+        expected_tris = 2 * grid_res * grid_res
+
+        print(f"[SiteDialog] Terrain data ready for C++ generation:")
+        print(f"  - {num_points:,} elevation points")
+        print(f"  - Grid resolution: {grid_res} (~{expected_tris:,} triangles)")
+        print(f"  - Mesh will be generated by viewport using C++")
+
+        # Update UI - no preview, just confirmation
+        self._elevation_results.setText(
+            self._elevation_results.text() +
+            f"\n\n✓ Terrain data ready ({num_points:,} points)\n"
+            f"   3D mesh will be generated when project loads (C++)"
+        )
+
+        # Don't generate mesh here - viewport will do it with C++
+        # Just ensure the settings flag is set
+        if not hasattr(self, '_lidar_import_settings'):
+            self._lidar_import_settings = {}
+        self._lidar_import_settings['use_cpp_generation'] = True
+        self._lidar_import_settings['grid_resolution'] = grid_res
 
     def _on_next(self):
         """Handle Next button - validate and emit site data."""
@@ -1681,12 +2813,6 @@ class SiteDialog(QDialog):
                 "west": self._view_west.isChecked(),
             },
             "feature_notes": self._feature_notes.toPlainText(),
-            "imported_files": {
-                "survey": self._survey_label.text(),
-                "topography": self._topo_label.text(),
-                "map": self._map_label.text(),
-                "cad": self._cad_label.text(),
-            }
         }
 
         # Calculate buildable area
@@ -1716,9 +2842,11 @@ class SiteDialog(QDialog):
             google_maps_data["latitude"] = self._lat_input.value()
             google_maps_data["longitude"] = self._lng_input.value()
 
-        # Add boundary data if drawn on map
+        # Add boundary data if drawn on map (including polygon vertices)
+        print(f"[SiteDialog] _map_boundary exists: {hasattr(self, '_map_boundary')}, value: {getattr(self, '_map_boundary', None)}")
         if hasattr(self, '_map_boundary') and self._map_boundary:
-            google_maps_data["boundary"] = {
+            print(f"[SiteDialog] Saving boundary: lat=[{self._map_boundary['lat_min']:.6f}, {self._map_boundary['lat_max']:.6f}], lng=[{self._map_boundary['lng_min']:.6f}, {self._map_boundary['lng_max']:.6f}]")
+            boundary_data = {
                 "lat_min": self._map_boundary["lat_min"],
                 "lat_max": self._map_boundary["lat_max"],
                 "lng_min": self._map_boundary["lng_min"],
@@ -1726,13 +2854,54 @@ class SiteDialog(QDialog):
                 "width_ft": self._map_boundary.get("width_ft", 0),
                 "depth_ft": self._map_boundary.get("depth_ft", 0)
             }
+            # Include actual polygon vertices if available
+            if self._map_boundary.get("vertices"):
+                boundary_data["vertices"] = self._map_boundary["vertices"]
+                boundary_data["vertices_ft"] = self._map_boundary.get("vertices_ft")
+                # Convert to mm for terrain generator
+                boundary_data["vertices_mm"] = [
+                    [v[0] * 304.8, v[1] * 304.8] for v in self._map_boundary.get("vertices_ft", [])
+                ]
+                print(f"[SiteDialog] Polygon boundary saved: {len(boundary_data['vertices'])} vertices")
+            google_maps_data["boundary"] = boundary_data
 
         self.site_data["google_maps"] = google_maps_data
 
-        # Add terrain mesh if generated
+        # Add building origin if placed on map
+        if self._building_origin:
+            rotation_deg = self._building_origin.get("rotation_deg", 0.0)
+            self.site_data["building_origin"] = {
+                "lat": self._building_origin["lat"],
+                "lng": self._building_origin["lng"],
+                "x_ft": self._building_origin["x_ft"],
+                "z_ft": self._building_origin["z_ft"],
+                "rotation_deg": rotation_deg,
+                # Convert to mm for renderer (building coordinates are in mm)
+                "x_mm": self._building_origin["x_ft"] * 304.8,
+                "z_mm": self._building_origin["z_ft"] * 304.8,
+                "rotation_rad": rotation_deg * 3.14159265 / 180.0
+            }
+            print(f"[SiteDialog] Building origin saved: center=({self._building_origin['x_ft']:.0f}', {self._building_origin['z_ft']:.0f}'), rotation={rotation_deg:.0f}°")
+        else:
+            print(f"[SiteDialog] WARNING: No building origin set (_building_origin is None/empty)")
+
+        # Add terrain mesh if generated (Python fallback)
         if hasattr(self, '_terrain_mesh') and self._terrain_mesh:
             self.site_data["terrain_mesh"] = self._terrain_mesh.to_dict()
             print(f"[SiteDialog] Terrain mesh saved to site data")
+
+        # Add terrain generation settings for C++ generation (faster)
+        # The viewport will use this to generate terrain directly in C++
+        if self._elevation_data:
+            terrain_settings = {
+                "use_cpp_generation": True,  # Always use C++ for speed
+                "grid_resolution": 250,  # Default
+            }
+            if hasattr(self, '_lidar_import_settings') and self._lidar_import_settings:
+                terrain_settings["grid_resolution"] = self._lidar_import_settings.get("grid_resolution", 250)
+                terrain_settings["use_cpp_generation"] = self._lidar_import_settings.get("use_cpp_generation", True)
+            self.site_data["terrain_generation_settings"] = terrain_settings
+            print(f"[SiteDialog] C++ terrain generation: grid_resolution={terrain_settings['grid_resolution']}, points={len(self._elevation_data)}")
 
         # Save site for future use
         self._save_site(self.site_data)

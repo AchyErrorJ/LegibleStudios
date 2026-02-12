@@ -104,8 +104,9 @@ class DiagnosticsManager:
 
     def _init_log_file(self):
         """Initialize diagnostic log file."""
-        log_dir = Path(__file__).parent.parent / "logs"
-        log_dir.mkdir(exist_ok=True)
+        # Use user's home directory to avoid permission issues in Program Files
+        log_dir = Path.home() / ".legiblestudio" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_file = log_dir / f"diagnostics_{timestamp}.log"
@@ -491,7 +492,8 @@ class DiagnosticsManager:
     def save_report(self, path: Optional[Path] = None):
         """Save diagnostic report to file."""
         if path is None:
-            log_dir = Path(__file__).parent.parent / "logs"
+            log_dir = Path.home() / ".legiblestudio" / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             path = log_dir / f"report_{timestamp}.txt"
 

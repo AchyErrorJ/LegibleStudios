@@ -1019,28 +1019,88 @@ class PlanGenerator:
 
         return sorted(set(breaks))
 
+    def _is_dimension_hidden(self, dim_id: str, overrides: List) -> bool:
+        """Check if a dimension should be hidden based on overrides."""
+        return any(
+            o.get('target') == dim_id and o.get('type') == 'hide'
+            for o in overrides
+        )
+
+    def _get_dimension_text_override(self, dim_id: str, overrides: List) -> Optional[str]:
+        """Get text override for a dimension if one exists."""
+        for o in overrides:
+            if o.get('target') == dim_id and o.get('type') == 'text':
+                return o.get('value')
+        return None
+
     def _generate_ladder_dimensions(self) -> str:
-        """Generate dimension chains on each wall with openings."""
+        """Generate dimension chains on each wall with openings.
+
+        Respects dimension_settings and dimension_overrides from document data.
+        Override types:
+        - {'type': 'hide', 'target': 'wall_0.seg_0'} - Hide a dimension
+        - {'type': 'text', 'target': 'wall_0.seg_0', 'value': '10'-0" TYP'} - Override text
+        - {'type': 'add', 'start': [x1, y1], 'end': [x2, y2], 'text': 'CUSTOM', 'view': 'plan'}
+        """
+        settings = self.data.get('dimension_settings', {})
+        overrides = self.data.get('dimension_overrides', [])
+
+        # Check if auto-dimensioning is enabled
+        if not settings.get('auto_exterior_walls', True) and not settings.get('auto_openings', True):
+            # Only render custom dimensions
+            return self._generate_custom_dimensions(overrides)
+
         dims = ['<!-- Wall Dimension Chains -->']
-        dim_offset = 600  # Distance from wall to dimension line
+        dim_offset = settings.get('offset_from_wall', 600)
 
         # Process each wall
         for wall_idx, wall in enumerate(self.walls):
+            # Only dimension exterior walls if auto_exterior_walls is set
+            if wall.category != 'exterior' and not settings.get('auto_openings', True):
+                continue
+
             geom = self._get_wall_geometry(wall)
 
             # Get all openings on this wall
             opening_centers = []
 
-            for door in self.doors:
-                if door.wall_index == wall_idx:
-                    opening_centers.append(door.offset)
+            if settings.get('auto_openings', True):
+                for door in self.doors:
+                    if door.wall_index == wall_idx:
+                        opening_centers.append(door.offset)
 
-            for window in self.windows:
-                if window.wall_index == wall_idx:
-                    opening_centers.append(window.offset)
+                for window in self.windows:
+                    if window.wall_index == wall_idx:
+                        opening_centers.append(window.offset)
 
-            # Skip walls with no openings
+            # Skip walls with no openings (unless we want wall-to-wall dims)
+            if not opening_centers and not settings.get('auto_exterior_walls', True):
+                continue
+
+            # If no openings but auto_exterior_walls is on, dimension the full wall
             if not opening_centers:
+                if wall.category == 'exterior' and settings.get('auto_exterior_walls', True):
+                    # Add single dimension for the wall
+                    dim_id = f'wall_{wall_idx}.length'
+                    if self._is_dimension_hidden(dim_id, overrides):
+                        continue
+
+                    text_override = self._get_dimension_text_override(dim_id, overrides)
+
+                    if geom['is_horizontal']:
+                        wall_start = min(geom['start_x'], geom['end_x'])
+                        wall_end = max(geom['start_x'], geom['end_x'])
+                        wall_z = geom['start_z']
+                        dim_y = wall_z - dim_offset
+                        dims.append(self._dim_line(wall_start, dim_y, wall_end, dim_y,
+                                                    wall_end - wall_start, text_override))
+                    elif geom['is_vertical']:
+                        wall_start = min(geom['start_z'], geom['end_z'])
+                        wall_end = max(geom['start_z'], geom['end_z'])
+                        wall_x = geom['start_x']
+                        dim_x = wall_x + dim_offset
+                        dims.append(self._dim_line_v(dim_x, wall_start, wall_end,
+                                                      wall_end - wall_start, text_override))
                 continue
 
             opening_centers.sort()
@@ -1061,7 +1121,16 @@ class PlanGenerator:
                 for i in range(len(breaks) - 1):
                     x1, x2 = breaks[i], breaks[i + 1]
                     if x2 - x1 > 50:
-                        dims.append(self._dim_line(x1, dim_y, x2, dim_y, x2 - x1))
+                        dim_id = f'wall_{wall_idx}.seg_{i}'
+
+                        # Check for hide override
+                        if self._is_dimension_hidden(dim_id, overrides):
+                            continue
+
+                        # Check for text override
+                        text_override = self._get_dimension_text_override(dim_id, overrides)
+
+                        dims.append(self._dim_line(x1, dim_y, x2, dim_y, x2 - x1, text_override))
 
             elif geom['is_vertical']:
                 wall_start = min(geom['start_z'], geom['end_z'])
@@ -1078,25 +1147,75 @@ class PlanGenerator:
                 for i in range(len(breaks) - 1):
                     z1, z2 = breaks[i], breaks[i + 1]
                     if z2 - z1 > 50:
-                        dims.append(self._dim_line_v(dim_x, z1, z2, z2 - z1))
+                        dim_id = f'wall_{wall_idx}.seg_{i}'
+
+                        # Check for hide override
+                        if self._is_dimension_hidden(dim_id, overrides):
+                            continue
+
+                        # Check for text override
+                        text_override = self._get_dimension_text_override(dim_id, overrides)
+
+                        dims.append(self._dim_line_v(dim_x, z1, z2, z2 - z1, text_override))
 
         # Add overall building dimensions
         bounds = self._get_building_bounds()
-        overall_offset = 1500
+        overall_offset = dim_offset + settings.get('chain_spacing', 400) * 2
 
-        # South overall
-        dims.append(self._dim_line(
-            bounds['min_x'], bounds['min_z'] - overall_offset,
-            bounds['max_x'], bounds['min_z'] - overall_offset,
-            bounds['max_x'] - bounds['min_x']
-        ))
+        # South overall dimension
+        dim_id = 'building.width'
+        if not self._is_dimension_hidden(dim_id, overrides):
+            text_override = self._get_dimension_text_override(dim_id, overrides)
+            dims.append(self._dim_line(
+                bounds['min_x'], bounds['min_z'] - overall_offset,
+                bounds['max_x'], bounds['min_z'] - overall_offset,
+                bounds['max_x'] - bounds['min_x'], text_override
+            ))
 
-        # East overall
-        dims.append(self._dim_line_v(
-            bounds['max_x'] + overall_offset,
-            bounds['min_z'], bounds['max_z'],
-            bounds['max_z'] - bounds['min_z']
-        ))
+        # East overall dimension
+        dim_id = 'building.depth'
+        if not self._is_dimension_hidden(dim_id, overrides):
+            text_override = self._get_dimension_text_override(dim_id, overrides)
+            dims.append(self._dim_line_v(
+                bounds['max_x'] + overall_offset,
+                bounds['min_z'], bounds['max_z'],
+                bounds['max_z'] - bounds['min_z'], text_override
+            ))
+
+        # Add custom dimensions from overrides
+        dims.append(self._generate_custom_dimensions(overrides))
+
+        return '\n'.join(dims)
+
+    def _generate_custom_dimensions(self, overrides: List) -> str:
+        """Generate custom dimensions from 'add' type overrides."""
+        dims = ['<!-- Custom Dimensions -->']
+
+        for override in overrides:
+            if override.get('type') != 'add':
+                continue
+            if override.get('view', 'plan') != 'plan':
+                continue
+
+            start = override.get('start', [0, 0])
+            end = override.get('end', [0, 0])
+            text = override.get('text', '')
+
+            # Determine if horizontal or vertical
+            if abs(end[1] - start[1]) < 50:  # Horizontal
+                value = abs(end[0] - start[0])
+                dims.append(self._dim_line(
+                    min(start[0], end[0]), start[1],
+                    max(start[0], end[0]), start[1],
+                    value, text if text else None
+                ))
+            else:  # Vertical
+                value = abs(end[1] - start[1])
+                dims.append(self._dim_line_v(
+                    start[0],
+                    min(start[1], end[1]), max(start[1], end[1]),
+                    value, text if text else None
+                ))
 
         return '\n'.join(dims)
 
@@ -1182,28 +1301,116 @@ class PlanGenerator:
 
         return sorted(set(filtered))
 
-    def _dim_line(self, x1: float, y: float, x2: float, y2: float, value: float) -> str:
-        """Generate a horizontal dimension line with ticks and text."""
-        tick = 150  # Extension line size
+    def _format_dimension(self, value_mm: float) -> str:
+        """Format dimension value based on display_format setting.
+
+        Args:
+            value_mm: Value in millimeters
+
+        Returns:
+            Formatted string (e.g., "3'-6\"" for imperial or "1067" for metric)
+        """
+        settings = self.data.get('dimension_settings', {})
+        fmt = settings.get('display_format', 'metric')
+
+        if fmt == 'imperial':
+            inches = value_mm / 25.4
+            feet = int(inches // 12)
+            remaining_inches = inches % 12
+
+            # Round to nearest 1/16"
+            sixteenths = round(remaining_inches * 16)
+            remaining_inches = sixteenths / 16
+
+            # Handle case where rounding brings us to 12 inches
+            if remaining_inches >= 12:
+                feet += 1
+                remaining_inches = 0
+
+            if remaining_inches == 0:
+                return f"{feet}'-0\""
+            elif remaining_inches == int(remaining_inches):
+                return f"{feet}'-{int(remaining_inches)}\""
+            else:
+                # Format as fraction for common values
+                whole_in = int(remaining_inches)
+                frac = remaining_inches - whole_in
+
+                # Common fractions
+                if abs(frac - 0.5) < 0.01:
+                    frac_str = "1/2"
+                elif abs(frac - 0.25) < 0.01:
+                    frac_str = "1/4"
+                elif abs(frac - 0.75) < 0.01:
+                    frac_str = "3/4"
+                elif abs(frac - 0.125) < 0.01:
+                    frac_str = "1/8"
+                elif abs(frac - 0.375) < 0.01:
+                    frac_str = "3/8"
+                elif abs(frac - 0.625) < 0.01:
+                    frac_str = "5/8"
+                elif abs(frac - 0.875) < 0.01:
+                    frac_str = "7/8"
+                else:
+                    # Fall back to decimal
+                    return f"{feet}'-{remaining_inches:.1f}\""
+
+                if whole_in > 0:
+                    return f"{feet}'-{whole_in} {frac_str}\""
+                else:
+                    return f"{feet}'-{frac_str}\""
+        else:
+            # Metric: just show millimeters as integer
+            return str(int(value_mm))
+
+    def _dim_line(self, x1: float, y: float, x2: float, y2: float, value, text: str = None) -> str:
+        """Generate a horizontal dimension line with ticks and text.
+
+        Args:
+            x1, y: Start point
+            x2, y2: End point (y2 is typically same as y for horizontal)
+            value: Numeric value in mm (used if text is None)
+            text: Optional override text to display instead of formatted value
+        """
+        settings = self.data.get('dimension_settings', {})
+        tick = settings.get('tick_length', 150)
         text_offset = 120  # Small gap above line
         font_size = self.dim_text_size
+        line_width = settings.get('line_width', 3)
+
+        # Use override text or format the value
+        display_text = text if text is not None else self._format_dimension(value)
+
         return f'''<g>
-  <line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" stroke="#000" stroke-width="3"/>
+  <line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" stroke="#000" stroke-width="{line_width}"/>
   <line x1="{x1}" y1="{y + tick}" x2="{x1}" y2="{y - tick}" stroke="#000" stroke-width="2"/>
   <line x1="{x2}" y1="{y + tick}" x2="{x2}" y2="{y - tick}" stroke="#000" stroke-width="2"/>
-  <text x="{(x1 + x2)/2}" y="{y - text_offset}" font-family="Arial" font-size="{font_size}" font-weight="bold" text-anchor="middle">{int(value)}</text>
+  <text x="{(x1 + x2)/2}" y="{y - text_offset}" font-family="Arial" font-size="{font_size}" font-weight="bold" text-anchor="middle">{display_text}</text>
 </g>'''
 
-    def _dim_line_v(self, x: float, z1: float, z2: float, value: float) -> str:
-        """Generate a vertical dimension line."""
-        tick = 150  # Extension line size
+    def _dim_line_v(self, x: float, z1: float, z2: float, value, text: str = None) -> str:
+        """Generate a vertical dimension line.
+
+        Args:
+            x: X position
+            z1, z2: Start and end Y positions
+            value: Numeric value in mm (used if text is None)
+            text: Optional override text to display instead of formatted value
+        """
+        settings = self.data.get('dimension_settings', {})
+        tick = settings.get('tick_length', 150)
         text_offset = 120  # Small gap beside line
         font_size = self.dim_text_size
+        line_width = settings.get('line_width', 3)
+
+        # Use override text or format the value
+        display_text = text if text is not None else self._format_dimension(value)
+
         return f'''<g>
-  <line x1="{x}" y1="{z1}" x2="{x}" y2="{z2}" stroke="#000" stroke-width="3"/>
+  <line x1="{x}" y1="{z1}" x2="{x}" y2="{z2}" stroke="#000" stroke-width="{line_width}"/>
   <line x1="{x - tick}" y1="{z1}" x2="{x + tick}" y2="{z1}" stroke="#000" stroke-width="2"/>
   <line x1="{x - tick}" y1="{z2}" x2="{x + tick}" y2="{z2}" stroke="#000" stroke-width="2"/>
-  <text x="{x + text_offset}" y="{(z1 + z2)/2}" font-family="Arial" font-size="{font_size}" font-weight="bold" text-anchor="start" dominant-baseline="middle">{int(value)}</text>
+  <text x="{x + text_offset}" y="{(z1 + z2)/2}" font-family="Arial" font-size="{font_size}" font-weight="bold" text-anchor="start" dominant-baseline="middle">{display_text}</text>
 </g>'''
 
     def _generate_north_arrow(self, x: float, y: float) -> str:

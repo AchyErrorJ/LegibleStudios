@@ -28,6 +28,7 @@ class SheetPropertiesPanel(QWidget):
     # Signals
     regenerate_requested = pyqtSignal(str)  # sheet_id
     text_sizes_changed = pyqtSignal(dict)   # {dim_text_size, room_text_size, room_area_size}
+    dimension_settings_changed = pyqtSignal(dict)  # dimension_settings dict
 
     def __init__(self, registry: SheetRegistry, parent=None):
         super().__init__(parent)
@@ -140,6 +141,44 @@ class SheetPropertiesPanel(QWidget):
 
         layout.addWidget(text_group)
 
+        # Dimension settings group
+        dim_group = QGroupBox("Dimension Settings")
+        dim_layout = QFormLayout(dim_group)
+        dim_layout.setSpacing(6)
+
+        # Auto-dimension checkboxes
+        self._auto_exterior_check = QCheckBox("Exterior walls")
+        self._auto_exterior_check.setChecked(True)
+        self._auto_exterior_check.toggled.connect(self._on_dimension_settings_changed)
+        dim_layout.addRow("Auto-dim:", self._auto_exterior_check)
+
+        self._auto_openings_check = QCheckBox("Openings (doors/windows)")
+        self._auto_openings_check.setChecked(True)
+        self._auto_openings_check.toggled.connect(self._on_dimension_settings_changed)
+        dim_layout.addRow("", self._auto_openings_check)
+
+        self._auto_rooms_check = QCheckBox("Room dimensions")
+        self._auto_rooms_check.setChecked(True)
+        self._auto_rooms_check.toggled.connect(self._on_dimension_settings_changed)
+        dim_layout.addRow("", self._auto_rooms_check)
+
+        # Display format dropdown
+        self._display_format_combo = QComboBox()
+        self._display_format_combo.addItems(["Metric (mm)", "Imperial (ft-in)"])
+        self._display_format_combo.currentIndexChanged.connect(self._on_dimension_settings_changed)
+        dim_layout.addRow("Format:", self._display_format_combo)
+
+        # Dimension offset from wall
+        self._dim_offset_spin = QSpinBox()
+        self._dim_offset_spin.setRange(200, 1500)
+        self._dim_offset_spin.setValue(600)
+        self._dim_offset_spin.setSingleStep(50)
+        self._dim_offset_spin.setSuffix(" mm")
+        self._dim_offset_spin.valueChanged.connect(self._on_dimension_settings_changed)
+        dim_layout.addRow("Offset:", self._dim_offset_spin)
+
+        layout.addWidget(dim_group)
+
         # Title block group
         title_block_group = QGroupBox("Title Block")
         tb_layout = QFormLayout(title_block_group)
@@ -212,6 +251,13 @@ class SheetPropertiesPanel(QWidget):
         self._project_number_edit.clear()
         self._client_edit.clear()
         self._architect_edit.clear()
+
+        # Clear dimension settings
+        self._auto_exterior_check.setChecked(True)
+        self._auto_openings_check.setChecked(True)
+        self._auto_rooms_check.setChecked(True)
+        self._display_format_combo.setCurrentIndex(0)
+        self._dim_offset_spin.setValue(600)
 
         self._updating = False
         self.setEnabled(False)
@@ -326,4 +372,47 @@ class SheetPropertiesPanel(QWidget):
             self._room_text_spin.setValue(sizes['room_text_size'])
         if 'room_area_size' in sizes:
             self._area_text_spin.setValue(sizes['room_area_size'])
+        self._updating = False
+
+    def _on_dimension_settings_changed(self):
+        """Handle changes to dimension settings."""
+        if self._updating:
+            return
+
+        settings = self.get_dimension_settings()
+        self._registry.dimension_settings = settings
+        self.dimension_settings_changed.emit(settings)
+
+    def get_dimension_settings(self) -> dict:
+        """Get current dimension settings."""
+        display_format = 'metric' if self._display_format_combo.currentIndex() == 0 else 'imperial'
+        return {
+            'auto_exterior_walls': self._auto_exterior_check.isChecked(),
+            'auto_openings': self._auto_openings_check.isChecked(),
+            'auto_rooms': self._auto_rooms_check.isChecked(),
+            'auto_heights': True,  # Default, no UI yet
+            'unit': 'mm',
+            'display_format': display_format,
+            'text_size': self._dim_text_spin.value(),
+            'line_width': 3,
+            'tick_length': 150,
+            'offset_from_wall': self._dim_offset_spin.value(),
+            'chain_spacing': 400,
+        }
+
+    def set_dimension_settings(self, settings: dict):
+        """Set dimension settings from a dictionary."""
+        self._updating = True
+        if 'auto_exterior_walls' in settings:
+            self._auto_exterior_check.setChecked(settings['auto_exterior_walls'])
+        if 'auto_openings' in settings:
+            self._auto_openings_check.setChecked(settings['auto_openings'])
+        if 'auto_rooms' in settings:
+            self._auto_rooms_check.setChecked(settings['auto_rooms'])
+        if 'display_format' in settings:
+            self._display_format_combo.setCurrentIndex(
+                0 if settings['display_format'] == 'metric' else 1
+            )
+        if 'offset_from_wall' in settings:
+            self._dim_offset_spin.setValue(settings['offset_from_wall'])
         self._updating = False

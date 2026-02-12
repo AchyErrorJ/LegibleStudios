@@ -48,7 +48,7 @@ class Config:
     @property
     def config_dir(self) -> Path:
         """Get config directory."""
-        config_path = Path.home() / ".archengine"
+        config_path = Path.home() / ".legiblestudio"
         config_path.mkdir(exist_ok=True)
         return config_path
 

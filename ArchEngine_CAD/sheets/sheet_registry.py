@@ -89,6 +89,28 @@ class SheetRegistry(QObject):
         """Set text size settings."""
         self._drawing_set._text_sizes = value
 
+    @property
+    def dimension_settings(self) -> dict:
+        """Get dimension settings."""
+        return getattr(self._drawing_set, '_dimension_settings', {
+            'auto_exterior_walls': True,
+            'auto_openings': True,
+            'auto_rooms': True,
+            'auto_heights': True,
+            'unit': 'mm',
+            'display_format': 'metric',
+            'text_size': 300,
+            'line_width': 3,
+            'tick_length': 150,
+            'offset_from_wall': 600,
+            'chain_spacing': 400,
+        })
+
+    @dimension_settings.setter
+    def dimension_settings(self, value: dict):
+        """Set dimension settings."""
+        self._drawing_set._dimension_settings = value
+
     # =========================================================================
     # Sheet Access
     # =========================================================================
