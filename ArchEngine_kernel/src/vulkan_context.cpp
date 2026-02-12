@@ -74,6 +74,35 @@ VulkanContext::VulkanContext(VkInstance instance, VkSurfaceKHR surface, u32 widt
     std::cout << "VulkanContext initialized in embedded mode (" << width << "x" << height << ")" << std::endl;
 }
 
+// Private headless constructor
+VulkanContext::VulkanContext(const VulkanConfig& config, bool /*headless*/)
+    : m_config(config), m_window(nullptr), m_ownsInstance(true), m_ownsSurface(false) {
+
+    m_config.headless = true;  // Ensure headless flag is set
+    m_surface = VK_NULL_HANDLE;  // No surface in headless mode
+
+    createInstanceHeadless();
+    if (m_config.enableValidation) {
+        setupDebugMessenger();
+    }
+    // No surface creation
+    pickPhysicalDevice();
+    createLogicalDevice();
+    // No swapchain in headless mode
+    createCommandPool();
+    createPipelineCache();
+
+    std::cout << "VulkanContext initialized in headless mode (compute-only)" << std::endl;
+}
+
+// Static factory for headless mode
+std::unique_ptr<VulkanContext> VulkanContext::createHeadless(const VulkanConfig& config) {
+    VulkanConfig headlessConfig = config;
+    headlessConfig.headless = true;
+    headlessConfig.enableMsaa = false;  // No MSAA in headless mode
+    return std::unique_ptr<VulkanContext>(new VulkanContext(headlessConfig, true));
+}
+
 VulkanContext::~VulkanContext() {
     savePipelineCache();
     cleanupSwapchain();
@@ -128,6 +157,37 @@ void VulkanContext::createInstance() {
 
     if (vkCreateInstance(&createInfo, nullptr, &m_instance) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create Vulkan instance");
+    }
+}
+
+void VulkanContext::createInstanceHeadless() {
+    VkApplicationInfo appInfo{};
+    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    appInfo.pApplicationName = "ArchEngine";
+    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.pEngineName = "ArchEngine";
+    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.apiVersion = VK_API_VERSION_1_2;
+
+    // Headless mode: no window extensions needed
+    std::vector<const char*> extensions;
+    if (m_config.enableValidation) {
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
+
+    VkInstanceCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    createInfo.pApplicationInfo = &appInfo;
+    createInfo.enabledExtensionCount = static_cast<u32>(extensions.size());
+    createInfo.ppEnabledExtensionNames = extensions.data();
+
+    if (m_config.enableValidation) {
+        createInfo.enabledLayerCount = static_cast<u32>(m_validationLayers.size());
+        createInfo.ppEnabledLayerNames = m_validationLayers.data();
+    }
+
+    if (vkCreateInstance(&createInfo, nullptr, &m_instance) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create Vulkan instance (headless)");
     }
 }
 
@@ -209,37 +269,35 @@ void VulkanContext::createLogicalDevice() {
     VkPhysicalDeviceFeatures supportedFeatures{};
     vkGetPhysicalDeviceFeatures(m_physicalDevice, &supportedFeatures);
 
-    // Only enable features that are actually supported by the GPU
-    // AMD integrated GPUs often lack wideLines support
     VkPhysicalDeviceFeatures deviceFeatures{};
-    deviceFeatures.fillModeNonSolid = supportedFeatures.fillModeNonSolid;   // For wireframe
-    deviceFeatures.wideLines = supportedFeatures.wideLines;                  // For thick lines (often unsupported on AMD)
-    deviceFeatures.sampleRateShading = supportedFeatures.sampleRateShading;  // For MSAA sample shading
-    deviceFeatures.shaderClipDistance = supportedFeatures.shaderClipDistance; // For section clipping
+    deviceFeatures.fillModeNonSolid = VK_TRUE;   // For wireframe
+    deviceFeatures.wideLines = VK_TRUE;          // For thick lines
+    deviceFeatures.sampleRateShading = VK_TRUE;  // For MSAA sample shading
+    deviceFeatures.shaderClipDistance = VK_TRUE; // For section clipping
     deviceFeatures.samplerAnisotropy = supportedFeatures.samplerAnisotropy;
-    deviceFeatures.tessellationShader = supportedFeatures.tessellationShader; // For displacement mapping
+    deviceFeatures.tessellationShader = VK_TRUE; // For displacement mapping
 
-    // Log which features were disabled due to lack of support
-    if (!supportedFeatures.fillModeNonSolid) {
-        std::cout << "[Warning] GPU does not support fillModeNonSolid - wireframe mode disabled" << std::endl;
-    }
-    if (!supportedFeatures.wideLines) {
-        std::cout << "[Warning] GPU does not support wideLines - thick lines disabled" << std::endl;
-    }
-    if (!supportedFeatures.tessellationShader) {
-        std::cout << "[Warning] GPU does not support tessellation - displacement mapping disabled" << std::endl;
-    }
-    if (!supportedFeatures.shaderClipDistance) {
-        std::cout << "[Warning] GPU does not support shaderClipDistance - section clipping disabled" << std::endl;
-    }
+    // Enable descriptor indexing features for UPDATE_AFTER_BIND (used by post-processing)
+    VkPhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures{};
+    descriptorIndexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+    descriptorIndexingFeatures.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    descriptorIndexingFeatures.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    createInfo.pNext = &descriptorIndexingFeatures;
     createInfo.queueCreateInfoCount = static_cast<u32>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pEnabledFeatures = &deviceFeatures;
-    createInfo.enabledExtensionCount = static_cast<u32>(m_deviceExtensions.size());
-    createInfo.ppEnabledExtensionNames = m_deviceExtensions.data();
+
+    // In headless mode, we don't need swapchain extension
+    if (m_config.headless) {
+        createInfo.enabledExtensionCount = 0;
+        createInfo.ppEnabledExtensionNames = nullptr;
+    } else {
+        createInfo.enabledExtensionCount = static_cast<u32>(m_deviceExtensions.size());
+        createInfo.ppEnabledExtensionNames = m_deviceExtensions.data();
+    }
 
     if (vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create logical device");
@@ -349,14 +407,32 @@ void VulkanContext::cleanupSwapchain() {
         m_msaaColorMemory = VK_NULL_HANDLE;
     }
 
-    vkDestroyImageView(m_device, m_depthImageView, nullptr);
-    vkDestroyImage(m_device, m_depthImage, nullptr);
-    vkFreeMemory(m_device, m_depthImageMemory, nullptr);
-
-    for (auto imageView : m_swapchainImageViews) {
-        vkDestroyImageView(m_device, imageView, nullptr);
+    // Depth resources (not present in headless mode)
+    if (m_depthImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device, m_depthImageView, nullptr);
+        m_depthImageView = VK_NULL_HANDLE;
     }
-    vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+    if (m_depthImage != VK_NULL_HANDLE) {
+        vkDestroyImage(m_device, m_depthImage, nullptr);
+        m_depthImage = VK_NULL_HANDLE;
+    }
+    if (m_depthImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(m_device, m_depthImageMemory, nullptr);
+        m_depthImageMemory = VK_NULL_HANDLE;
+    }
+
+    // Swapchain resources (not present in headless mode)
+    for (auto imageView : m_swapchainImageViews) {
+        if (imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(m_device, imageView, nullptr);
+        }
+    }
+    m_swapchainImageViews.clear();
+
+    if (m_swapchain != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+        m_swapchain = VK_NULL_HANDLE;
+    }
 }
 
 void VulkanContext::recreateSwapchain() {
@@ -397,10 +473,16 @@ QueueFamilyIndices VulkanContext::findQueueFamilies(VkPhysicalDevice device) {
             indices.graphicsFamily = i;
         }
 
-        VkBool32 presentSupport = false;
-        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_surface, &presentSupport);
-        if (presentSupport) {
-            indices.presentFamily = i;
+        // In headless mode, we don't have a surface, so skip present support check
+        if (m_config.headless) {
+            // For headless mode, use graphics queue for "present" as well
+            indices.presentFamily = indices.graphicsFamily;
+        } else if (m_surface != VK_NULL_HANDLE) {
+            VkBool32 presentSupport = false;
+            vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_surface, &presentSupport);
+            if (presentSupport) {
+                indices.presentFamily = i;
+            }
         }
 
         if (indices.isComplete()) break;
@@ -433,6 +515,12 @@ SwapchainSupportDetails VulkanContext::querySwapchainSupport(VkPhysicalDevice de
 
 bool VulkanContext::isDeviceSuitable(VkPhysicalDevice device) {
     QueueFamilyIndices indices = findQueueFamilies(device);
+
+    // In headless mode, we only need a graphics queue (compute uses graphics queue)
+    if (m_config.headless) {
+        return indices.graphicsFamily.has_value();
+    }
+
     bool extensionsSupported = checkDeviceExtensionSupport(device);
 
     bool swapchainAdequate = false;

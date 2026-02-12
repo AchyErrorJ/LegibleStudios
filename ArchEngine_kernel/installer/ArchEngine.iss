@@ -71,6 +71,9 @@ Source: "..\shaders\*.spv"; DestDir: "{app}\shaders"; Flags: ignoreversion
 ; Materials library
 Source: "..\materials\*"; DestDir: "{app}\materials"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.bak,*_old*"
 
+; HDRI environment maps (optional, for IBL lighting)
+Source: "..\hdri\*"; DestDir: "{app}\hdri"; Flags: ignoreversion skipifsourcedoesntexist recursesubdirs
+
 ; Launcher and documentation
 Source: "..\launch_archengine.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README_INSTALL.txt"; DestDir: "{app}"; DestName: "README.txt"; Flags: ignoreversion isreadme

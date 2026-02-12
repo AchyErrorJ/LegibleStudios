@@ -1,6 +1,6 @@
 #version 450
 
-// Final composite pass: combines HDR scene + SSAO + bloom, applies tonemapping
+// Final composite pass: combines HDR scene + SSAO + bloom + SSR, applies tonemapping
 
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 0) out vec4 outColor;
@@ -8,6 +8,8 @@ layout(location = 0) out vec4 outColor;
 layout(set = 0, binding = 0) uniform sampler2D hdrScene;
 layout(set = 0, binding = 1) uniform sampler2D ssaoTexture;
 layout(set = 0, binding = 2) uniform sampler2D bloomTexture;
+layout(set = 0, binding = 3) uniform sampler2D ssrTexture;      // SSR reflections (rgb=color, a=confidence)
+layout(set = 0, binding = 4) uniform sampler2D normalRoughness; // Normal + roughness for SSR blend
 
 layout(push_constant) uniform CompositeParams {
     float bloomIntensity;
@@ -16,7 +18,11 @@ layout(push_constant) uniform CompositeParams {
     uint enableSSAO;
     uint enableBloom;
     uint tonemapMode;  // 0=Reinhard, 1=ACES, 2=Uncharted2
-    vec2 _padding;
+    uint debugMode;    // 0=None, 1=SSAO, 2=Bloom, 3=HDRScene, 4=Depth, 5=SSR, 6=Normals
+    float nearPlane;
+    float farPlane;
+    uint enableSSR;     // SSR enabled flag
+    float ssrIntensity; // SSR intensity multiplier
 } params;
 
 // ACES Filmic Tonemapping
@@ -54,8 +60,55 @@ vec3 Reinhard(vec3 color) {
     return color / (color + vec3(1.0));
 }
 
+// Linearize depth for visualization
+float linearizeDepth(float depth) {
+    float z = depth * 2.0 - 1.0;  // NDC
+    return (2.0 * params.nearPlane * params.farPlane) / (params.farPlane + params.nearPlane - z * (params.farPlane - params.nearPlane));
+}
+
 void main() {
-    // Sample HDR scene
+    // Debug modes - show individual buffers
+    if (params.debugMode == 1u) {
+        // SSAO Only - grayscale
+        float ao = texture(ssaoTexture, fragTexCoord).r;
+        outColor = vec4(vec3(ao), 1.0);
+        return;
+    } else if (params.debugMode == 2u) {
+        // Bloom Only
+        vec3 bloom = texture(bloomTexture, fragTexCoord).rgb;
+        // Apply gamma for visibility
+        bloom = pow(bloom, vec3(1.0 / 2.2));
+        outColor = vec4(bloom, 1.0);
+        return;
+    } else if (params.debugMode == 3u) {
+        // HDR Scene without effects
+        vec3 hdr = texture(hdrScene, fragTexCoord).rgb;
+        hdr *= params.exposure;
+        vec3 mapped = ACESFilm(hdr);
+        mapped = pow(mapped, vec3(1.0 / 2.2));
+        outColor = vec4(mapped, 1.0);
+        return;
+    } else if (params.debugMode == 4u) {
+        // Depth visualization - need to sample from depth somehow
+        // For now, show SSAO inverted as proxy for depth edges
+        float ao = 1.0 - texture(ssaoTexture, fragTexCoord).r;
+        outColor = vec4(vec3(ao), 1.0);
+        return;
+    } else if (params.debugMode == 5u) {
+        // SSR Only - show reflections
+        vec4 ssr = texture(ssrTexture, fragTexCoord);
+        vec3 ssrColor = ssr.rgb * ssr.a;  // Color weighted by confidence
+        ssrColor = pow(ssrColor, vec3(1.0 / 2.2));
+        outColor = vec4(ssrColor, 1.0);
+        return;
+    } else if (params.debugMode == 6u) {
+        // Normals visualization
+        vec3 normal = texture(normalRoughness, fragTexCoord).rgb;
+        outColor = vec4(normal, 1.0);  // Already packed in [0,1]
+        return;
+    }
+
+    // Normal rendering path
     vec3 hdrColor = texture(hdrScene, fragTexCoord).rgb;
 
     // Apply SSAO
@@ -63,6 +116,25 @@ void main() {
         float ao = texture(ssaoTexture, fragTexCoord).r;
         ao = mix(1.0, ao, params.ssaoIntensity);
         hdrColor *= ao;
+    }
+
+    // Apply SSR (screen-space reflections)
+    if (params.enableSSR != 0u) {
+        vec4 ssrData = texture(ssrTexture, fragTexCoord);
+        vec3 ssrColor = ssrData.rgb;
+        float ssrConfidence = ssrData.a;
+
+        // Get roughness from normal buffer to modulate reflection intensity
+        float roughness = texture(normalRoughness, fragTexCoord).a;
+
+        // Calculate reflection blend factor:
+        // - Lower roughness = stronger reflections
+        // - Higher SSR confidence = more visible reflection
+        float reflectivity = (1.0 - roughness) * ssrConfidence * params.ssrIntensity;
+
+        // Blend reflections additively (reflections add light)
+        // For more physically accurate results, this should be multiplied by metallic
+        hdrColor += ssrColor * reflectivity * 0.5;
     }
 
     // Apply bloom

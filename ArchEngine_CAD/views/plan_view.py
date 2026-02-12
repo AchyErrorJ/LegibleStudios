@@ -2986,6 +2986,7 @@ class PlanView(BaseView):
     """
 
     selection_changed = pyqtSignal(list)  # List of selected item indices
+    lod_level_changed = pyqtSignal(int)  # LOD level 1-5
 
     def __init__(self, document: ArchDocument, config: Config, parent=None):
         super().__init__(document, config, parent)
@@ -3134,6 +3135,10 @@ class PlanView(BaseView):
                 item = ConnectionItem(conn, document=self.document, view=self)
                 self.scene.addItem(item)
                 self._connection_items.append(item)
+
+    def set_view_mode(self, mode: str):
+        """Set view mode from tetrahedron navigation (stub)."""
+        pass
 
     @property
     def tool_manager(self):

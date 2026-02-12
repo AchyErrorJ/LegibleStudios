@@ -79,6 +79,10 @@ public:
         float postVibrance = -1.0f;
         float postSharpness = -1.0f;
         float postVignette = -1.0f;
+        // Path tracer settings
+        int renderMode = 0;     // 0=Rasterizer, 1=Path Tracer
+        int ptSamples = 64;     // Path tracer samples per pixel
+        int ptBounces = 6;      // Path tracer max bounces
     };
 
     struct MaterialOverrideRequest {
@@ -424,8 +428,11 @@ private:
     int m_renderFormat = 0;         // 0=PNG, 1=EXR
     bool m_renderUpscale = false;
     int m_renderUpscaleMethod = 0;
-    float m_renderBrightness = 1.0f; // Brightness multiplier (1.0 = match viewport)
+    float m_renderBrightness = 1.8f; // Brightness multiplier (1.8 default to compensate for no bloom/post-process)
     int m_renderPostProcess = 4;    // 0=none, 1=subtle, 2=vivid, 3=warm, 4=architectural, 5=golden_hour, 6=print_ready
+    int m_renderMode = 0;           // 0=Rasterizer (fast), 1=Path Tracer (quality)
+    int m_ptSamples = 64;           // Path tracer samples per pixel
+    int m_ptBounces = 6;            // Path tracer max bounces
     char m_renderOutputPath[260] = "renders/render.png";
 
     // Post-process manual adjustments (negative = use preset)

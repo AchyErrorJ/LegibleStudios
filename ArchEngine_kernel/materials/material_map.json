@@ -1,658 +1,185 @@
 {
   "category_defaults": {
-    "Walls": "siding_vinyl_light",
-    "Walls_Exterior": "brick_red_01",
-    "Walls_Interior": "paint_offwhite_matte",
-    "Roofs": "roof_shingle_asphalt_gray",
-    "Roofs_Metal": "roof_metal_standing_seam",
-    "Floors": "floors/concrete",
-    "Floors_Wood": "wood_floor_oak",
+    "Walls": "polyhaven/brick_wall_006",
+    "Walls_Exterior": "polyhaven/brick_wall_006",
+    "Walls_Interior": "polyhaven/concrete_wall_008",
+    "Roofs": "polyhaven/roof_slates_02",
+    "Roofs_Metal": "polyhaven/metal_plate_02",
+    "Floors": "polyhaven/concrete_floor_003",
+    "Floors_Wood": "polyhaven/wood_floor_deck",
+    "Floors_Exterior": "polyhaven/gravel_concrete",
+    "Ground": "polyhaven/grass_path_2",
+    "Driveway": "polyhaven/asphalt_04",
     "Windows": "glass",
-    "Doors": "wood_structural_oak",
-    "Structural": "wood_structural_fir"
+    "Doors": "polyhaven/wood_floor_deck",
+    "Structural": "polyhaven/wood_floor_deck"
   },
   "name_overrides": {
-    "Wall-Ext_102Bwk": "brick_red_01",
-    "Wall-Ext_Vinyl": "siding_vinyl_light",
-    "Wall-Ext_Siding": "siding_wood_clapboard",
-    "Wall-Partn": "paint_offwhite_matte",
-    "Wall-Int": "paint_white_flat",
-    "Floor-Grnd": "floors/concrete",
-    "Floor-Wood": "wood_floor_oak",
-    "Roof_Pitched": "roof_shingle_asphalt_gray",
-    "Roof_Flat": "roof_metal_standing_seam",
-    "Roof_Metal": "roof_metal_corrugated",
-    "Beam": "wood_structural_fir",
-    "Column": "wood_structural_oak",
-    "Joist": "wood_structural_fir"
+    "Wall-Ext_102Bwk": "polyhaven/brick_wall_006",
+    "Wall-Ext_Brick": "polyhaven/brick_wall_008",
+    "Wall-Ext_Vinyl": "polyhaven/concrete_wall_008",
+    "Wall-Ext_Siding": "polyhaven/wood_floor_deck",
+    "Wall-Ext_Concrete": "polyhaven/concrete_wall_008",
+    "Wall-Partn": "polyhaven/concrete_wall_008",
+    "Wall-Int": "polyhaven/concrete_wall_008",
+    "Floor-Grnd": "polyhaven/concrete_floor_003",
+    "Floor-Wood": "polyhaven/wood_floor_deck",
+    "Floor-Concrete": "polyhaven/concrete_floor_003",
+    "Roof_Pitched": "polyhaven/roof_slates_02",
+    "Roof_Flat": "polyhaven/metal_plate_02",
+    "Roof_Metal": "polyhaven/metal_plate_02",
+    "Beam": "polyhaven/wood_floor_deck",
+    "Column": "polyhaven/wood_floor_deck",
+    "Joist": "polyhaven/wood_floor_deck",
+    "Ground": "polyhaven/grass_path_2",
+    "Driveway": "polyhaven/asphalt_04",
+    "Patio": "polyhaven/gravel_concrete"
   },
   "materials": {
-    "walls/brick_red": {
-      "name": "Walls/Brick Red",
+    "polyhaven/brick_wall_006": {
+      "name": "Brick Wall",
+      "folder": "polyhaven/brick_wall_006",
       "textures": {
         "albedo": "albedo.jpg",
         "normal": "normal.jpg",
         "roughness": "roughness.jpg",
         "ao": "ao.jpg"
       },
-      "resolution": [
-        2048,
-        2048
-      ]
+      "resolution": [2048, 2048],
+      "source": "polyhaven"
     },
-    "roofs/slate": {
-      "name": "Roofs/Slate",
+    "polyhaven/brick_wall_008": {
+      "name": "Brick Wall Alt",
+      "folder": "polyhaven/brick_wall_008",
       "textures": {
         "albedo": "albedo.jpg",
         "normal": "normal.jpg",
-        "roughness": "roughness.jpg"
+        "roughness": "roughness.jpg",
+        "ao": "ao.jpg"
       },
-      "resolution": [
-        2048,
-        2048
-      ]
+      "resolution": [2048, 2048],
+      "source": "polyhaven"
     },
-    "floors/wood": {
-      "name": "Floors/Wood",
+    "polyhaven/concrete_wall_008": {
+      "name": "Concrete Wall",
+      "folder": "polyhaven/concrete_wall_008",
       "textures": {
         "albedo": "albedo.jpg",
         "normal": "normal.jpg",
-        "roughness": "roughness.jpg"
+        "roughness": "roughness.jpg",
+        "ao": "ao.jpg"
       },
-      "resolution": [
-        2048,
-        2048
-      ]
+      "resolution": [2048, 2048],
+      "source": "polyhaven"
     },
-    "floors/concrete": {
-      "name": "Floors/Concrete",
+    "polyhaven/concrete_floor_003": {
+      "name": "Concrete Floor",
+      "folder": "polyhaven/concrete_floor_003",
       "textures": {
         "albedo": "albedo.jpg",
         "normal": "normal.jpg",
-        "roughness": "roughness.jpg"
+        "roughness": "roughness.jpg",
+        "ao": "ao.jpg"
       },
-      "resolution": [
-        2048,
-        2048
-      ]
+      "resolution": [2048, 2048],
+      "source": "polyhaven"
     },
-    "brick_brown_01": {
-      "name": "Brick Brown 01",
+    "polyhaven/wood_floor_deck": {
+      "name": "Wood Deck",
+      "folder": "polyhaven/wood_floor_deck",
       "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
+        "albedo": "albedo.jpg",
+        "normal": "normal.jpg",
+        "roughness": "roughness.jpg",
+        "ao": "ao.jpg"
       },
-      "resolution": [
-        512,
-        512
-      ]
+      "resolution": [2048, 2048],
+      "source": "polyhaven"
     },
-    "brick_buff_01": {
-      "name": "Brick Buff 01",
+    "polyhaven/metal_plate_02": {
+      "name": "Metal Plate",
+      "folder": "polyhaven/metal_plate_02",
       "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
+        "albedo": "albedo.jpg",
+        "normal": "normal.jpg",
+        "roughness": "roughness.jpg",
+        "ao": "ao.jpg"
       },
-      "resolution": [
-        512,
-        512
-      ]
+      "resolution": [2048, 2048],
+      "source": "polyhaven"
     },
-    "brick_gray_01": {
-      "name": "Brick Gray 01",
+    "polyhaven/roof_slates_02": {
+      "name": "Roof Slates",
+      "folder": "polyhaven/roof_slates_02",
       "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
+        "albedo": "albedo.jpg",
+        "normal": "normal.jpg",
+        "roughness": "roughness.jpg",
+        "ao": "ao.jpg"
       },
-      "resolution": [
-        512,
-        512
-      ]
+      "resolution": [2048, 2048],
+      "source": "polyhaven"
     },
-    "brick_old_01": {
-      "name": "Brick Old 01",
+    "polyhaven/asphalt_04": {
+      "name": "Asphalt",
+      "folder": "polyhaven/asphalt_04",
       "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
+        "albedo": "albedo.jpg",
+        "normal": "normal.jpg",
+        "roughness": "roughness.jpg",
+        "ao": "ao.jpg"
       },
-      "resolution": [
-        512,
-        512
-      ]
+      "resolution": [2048, 2048],
+      "source": "polyhaven"
     },
-    "brick_red_01": {
-      "name": "Brick Red 01",
+    "polyhaven/grass_path_2": {
+      "name": "Grass Path",
+      "folder": "polyhaven/grass_path_2",
       "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
+        "albedo": "albedo.jpg",
+        "normal": "normal.jpg",
+        "roughness": "roughness.jpg",
+        "ao": "ao.jpg"
       },
-      "resolution": [
-        512,
-        512
-      ]
+      "resolution": [2048, 2048],
+      "source": "polyhaven"
     },
-    "brick_red_dark": {
-      "name": "Brick Red Dark",
+    "polyhaven/gravel_concrete": {
+      "name": "Gravel Concrete",
+      "folder": "polyhaven/gravel_concrete",
       "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
+        "albedo": "albedo.jpg",
+        "normal": "normal.jpg",
+        "roughness": "roughness.jpg",
+        "ao": "ao.jpg"
       },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "brick_white_01": {
-      "name": "Brick White 01",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "metal_brushed": {
-      "name": "Metal Brushed",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "metal_galvanized": {
-      "name": "Metal Galvanized",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "paint_beige_satin": {
-      "name": "Paint Beige Satin",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "paint_gray_eggshell": {
-      "name": "Paint Gray Eggshell",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "paint_offwhite_matte": {
-      "name": "Paint Offwhite Matte",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "paint_white_flat": {
-      "name": "Paint White Flat",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "roof_metal_corrugated": {
-      "name": "Roof Metal Corrugated",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "roof_metal_ribbed_galv": {
-      "name": "Roof Metal Ribbed Galv",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "roof_metal_standing_seam": {
-      "name": "Roof Metal Standing Seam",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "roof_shingle_asphalt_black": {
-      "name": "Roof Shingle Asphalt Black",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "roof_shingle_asphalt_brown": {
-      "name": "Roof Shingle Asphalt Brown",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "roof_shingle_asphalt_gray": {
-      "name": "Roof Shingle Asphalt Gray",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "roof_shingle_cedar_fresh": {
-      "name": "Roof Shingle Cedar Fresh",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "roof_shingle_cedar_weathered": {
-      "name": "Roof Shingle Cedar Weathered",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "siding_fiber_cement_smooth": {
-      "name": "Siding Fiber Cement Smooth",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "siding_fiber_cement_woodgrain": {
-      "name": "Siding Fiber Cement Woodgrain",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "siding_vinyl_dark": {
-      "name": "Siding Vinyl Dark",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "siding_vinyl_light": {
-      "name": "Siding Vinyl Light",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "siding_vinyl_slate": {
-      "name": "Siding Vinyl Slate",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "siding_wood_cedar": {
-      "name": "Siding Wood Cedar",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "siding_wood_clapboard": {
-      "name": "Siding Wood Clapboard",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "siding_wood_shingle": {
-      "name": "Siding Wood Shingle",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "wood_floor_maple": {
-      "name": "Wood Floor Maple",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "wood_floor_oak": {
-      "name": "Wood Floor Oak",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "wood_floor_walnut": {
-      "name": "Wood Floor Walnut",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "wood_structural_fir": {
-      "name": "Wood Structural Fir",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
-    },
-    "wood_structural_oak": {
-      "name": "Wood Structural Oak",
-      "textures": {
-        "albedo": "albedo.png",
-        "normal": "normal.png",
-        "roughness": "roughness.png",
-        "metallic": "metallic.png",
-        "ao": "ao.png",
-        "height": "height.png",
-        "emissive": "emissive.png",
-        "opacity": "opacity.png"
-      },
-      "resolution": [
-        512,
-        512
-      ]
+      "resolution": [2048, 2048],
+      "source": "polyhaven"
     }
+  },
+  "hdri": {
+    "default": "hdri/kloppenheim_06_puresky_2k.hdr",
+    "available": [
+      {
+        "name": "Kloppenheim Pure Sky",
+        "path": "hdri/kloppenheim_06_puresky_2k.hdr",
+        "type": "outdoor_day"
+      },
+      {
+        "name": "Autumn Field Pure Sky",
+        "path": "hdri/autumn_field_puresky_2k.hdr",
+        "type": "outdoor_day"
+      },
+      {
+        "name": "Industrial Sunset Pure Sky",
+        "path": "hdri/industrial_sunset_puresky_2k.hdr",
+        "type": "outdoor_sunset"
+      },
+      {
+        "name": "Blue Photo Studio",
+        "path": "hdri/blue_photo_studio_2k.hdr",
+        "type": "studio"
+      }
+    ]
   }
 }

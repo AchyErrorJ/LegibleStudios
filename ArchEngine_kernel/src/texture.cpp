@@ -423,12 +423,20 @@ Material* MaterialLibrary::loadMaterial(const std::string& name, const std::stri
     mat->heightMap = tryLoad("height", false);
     if (!mat->heightMap) mat->heightMap = tryLoad("displacement", false);
     if (!mat->heightMap) mat->heightMap = tryLoad("bump", false);
+    bool hasHeightMap = (mat->heightMap != nullptr);
+
+    // DEBUG: Print height map loading status
+    std::cout << "[MaterialLibrary] Height map for " << name << ": "
+              << (hasHeightMap ? "LOADED" : "NOT FOUND")
+              << " (searched in: " << directory << "/height.png)" << std::endl;
+
     if (!mat->heightMap) mat->heightMap = Texture::getGrey();   // Grey (0.5) = no displacement
 
     auto* ptr = mat.get();
     m_materials[name] = std::move(mat);
 
-    std::cout << "[MaterialLibrary] Loaded material: " << name << std::endl;
+    std::cout << "[MaterialLibrary] Loaded material: " << name
+              << (hasHeightMap ? " [HAS HEIGHT MAP]" : " [no height map]") << std::endl;
     return ptr;
 }
 
@@ -441,16 +449,47 @@ u32 MaterialLibrary::loadMaterialsFromDirectory(const std::string& rootDirectory
     }
 
     u32 loaded = 0;
+
+    // Helper to check if a directory contains texture files (is a material folder)
+    auto isMaterialFolder = [](const fs::path& dir) -> bool {
+        for (const auto& ext : {".png", ".jpg", ".jpeg", ".tga"}) {
+            if (fs::exists(dir / ("albedo" + std::string(ext))) ||
+                fs::exists(dir / ("diffuse" + std::string(ext))) ||
+                fs::exists(dir / ("basecolor" + std::string(ext)))) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Scan root directory
     for (const auto& entry : fs::directory_iterator(rootDirectory)) {
         if (!entry.is_directory()) continue;
 
         std::string name = entry.path().filename().string();
-        if (m_materials.find(name) != m_materials.end()) {
-            continue;
-        }
 
-        if (loadMaterial(name, entry.path().string())) {
-            loaded++;
+        // Check if this is a material folder (has texture files)
+        if (isMaterialFolder(entry.path())) {
+            if (m_materials.find(name) == m_materials.end()) {
+                if (loadMaterial(name, entry.path().string())) {
+                    loaded++;
+                }
+            }
+        } else {
+            // This might be a category folder (like "polyhaven/") - scan its contents
+            for (const auto& subEntry : fs::directory_iterator(entry.path())) {
+                if (!subEntry.is_directory()) continue;
+
+                if (isMaterialFolder(subEntry.path())) {
+                    // Use "category/material" naming (e.g., "polyhaven/brick_wall_006")
+                    std::string subName = name + "/" + subEntry.path().filename().string();
+                    if (m_materials.find(subName) == m_materials.end()) {
+                        if (loadMaterial(subName, subEntry.path().string())) {
+                            loaded++;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -488,36 +527,46 @@ Material* MaterialLibrary::createSolidMaterial(const std::string& name, vec3 alb
 }
 
 Material* MaterialLibrary::getMaterial(const std::string& name) {
+    // First check direct material
     auto it = m_materials.find(name);
-    return (it != m_materials.end()) ? it->second.get() : &m_defaultMaterial;
+    if (it != m_materials.end()) {
+        return it->second.get();
+    }
+
+    // Check aliases
+    auto aliasIt = m_materialAliases.find(name);
+    if (aliasIt != m_materialAliases.end()) {
+        it = m_materials.find(aliasIt->second);
+        if (it != m_materials.end()) {
+            return it->second.get();
+        }
+    }
+
+    return &m_defaultMaterial;
 }
 
 void MaterialLibrary::createBuiltinMaterials() {
-    // Concrete - gray, rough, non-metallic
-    createSolidMaterial("concrete", vec3(0.6f, 0.58f, 0.55f), 0.9f, 0.0f);
-
-    // Brick - reddish, rough
-    createSolidMaterial("brick", vec3(0.7f, 0.35f, 0.25f), 0.85f, 0.0f);
-
-    // Wood - brownish, medium rough
-    createSolidMaterial("wood", vec3(0.55f, 0.35f, 0.2f), 0.7f, 0.0f);
-
-    // Drywall/Plaster - off-white, rough
-    createSolidMaterial("drywall", vec3(0.9f, 0.88f, 0.85f), 0.95f, 0.0f);
-
-    // Metal - gray, smooth, metallic
-    createSolidMaterial("metal", vec3(0.8f, 0.8f, 0.8f), 0.3f, 1.0f);
-
-    // Glass - slight tint, very smooth
+    // Only create glass as solid material (transparent, doesn't need texture)
     createSolidMaterial("glass", vec3(0.9f, 0.95f, 1.0f), 0.05f, 0.0f);
 
-    // Tile - white, smooth
-    createSolidMaterial("tile", vec3(0.95f, 0.95f, 0.95f), 0.2f, 0.0f);
-
-    // Asphalt shingle (roof)
-    createSolidMaterial("shingle", vec3(0.25f, 0.25f, 0.28f), 0.8f, 0.0f);
-
     std::cout << "[MaterialLibrary] Created " << m_materials.size() << " builtin materials" << std::endl;
+}
+
+void MaterialLibrary::createMaterialAliases() {
+    // Create aliases so generic names map to Poly Haven materials
+    // This allows code using "concrete" to get "polyhaven/concrete_wall_008"
+    m_materialAliases["concrete"] = "polyhaven/concrete_wall_008";
+    m_materialAliases["brick"] = "polyhaven/brick_wall_006";
+    m_materialAliases["wood"] = "polyhaven/wood_floor_deck";
+    m_materialAliases["drywall"] = "polyhaven/concrete_wall_008";
+    m_materialAliases["metal"] = "polyhaven/metal_plate_02";
+    m_materialAliases["tile"] = "polyhaven/concrete_floor_003";
+    m_materialAliases["shingle"] = "polyhaven/roof_slates_02";
+    m_materialAliases["asphalt"] = "polyhaven/asphalt_04";
+    m_materialAliases["grass"] = "polyhaven/grass_path_2";
+    m_materialAliases["gravel"] = "polyhaven/gravel_concrete";
+
+    std::cout << "[MaterialLibrary] Created " << m_materialAliases.size() << " material aliases" << std::endl;
 }
 
 void MaterialLibrary::loadMaterialSettings(const std::string& settingsPath) {

@@ -16,7 +16,7 @@ PipelineConfig PipelineConfig::defaultConfig() {
     config.rasterization.rasterizerDiscardEnable = VK_FALSE;
     config.rasterization.polygonMode = VK_POLYGON_MODE_FILL;
     config.rasterization.lineWidth = 1.0f;
-    config.rasterization.cullMode = VK_CULL_MODE_NONE;  // Disable culling to test flickering
+    config.rasterization.cullMode = VK_CULL_MODE_BACK_BIT;  // Enable back-face culling
     config.rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     config.rasterization.depthBiasEnable = VK_FALSE;
 

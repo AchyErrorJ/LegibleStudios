@@ -124,7 +124,13 @@ public:
         return m_materials;
     }
     bool hasMaterial(const std::string& name) const {
-        return m_materials.find(name) != m_materials.end();
+        if (m_materials.find(name) != m_materials.end()) return true;
+        // Check aliases
+        auto aliasIt = m_materialAliases.find(name);
+        if (aliasIt != m_materialAliases.end()) {
+            return m_materials.find(aliasIt->second) != m_materials.end();
+        }
+        return false;
     }
 
     // Create material with solid colors
@@ -139,6 +145,9 @@ public:
     // Create built-in architectural materials
     void createBuiltinMaterials();
 
+    // Create aliases mapping generic names to Poly Haven materials
+    void createMaterialAliases();
+
     // Load/save per-material settings from/to JSON
     void loadMaterialSettings(const std::string& settingsPath);
     void saveMaterialSettings(const std::string& settingsPath);
@@ -148,6 +157,7 @@ private:
     VulkanContext& m_context;
     std::unordered_map<std::string, std::unique_ptr<Material>> m_materials;
     std::unordered_map<std::string, std::unique_ptr<Texture>> m_textures;
+    std::unordered_map<std::string, std::string> m_materialAliases;  // Maps generic names to Poly Haven
     Material m_defaultMaterial;
 };
 

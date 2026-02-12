@@ -34,6 +34,24 @@ from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt6.QtGui import QPainter, QColor
 
+
+# ctypes structure matching ArchRoomData in arch_api.h
+class ArchRoomData(ctypes.Structure):
+    _fields_ = [
+        ("id", ctypes.c_char * 64),
+        ("name", ctypes.c_char * 128),
+        ("room_type", ctypes.c_char * 64),
+        ("bounds_x", ctypes.c_float),
+        ("bounds_y", ctypes.c_float),
+        ("bounds_width", ctypes.c_float),
+        ("bounds_height", ctypes.c_float),
+        ("center_x", ctypes.c_float),
+        ("center_y", ctypes.c_float),
+        ("area", ctypes.c_float),
+        ("zone", ctypes.c_int),
+    ]
+
+
 # Find the DLL
 def _get_app_root() -> Path:
     """Get the application root directory, handling both dev and frozen modes."""
@@ -113,6 +131,7 @@ class VulkanViewportWidget(QWidget):
     # Signals
     initialized = pyqtSignal()
     load_complete = pyqtSignal(int)  # element count
+    rooms_loaded = pyqtSignal(list)  # list of room dicts
     error_occurred = pyqtSignal(str)
     camera_distance_changed = pyqtSignal(float)  # distance from target
     lod_level_changed = pyqtSignal(int)  # LOD level 1-5 (shift+scroll)
@@ -163,6 +182,22 @@ class VulkanViewportWidget(QWidget):
         self._hover_update_timer = None  # Throttle hover updates
 
         # Navigation overlay (optional)
+        self._nav_overlay = None
+
+        # Section drag state
+        self._section_mode = False  # Press 'S' to toggle
+        self._section_dragging = False
+
+        # Selection manager for Python-side picking + Tab cycling
+        self._selection_manager: Optional[SelectionManager] = None
+        self._document = None  # Set via set_document()
+        self._last_pick_pos = (0, 0)  # For Tab cycling detection
+
+        # Hover state for visual feedback
+        self._hovered_element: Optional[tuple] = None  # (element_type, element_id)
+        self._hover_update_timer = None  # Throttle hover updates
+
+        # Navigation overlay (optional, may be set later)
         self._nav_overlay = None
 
         # Widget setup
@@ -676,10 +711,12 @@ class VulkanViewportWidget(QWidget):
             self._initialized = True
             print("[VulkanWidget] Renderer initialized")
 
-            # Start render loop
+            # Start render loop - slow rate for stability
             self._render_timer = QTimer(self)
             self._render_timer.timeout.connect(self._render_frame)
-            self._render_timer.start(33)  # ~30 FPS
+            self._render_timer.start(100)  # 10 FPS for stability
+
+            # Don't render immediately - wait for load_json to provide data first
 
             self.initialized.emit()
         except Exception as e:
@@ -691,6 +728,10 @@ class VulkanViewportWidget(QWidget):
     def _render_frame(self):
         """Render a single frame."""
         if not self._initialized or self._lib is None:
+            return
+
+        # Skip if no data loaded yet (prevents depth buffer issues on empty scene)
+        if not getattr(self, '_has_data', False):
             return
 
         # Skip if already rendering
@@ -767,7 +808,8 @@ class VulkanViewportWidget(QWidget):
         """Handle widget resize."""
         super().resizeEvent(event)
 
-        if self._initialized and self._lib is not None:
+        # Only resize if data is loaded (prevents depth buffer issues on empty scene)
+        if self._initialized and self._lib is not None and getattr(self, '_has_data', False):
             with self._api_lock:
                 self._lib.arch_resize(event.size().width(), event.size().height())
 
@@ -916,7 +958,10 @@ class VulkanViewportWidget(QWidget):
                     # Force a sync render to process new geometry
                     self._lib.arch_render_frame()
 
-                    # Get rooms while we have the lock
+                    # Enable render loop now that we have data
+                    self._has_data = True
+
+                    # Get rooms while we have the lock, but emit signal AFTER releasing lock
                     rooms_to_emit = self.get_rooms()
                     success = True
                 else:
@@ -1481,6 +1526,42 @@ class VulkanViewportWidget(QWidget):
     def is_initialized(self) -> bool:
         """Check if renderer is ready."""
         return self._initialized
+
+    def get_rooms(self) -> list:
+        """Get room data from the renderer via DLL."""
+        if not self._initialized or self._lib is None:
+            return []
+
+        try:
+            room_count = self._lib.arch_get_room_count()
+            if room_count <= 0:
+                return []
+
+            rooms_array = (ArchRoomData * room_count)()
+            result = self._lib.arch_get_all_rooms(rooms_array, room_count)
+            if result <= 0:
+                return []
+
+            rooms = []
+            for i in range(result):
+                r = rooms_array[i]
+                rooms.append({
+                    'id': r.id.decode('utf-8', errors='ignore').rstrip('\x00'),
+                    'name': r.name.decode('utf-8', errors='ignore').rstrip('\x00'),
+                    'room_type': r.room_type.decode('utf-8', errors='ignore').rstrip('\x00'),
+                    'bounds': {
+                        'x': r.bounds_x,
+                        'y': r.bounds_y,
+                        'width': r.bounds_width,
+                        'height': r.bounds_height,
+                    },
+                    'center': {'x': r.center_x, 'y': r.center_y},
+                    'area': r.area,
+                })
+            return rooms
+        except Exception as e:
+            print(f"[VulkanWidget] get_rooms error: {e}")
+            return []
 
     # =========================================================================
     # Section Clipping
@@ -2089,9 +2170,10 @@ class VulkanViewportWidget(QWidget):
     # Mouse interaction
     # =========================================================================
 
-    def _route_overlay_mouse(self, event):
-        """Route mouse event to overlay if active. Returns True if handled."""
-        # Stub - no overlay handling for now
+    def _route_overlay_mouse(self, event) -> bool:
+        """Route mouse event to navigation overlay if present. Returns True if consumed."""
+        if self._nav_overlay and hasattr(self._nav_overlay, 'handle_mouse'):
+            return self._nav_overlay.handle_mouse(event)
         return False
 
     def mousePressEvent(self, event):
