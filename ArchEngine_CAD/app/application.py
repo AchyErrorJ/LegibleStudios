@@ -7,7 +7,7 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QMainWindow, QDockWidget, QToolBar, QStatusBar,
     QFileDialog, QMessageBox, QWidget, QVBoxLayout,
-    QSplitter, QLabel, QTabWidget
+    QSplitter, QLabel, QTabWidget, QDialog
 )
 from PyQt6.QtCore import Qt, QSettings, QTimer
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
@@ -48,13 +48,7 @@ from generators.generator_service import GeneratorService
 from dialogs.qbd_questionnaire import QBDQuestionnaireDialog
 from dialogs.site_dialog import SiteDialog
 
-# Optional viewport imports
-try:
-    from viewport import UE5ViewportWidget
-    HAS_UE5_VIEWPORT = True
-except ImportError:
-    HAS_UE5_VIEWPORT = False
-
+# Viewport import (Vulkan only - UE5 viewport removed)
 try:
     from viewport import VulkanViewportWidget, HAS_VULKAN_WIDGET
     HAS_VIEWPORT = HAS_VULKAN_WIDGET
@@ -62,17 +56,9 @@ except ImportError:
     HAS_VIEWPORT = False
     HAS_VULKAN_WIDGET = False
 
-# Optional LiveSync import
-try:
-    from sync import get_livesync_server, HAS_LIVESYNC
-except ImportError:
-    HAS_LIVESYNC = False
-
-# Optional VulkanSync import
-try:
-    from sync import get_vulkan_sync_client, HAS_VULKAN_SYNC
-except ImportError:
-    HAS_VULKAN_SYNC = False
+# Sync modules disabled - not needed with embedded viewport
+HAS_LIVESYNC = False
+HAS_VULKAN_SYNC = False
 
 
 class ArchEngineApplication(QMainWindow):
@@ -110,32 +96,34 @@ class ArchEngineApplication(QMainWindow):
             if is_api_enabled() and not HAS_API_BACKEND:
                 print("[App] API backend requested but client module not available")
 
-        # Initialize LiveSync server for UE5 connection
+        # LiveSync server for UE5 connection - DISABLED (not used with embedded Vulkan viewport)
         self._livesync_server = None
-        if HAS_LIVESYNC:
-            try:
-                self._livesync_server = get_livesync_server()
-                self._livesync_server.start()
-                self.document.document_changed.connect(self._on_document_changed_livesync)
-            except Exception as e:
-                print(f"[App] LiveSync init failed: {e}")
+        # LiveSync was causing performance issues and is not needed with embedded viewport
+        # if HAS_LIVESYNC:
+        #     try:
+        #         self._livesync_server = get_livesync_server()
+        #         self._livesync_server.start()
+        #         self.document.document_changed.connect(self._on_document_changed_livesync)
+        #     except Exception as e:
+        #         print(f"[App] LiveSync init failed: {e}")
 
-        # Initialize VulkanSync client for Vulkan renderer connection
+        # VulkanSync client - DISABLED (not needed with embedded Vulkan viewport)
+        # VulkanSync was for standalone renderer process, embedded viewport uses DLL directly
         self._vulkan_sync = None
-        if HAS_VULKAN_SYNC:
-            try:
-                self._vulkan_sync = get_vulkan_sync_client()
-                self._vulkan_sync.connected.connect(self._on_vulkan_connected)
-                self._vulkan_sync.disconnected.connect(self._on_vulkan_disconnected)
-                self.document.document_changed.connect(self._on_document_changed_vulkan)
-                self._vulkan_sync.connect_to_renderer()
-            except Exception as e:
-                print(f"[App] VulkanSync init failed: {e}")
+        # if HAS_VULKAN_SYNC:
+        #     try:
+        #         self._vulkan_sync = get_vulkan_sync_client()
+        #         self._vulkan_sync.connected.connect(self._on_vulkan_connected)
+        #         self._vulkan_sync.disconnected.connect(self._on_vulkan_disconnected)
+        #         self.document.document_changed.connect(self._on_document_changed_vulkan)
+        #         self._vulkan_sync.connect_to_renderer()
+        #     except Exception as e:
+        #         print(f"[App] VulkanSync init failed: {e}")
 
         # Throttle timer for 3D viewport updates (prevents lag during dragging)
         self._viewport_update_timer = QTimer(self)
         self._viewport_update_timer.setSingleShot(True)
-        self._viewport_update_timer.setInterval(150)  # 150ms debounce - gives GPU time to finish
+        self._viewport_update_timer.setInterval(500)  # 500ms debounce - prevent rapid updates during dragging
         self._viewport_update_timer.timeout.connect(self._do_viewport_update)
 
         # Initialize sheet system
@@ -268,6 +256,21 @@ class ArchEngineApplication(QMainWindow):
         self.action_save_as = QAction("Save &As...", self)
         self.action_save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
         self.action_save_as.triggered.connect(self._on_save_as)
+
+        # Export/Print actions
+        self.action_export_pdf = QAction("Export to &PDF...", self)
+        self.action_export_pdf.setShortcut(QKeySequence("Ctrl+P"))
+        self.action_export_pdf.setStatusTip("Export current sheet to PDF")
+        self.action_export_pdf.triggered.connect(self._on_export_pdf)
+
+        self.action_export_all_pdf = QAction("Export All Sheets to PDF...", self)
+        self.action_export_all_pdf.setStatusTip("Export all sheets to a single PDF")
+        self.action_export_all_pdf.triggered.connect(self._on_export_all_pdf)
+
+        self.action_print = QAction("&Print...", self)
+        self.action_print.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        self.action_print.setStatusTip("Print current sheet")
+        self.action_print.triggered.connect(self._on_print)
 
         self.action_define_site = QAction("&Define Site...", self)
         self.action_define_site.setStatusTip("Define site characteristics and fetch terrain elevation data")
@@ -448,6 +451,10 @@ class ArchEngineApplication(QMainWindow):
         file_menu.addAction(self.action_save)
         file_menu.addAction(self.action_save_as)
         file_menu.addSeparator()
+        file_menu.addAction(self.action_export_pdf)
+        file_menu.addAction(self.action_export_all_pdf)
+        file_menu.addAction(self.action_print)
+        file_menu.addSeparator()
         file_menu.addAction(self.action_define_site)
         file_menu.addSeparator()
         file_menu.addAction(self.action_exit)
@@ -536,6 +543,14 @@ class ArchEngineApplication(QMainWindow):
             self.action_show_materials = QAction("Show &Materials Panel", self)
             self.action_show_materials.triggered.connect(lambda: self.materials_dock.show() and self.materials_dock.raise_())
             render_menu.addAction(self.action_show_materials)
+
+            render_menu.addSeparator()
+
+            # Path Tracer for high-quality offline renders
+            self.action_path_tracer = QAction("&Path Traced Render...", self)
+            self.action_path_tracer.setToolTip("Render high-quality image using path tracing")
+            self.action_path_tracer.triggered.connect(self._show_path_tracer_dialog)
+            render_menu.addAction(self.action_path_tracer)
 
         # Debug/Diagnostics menu
         if HAS_DIAGNOSTICS:
@@ -1071,34 +1086,58 @@ class ArchEngineApplication(QMainWindow):
             self._syncing_selection = False
 
     def _on_material_assigned(self, element_type: str, material_id: str):
-        """Handle material assignment from materials panel."""
+        """Handle material assignment from materials panel.
+
+        Updates materials in the document and reloads the 3D view.
+        """
         print(f"[App] Applying material '{material_id}' to {element_type}")
 
-        if element_type == "selection":
-            # Apply to currently selected walls
-            selected_walls = []
-            for item in self.plan_view.scene().selectedItems():
-                if hasattr(item, 'wall'):
-                    selected_walls.append(item.wall.index)
+        changed = False
 
-            if selected_walls:
-                for wall_idx in selected_walls:
-                    self.document.set_wall_material(wall_idx, material_id)
-                print(f"[App] Applied material to {len(selected_walls)} selected walls")
+        if element_type == "selection":
+            # Apply to currently selected walls in plan view
+            count = 0
+            for item in self.plan_view.scene().selectedItems():
+                if hasattr(item, 'wall') and hasattr(item.wall, 'index'):
+                    wall_idx = item.wall.index
+                    if wall_idx < len(self.document._walls):
+                        self.document._walls[wall_idx].material_override = material_id
+                        count += 1
+                        changed = True
+            if count > 0:
+                print(f"[App] Applied material to {count} selected walls")
             else:
                 print("[App] No walls selected")
 
-        elif element_type == "exterior_wall":
-            self.document.set_walls_material_by_category("exterior", material_id)
-            print("[App] Applied material to all exterior walls")
+        elif element_type == "wall":
+            # Apply to all walls
+            for wall in self.document._walls:
+                wall.material_override = material_id
+            print(f"[App] Applied material to {len(self.document._walls)} walls")
+            changed = True
 
-        elif element_type == "interior_wall":
-            self.document.set_walls_material_by_category("interior", material_id)
-            print("[App] Applied material to all interior walls")
+        elif element_type == "roof":
+            # Apply to all roofs via document's roof material setting
+            for roof in self.document._roofs:
+                roof.material = material_id
+            print(f"[App] Applied material to {len(self.document._roofs)} roofs")
+            changed = True
 
-        # Refresh 3D viewport
-        if hasattr(self, 'viewport_3d'):
-            self._on_document_changed_vulkan()
+        elif element_type == "floor":
+            # Apply to all floors
+            for floor in self.document._floors:
+                floor.material = material_id
+            print(f"[App] Applied material to {len(self.document._floors)} floors")
+            changed = True
+
+        # Reload the 3D viewport to show updated materials
+        if changed:
+            print("[App] Reloading viewport with updated materials...")
+            # Update embedded viewport
+            self._do_viewport_update()
+            # Also update VulkanSync if connected
+            if self._vulkan_sync and self._vulkan_sync.is_connected:
+                self._on_document_changed_vulkan()
 
     def _on_tool_changed(self, tool_name: str):
         """Handle tool change - update smart panels task state."""
@@ -1138,7 +1177,7 @@ class ArchEngineApplication(QMainWindow):
     # =========================================================================
 
     def _on_new(self):
-        """Create new document with site definition."""
+        """Create new document with site definition and building design."""
         if not self._check_save():
             return
 
@@ -1148,24 +1187,176 @@ class ArchEngineApplication(QMainWindow):
         site_data = show_site_dialog(self)
 
         if site_data:
-            # User completed site dialog - create document with terrain
+            # User completed site dialog - now show QBD questionnaire
+            self._pending_site_data = site_data
+            self._show_qbd_after_site()
+        else:
+            # User cancelled - still create empty document
             self.document.new()
 
-            # Add site data including terrain mesh
+    def _show_qbd_after_site(self):
+        """Show QBD questionnaire after site is defined."""
+        from dialogs.qbd_questionnaire import QBDQuestionnaireDialog
+
+        dialog = QBDQuestionnaireDialog(self)
+        dialog.generate_building.connect(self._on_generate_from_qbd_algebra)
+        result = dialog.exec()
+
+        if result != QDialog.DialogCode.Accepted:
+            # User cancelled questionnaire - create document with just terrain
+            self._create_document_with_site(self._pending_site_data, None)
+
+    def _show_path_tracer_dialog(self):
+        """Show path tracer render dialog."""
+        if not hasattr(self, 'viewport_3d') or not self.viewport_3d.is_initialized:
+            QMessageBox.warning(self, "3D Viewport Required",
+                "The 3D viewport must be initialized before using the path tracer.")
+            return
+
+        from dialogs.path_tracer_dialog import PathTracerDialog
+        dialog = PathTracerDialog(self.viewport_3d, self)
+        dialog.exec()
+
+    def _on_generate_from_qbd_algebra(self, answers: dict):
+        """Generate building using QBD algebra from questionnaire answers."""
+        site_data = getattr(self, '_pending_site_data', None)
+        self._create_document_with_site(site_data, answers)
+
+    def _create_document_with_site(self, site_data: dict, qbd_answers: dict = None):
+        """Create document with site data and optionally generate building from QBD."""
+        self.document.new()
+
+        # Add site data including terrain mesh and building origin
+        if site_data:
             self.document._data['site'] = site_data
-            if 'terrain_mesh' in site_data:
+
+            # Copy terrain generation settings for C++ terrain generation
+            if 'terrain_generation_settings' in site_data:
+                self.document._data['terrain_generation_settings'] = site_data['terrain_generation_settings']
+                print(f"[App] C++ terrain generation enabled: {site_data['terrain_generation_settings']}")
+
+            # Copy google_maps data (contains elevation_grid for terrain)
+            if 'google_maps' in site_data:
+                self.document._data['google_maps'] = site_data['google_maps']
+                elev_grid = site_data['google_maps'].get('elevation_grid', {})
+                print(f"[App] Elevation data: {len(elev_grid)} points")
+
+            # Copy property dimensions
+            if 'property_width_ft' in site_data:
+                self.document._data['property_width_ft'] = site_data['property_width_ft']
+            if 'property_depth_ft' in site_data:
+                self.document._data['property_depth_ft'] = site_data['property_depth_ft']
+
+            # Handle terrain: either use pre-computed mesh or let C++ generate from elevation data
+            terrain_settings = site_data.get('terrain_generation_settings', {})
+            use_cpp = terrain_settings.get('use_cpp_generation', False)
+            has_elevation = bool(site_data.get('google_maps', {}).get('elevation_grid'))
+
+            if use_cpp and has_elevation:
+                # C++ will generate terrain - remove test terrain so viewport uses C++
+                if 'terrain_mesh' in self.document._data:
+                    del self.document._data['terrain_mesh']
+                    print("[App] Removed test terrain - C++ will generate from LiDAR data")
+            elif 'terrain_mesh' in site_data:
                 self.document._data['terrain_mesh'] = site_data['terrain_mesh']
                 print(f"[App] New document with site terrain: {site_data['terrain_mesh']['vertex_count']} vertices")
 
-            # Update 3D viewport with the new document
-            if HAS_VIEWPORT and self.viewport_3d:
-                self.viewport_3d.load_json(self.document._data)
-                # Reset camera to see the terrain better
-                self.viewport_3d.reset_camera()
-                print("[App] Camera reset to view terrain")
-        else:
-            # User cancelled - still create document with test terrain
-            self.document.new()
+            if 'building_origin' in site_data:
+                self.document._data['building_origin'] = site_data['building_origin']
+                origin = site_data['building_origin']
+                print(f"[App] Building origin: ({origin.get('x_ft', 0):.0f}', {origin.get('z_ft', 0):.0f}') rotation={origin.get('rotation_deg', 0):.0f}°")
+
+        # Generate building from QBD algebra if answers provided
+        if qbd_answers:
+            self._generate_building_from_qbd_algebra(qbd_answers, site_data)
+
+        # Update 3D viewport
+        if HAS_VIEWPORT and self.viewport_3d:
+            self.viewport_3d.load_json(self.document._data)
+            self.viewport_3d.reset_camera()
+            print("[App] 3D viewport updated")
+
+    def _generate_building_from_qbd_algebra(self, answers: dict, site_data: dict = None):
+        """Generate building layout using QBD algebra system."""
+        try:
+            # Import the QBD layout generator
+            import sys
+            import os
+
+            # Handle both development and frozen (PyInstaller) modes
+            if getattr(sys, 'frozen', False):
+                # Frozen mode: render_server is bundled in _MEIPASS/render_server/
+                render_server_path = os.path.join(sys._MEIPASS, 'render_server')
+            else:
+                # Development mode: render_server is in sibling kernel directory
+                render_server_path = os.path.abspath(os.path.join(
+                    os.path.dirname(__file__), '..', '..', 'ArchEngine_kernel', 'render_server'
+                ))
+
+            if render_server_path not in sys.path:
+                sys.path.insert(0, render_server_path)
+                print(f"[App] Added to sys.path: {render_server_path}")
+
+            from qbd_layout_generator import generate_floor_plan_from_qbd, OutputFormat
+
+            print(f"[App] Generating building from QBD algebra: {answers}")
+
+            # DON'T use site dimensions as building size!
+            # The building size should be calculated from sqft in the answers.
+            # Site dimensions are only a constraint (max size), not the building size.
+            # Let the QBD generator calculate the optimal building dimensions from sqft.
+            width = None
+            depth = None
+
+            # Generate the layout - building sized from sqft, NOT from site
+            result = generate_floor_plan_from_qbd(
+                answers,
+                width=width,   # None = auto-calculate from sqft
+                depth=depth,   # None = auto-calculate from sqft
+                output_format=OutputFormat.ARCHENGINE
+            )
+
+            if result.get('success'):
+                print(f"[App] QBD algebra generated: {result['summary']}")
+
+                # Merge generated data into document
+                self.document._data['walls_batch'] = result.get('walls_batch', [])
+                self.document._data['doors'] = result.get('doors', [])
+                self.document._data['windows'] = result.get('windows', [])
+                self.document._data['rooms'] = result.get('rooms', {})
+                self.document._data['levels'] = result.get('levels', [])
+                self.document._data['width'] = result.get('width', 0)
+                self.document._data['depth'] = result.get('depth', 0)
+                self.document._data['sqft'] = result.get('sqft', 0)
+                self.document._data['qbd_answers'] = answers
+                self.document._data['is_complete'] = result.get('is_complete', False)
+
+                # Parse the generated data into document objects
+                self.document._parse_data()
+                self.document.set_modified()
+                # Trigger 2D view refresh (document_changed is what plan_view listens to)
+                self.document.document_changed.emit()
+
+                self.status_bar.showMessage(
+                    f"Building generated: {len(result.get('walls_batch', []))} walls, "
+                    f"{len(result.get('rooms', {}))} rooms",
+                    5000
+                )
+            else:
+                error = result.get('error', 'Unknown error')
+                print(f"[App] QBD algebra failed: {error}")
+                self.status_bar.showMessage(f"Building generation failed: {error}", 5000)
+
+        except ImportError as e:
+            print(f"[App] Could not import QBD algebra: {e}")
+            import traceback
+            traceback.print_exc()
+            self.status_bar.showMessage(f"QBD import error: {e}", 5000)
+        except Exception as e:
+            print(f"[App] Error generating building: {e}")
+            import traceback
+            traceback.print_exc()
+            self.status_bar.showMessage(f"Error: {e}", 5000)
 
     def _on_qbd_generate(self, answers: dict, site_data: dict = None):
         """Handle QBD questionnaire answers and generate building."""
@@ -1184,6 +1375,11 @@ class ArchEngineApplication(QMainWindow):
             if 'terrain_mesh' in site_data:
                 self.document._data['terrain_mesh'] = site_data['terrain_mesh']
                 print(f"[App] Using site terrain mesh from elevation data")
+
+            # If site has building origin, store it
+            if 'building_origin' in site_data:
+                self.document._data['building_origin'] = site_data['building_origin']
+                print(f"[App] Building origin: ({site_data['building_origin']['x_ft']:.0f}', {site_data['building_origin']['z_ft']:.0f}')")
 
         # Generate building layout from answers using the generator service
         try:
@@ -1286,6 +1482,147 @@ class ArchEngineApplication(QMainWindow):
                 self.config.add_recent_file(Path(file_path))
                 self.status_bar.showMessage(f"Saved: {Path(file_path).name}", 5000)
 
+    def _on_export_pdf(self):
+        """Export current sheet to PDF."""
+        try:
+            from exports.pdf_exporter import PDFExporter
+        except ImportError:
+            QMessageBox.warning(
+                self,
+                "Export Not Available",
+                "PDF export module not found."
+            )
+            return
+
+        # Get current sheet from the tab widget
+        current_sheet_id = self._get_current_sheet_id()
+        if not current_sheet_id:
+            QMessageBox.information(
+                self,
+                "No Sheet Selected",
+                "Please open a sheet tab to export."
+            )
+            return
+
+        sheet = self._sheet_registry.get_sheet(current_sheet_id)
+        if not sheet or not sheet.svg_content:
+            QMessageBox.warning(
+                self,
+                "No Content",
+                "The selected sheet has no content to export.\nTry regenerating the sheet first."
+            )
+            return
+
+        # Default filename based on sheet number and title
+        default_name = f"{sheet.number}_{sheet.title.replace(' ', '_')}.pdf"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export to PDF",
+            default_name,
+            "PDF Files (*.pdf)"
+        )
+
+        if file_path:
+            exporter = PDFExporter(self)
+            if exporter.export_sheet(sheet.svg_content, file_path, title=sheet.title, number=sheet.number):
+                self.status_bar.showMessage(f"Exported: {Path(file_path).name}", 5000)
+
+    def _on_export_all_pdf(self):
+        """Export all sheets to a single PDF."""
+        try:
+            from exports.pdf_exporter import PDFExporter
+        except ImportError:
+            QMessageBox.warning(
+                self,
+                "Export Not Available",
+                "PDF export module not found."
+            )
+            return
+
+        # Gather all sheets with content
+        sheets_data = []
+        for sheet in self._sheet_registry.get_all_sheets():
+            if sheet.svg_content:
+                sheets_data.append({
+                    'svg_content': sheet.svg_content,
+                    'title': sheet.title,
+                    'number': sheet.number
+                })
+
+        if not sheets_data:
+            QMessageBox.information(
+                self,
+                "No Content",
+                "No sheets have content to export.\nTry regenerating sheets first (F4)."
+            )
+            return
+
+        # Default filename
+        default_name = "drawing_set.pdf"
+        if self.document.file_path:
+            default_name = f"{self.document.file_path.stem}_sheets.pdf"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export All Sheets to PDF",
+            default_name,
+            "PDF Files (*.pdf)"
+        )
+
+        if file_path:
+            exporter = PDFExporter(self)
+            if exporter.export_sheets(sheets_data, file_path):
+                self.status_bar.showMessage(
+                    f"Exported {len(sheets_data)} sheets to: {Path(file_path).name}",
+                    5000
+                )
+
+    def _on_print(self):
+        """Print current sheet."""
+        try:
+            from exports.pdf_exporter import PDFExporter
+        except ImportError:
+            QMessageBox.warning(
+                self,
+                "Print Not Available",
+                "Print module not found."
+            )
+            return
+
+        # Get current sheet
+        current_sheet_id = self._get_current_sheet_id()
+        if not current_sheet_id:
+            QMessageBox.information(
+                self,
+                "No Sheet Selected",
+                "Please open a sheet tab to print."
+            )
+            return
+
+        sheet = self._sheet_registry.get_sheet(current_sheet_id)
+        if not sheet or not sheet.svg_content:
+            QMessageBox.warning(
+                self,
+                "No Content",
+                "The selected sheet has no content to print.\nTry regenerating the sheet first."
+            )
+            return
+
+        exporter = PDFExporter(self)
+        if exporter.print_sheet(sheet.svg_content, f"{sheet.number} - {sheet.title}"):
+            self.status_bar.showMessage("Print job sent", 3000)
+
+    def _get_current_sheet_id(self) -> Optional[str]:
+        """Get the sheet ID of the currently active tab."""
+        if not hasattr(self, 'central_tabs') or not self.central_tabs:
+            return None
+
+        current_widget = self.central_tabs.currentWidget()
+        if current_widget and hasattr(current_widget, 'sheet_id'):
+            return current_widget.sheet_id
+        return None
+
     def _on_define_site(self):
         """Show site definition dialog to fetch terrain elevation data."""
         from dialogs.site_dialog import show_site_dialog
@@ -1297,6 +1634,11 @@ class ArchEngineApplication(QMainWindow):
             # User provided terrain data - update the current document
             self.document._data['terrain_mesh'] = site_data['terrain_mesh']
             self.document._data['site'] = site_data
+
+            # Copy building origin to document level if provided
+            if 'building_origin' in site_data:
+                self.document._data['building_origin'] = site_data['building_origin']
+                print(f"[App] Building origin: ({site_data['building_origin']['x_ft']:.0f}', {site_data['building_origin']['z_ft']:.0f}')")
 
             # Mark document as modified
             self.document.set_modified()
@@ -1313,6 +1655,8 @@ class ArchEngineApplication(QMainWindow):
         elif site_data:
             # Site data but no terrain
             self.document._data['site'] = site_data
+            if 'building_origin' in site_data:
+                self.document._data['building_origin'] = site_data['building_origin']
             self.document.set_modified()
             self.status_bar.showMessage("Site data saved (no terrain)", 3000)
 
@@ -1616,17 +1960,17 @@ class ArchEngineApplication(QMainWindow):
         if not HAS_VIEWPORT:
             return
 
+        # Skip 3D updates at LOD 1 (Topology mode) - will update when leaving LOD 1
+        if getattr(self, '_global_lod_level', 2) == 1:
+            return
+
         data = self.document.get_data() if hasattr(self.document, 'get_data') else self.document._data
         if not data:
             return
 
-        print(f"[App] Viewport update: {len(data.get('walls_batch', []))} walls, {len(data.get('rooms', []))} rooms", flush=True)
-
         # Update dock viewport
         if hasattr(self, 'viewport_3d') and self.viewport_3d.is_initialized:
-            print("[App] Calling viewport_3d.load_json...", flush=True)
             self.viewport_3d.load_json(data)
-            print("[App] viewport_3d.load_json returned", flush=True)
 
         # Update split viewport if in split mode
         if self._split_viewport and self._split_viewport.is_initialized:
@@ -1676,6 +2020,10 @@ class ArchEngineApplication(QMainWindow):
             if hasattr(self, 'plan_view'):
                 self.plan_view.lod_level_changed.connect(
                     self.viewport_panel.set_lod_level
+                )
+                # Also update 3D viewport rendering quality when 2D LOD changes
+                self.plan_view.lod_level_changed.connect(
+                    self.viewport_3d.set_lod_level
                 )
 
             # Connect to smart panel container if available
@@ -1743,9 +2091,18 @@ class ArchEngineApplication(QMainWindow):
 
     def _on_request_lod_change(self, lod_level: int):
         """Handle request to change LOD (from hovering a panel)."""
+        old_lod = getattr(self, '_global_lod_level', 2)
         self._global_lod_level = lod_level
         if hasattr(self, 'viewport_panel'):
             self.viewport_panel.set_lod_level(lod_level)
+        # Update 3D viewport rendering quality based on LOD
+        if hasattr(self, 'viewport_3d') and self.viewport_3d.is_initialized:
+            self.viewport_3d.set_lod_level(lod_level)
+        if self._split_viewport and self._split_viewport.is_initialized:
+            self._split_viewport.set_lod_level(lod_level)
+        # If leaving LOD 1, force a viewport update (was skipped during topology editing)
+        if old_lod == 1 and lod_level != 1:
+            self._do_viewport_update()
         # Show feedback
         lod_names = {1: "Topology", 2: "Walls", 3: "Fixtures", 4: "Viewports", 5: "Documentation"}
         self.status_bar.showMessage(

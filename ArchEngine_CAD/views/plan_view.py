@@ -795,8 +795,9 @@ class WallLayerItem(QGraphicsItem):
         self._grips: List[GripItem] = []
         self._selected = False
 
-        # Colors
+        # Colors - clamp to valid range to prevent QColor errors
         r, g, b, a = layer_data.color
+        r, g, b, a = max(0, min(1, r)), max(0, min(1, g)), max(0, min(1, b)), max(0, min(1, a))
         self._fill_color = QColor(int(r * 255), int(g * 255), int(b * 255), int(a * 255))
         self._selection_color = QColor("#00ffff")
 
@@ -1038,9 +1039,9 @@ class WallItem(QGraphicsItem):
             current_offset += layer.thickness
 
     def remove_layer_items(self):
-        """Remove all layer items."""
+        """Remove all layer items and clean up memory."""
         for item in self._layer_items:
-            if item._grips:
+            if hasattr(item, '_grips') and item._grips:
                 item._remove_grips()
             if item.scene():
                 item.scene().removeItem(item)
@@ -1402,6 +1403,7 @@ class WallItem(QGraphicsItem):
                 path.closeSubpath()
 
                 r, g, b, a = layer.color
+                r, g, b, a = max(0, min(1, r)), max(0, min(1, g)), max(0, min(1, b)), max(0, min(1, a))
                 fill_color = QColor(int(r * 255), int(g * 255), int(b * 255), int(a * 255))
                 painter.fillPath(path, QBrush(fill_color))
 
@@ -2256,6 +2258,8 @@ class RoomResizeGrip(QGraphicsItem):
 
     def _get_edge_vertices(self):
         """Get the two vertex indices for this edge."""
+        if not self.room_item or not self.room_item.room.vertices:
+            return 0, 0
         n = len(self.room_item.room.vertices)
         v1_idx = self.edge_index
         v2_idx = (self.edge_index + 1) % n
@@ -2263,6 +2267,8 @@ class RoomResizeGrip(QGraphicsItem):
 
     def _update_cursor_and_orientation(self):
         """Set cursor based on edge orientation."""
+        if not self.room_item or not self.room_item.room.vertices:
+            return
         v1_idx, v2_idx = self._get_edge_vertices()
         v1 = self.room_item.room.vertices[v1_idx]
         v2 = self.room_item.room.vertices[v2_idx]
@@ -2288,8 +2294,13 @@ class RoomResizeGrip(QGraphicsItem):
         return path
 
     def paint(self, painter: QPainter, option, widget):
+        # Safety check - room_item may be invalid during refresh
+        if not self.room_item or not hasattr(self.room_item, '_view'):
+            return
         # Only show at LOD 1 and when room is selected
         if not self.room_item._view or self.room_item._view.lod_level != 1:
+            return
+        if not self.room_item.scene():  # Room item removed from scene
             return
         if not self.room_item.isSelected():
             return
@@ -2322,6 +2333,11 @@ class RoomResizeGrip(QGraphicsItem):
             return
 
         if event.button() == Qt.MouseButton.LeftButton:
+            # Safety check
+            if not self.room_item or not self.room_item.room.vertices:
+                event.ignore()
+                return
+
             self._dragging = True
             self._drag_start_pos = event.scenePos()
 
@@ -2341,6 +2357,11 @@ class RoomResizeGrip(QGraphicsItem):
             return
 
         if self._dragging and self._drag_start_pos:
+            # Safety check
+            if not self.room_item or not self.room_item.room.vertices:
+                self._dragging = False
+                return
+
             delta = event.scenePos() - self._drag_start_pos
 
             v1_idx, v2_idx = self._get_edge_vertices()
@@ -2381,14 +2402,33 @@ class RoomResizeGrip(QGraphicsItem):
             self._drag_start_pos = None
             self._drag_start_v1 = None
             self._drag_start_v2 = None
-            # Recalculate adjacencies and regenerate walls
-            if self.room_item.document:
-                self.room_item.document.detect_room_adjacencies()
-                self.room_item.document.generate_walls_from_rooms()
-                if self.room_item._view:
-                    # Refresh the entire view to show updated walls
-                    self.room_item._view.refresh()
-                event_bus.document_modified.emit()
+            # At LOD 1, skip wall regeneration - just mark dirty
+            if self.room_item and self.room_item._view:
+                view = self.room_item._view
+                if view.lod_level == 1:
+                    view._topology_dirty = True
+                    print(f"[RoomResizeGrip] Resize at LOD 1, marked _topology_dirty=True")
+                    event_bus.document_modified.emit()
+                elif self.room_item.document:
+                    # LOD 2+: Defer wall regeneration
+                    from PyQt6.QtCore import QTimer
+                    doc = self.room_item.document
+
+                    if not getattr(view, '_regeneration_pending', False):
+                        view._regeneration_pending = True
+
+                        def do_wall_regeneration():
+                            try:
+                                doc.detect_room_adjacencies()
+                                doc.generate_walls_from_rooms()
+                                view._force_refresh()
+                                event_bus.document_modified.emit()
+                            except Exception as e:
+                                print(f"[RoomResizeGrip] Wall regeneration error: {e}")
+                            finally:
+                                view._regeneration_pending = False
+
+                        QTimer.singleShot(0, do_wall_regeneration)
             event.accept()
 
 
@@ -2741,28 +2781,43 @@ class RoomItem(QGraphicsItem):
             self.room.bounds['width'] = max(xs) - min(xs)
             self.room.bounds['height'] = max(zs) - min(zs)
 
-            # Recalculate adjacencies and regenerate walls
-            if self.document:
-                self.document.detect_room_adjacencies()
-                self.document.generate_walls_from_rooms()
-                if self._view:
-                    # Refresh the entire view to show updated walls
-                    self._view.refresh()
-            from core.events import event_bus
-            event_bus.document_modified.emit()
+            # At LOD 1, skip wall regeneration - just mark dirty
+            # Walls will be regenerated when switching to LOD 2+
+            if self._view and self._view.lod_level == 1:
+                self._view._topology_dirty = True
+                print(f"[RoomItem] Blob moved at LOD 1, marked _topology_dirty=True")
+                # Just emit modified to update title
+                from core.events import event_bus
+                event_bus.document_modified.emit()
+            elif self.document and self._view:
+                # LOD 2+: Do immediate wall regeneration (deferred to avoid crash)
+                from PyQt6.QtCore import QTimer
+                doc = self.document
+                view = self._view
 
-            # Update grip positions after vertices are updated
-            self._update_grip_positions()
-            # Show grips again
-            for grip in self._resize_grips:
-                grip.setVisible(True)
+                if not getattr(view, '_regeneration_pending', False):
+                    view._regeneration_pending = True
 
-        # Always reset drag state
+                    def do_wall_regeneration():
+                        try:
+                            doc.detect_room_adjacencies()
+                            doc.generate_walls_from_rooms()
+                            view._force_refresh()
+                            from core.events import event_bus
+                            event_bus.document_modified.emit()
+                        except Exception as e:
+                            print(f"[RoomItem] Wall regeneration error: {e}")
+                        finally:
+                            view._regeneration_pending = False
+
+                    QTimer.singleShot(0, do_wall_regeneration)
+
+        # Always reset drag state BEFORE deferring work
         self._dragging = False
         self._drag_start_mouse_pos = None
         self._drag_start_item_pos = None
 
-        super().mouseReleaseEvent(event)
+        # Don't call super or update grips - the deferred refresh will recreate everything
 
     def boundingRect(self) -> QRectF:
         """Return bounding rectangle in local coordinates (relative to item pos)."""
@@ -2957,6 +3012,11 @@ class PlanView(BaseView):
         self._cycle_index: int = 0
         self._last_click_pos = None
 
+        # Guard against overlapping refresh during wall regeneration
+        self._regeneration_pending = False
+        # Track if topology was modified at LOD 1 (needs wall regen on LOD change)
+        self._topology_dirty = False
+
         # Connect to document changes
         self.document.document_changed.connect(self.refresh)
         event_bus.element_modified.connect(self._on_element_modified)
@@ -2977,8 +3037,49 @@ class PlanView(BaseView):
 
     def set_lod_level(self, level: int):
         """Set LOD level and update item visibility/states."""
-        super().set_lod_level(level)
-        self._apply_lod_visibility()
+        old_level = getattr(self, '_lod_level', 2)
+        topology_dirty = getattr(self, '_topology_dirty', False)
+        print(f"[PlanView] set_lod_level({level}), old={old_level}, _topology_dirty={topology_dirty}")
+
+        # Manually update _lod_level and emit signal (avoid base class scene.update())
+        level = max(1, min(5, level))
+        if level != self._lod_level:
+            self._lod_level = level
+            print(f"[PlanView] Emitting lod_level_changed signal...")
+            self.lod_level_changed.emit(level)
+            print(f"[PlanView] Signal emitted")
+
+        # If leaving LOD 1 and topology was modified, defer wall regeneration
+        if old_level == 1 and level != 1 and topology_dirty:
+            self._topology_dirty = False
+            if self.document:
+                from PyQt6.QtCore import QTimer
+                print(f"[PlanView] Scheduling deferred wall regeneration")
+                QTimer.singleShot(0, self._deferred_wall_regeneration)
+            # Don't apply visibility yet - will be done after regeneration
+        else:
+            self._apply_lod_visibility()
+
+    def _deferred_wall_regeneration(self):
+        """Regenerate walls after LOD 1 edit, called via QTimer.singleShot."""
+        if not self.document:
+            return
+        print(f"[PlanView] Starting deferred wall regeneration")
+        try:
+            self.document.detect_room_adjacencies()
+            print(f"[PlanView] detect_room_adjacencies done")
+            self.document.generate_walls_from_rooms()
+            print(f"[PlanView] generate_walls_from_rooms done, {len(self.document.walls)} walls")
+            self._force_refresh()
+            print(f"[PlanView] _force_refresh done")
+            self._apply_lod_visibility()
+            print(f"[PlanView] _apply_lod_visibility done")
+            from core.events import event_bus
+            event_bus.document_modified.emit()
+        except Exception as e:
+            import traceback
+            print(f"[PlanView] ERROR during deferred wall regeneration: {e}")
+            traceback.print_exc()
 
     def _apply_lod_visibility(self):
         """Apply visibility settings based on current LOD level."""
@@ -2988,26 +3089,33 @@ class PlanView(BaseView):
 
         # Update room items - they become draggable at LOD 1
         for room_item in self._room_items:
-            room_item._update_movable_state()
-            room_item.update()  # Force repaint
+            if room_item and room_item.scene():
+                if hasattr(room_item, '_update_movable_state'):
+                    room_item._update_movable_state()
+                room_item.update()  # Force repaint
 
         # Hide walls at LOD 1
         for wall_item in self._wall_items:
-            wall_item.setVisible(not is_lod_1)
-            # Also hide layer items
-            for layer_item in wall_item._layer_items:
-                layer_item.setVisible(not is_lod_1)
+            if wall_item and wall_item.scene():
+                wall_item.setVisible(not is_lod_1)
+                # Also hide layer items
+                for layer_item in getattr(wall_item, '_layer_items', []):
+                    if layer_item and layer_item.scene():
+                        layer_item.setVisible(not is_lod_1)
 
         # Hide doors at LOD 1
         for door_item in self._door_items:
-            door_item.setVisible(not is_lod_1)
+            if door_item and door_item.scene():
+                door_item.setVisible(not is_lod_1)
 
         # Hide windows at LOD 1
         for window_item in self._window_items:
-            window_item.setVisible(not is_lod_1)
+            if window_item and window_item.scene():
+                window_item.setVisible(not is_lod_1)
 
         # Force scene update
-        self.scene.update()
+        if self.scene:
+            self.scene.update()
 
     def refresh_connections(self):
         """Refresh room connection items from document data.
@@ -3034,7 +3142,15 @@ class PlanView(BaseView):
 
     def refresh(self):
         """Rebuild the entire view from document data."""
-        # Clear existing items
+        # Skip if regeneration is pending (another blob move will trigger refresh)
+        if getattr(self, '_regeneration_pending', False):
+            return
+        self._force_refresh()
+
+    def _force_refresh(self):
+        """Internal refresh - bypasses regeneration guard."""
+        print(f"[PlanView] _force_refresh starting, {len(self._room_items)} room items")
+        # Clear existing items - must delete explicitly to prevent memory leaks
         for item in self._wall_items:
             # Remove layer items first
             if hasattr(item, 'remove_layer_items'):
@@ -3042,21 +3158,30 @@ class PlanView(BaseView):
             # Remove grips
             if hasattr(item, '_remove_grips'):
                 item._remove_grips()
-            self.scene.removeItem(item)
+            if item.scene():
+                self.scene.removeItem(item)
         for item in self._door_items:
             if hasattr(item, '_remove_grips'):
                 item._remove_grips()
-            self.scene.removeItem(item)
+            if item.scene():
+                self.scene.removeItem(item)
         for item in self._window_items:
             if hasattr(item, '_remove_grips'):
                 item._remove_grips()
-            self.scene.removeItem(item)
+            if item.scene():
+                self.scene.removeItem(item)
         for item in self._room_items:
-            self.scene.removeItem(item)
+            # Remove resize grips first (they're separate scene items)
+            if hasattr(item, '_remove_resize_grips'):
+                item._remove_resize_grips()
+            if item.scene():
+                self.scene.removeItem(item)
         for item in self._room_labels:
-            self.scene.removeItem(item)
+            if item.scene():
+                self.scene.removeItem(item)
         for item in self._connection_items:
-            self.scene.removeItem(item)
+            if item.scene():
+                self.scene.removeItem(item)
 
         self._wall_items.clear()
         self._door_items.clear()
@@ -3064,6 +3189,10 @@ class PlanView(BaseView):
         self._room_items.clear()
         self._room_labels.clear()
         self._connection_items.clear()
+
+        # Force garbage collection to reclaim memory
+        import gc
+        gc.collect()
 
         # Add walls
         for wall in self.document.walls:

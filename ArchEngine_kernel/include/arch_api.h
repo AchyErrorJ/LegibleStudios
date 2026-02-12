@@ -977,6 +977,67 @@ ARCH_API void arch_set_terrain_material(float roughness, float metallic);
  */
 ARCH_API void arch_set_terrain_color_mode(int mode);
 
+/**
+ * Elevation point for terrain generation.
+ * Coordinates in WGS84 (lat/lng) with elevation in meters.
+ */
+typedef struct {
+    float lat;          // Latitude (degrees)
+    float lng;          // Longitude (degrees)
+    float elevation_m;  // Elevation in meters above sea level
+} ArchElevationPoint;
+
+/**
+ * Generate terrain mesh from raw elevation points.
+ *
+ * This performs high-performance mesh generation in C++ from LiDAR or other
+ * elevation data. Much faster than Python-based generation.
+ *
+ * The function:
+ * 1. Creates a grid within the polygon boundary
+ * 2. Interpolates elevation at each grid point from nearby samples
+ * 3. Generates triangulated mesh with normals and UVs
+ * 4. Stores result internally (replaces any existing terrain)
+ *
+ * @param points Array of elevation points (lat, lng, elevation_m)
+ * @param point_count Number of elevation points
+ * @param boundary_ft Polygon boundary vertices in feet [x0,z0, x1,z1, ...]
+ *                    relative to property corner. NULL for rectangular bounds.
+ * @param boundary_vertex_count Number of boundary vertices (0 if NULL boundary)
+ * @param bounds_lat_min Minimum latitude of data bounds
+ * @param bounds_lat_max Maximum latitude of data bounds
+ * @param bounds_lng_min Minimum longitude of data bounds
+ * @param bounds_lng_max Maximum longitude of data bounds
+ * @param width_ft Property width in feet
+ * @param depth_ft Property depth in feet
+ * @param grid_resolution Mesh resolution (100=20k tris, 300=180k, 500=500k)
+ * @param origin_x_ft Building origin X offset in feet (terrain shifted so building at 0,0)
+ * @param origin_z_ft Building origin Z offset in feet
+ * @param rotation_deg Building rotation in degrees (terrain rotated to match)
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_generate_terrain_from_points(
+    const ArchElevationPoint* points,
+    int point_count,
+    const float* boundary_ft,
+    int boundary_vertex_count,
+    float bounds_lat_min, float bounds_lat_max,
+    float bounds_lng_min, float bounds_lng_max,
+    float width_ft, float depth_ft,
+    int grid_resolution,
+    float origin_x_ft, float origin_z_ft,
+    float rotation_deg
+);
+
+/**
+ * Get terrain generation progress (for async generation).
+ *
+ * @param out_progress Output: progress 0.0-1.0 (or NULL to skip)
+ * @param out_status Output: status string (or NULL to skip)
+ * @return 1 if generation in progress, 0 if complete or not started
+ */
+ARCH_API int arch_get_terrain_generation_progress(float* out_progress, const char** out_status);
+
 // =============================================================================
 // Environment/HDRI API
 // =============================================================================
@@ -1182,6 +1243,61 @@ ARCH_API void arch_set_displacement_scale(float scale);
  * @return Current displacement scale
  */
 ARCH_API float arch_get_displacement_scale(void);
+
+// =============================================================================
+// LOD (Level of Detail) API
+// =============================================================================
+
+/**
+ * Set rendering LOD level.
+ * Adjusts tessellation, shadow quality, and other render settings based on LOD.
+ *
+ * LOD Levels:
+ *   1 = Topology (minimal detail, fastest rendering)
+ *   2 = Spatial (low detail, good for interactive editing)
+ *   3 = Assembly (medium detail, balanced quality)
+ *   4 = Construction (high detail, production quality)
+ *   5 = Fabrication (maximum detail, final renders)
+ *
+ * @param level LOD level (1-5)
+ */
+ARCH_API void arch_set_lod_level(int level);
+
+/**
+ * Get current LOD level.
+ *
+ * @return Current LOD level (1-5)
+ */
+ARCH_API int arch_get_lod_level(void);
+
+// =============================================================================
+// Frame Capture API
+// =============================================================================
+
+/**
+ * Capture the current frame to a PNG file.
+ *
+ * Renders a single frame and saves it to the specified path.
+ * Useful for generating elevation views, thumbnails, or documentation.
+ *
+ * @param path Output file path (must end in .png)
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_capture_frame(const char* path);
+
+/**
+ * Capture an orthogonal view for elevation/section generation.
+ *
+ * Temporarily switches to orthographic mode, sets camera to specified direction,
+ * captures the frame, then restores previous camera state.
+ *
+ * @param path Output file path
+ * @param direction View direction: 0=South, 1=North, 2=East, 3=West
+ * @param section_enabled 1 to enable section cut, 0 for full view
+ * @param section_depth Section cut depth in feet (only used if section_enabled)
+ * @return 0 on success, non-zero on failure
+ */
+ARCH_API int arch_capture_elevation(const char* path, int direction, int section_enabled, float section_depth);
 
 #ifdef __cplusplus
 }

@@ -2262,6 +2262,203 @@ ARCH_API int arch_generate_terrain_from_points(
         std::cout << "[TerrainGen]   Z: [" << minZ << ", " << maxZ << "] ft" << std::endl;
     }
 
+    // Add 3D North Arrow to terrain mesh
+    // Arrow positioned at SW corner, pointing north (+Z direction)
+    {
+        // Get terrain bounds (already in feet)
+        float tMinX = 1e9f, tMaxX = -1e9f, tMinZ = 1e9f, tMaxZ = -1e9f;
+        float avgY = 0.0f;
+        for (const auto& v : g_building.terrainMesh.vertices) {
+            tMinX = std::min(tMinX, v.position.x);
+            tMaxX = std::max(tMaxX, v.position.x);
+            tMinZ = std::min(tMinZ, v.position.z);
+            tMaxZ = std::max(tMaxZ, v.position.z);
+            avgY += v.position.y;
+        }
+        if (!g_building.terrainMesh.vertices.empty()) {
+            avgY /= g_building.terrainMesh.vertices.size();
+        }
+
+        // Arrow dimensions (in feet)
+        float arrowLength = std::min(tMaxX - tMinX, tMaxZ - tMinZ) * 0.15f;  // 15% of smaller dimension
+        float arrowWidth = arrowLength * 0.1f;   // Stem width
+        float arrowHeadWidth = arrowLength * 0.25f;  // Head width
+        float arrowHeadLength = arrowLength * 0.3f;  // Head length
+        float arrowHeight = 2.0f;  // 2 feet above terrain
+
+        // Position at SW corner with some offset
+        float baseX = tMinX + arrowLength * 0.5f;
+        float baseZ = tMinZ + arrowLength * 0.5f;
+        float baseY = avgY + arrowHeight;
+
+        // North arrow color (red)
+        vec3 arrowColor(0.9f, 0.1f, 0.1f);
+
+        // Create arrow vertices
+        u32 baseIdx = static_cast<u32>(g_building.terrainMesh.vertices.size());
+
+        // Arrow stem (rectangle pointing +Z)
+        float stemLength = arrowLength - arrowHeadLength;
+
+        // Stem vertices (4 corners of rectangle)
+        Vertex v0, v1, v2, v3;
+        v0.position = vec3(baseX - arrowWidth/2, baseY, baseZ);
+        v0.normal = vec3(0, 1, 0);
+        v0.color = arrowColor;
+        v0.texCoord = vec2(0, 0);
+
+        v1.position = vec3(baseX + arrowWidth/2, baseY, baseZ);
+        v1.normal = vec3(0, 1, 0);
+        v1.color = arrowColor;
+        v1.texCoord = vec2(1, 0);
+
+        v2.position = vec3(baseX + arrowWidth/2, baseY, baseZ + stemLength);
+        v2.normal = vec3(0, 1, 0);
+        v2.color = arrowColor;
+        v2.texCoord = vec2(1, 1);
+
+        v3.position = vec3(baseX - arrowWidth/2, baseY, baseZ + stemLength);
+        v3.normal = vec3(0, 1, 0);
+        v3.color = arrowColor;
+        v3.texCoord = vec2(0, 1);
+
+        g_building.terrainMesh.vertices.push_back(v0);
+        g_building.terrainMesh.vertices.push_back(v1);
+        g_building.terrainMesh.vertices.push_back(v2);
+        g_building.terrainMesh.vertices.push_back(v3);
+
+        // Stem triangles
+        g_building.terrainMesh.indices.push_back(baseIdx + 0);
+        g_building.terrainMesh.indices.push_back(baseIdx + 1);
+        g_building.terrainMesh.indices.push_back(baseIdx + 2);
+        g_building.terrainMesh.indices.push_back(baseIdx + 0);
+        g_building.terrainMesh.indices.push_back(baseIdx + 2);
+        g_building.terrainMesh.indices.push_back(baseIdx + 3);
+
+        // Arrow head (triangle)
+        u32 headBaseIdx = static_cast<u32>(g_building.terrainMesh.vertices.size());
+
+        Vertex h0, h1, h2;
+        // Left corner of head base
+        h0.position = vec3(baseX - arrowHeadWidth/2, baseY, baseZ + stemLength);
+        h0.normal = vec3(0, 1, 0);
+        h0.color = arrowColor;
+        h0.texCoord = vec2(0, 0);
+
+        // Right corner of head base
+        h1.position = vec3(baseX + arrowHeadWidth/2, baseY, baseZ + stemLength);
+        h1.normal = vec3(0, 1, 0);
+        h1.color = arrowColor;
+        h1.texCoord = vec2(1, 0);
+
+        // Tip of arrow (north)
+        h2.position = vec3(baseX, baseY, baseZ + arrowLength);
+        h2.normal = vec3(0, 1, 0);
+        h2.color = arrowColor;
+        h2.texCoord = vec2(0.5f, 1);
+
+        g_building.terrainMesh.vertices.push_back(h0);
+        g_building.terrainMesh.vertices.push_back(h1);
+        g_building.terrainMesh.vertices.push_back(h2);
+
+        // Arrow head triangle
+        g_building.terrainMesh.indices.push_back(headBaseIdx + 0);
+        g_building.terrainMesh.indices.push_back(headBaseIdx + 1);
+        g_building.terrainMesh.indices.push_back(headBaseIdx + 2);
+
+        // Add "N" label vertices (simple N shape made of lines/quads)
+        // Position N just beyond the arrow tip
+        float nBaseZ = baseZ + arrowLength + arrowWidth;
+        float nHeight = arrowHeadWidth * 0.8f;
+        float nWidth = arrowHeadWidth * 0.6f;
+        float nThickness = arrowWidth * 0.5f;
+
+        u32 nBaseIdx = static_cast<u32>(g_building.terrainMesh.vertices.size());
+
+        // N is made of 3 vertical strokes: left |, diagonal \, right |
+        // Left vertical bar
+        Vertex n0, n1, n2, n3;
+        n0.position = vec3(baseX - nWidth/2, baseY, nBaseZ);
+        n0.normal = vec3(0, 1, 0); n0.color = arrowColor; n0.texCoord = vec2(0, 0);
+
+        n1.position = vec3(baseX - nWidth/2 + nThickness, baseY, nBaseZ);
+        n1.normal = vec3(0, 1, 0); n1.color = arrowColor; n1.texCoord = vec2(1, 0);
+
+        n2.position = vec3(baseX - nWidth/2 + nThickness, baseY, nBaseZ + nHeight);
+        n2.normal = vec3(0, 1, 0); n2.color = arrowColor; n2.texCoord = vec2(1, 1);
+
+        n3.position = vec3(baseX - nWidth/2, baseY, nBaseZ + nHeight);
+        n3.normal = vec3(0, 1, 0); n3.color = arrowColor; n3.texCoord = vec2(0, 1);
+
+        g_building.terrainMesh.vertices.push_back(n0);
+        g_building.terrainMesh.vertices.push_back(n1);
+        g_building.terrainMesh.vertices.push_back(n2);
+        g_building.terrainMesh.vertices.push_back(n3);
+
+        g_building.terrainMesh.indices.push_back(nBaseIdx + 0);
+        g_building.terrainMesh.indices.push_back(nBaseIdx + 1);
+        g_building.terrainMesh.indices.push_back(nBaseIdx + 2);
+        g_building.terrainMesh.indices.push_back(nBaseIdx + 0);
+        g_building.terrainMesh.indices.push_back(nBaseIdx + 2);
+        g_building.terrainMesh.indices.push_back(nBaseIdx + 3);
+
+        // Right vertical bar
+        u32 n2BaseIdx = static_cast<u32>(g_building.terrainMesh.vertices.size());
+        Vertex n4, n5, n6, n7;
+        n4.position = vec3(baseX + nWidth/2 - nThickness, baseY, nBaseZ);
+        n4.normal = vec3(0, 1, 0); n4.color = arrowColor; n4.texCoord = vec2(0, 0);
+
+        n5.position = vec3(baseX + nWidth/2, baseY, nBaseZ);
+        n5.normal = vec3(0, 1, 0); n5.color = arrowColor; n5.texCoord = vec2(1, 0);
+
+        n6.position = vec3(baseX + nWidth/2, baseY, nBaseZ + nHeight);
+        n6.normal = vec3(0, 1, 0); n6.color = arrowColor; n6.texCoord = vec2(1, 1);
+
+        n7.position = vec3(baseX + nWidth/2 - nThickness, baseY, nBaseZ + nHeight);
+        n7.normal = vec3(0, 1, 0); n7.color = arrowColor; n7.texCoord = vec2(0, 1);
+
+        g_building.terrainMesh.vertices.push_back(n4);
+        g_building.terrainMesh.vertices.push_back(n5);
+        g_building.terrainMesh.vertices.push_back(n6);
+        g_building.terrainMesh.vertices.push_back(n7);
+
+        g_building.terrainMesh.indices.push_back(n2BaseIdx + 0);
+        g_building.terrainMesh.indices.push_back(n2BaseIdx + 1);
+        g_building.terrainMesh.indices.push_back(n2BaseIdx + 2);
+        g_building.terrainMesh.indices.push_back(n2BaseIdx + 0);
+        g_building.terrainMesh.indices.push_back(n2BaseIdx + 2);
+        g_building.terrainMesh.indices.push_back(n2BaseIdx + 3);
+
+        // Diagonal bar (connecting top-left to bottom-right)
+        u32 n3BaseIdx = static_cast<u32>(g_building.terrainMesh.vertices.size());
+        Vertex d0, d1, d2, d3;
+        d0.position = vec3(baseX - nWidth/2, baseY, nBaseZ + nHeight - nThickness);
+        d0.normal = vec3(0, 1, 0); d0.color = arrowColor; d0.texCoord = vec2(0, 0);
+
+        d1.position = vec3(baseX - nWidth/2 + nThickness, baseY, nBaseZ + nHeight);
+        d1.normal = vec3(0, 1, 0); d1.color = arrowColor; d1.texCoord = vec2(1, 0);
+
+        d2.position = vec3(baseX + nWidth/2, baseY, nBaseZ + nThickness);
+        d2.normal = vec3(0, 1, 0); d2.color = arrowColor; d2.texCoord = vec2(1, 1);
+
+        d3.position = vec3(baseX + nWidth/2 - nThickness, baseY, nBaseZ);
+        d3.normal = vec3(0, 1, 0); d3.color = arrowColor; d3.texCoord = vec2(0, 1);
+
+        g_building.terrainMesh.vertices.push_back(d0);
+        g_building.terrainMesh.vertices.push_back(d1);
+        g_building.terrainMesh.vertices.push_back(d2);
+        g_building.terrainMesh.vertices.push_back(d3);
+
+        g_building.terrainMesh.indices.push_back(n3BaseIdx + 0);
+        g_building.terrainMesh.indices.push_back(n3BaseIdx + 1);
+        g_building.terrainMesh.indices.push_back(n3BaseIdx + 2);
+        g_building.terrainMesh.indices.push_back(n3BaseIdx + 0);
+        g_building.terrainMesh.indices.push_back(n3BaseIdx + 2);
+        g_building.terrainMesh.indices.push_back(n3BaseIdx + 3);
+
+        std::cout << "[TerrainGen] Added 3D north arrow at (" << baseX << ", " << baseZ << ") ft" << std::endl;
+    }
+
     return 0;
 }
 
@@ -2630,6 +2827,172 @@ ARCH_API float arch_get_displacement_scale(void) {
         return g_renderer->getDisplacementScale();
     }
     return 0.0f;
+}
+
+// =============================================================================
+// LOD (Level of Detail) API
+// =============================================================================
+
+static int g_lod_level = 3;  // Default: Assembly (medium detail)
+
+ARCH_API void arch_set_lod_level(int level) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+
+    // Clamp to valid range
+    level = std::max(1, std::min(5, level));
+    g_lod_level = level;
+
+    if (!g_renderer) return;
+
+    // Adjust rendering parameters based on LOD level
+    switch (level) {
+        case 1:  // Topology - minimal detail, fastest
+            g_renderer->setTessellationEnabled(false);
+            g_renderer->setShadowsEnabled(false);
+            g_renderer->setSSAOEnabled(false);
+            g_renderer->setBloomEnabled(false);
+            break;
+
+        case 2:  // Spatial - low detail
+            g_renderer->setTessellationEnabled(false);
+            g_renderer->setShadowsEnabled(true);
+            g_renderer->setSSAOEnabled(false);
+            g_renderer->setBloomEnabled(false);
+            break;
+
+        case 3:  // Assembly - medium detail (default)
+            g_renderer->setTessellationEnabled(false);
+            g_renderer->setShadowsEnabled(true);
+            g_renderer->setSSAOEnabled(true);
+            g_renderer->setSSAORadius(0.3f);
+            g_renderer->setSSAOIntensity(0.8f);
+            g_renderer->setBloomEnabled(false);
+            break;
+
+        case 4:  // Construction - high detail
+            g_renderer->setTessellationEnabled(true);
+            g_renderer->setTessellationLevel(16.0f);
+            g_renderer->setDisplacementScale(0.05f);
+            g_renderer->setShadowsEnabled(true);
+            g_renderer->setSSAOEnabled(true);
+            g_renderer->setSSAORadius(0.5f);
+            g_renderer->setSSAOIntensity(1.0f);
+            g_renderer->setBloomEnabled(true);
+            g_renderer->setBloomIntensity(0.3f);
+            break;
+
+        case 5:  // Fabrication - maximum detail
+            g_renderer->setTessellationEnabled(true);
+            g_renderer->setTessellationLevel(32.0f);
+            g_renderer->setDisplacementScale(0.1f);
+            g_renderer->setShadowsEnabled(true);
+            g_renderer->setSSAOEnabled(true);
+            g_renderer->setSSAORadius(0.7f);
+            g_renderer->setSSAOIntensity(1.2f);
+            g_renderer->setBloomEnabled(true);
+            g_renderer->setBloomIntensity(0.5f);
+            break;
+    }
+}
+
+ARCH_API int arch_get_lod_level(void) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    return g_lod_level;
+}
+
+// =============================================================================
+// Frame Capture API
+// =============================================================================
+
+ARCH_API int arch_capture_frame(const char* path) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    if (!g_renderer) {
+        setError("Renderer not initialized");
+        return 1;
+    }
+
+    try {
+        // Get current viewport size
+        u32 width = g_context ? g_context->getSwapchainExtent().width : 1920;
+        u32 height = g_context ? g_context->getSwapchainExtent().height : 1080;
+
+        // Render current frame and save
+        // TODO: Implement proper high-res capture
+        setError("Frame capture not yet implemented");
+        return 1;
+    } catch (const std::exception& e) {
+        setError(e.what());
+        return -1;
+    }
+}
+
+ARCH_API int arch_capture_elevation(const char* path, int direction, int section_enabled, float section_depth) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    if (!g_renderer || !g_context) {
+        setError("Renderer not initialized");
+        return 1;
+    }
+
+    try {
+        // Save current camera state
+        float savedYaw = g_cameraYaw;
+        float savedPitch = g_cameraPitch;
+        float savedDistance = g_cameraDistance;
+        vec3 savedTarget = g_cameraTarget;
+        bool savedOrtho = g_cameraOrthographic;
+
+        // Switch to orthographic mode
+        g_cameraOrthographic = true;
+
+        // Use default bounds if no geometry
+        float distance = 100.0f;
+
+        // Position camera based on direction
+        // Direction: 0=South, 1=North, 2=East, 3=West
+        switch (direction) {
+            case 0: // South - looking from south
+                g_cameraYaw = 0.0f;
+                g_cameraPitch = 0.0f;
+                break;
+            case 1: // North - looking from north
+                g_cameraYaw = 3.14159f;  // 180 degrees in radians
+                g_cameraPitch = 0.0f;
+                break;
+            case 2: // East - looking from east
+                g_cameraYaw = 1.5708f;   // 90 degrees in radians
+                g_cameraPitch = 0.0f;
+                break;
+            case 3: // West - looking from west
+                g_cameraYaw = -1.5708f;  // -90 degrees in radians
+                g_cameraPitch = 0.0f;
+                break;
+            default:
+                g_cameraYaw = 0.0f;
+                g_cameraPitch = 0.0f;
+                break;
+        }
+
+        g_cameraDistance = distance;
+
+        // Update camera
+        updateCamera();
+
+        // Capture frame
+        int result = arch_capture_frame(path);
+
+        // Restore camera state
+        g_cameraYaw = savedYaw;
+        g_cameraPitch = savedPitch;
+        g_cameraDistance = savedDistance;
+        g_cameraTarget = savedTarget;
+        g_cameraOrthographic = savedOrtho;
+        updateCamera();
+
+        return result;
+    } catch (const std::exception& e) {
+        setError(e.what());
+        return -1;
+    }
 }
 
 } // extern "C"
