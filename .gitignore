@@ -24,3 +24,38 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+
+# Build artifacts and generated files
+dist/
+dll/
+*.spec
+installer/
+exports/
+
+# Logs
+*.log
+logs/
+app_output.log
+
+# Compiled shaders (SPIR-V)
+*.spv
+
+# Test files and temporary data
+test_*.py
+test_*.html
+test_*.json
+osm_map.html
+
+# Render outputs and models
+renders/
+models/
+
+# History and backup folders
+.history/
+TestData/.history/
+
+# PID files
+*.pid
+
+# Dependencies
+MapWidgetLib/
