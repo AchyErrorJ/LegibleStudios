@@ -30,7 +30,7 @@ import random
 import time
 from collections import defaultdict, deque
 
-from room_relationships import SpatialGraph, Room
+from room_relationships import SpatialGraph, RoomNode
 from coordinate_solver import (
     Point, Rect, PlacedRoom, PlacedLayout, WallCoordinate,
     CoordinateSolver as GridSolver
@@ -302,27 +302,14 @@ class GridSolverWrapper(BaseSolver):
     
     def _to_layout_spec(self):
         """Convert SpatialGraph to LayoutSpec."""
-        from wall_graph import LayoutSpec, RoomAreaSpec, AdjacencyConstraints
-        
-        spec = LayoutSpec(
+        from wall_graph import LayoutSpec
+
+        # Use the class method that properly creates a LayoutSpec
+        spec = LayoutSpec.from_spatial_graph(
+            spatial=self.graph,
             building_width=self.width,
             building_depth=self.depth
         )
-        
-        # Add rooms
-        for room_id, room in self.graph.rooms.items():
-            spec.room_areas[room_id] = RoomAreaSpec(
-                min_area=room.min_area or 100,
-                max_area=room.max_area or 1000,
-                aspect_min=room.aspect_ratio.get("min", 0.5) if room.aspect_ratio else 0.5,
-                aspect_max=room.aspect_ratio.get("max", 2.0) if room.aspect_ratio else 2.0
-            )
-        
-        # Add adjacencies
-        for adj in self.graph.adjacencies:
-            spec.constraints.must_touch.setdefault(adj.room_a, set()).add(adj.room_b)
-            spec.constraints.must_touch.setdefault(adj.room_b, set()).add(adj.room_a)
-        
         return spec
     
     def _calculate_score(self, layout: PlacedLayout) -> float:
@@ -1158,7 +1145,7 @@ class ConstraintSolver(BaseSolver):
         
         return placed
     
-    def _generate_candidates(self, room_id: str, room: Room) -> List[Rect]:
+    def _generate_candidates(self, room_id: str, room: RoomNode) -> List[Rect]:
         """Generate candidate positions."""
         candidates = []
         

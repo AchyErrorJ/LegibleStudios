@@ -32,7 +32,7 @@ except ImportError:
     SOLVERS_AVAILABLE = False
     print("[SolverIntegration] Warning: New solvers not available")
 
-from room_relationships import SpatialGraph, Room, Zone
+from room_relationships import SpatialGraph, RoomNode, Zone
 
 
 # =============================================================================

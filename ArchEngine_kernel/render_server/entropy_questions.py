@@ -11,7 +11,7 @@ from enum import Enum, auto
 import math
 from collections import defaultdict
 
-from room_relationships import SpatialGraph, Room, RoomTypeSpec, ROOM_TYPES, Zone
+from room_relationships import SpatialGraph, RoomNode, RoomTypeSpec, ROOM_TYPES, Zone
 
 
 # =============================================================================

@@ -104,7 +104,7 @@ class TeachingComparator:
                 continue
             
             viz = VISUALIZATION_CONFIG.get(solver_type)
-            print(f"\n🔄 Running {viz.name if viz else solver_type.value}...")
+            print(f"\n[*] Running {viz.name if viz else solver_type.value}...")
             
             try:
                 layout = self.suite.solve(solver_type, max_iterations=5000)
@@ -113,10 +113,10 @@ class TeachingComparator:
                 # Generate individual visualization
                 self._generate_solver_viz(layout, solver_type, f"{output_dir}/{solver_type.value}.svg")
                 
-                print(f"   ✅ Score: {layout.score:.1f}, Rooms: {len(layout.rooms)}/{len(self.graph.rooms)}")
+                print(f"   [OK] Score: {layout.score:.1f}, Rooms: {len(layout.rooms)}/{len(self.graph.rooms)}")
                 
             except Exception as e:
-                print(f"   ❌ Failed: {e}")
+                print(f"   [FAIL] Failed: {e}")
         
         # Generate comparison materials
         self._generate_comparison_grid(results, f"{output_dir}/comparison_grid.svg")
