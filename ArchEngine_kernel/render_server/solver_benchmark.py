@@ -27,7 +27,7 @@ import statistics
 from collections import defaultdict
 import random
 
-from room_relationships import SpatialGraph, Room, Zone
+from room_relationships import SpatialGraph, RoomNode, Zone, ExteriorRequirement
 from solver_suite import SolverSuite, SolverType, get_solver_descriptions
 from coordinate_solver import PlacedLayout, Rect
 
@@ -408,7 +408,7 @@ class BenchmarkSuite:
             rooms_placed=len(layout.rooms),
             rooms_total=len(graph.rooms),
             adjs_satisfied=self._count_satisfied_adjs(layout, graph),
-            adjs_total=len(graph.adjacencies)
+            adjs_total=len(graph.get_required_walls())
         )
     
     def _calculate_metrics(
@@ -435,7 +435,7 @@ class BenchmarkSuite:
         
         # Exterior satisfaction (simplified)
         exterior_req = sum(1 for r in graph.rooms.values()
-                         if ROOM_TYPES.get(r.type, Room("", "", Zone.PUBLIC)).exterior == ExteriorRequirement.REQUIRED)
+                         if r.exterior_requirement == ExteriorRequirement.REQUIRED)
         exterior_sat = 1.0  # Simplified
         
         # Overall score
@@ -461,24 +461,27 @@ class BenchmarkSuite:
     
     def _calculate_adj_satisfaction(self, layout: PlacedLayout, graph: SpatialGraph) -> float:
         """Calculate adjacency satisfaction ratio."""
-        if not graph.adjacencies:
+        # Get all required walls/adjacencies from the graph
+        required_walls = graph.get_required_walls()
+        if not required_walls:
             return 1.0
-        
+
         satisfied = 0
-        for adj in graph.adjacencies:
-            r1 = layout.rooms.get(adj.room_a)
-            r2 = layout.rooms.get(adj.room_b)
+        for room1_id, room2_id, wall_type, opening_type in required_walls:
+            r1 = layout.rooms.get(room1_id)
+            r2 = layout.rooms.get(room2_id)
             if r1 and r2 and r1.rect.touches(r2.rect):
                 satisfied += 1
-        
-        return satisfied / len(graph.adjacencies)
-    
+
+        return satisfied / len(required_walls)
+
     def _count_satisfied_adjs(self, layout: PlacedLayout, graph: SpatialGraph) -> int:
         """Count satisfied adjacencies."""
         count = 0
-        for adj in graph.adjacencies:
-            r1 = layout.rooms.get(adj.room_a)
-            r2 = layout.rooms.get(adj.room_b)
+        required_walls = graph.get_required_walls()
+        for room1_id, room2_id, wall_type, opening_type in required_walls:
+            r1 = layout.rooms.get(room1_id)
+            r2 = layout.rooms.get(room2_id)
             if r1 and r2 and r1.rect.touches(r2.rect):
                 count += 1
         return count
