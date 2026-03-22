@@ -29,6 +29,10 @@ from .elements.dimensions import (
     render_centerline_chain,
     render_opening_dimensions,
 )
+from .elements.dimensions_enhanced import (
+    render_complete_dimensions,
+    render_opening_dimensions_metric,
+)
 from .viewport import Viewport, ViewportBounds, ViewportRenderer, create_standard_layout
 from .sheet_types import (
     DrawingType,
@@ -477,33 +481,19 @@ class InteractiveSheet:
             )
 
         elif level == LODLevel.DETAILED:
-            # LOD 3: Dimension chains (per DIMENSIONING.md)
-            # Pull dimensions well outside the building footprint
-
-            # Centerline chain dimensions - showing wall positions
-            render_centerline_chain(
+            # LOD 3: Complete dimension set on all 4 sides (metric)
+            render_complete_dimensions(
                 builder, self.walls, g,
                 scale=scale,
                 transform_y=False,
                 height=0,
-                axis="x",
-                offset=120,  # Well outside building
             )
-            render_centerline_chain(
-                builder, self.walls, g,
+            # Opening dimensions (doors/windows)
+            render_opening_dimensions_metric(
+                builder, self.doors, self.windows, self.walls, g,
                 scale=scale,
                 transform_y=False,
                 height=0,
-                axis="z",
-                offset=120,
-            )
-            # Overall extents - outermost dimension line
-            render_overall_dimensions(
-                builder, self.walls, g,
-                scale=scale,
-                transform_y=False,
-                height=0,
-                margin=180,  # Furthest out
             )
 
         elif level == LODLevel.CONSTRUCTION:

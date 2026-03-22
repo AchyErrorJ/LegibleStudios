@@ -56,6 +56,7 @@ class OpeningType(Enum):
     POCKET_DOOR = "pocket_door"      # Sliding pocket door
     BARN_DOOR = "barn_door"          # Sliding barn door
     FRENCH_DOOR = "french_door"      # Glass french doors
+    WINDOW = "window"                # Window opening
 
 
 class WallType(Enum):

@@ -16,6 +16,13 @@ from typing import List, Dict, Tuple, Optional
 
 from title_block import generate_title_block, get_project_info_from_json, get_drawing_info
 
+# Import intelligent dimensioning
+try:
+    from intelligent_dimensions import generate_intelligent_dimensions, DimTier
+    _INTELLIGENT_DIM_AVAILABLE = True
+except ImportError:
+    _INTELLIGENT_DIM_AVAILABLE = False
+
 # Try to import shared geometry library
 _ARCHGEOMETRY_AVAILABLE = False
 try:
@@ -306,7 +313,11 @@ class PlanGenerator:
         # === LOD 2: Dimensions, areas, scale ===
         svg.append('<g id="lod-2" data-lod="2">')
         svg.append(self._generate_room_labels(areas_only=True))
-        svg.append(self._generate_ladder_dimensions())
+        # Use intelligent dimensioning if available
+        if _INTELLIGENT_DIM_AVAILABLE:
+            svg.append(self._generate_intelligent_dimensions())
+        else:
+            svg.append(self._generate_ladder_dimensions())
         svg.append(self._generate_scale_bar(-margin + 500, self.depth - 500))
         svg.append('</g>')
 
@@ -1032,6 +1043,386 @@ class PlanGenerator:
             if o.get('target') == dim_id and o.get('type') == 'text':
                 return o.get('value')
         return None
+
+    def _generate_intelligent_dimensions(self) -> str:
+        """Generate three-tiered intelligent dimension chains.
+        
+        Uses room adjacency graph to create architecturally meaningful dimensions:
+        - Tier 1: Overall building envelope
+        - Tier 2: Structural grid (major room divisions)  
+        - Tier 3: Interior partitions
+        """
+        from intelligent_dimensions import IntelligentDimensioning, DimTier
+        
+        # Prepare data for intelligent dimensioning
+        rooms_data = []
+        # self.rooms is a dict: {room_id: Room}
+        for room_id, room in self.rooms.items():
+            rooms_data.append({
+                'id': room_id,
+                'name': room.name,
+                'room_type': room.room_type,
+                'bounds': room.bounds
+            })
+        
+        walls_data = []
+        for i, wall in enumerate(self.walls):
+            wall_entry = {
+                'start': wall.start,
+                'end': wall.end,
+                'category': wall.category,
+                'wall_type': wall.wall_type,
+                'index': i,
+                'openings': []
+            }
+            
+            # Add doors on this wall
+            for door in self.doors:
+                if door.wall_index == i:
+                    # Calculate door start/end positions
+                    wall_dx = wall.end[0] - wall.start[0]
+                    wall_dz = wall.end[2] - wall.start[2]
+                    wall_len = (wall_dx**2 + wall_dz**2)**0.5
+                    
+                    if wall_len > 0:
+                        # Door center position
+                        door_center_x = wall.start[0] + (wall_dx / wall_len) * door.offset
+                        door_center_z = wall.start[2] + (wall_dz / wall_len) * door.offset
+                        
+                        # Door start/end (perpendicular to wall direction)
+                        half_width = door.width / 2
+                        if abs(wall_dx) > abs(wall_dz):  # Horizontal wall
+                            door_start = [door_center_x - half_width, 0, door_center_z]
+                            door_end = [door_center_x + half_width, 0, door_center_z]
+                        else:  # Vertical wall
+                            door_start = [door_center_x, 0, door_center_z - half_width]
+                            door_end = [door_center_x, 0, door_center_z + half_width]
+                        
+                        wall_entry['openings'].append({
+                            'start': door_start,
+                            'end': door_end,
+                            'type': 'door',
+                            'width': door.width
+                        })
+            
+            # Add windows on this wall
+            for window in self.windows:
+                if window.wall_index == i:
+                    wall_dx = wall.end[0] - wall.start[0]
+                    wall_dz = wall.end[2] - wall.start[2]
+                    wall_len = (wall_dx**2 + wall_dz**2)**0.5
+                    
+                    if wall_len > 0:
+                        window_center_x = wall.start[0] + (wall_dx / wall_len) * window.offset
+                        window_center_z = wall.start[2] + (wall_dz / wall_len) * window.offset
+                        
+                        half_width = window.width / 2
+                        if abs(wall_dx) > abs(wall_dz):  # Horizontal wall
+                            win_start = [window_center_x - half_width, 0, window_center_z]
+                            win_end = [window_center_x + half_width, 0, window_center_z]
+                        else:  # Vertical wall
+                            win_start = [window_center_x, 0, window_center_z - half_width]
+                            win_end = [window_center_x, 0, window_center_z + half_width]
+                        
+                        wall_entry['openings'].append({
+                            'start': win_start,
+                            'end': win_end,
+                            'type': 'window',
+                            'width': window.width
+                        })
+            
+            walls_data.append(wall_entry)
+        
+        doors_data = []
+        for door in self.doors:
+            doors_data.append({
+                'wall_index': door.wall_index,
+                'offset': door.offset,
+                'width': door.width
+            })
+        
+        windows_data = []
+        for window in self.windows:
+            windows_data.append({
+                'wall_index': window.wall_index,
+                'offset': window.offset,
+                'width': window.width
+            })
+        
+        # Create SVG builder class
+        class SVGBuilder:
+            def __init__(self):
+                self.elements = []
+            
+            def line(self, x1, y1, x2, y2, cls):
+                self.elements.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" class="{cls}" />')
+            
+            def text(self, x, y, text, cls):
+                self.elements.append(f'<text x="{x:.1f}" y="{y:.1f}" class="{cls}">{text}</text>')
+            
+            def to_string(self):
+                return '\n'.join(self.elements)
+        
+        # Get bounds for dimension placement
+        min_x = min(w.start[0] for w in self.walls) if self.walls else 0
+        min_z = min(w.start[2] for w in self.walls) if self.walls else 0
+        max_x = max(w.end[0] for w in self.walls) if self.walls else 10000
+        max_z = max(w.end[2] for w in self.walls) if self.walls else 10000
+        
+        building_width = max_x - min_x
+        building_depth = max_z - min_z
+        
+        # Use raw mm coordinates (same as walls)
+        # The viewBox handles the scaling for display
+        margin = 2500  # mm margin for dimensions
+        base_offset = 1500  # Offset from building edge
+        
+        # Transform functions (just add margin offset, no scaling)
+        def tx(x):
+            return x
+        def tz(z):
+            return z
+        
+        # Format function
+        def format_dim(length_mm):
+            if length_mm >= 1000:
+                meters = length_mm / 1000
+                if meters == int(meters):
+                    return f"{int(meters)} m"
+                return f"{meters:.1f} m"
+            return f"{int(length_mm)}"
+        
+        # Generate intelligent dimensions
+        builder = SVGBuilder()
+        
+        dim = IntelligentDimensioning(rooms_data, walls_data)
+        chains = dim.generate_chains()
+        
+        # Separate by orientation
+        horizontal_chains = [c for c in chains if c.orientation == 'horizontal']
+        vertical_chains = [c for c in chains if c.orientation == 'vertical']
+        
+        tier_spacing = 1200  # mm between tier lines
+        
+        # --- TOP DIMENSIONS (above building) ---
+        # OVERALL and STRUCTURAL tiers go outside the building
+        y_pos = min_z - base_offset
+        
+        for tier in [DimTier.OVERALL, DimTier.STRUCTURAL]:
+            tier_chains = [c for c in horizontal_chains if c.tier == tier]
+            if not tier_chains:
+                y_pos -= tier_spacing
+                continue
+            
+            all_segments = []
+            for chain in tier_chains:
+                all_segments.extend(chain.segments)
+            
+            if all_segments:
+                all_x_vals = [s[0] for s in all_segments] + [s[1] for s in all_segments]
+                line_min_x, line_max_x = min(all_x_vals), max(all_x_vals)
+                builder.line(tx(line_min_x), y_pos, tx(line_max_x), y_pos, "dim-line")
+                
+                # Extension line down to building edge
+                ext_bottom = min_z - 100
+                
+                drawn_x = set()
+                labeled_dims = set()
+                for start, end, value_mm in all_segments:
+                    for x in [start, end]:
+                        x_key = round(x / 50)
+                        if x_key not in drawn_x:
+                            drawn_x.add(x_key)
+                            builder.line(tx(x), y_pos, tx(x), ext_bottom, "dim-ext")
+                    
+                    mid_x = (start + end) / 2
+                    dim_key = (round(start/100), round(end/100))
+                    if dim_key not in labeled_dims:
+                        labeled_dims.add(dim_key)
+                        if value_mm > 300 and (tier != DimTier.STRUCTURAL or value_mm > 1000):
+                            builder.text(tx(mid_x), y_pos - 12, format_dim(value_mm), "dim-text")
+            
+            y_pos -= tier_spacing
+        
+        # --- OPENING DIMENSIONS (centered on doors/windows) ---
+        # These are positioned right at the opening location
+        opening_h_chains = [c for c in horizontal_chains if c.tier == DimTier.OPENING]
+        for chain in opening_h_chains:
+            for start, end, value_mm in chain.segments:
+                # Short dimension line just outside the wall at opening location
+                # Position it slightly above the building (y = min_z - 200)
+                dim_y = min_z - 300
+                builder.line(tx(start), dim_y, tx(end), dim_y, "dim-line")
+                # Small ticks reaching to opening edges
+                builder.line(tx(start), dim_y - 5, tx(start), dim_y + 5, "dim-ext")
+                builder.line(tx(end), dim_y - 5, tx(end), dim_y + 5, "dim-ext")
+                # Label centered on opening
+                builder.text(tx((start + end) / 2), dim_y - 8, format_dim(value_mm), "dim-text")
+        
+        # --- INTERIOR DIMENSIONS (inside each room) ---
+        interior_h_chains = [c for c in horizontal_chains if c.tier == DimTier.INTERIOR]
+        for chain in interior_h_chains:
+            # Use the stored y_pos (already positioned inside the room)
+            y_pos = chain.y_pos if chain.y_pos > 0 else min_z + 1000  # Fallback
+            
+            for start, end, value_mm in chain.segments:
+                # Short dimension line inside room
+                builder.line(tx(start), y_pos, tx(end), y_pos, "dim-line")
+                # Small ticks at ends
+                builder.line(tx(start), y_pos - 5, tx(start), y_pos + 5, "dim-ext")
+                builder.line(tx(end), y_pos - 5, tx(end), y_pos + 5, "dim-ext")
+                # Label above
+                if value_mm > 500:
+                    builder.text(tx((start + end) / 2), y_pos - 8, format_dim(value_mm), "dim-text")
+        
+        # --- BOTTOM DIMENSIONS (below building) ---
+        # OVERALL and STRUCTURAL tiers go outside
+        y_pos = max_z + base_offset
+        
+        for tier in [DimTier.OVERALL, DimTier.STRUCTURAL]:
+            tier_chains = [c for c in horizontal_chains if c.tier == tier]
+            if not tier_chains:
+                y_pos += tier_spacing
+                continue
+            
+            all_segments = []
+            for chain in tier_chains:
+                all_segments.extend(chain.segments)
+            
+            if all_segments:
+                all_x_vals = [s[0] for s in all_segments] + [s[1] for s in all_segments]
+                line_min_x, line_max_x = min(all_x_vals), max(all_x_vals)
+                builder.line(tx(line_min_x), y_pos, tx(line_max_x), y_pos, "dim-line")
+                
+                # Extension line up to building edge
+                ext_top = max_z + 100
+                
+                drawn_x = set()
+                labeled_dims = set()
+                for start, end, value_mm in all_segments:
+                    for x in [start, end]:
+                        x_key = round(x / 50)
+                        if x_key not in drawn_x:
+                            drawn_x.add(x_key)
+                            builder.line(tx(x), y_pos, tx(x), ext_top, "dim-ext")
+                    
+                    mid_x = (start + end) / 2
+                    dim_key = (round(start/100), round(end/100))
+                    if dim_key not in labeled_dims:
+                        labeled_dims.add(dim_key)
+                        if value_mm > 300 and (tier != DimTier.STRUCTURAL or value_mm > 1000):
+                            builder.text(tx(mid_x), y_pos + 20, format_dim(value_mm), "dim-text")
+            
+            y_pos += tier_spacing
+        
+        # --- VERTICAL INTERIOR DIMENSIONS (inside each room) ---
+        interior_v_chains = [c for c in vertical_chains if c.tier == DimTier.INTERIOR]
+        for chain in interior_v_chains:
+            # Use the stored y_pos (which is actually x_pos for vertical chains)
+            x_pos = chain.y_pos if chain.y_pos > 0 else min_x + 1000
+            
+            for start, end, value_mm in chain.segments:
+                # Short dimension line inside room
+                builder.line(x_pos, tz(start), x_pos, tz(end), "dim-line")
+                # Small ticks at ends
+                builder.line(x_pos - 5, tz(start), x_pos + 5, tz(start), "dim-ext")
+                builder.line(x_pos - 5, tz(end), x_pos + 5, tz(end), "dim-ext")
+                # Label beside
+                if value_mm > 500:
+                    builder.text(x_pos - 8, tz((start + end) / 2), format_dim(value_mm), "dim-text")
+        
+        # --- VERTICAL OPENING DIMENSIONS (centered on doors/windows) ---
+        opening_v_chains = [c for c in vertical_chains if c.tier == DimTier.OPENING]
+        for chain in opening_v_chains:
+            for start, end, value_mm in chain.segments:
+                # Short dimension line just outside the wall at opening location
+                dim_x = min_x - 300  # Left side of building
+                builder.line(dim_x, tz(start), dim_x, tz(end), "dim-line")
+                # Small ticks
+                builder.line(dim_x - 5, tz(start), dim_x + 5, tz(start), "dim-ext")
+                builder.line(dim_x - 5, tz(end), dim_x + 5, tz(end), "dim-ext")
+                # Label centered on opening
+                builder.text(dim_x - 8, tz((start + end) / 2), format_dim(value_mm), "dim-text")
+        
+        # --- LEFT DIMENSIONS (left of building) ---
+        x_pos = min_x - base_offset
+        
+        for tier in [DimTier.OVERALL, DimTier.STRUCTURAL]:
+            tier_chains = [c for c in vertical_chains if c.tier == tier]
+            if not tier_chains:
+                x_pos -= tier_spacing
+                continue
+            
+            all_segments = []
+            for chain in tier_chains:
+                all_segments.extend(chain.segments)
+            
+            if all_segments:
+                all_z_vals = [s[0] for s in all_segments] + [s[1] for s in all_segments]
+                line_min_z, line_max_z = min(all_z_vals), max(all_z_vals)
+                builder.line(x_pos, tz(line_max_z), x_pos, tz(line_min_z), "dim-line")
+                
+                # Extension line to building edge
+                ext_right = min_x - 100
+                
+                drawn_z = set()
+                labeled_dims = set()
+                for start, end, value_mm in all_segments:
+                    for z in [start, end]:
+                        z_key = round(z / 50)
+                        if z_key not in drawn_z:
+                            drawn_z.add(z_key)
+                            builder.line(x_pos, tz(z), ext_right, tz(z), "dim-ext")
+                    
+                    mid_z = (start + end) / 2
+                    dim_key = (round(start/100), round(end/100))
+                    if dim_key not in labeled_dims:
+                        labeled_dims.add(dim_key)
+                        if value_mm > 300 and (tier != DimTier.STRUCTURAL or value_mm > 1000):
+                            builder.text(x_pos - 15, tz(mid_z), format_dim(value_mm), "dim-text")
+            
+            x_pos -= tier_spacing
+        
+        # --- RIGHT DIMENSIONS (right of building) ---
+        x_pos = max_x + base_offset
+        
+        for tier in [DimTier.OVERALL, DimTier.STRUCTURAL]:
+            tier_chains = [c for c in vertical_chains if c.tier == tier]
+            if not tier_chains:
+                x_pos += tier_spacing
+                continue
+            
+            all_segments = []
+            for chain in tier_chains:
+                all_segments.extend(chain.segments)
+            
+            if all_segments:
+                all_z_vals = [s[0] for s in all_segments] + [s[1] for s in all_segments]
+                line_min_z, line_max_z = min(all_z_vals), max(all_z_vals)
+                builder.line(x_pos, tz(line_max_z), x_pos, tz(line_min_z), "dim-line")
+                
+                # Extension line to building edge
+                ext_left = max_x + 100
+                
+                drawn_z = set()
+                labeled_dims = set()
+                for start, end, value_mm in all_segments:
+                    for z in [start, end]:
+                        z_key = round(z / 50)
+                        if z_key not in drawn_z:
+                            drawn_z.add(z_key)
+                            builder.line(x_pos, tz(z), ext_left, tz(z), "dim-ext")
+                    
+                    mid_z = (start + end) / 2
+                    dim_key = (round(start/100), round(end/100))
+                    if dim_key not in labeled_dims:
+                        labeled_dims.add(dim_key)
+                        if value_mm > 300 and (tier != DimTier.STRUCTURAL or value_mm > 1000):
+                            builder.text(x_pos + 15, tz(mid_z), format_dim(value_mm), "dim-text")
+            
+            x_pos += tier_spacing
+        
+        return f'<!-- Intelligent Dimensions ({len(chains)} chains) -->\n{builder.to_string()}'
 
     def _generate_ladder_dimensions(self) -> str:
         """Generate dimension chains on each wall with openings.
