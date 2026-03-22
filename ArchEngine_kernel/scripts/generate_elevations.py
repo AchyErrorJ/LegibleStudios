@@ -275,8 +275,19 @@ def get_roof_profile(roof: dict, direction: str, building_bounds: dict) -> List[
                     end=Point2D(x2, y2)
                 ))
     else:
-        # Fallback: Generate roof profile from base_vertices and ridge_vertices
+        # Fallback: Generate roof profile from building bounds
+        # Create base vertices from building dimensions if not provided
         base = roof.get('base_vertices', [])
+        if not base:
+            # Generate base rectangle from building bounds
+            width = building_bounds.get('width', 10000)
+            depth = building_bounds.get('depth', 10000)
+            base = [
+                [0, 0],  # x, z
+                [width, 0],
+                [width, depth],
+                [0, depth]
+            ]
         ridge = roof.get('ridge_vertices', [])
         base_height = roof.get('base_height', 2700)
         ridge_height = base_height + roof.get('ridge_height', 1000)
