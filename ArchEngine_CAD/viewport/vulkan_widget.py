@@ -65,6 +65,10 @@ def _get_app_root() -> Path:
 
 def _find_dll() -> Optional[Path]:
     """Search for ArchEngineLib.dll - prioritize local/updated DLL first."""
+    # Debug info
+    print(f"[DLL] CWD: {Path.cwd()}")
+    print(f"[DLL] __file__: {__file__}")
+
     # Handle frozen PyInstaller app
     if getattr(sys, 'frozen', False):
         # In frozen mode, DLL is bundled in _internal/dll/
@@ -82,8 +86,18 @@ def _find_dll() -> Optional[Path]:
         return None
 
     # Development mode - search multiple paths
-    cad_root = Path(__file__).parent.parent  # ArchEngine_CAD folder
-    suite_root = cad_root.parent  # ArchEngine_Suite_UE5 folder
+    # Use resolve() to get absolute paths
+    try:
+        cad_root = Path(__file__).parent.parent.resolve()  # ArchEngine_CAD folder
+        suite_root = cad_root.parent.resolve()  # ArchEngine_Suite folder
+    except Exception as e:
+        print(f"[DLL] Path resolution error: {e}")
+        # Fallback to cwd
+        cad_root = Path.cwd()
+        suite_root = cad_root.parent
+
+    print(f"[DLL] CAD root: {cad_root}")
+    print(f"[DLL] Suite root: {suite_root}")
 
     search_paths = [
         # 1. Direct DLL override (for testing new builds)
@@ -94,17 +108,24 @@ def _find_dll() -> Optional[Path]:
         suite_root / "ArchEngine_kernel" / "build" / "Release",
         suite_root / "ArchEngine_kernel" / "build" / "Debug",
 
-        # 3. Kernel branch worktree (for latest kernel features)
+        # 3. CWD-based search (when running from different locations)
+        Path.cwd() / "ArchEngine_kernel" / "build" / "Release",
+        Path.cwd() / "build" / "Release",
+        Path.cwd().parent / "ArchEngine_kernel" / "build" / "Release",
+
+        # 4. Kernel branch worktree (for latest kernel features)
         Path(r"X:\ARCH\Software\ArchEngine_Suite_Kernel\ArchEngine_kernel\build\Release"),
         Path(r"X:\ARCH\Software\ArchEngine_Suite_Kernel\ArchEngine_kernel\build\Debug"),
 
-        # 4. UE5 worktree paths (explicit fallback)
+        # 5. UE5 worktree paths (explicit fallback)
         Path(r"X:\ARCH\Software\ArchEngine_suite_ue5\ArchEngine_kernel\build\Release"),
         Path(r"X:\ARCH\Software\ArchEngine_suite_ue5\ArchEngine_kernel\build\Debug"),
     ]
 
-    for path in search_paths:
+    print(f"[DLL] Searching {len(search_paths)} paths...")
+    for i, path in enumerate(search_paths):
         dll_path = path / "ArchEngineLib.dll"
+        print(f"[DLL] [{i}] {dll_path} - exists: {dll_path.exists()}")
         if dll_path.exists():
             print(f"[DLL] Found: {dll_path}")
             return dll_path
@@ -298,6 +319,9 @@ class VulkanViewportWidget(QWidget):
                 print("[VulkanWidget] Selection API not available in this DLL")
 
             print(f"[VulkanWidget] Loaded {dll_path}")
+
+            # Store DLL directory for shader loading
+            self._dll_dir = dll_path.parent
 
             # Section clipping API (optional)
             try:
@@ -666,14 +690,18 @@ class VulkanViewportWidget(QWidget):
     def showEvent(self, event):
         """Initialize renderer when widget is first shown."""
         super().showEvent(event)
+        print(f"[VulkanWidget] showEvent: isVisible={self.isVisible()}, _initialized={self._initialized}, _lib={self._lib is not None}")
 
         if not self._initialized and self._lib is not None:
+            print("[VulkanWidget] Scheduling initialization in 100ms...")
             # Defer initialization to allow window to be fully created
             QTimer.singleShot(100, self._initialize_renderer)
 
     def _initialize_renderer(self):
         """Initialize the Vulkan renderer with our window handle."""
+        print(f"[VulkanWidget] _initialize_renderer called, _initialized={self._initialized}, _lib={self._lib is not None}")
         if self._initialized or self._lib is None:
+            print(f"[VulkanWidget] Skipping init: _initialized={self._initialized}, _lib={self._lib is not None}")
             return
 
         try:
@@ -683,16 +711,13 @@ class VulkanViewportWidget(QWidget):
             height = self.height()
 
             print(f"[VulkanWidget] Initializing renderer: HWND={hwnd}, size={width}x{height}")
+            print(f"[VulkanWidget] Window isVisible={self.isVisible()}, winId={self.winId()}")
 
             # Change to DLL directory so shaders can be found
-            if getattr(sys, 'frozen', False):
-                dll_dir = Path(sys._MEIPASS) / "dll"
-            else:
-                dll_dir = Path(__file__).parent.parent / "dll"
             original_cwd = os.getcwd()
-            if dll_dir.exists():
-                os.chdir(dll_dir)
-                print(f"[VulkanWidget] Changed to DLL dir: {dll_dir}")
+            if hasattr(self, '_dll_dir') and self._dll_dir.exists():
+                os.chdir(self._dll_dir)
+                print(f"[VulkanWidget] Changed to DLL dir: {self._dll_dir}")
 
             result = self._lib.arch_init(ctypes.c_void_p(hwnd), width, height)
 
@@ -944,6 +969,8 @@ class VulkanViewportWidget(QWidget):
                         )
                 else:
                     # Standard path: use pre-computed terrain mesh from Python
+                    # Note: Building lift is now done at document level in _lift_building_to_terrain()
+                    # to ensure roof generation uses correct wall heights
                     json_str = json.dumps(data).encode('utf-8')
                     result = self._lib.arch_load_json(json_str)
 
@@ -1375,9 +1402,14 @@ class VulkanViewportWidget(QWidget):
         Args:
             level: 1=Topology, 2=Spatial, 3=Assembly, 4=Construction, 5=Fabrication
         """
+        # Clamp level to valid range
+        level = max(1, min(5, level))
         if self._initialized and self._lib and getattr(self, '_has_lod_api', False):
-            self._lib.arch_set_lod_level(level)
-            self.update()  # Request repaint
+            try:
+                self._lib.arch_set_lod_level(level)
+                self.update()  # Request repaint
+            except Exception as e:
+                print(f"[Viewport] Error setting LOD level: {e}")
 
     def set_document(self, document):
         """Set document reference for Python-side picking."""

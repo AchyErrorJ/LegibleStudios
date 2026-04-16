@@ -149,6 +149,10 @@ def generate_title_block(
   <text x="{tb_x + 3100}" y="{tb_y + 1100}"
         font-family="Arial" font-size="100">{drawing_info.get('sheet', '1 OF 8')}</text>
 
+  <!-- Solver Info (small text, top left of title block) -->
+  <text x="{tb_x + 50}" y="{tb_y + 50}"
+        font-family="Arial" font-size="60" fill="#999">{drawing_info.get('solver', 'QBD Layout')}</text>
+
 </g>'''
 
     return svg
@@ -171,11 +175,28 @@ def get_project_info_from_json(data: Dict) -> Dict:
     else:
         project_name = "RESIDENTIAL PROJECT"
 
+    # Get solver info
+    solver_used = data.get('_solver_used', 'qbd')
+    solver_labels = {
+        'grid': 'Grid Solver',
+        'wave_collapse': 'WFC Solver',
+        'tree': 'Tree Solver',
+        'perfect_adjacency': 'Adjacency Solver',
+        'constraint': 'Constraint Solver',
+        'genetic': 'Genetic Solver',
+        'annealing': 'Annealing Solver',
+        'force_directed': 'Force Solver',
+        'space_colonization': 'Growth Solver',
+        'qbd': 'QBD Layout',
+    }
+    solver_display = solver_labels.get(solver_used, solver_used.upper())
+
     return {
         'name': project_name,
         'address': qbd.get('address', ''),
         'client': qbd.get('client_name', ''),
         'number': data.get('building_id', 'P-001'),
+        'solver': solver_display,
     }
 
 

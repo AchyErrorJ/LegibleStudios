@@ -50,6 +50,9 @@ from app.config import Config
 
 
 def main():
+    # Required for QtWebEngine - must be set before QApplication creation
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+
     # High DPI support
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

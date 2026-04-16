@@ -8,9 +8,12 @@ Imports and registers all solvers from solver_suite and advanced_solvers.
 from solver_suite import (
     SolverType, SolverMetadata, SOLVER_INFO,
     BaseSolver, PlacedLayout, PlacedRoom, Rect, Point,
-    GridSolverWrapper, WaveCollapseSolver, TreeSolver,
+    GridSolver, GridSolverWrapper, WaveCollapseSolver, TreeSolver,
     PerfectAdjacencySolver, ConstraintSolver, HybridSolver
 )
+
+# Import normalized constraint solver
+from normalized_solver import NormalizedConstraintSolver
 
 # Import advanced solvers
 try:
@@ -29,6 +32,7 @@ SOLVER_MAP = {
     SolverType.TREE: TreeSolver,
     SolverType.PERFECT_ADJACENCY: PerfectAdjacencySolver,
     SolverType.CONSTRAINT: ConstraintSolver,
+    SolverType.NORMALIZED_CONSTRAINT: NormalizedConstraintSolver,
     SolverType.HYBRID: HybridSolver,
 }
 
@@ -59,14 +63,30 @@ class CompleteSolverSuite:
         """Get metadata for solver."""
         return SOLVER_INFO[solver_type]
     
-    def solve(self, solver_type, max_iterations=10000):
-        """Solve with specified solver."""
+    def solve(self, solver_type, max_iterations=10000, timeout_ms=10000):
+        """Solve with specified solver.
+
+        Args:
+            solver_type: Type of solver to use
+            max_iterations: Maximum iterations for iterative solvers
+            timeout_ms: Timeout in milliseconds (for solvers that support it)
+
+        Returns:
+            PlacedLayout with rooms placed
+        """
         solver_class = SOLVER_MAP.get(solver_type)
         if not solver_class:
             raise ValueError(f"Unknown solver: {solver_type}")
-        
+
         solver = solver_class(self.graph, self.width, self.depth, self.grid_size)
-        return solver.solve(max_iterations)
+
+        # Pass timeout for solvers that support it (like ConstraintSolver)
+        if solver_type == SolverType.CONSTRAINT:
+            result = solver.solve(max_iterations=max_iterations, timeout_ms=timeout_ms)
+        else:
+            result = solver.solve(max_iterations)
+
+        return result
     
     def solve_all(self, max_iterations=5000):
         """Run all solvers."""

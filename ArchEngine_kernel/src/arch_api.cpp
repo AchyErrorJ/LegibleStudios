@@ -2161,6 +2161,7 @@ ARCH_API int arch_generate_terrain_from_points(
         std::cout << std::endl;
     }
 
+
     // Sample terrain elevation at building origin and lift building to sit on terrain
     // The building was loaded at Y=0, but the terrain at that XZ position may be higher
     float buildingElevMm = 0.0f;
@@ -2189,19 +2190,58 @@ ARCH_API int arch_generate_terrain_from_points(
         // Convert elevation to feet (building elements are already in feet from arch_load_json)
         float buildingElevFt = buildingElevMm / 304.8f;
 
-        // Offset all building elements to sit on terrain (in feet)
+        // Offset building elements to sit on terrain (in feet)
+        // Lift elements based on their current Y position:
+        // - Y ≈ 0: Floors/walls at ground level, need full lift
+        // - Y ≈ 9ft (wall height): Roofs at wall top, need full lift
+        // - Y > 20ft: Already lifted elements, skip
+        int liftedCount = 0;
+        int skippedCount = 0;
+        int roofCount = 0;
+        float minRoofY = 1e9f, maxRoofY = -1e9f;
         for (auto& elem : g_building.elements) {
+            // Track roof Y range for debugging
+            if (elem.type == ElementType::Roof) {
+                roofCount++;
+                minRoofY = std::min(minRoofY, elem.start.y);
+                maxRoofY = std::max(maxRoofY, elem.end.y);
+            }
+
+            // Determine if element needs lifting
+            // Walls/roofs on first load: start.y is 0 or wall height (~9ft)
+            // Elements after lift: start.y > 20ft (terrain lift + wall height)
+            bool needsLift = false;
+            if (elem.start.y <= 15.0f) {
+                // Ground level elements (floors, walls at Y=0) or roofs at wall height (~9ft)
+                needsLift = true;
+            }
+            // else: Already lifted (start.y > 15ft), skip
+
+            if (!needsLift) {
+                skippedCount++;
+                continue;
+            }
+
             elem.start.y += buildingElevFt;
             elem.end.y += buildingElevFt;
             for (auto& v : elem.mesh.vertices) {
                 v.y += buildingElevFt;
             }
+            liftedCount++;
         }
 
         // Offset parametric walls (in feet)
         for (auto& pw : g_building.parametricWalls) {
-            pw.baseHeight += buildingElevFt;
-            pw.topHeight += buildingElevFt;
+            // Only lift if not already lifted (baseHeight <= 15ft)
+            if (pw.baseHeight <= 15.0f) {
+                pw.baseHeight += buildingElevFt;
+                pw.topHeight += buildingElevFt;
+            }
+        }
+
+        std::cout << "[TerrainGen] Lifted " << liftedCount << " elements, skipped " << skippedCount << " already-lifted" << std::endl;
+        if (roofCount > 0) {
+            std::cout << "[TerrainGen] Roof Y range: [" << minRoofY << ", " << maxRoofY << "] ft" << std::endl;
         }
 
         std::cout << "[TerrainGen] Building lifted by " << buildingElevFt << " ft to sit on terrain" << std::endl;
@@ -2838,7 +2878,7 @@ static int g_lod_level = 3;  // Default: Assembly (medium detail)
 ARCH_API void arch_set_lod_level(int level) {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
-    // Clamp to valid range
+    // Clamp to valid range and store
     level = std::max(1, std::min(5, level));
     g_lod_level = level;
 

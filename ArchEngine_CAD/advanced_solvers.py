@@ -198,10 +198,7 @@ class GeneticSolver(BaseSolver, VisualDebugMixin):
         
         layout = PlacedLayout(
             rooms=placed,
-            walls=[],
-            building_bounds=Rect(0, 0, self.width, self.depth),
             is_complete=len(placed) == len(self.graph.rooms),
-            unplaced_rooms=[r for r in self.graph.rooms if r not in placed],
             score=best_fitness
         )
         
@@ -243,16 +240,19 @@ class GeneticSolver(BaseSolver, VisualDebugMixin):
         overlaps = 0
         for r1 in placed.values():
             for r2 in placed.values():
-                if r1.room_id != r2.room_id and r1.rect.overlaps(r2.rect):
+                if r1.node.id != r2.node.id and r1.rect.intersects(r2.rect):
                     overlaps += 1
         score -= overlaps * 50
         
         # Adjacency satisfaction
-        for adj in self.graph.adjacencies:
-            r1 = placed.get(adj.room_a)
-            r2 = placed.get(adj.room_b)
-            if r1 and r2 and r1.rect.touches(r2.rect):
-                score += 20
+        for room_id, neighbors in self.graph.adjacencies.items():
+            r1 = placed.get(room_id)
+            if not r1:
+                continue
+            for neighbor_id in neighbors:
+                r2 = placed.get(neighbor_id)
+                if r2 and r1.rect.touches(r2.rect):
+                    score += 20
         
         # Within bounds
         for r in placed.values():
@@ -279,14 +279,17 @@ class GeneticSolver(BaseSolver, VisualDebugMixin):
         return Genome(genes=child_genes)
     
     def _mutate(self, genome: Genome):
-        """Random mutation."""
+        """Random mutation with bounds enforcement."""
         for room_id in genome.genes:
             if random.random() < self.mutation_rate:
                 x, y, w, h = genome.genes[room_id]
                 # Small random adjustment
                 dx = random.gauss(0, 2)
                 dy = random.gauss(0, 2)
-                genome.genes[room_id] = (max(0, x + dx), max(0, y + dy), w, h)
+                # Keep in bounds
+                new_x = max(0, min(x + dx, self.width - w))
+                new_y = max(0, min(y + dy, self.depth - h))
+                genome.genes[room_id] = (new_x, new_y, w, h)
     
     def _genome_to_placed(self, genome: Optional[Genome]) -> Dict[str, PlacedRoom]:
         """Convert genome to placed rooms."""
@@ -295,7 +298,9 @@ class GeneticSolver(BaseSolver, VisualDebugMixin):
         
         placed = {}
         for room_id, (x, y, w, h) in genome.genes.items():
-            placed[room_id] = PlacedRoom(room_id, Rect(x, y, w, h))
+            room_node = self.graph.rooms.get(room_id)
+            if room_node:
+                placed[room_id] = PlacedRoom(room_node, Rect(x, y, w, h))
         return placed
 
 
@@ -368,10 +373,7 @@ class SimulatedAnnealingSolver(BaseSolver, VisualDebugMixin):
         
         layout = PlacedLayout(
             rooms=best,
-            walls=[],
-            building_bounds=Rect(0, 0, self.width, self.depth),
             is_complete=len(best) == len(self.graph.rooms),
-            unplaced_rooms=[r for r in self.graph.rooms if r not in best],
             score=100 - best_energy
         )
         
@@ -389,17 +391,17 @@ class SimulatedAnnealingSolver(BaseSolver, VisualDebugMixin):
             h = area / w
             x = random.uniform(0, max(0, self.width - w))
             y = random.uniform(0, max(0, self.depth - h))
-            placed[room_id] = PlacedRoom(room_id, Rect(x, y, w, h))
+            placed[room_id] = PlacedRoom(room, Rect(x, y, w, h))
         return placed
-    
+
     def _energy(self, placed: Dict) -> float:
         """Calculate energy (lower is better)."""
         energy = 0.0
-        
+
         # Overlaps (high penalty)
         for r1 in placed.values():
             for r2 in placed.values():
-                if r1.room_id != r2.room_id and r1.rect.overlaps(r2.rect):
+                if r1.node.id != r2.node.id and r1.rect.intersects(r2.rect):
                     energy += 100
         
         # Out of bounds
@@ -410,33 +412,35 @@ class SimulatedAnnealingSolver(BaseSolver, VisualDebugMixin):
                 energy += (r.rect.y2 - self.depth) * 10
         
         # Missing adjacencies
-        for adj in self.graph.adjacencies:
-            r1 = placed.get(adj.room_a)
-            r2 = placed.get(adj.room_b)
-            if r1 and r2 and not r1.rect.touches(r2.rect):
-                energy += 20
+        for room_id, neighbors in self.graph.adjacencies.items():
+            r1 = placed.get(room_id)
+            if not r1:
+                continue
+            for neighbor_id in neighbors:
+                r2 = placed.get(neighbor_id)
+                if r2 and not r1.rect.touches(r2.rect):
+                    energy += 20
         
         return energy
     
     def _neighbor(self, placed: Dict) -> Dict:
-        """Generate neighboring solution."""
+        """Generate neighboring solution with bounds enforcement."""
         new_placed = copy.deepcopy(placed)
-        
+
         # Pick random room and move slightly
         room_id = random.choice(list(new_placed.keys()))
         room = new_placed[room_id]
-        
+
         dx = random.gauss(0, 3)
         dy = random.gauss(0, 3)
-        
-        new_rect = Rect(
-            max(0, room.rect.x + dx),
-            max(0, room.rect.y + dy),
-            room.rect.width,
-            room.rect.height
-        )
-        
-        new_placed[room_id] = PlacedRoom(room_id, new_rect)
+
+        # Keep in bounds
+        new_x = max(0, min(room.rect.x + dx, self.width - room.rect.width))
+        new_y = max(0, min(room.rect.y + dy, self.depth - room.rect.height))
+
+        new_rect = Rect(new_x, new_y, room.rect.width, room.rect.height)
+
+        new_placed[room_id] = PlacedRoom(room.node, new_rect)
         return new_placed
 
 
@@ -498,19 +502,23 @@ class ForceDirectedSolver(BaseSolver, VisualDebugMixin):
             forces: Dict[str, Point] = {rid: Point(0, 0) for rid in positions}
             
             # Spring forces (adjacencies attract)
-            for adj in self.graph.adjacencies:
-                if adj.room_a in positions and adj.room_b in positions:
-                    p1 = positions[adj.room_a]
-                    p2 = positions[adj.room_b]
+            for room_id, neighbors in self.graph.adjacencies.items():
+                if room_id not in positions:
+                    continue
+                for neighbor_id in neighbors:
+                    if neighbor_id not in positions:
+                        continue
+                    p1 = positions[room_id]
+                    p2 = positions[neighbor_id]
                     dx = p2.x - p1.x
                     dy = p2.y - p1.y
                     dist = math.sqrt(dx**2 + dy**2) + 0.1
-                    
+
                     fx = dx * self.spring_strength
                     fy = dy * self.spring_strength
-                    
-                    forces[adj.room_a] = Point(forces[adj.room_a].x + fx, forces[adj.room_a].y + fy)
-                    forces[adj.room_b] = Point(forces[adj.room_b].x - fx, forces[adj.room_b].y - fy)
+
+                    forces[room_id] = Point(forces[room_id].x + fx, forces[room_id].y + fy)
+                    forces[neighbor_id] = Point(forces[neighbor_id].x - fx, forces[neighbor_id].y - fy)
             
             # Repulsion forces (overlap prevention)
             for r1 in positions:
@@ -550,27 +558,61 @@ class ForceDirectedSolver(BaseSolver, VisualDebugMixin):
         
         # Final layout
         placed = self._positions_to_placed(positions, sizes)
-        
+
+        # Final overlap cleanup - multiple passes with increasing strength
+        for strength in [0.5, 1.0, 2.0]:
+            placed = self._resolve_overlaps(placed, strength)
+
         layout = PlacedLayout(
             rooms=placed,
-            walls=[],
-            building_bounds=Rect(0, 0, self.width, self.depth),
             is_complete=len(placed) == len(self.graph.rooms),
-            unplaced_rooms=[r for r in self.graph.rooms if r not in placed],
             score=self._calculate_score(placed)
         )
-        
+
         print(f"[Force] Complete: {len(placed)}/{len(self.graph.rooms)} rooms, "
               f"Score: {layout.score:.1f}, Time: {self._elapsed():.2f}s")
-        
+
         return layout
+
+    def _resolve_overlaps(self, placed: Dict, strength: float = 1.0) -> Dict:
+        """Final pass to resolve any remaining overlaps."""
+        for iteration in range(200):
+            overlaps_found = False
+            room_list = list(placed.values())
+            for i, r1 in enumerate(room_list):
+                for r2 in room_list[i+1:]:
+                    if r1.rect.intersects(r2.rect):
+                        overlaps_found = True
+                        # Calculate actual overlap amount
+                        overlap_x = min(r1.rect.x2, r2.rect.x2) - max(r1.rect.x, r2.rect.x)
+                        overlap_y = min(r1.rect.y2, r2.rect.y2) - max(r1.rect.y, r2.rect.y)
+
+                        dx = r1.rect.center.x - r2.rect.center.x
+                        dy = r1.rect.center.y - r2.rect.center.y
+                        dist = math.sqrt(dx*dx + dy*dy) + 0.001
+
+                        # Stronger separation based on overlap depth and strength multiplier
+                        sep_amount = (0.5 + min(overlap_x, overlap_y) * 0.5) * strength
+                        sep_x = (dx / dist) * sep_amount
+                        sep_y = (dy / dist) * sep_amount
+
+                        r1.rect.x = max(0, min(r1.rect.x + sep_x, self.width - r1.rect.width))
+                        r1.rect.y = max(0, min(r1.rect.y + sep_y, self.depth - r1.rect.height))
+                        r2.rect.x = max(0, min(r2.rect.x - sep_x, self.width - r2.rect.width))
+                        r2.rect.y = max(0, min(r2.rect.y - sep_y, self.depth - r2.rect.height))
+
+            if not overlaps_found:
+                break
+        return placed
     
     def _positions_to_placed(self, positions: Dict, sizes: Dict) -> Dict[str, PlacedRoom]:
         """Convert positions to placed rooms."""
         placed = {}
         for room_id, pos in positions.items():
-            w, h = sizes[room_id]
-            placed[room_id] = PlacedRoom(room_id, Rect(pos.x, pos.y, w, h))
+            room_node = self.graph.rooms.get(room_id)
+            if room_node:
+                w, h = sizes[room_id]
+                placed[room_id] = PlacedRoom(room_node, Rect(pos.x, pos.y, w, h))
         return placed
     
     def _calculate_score(self, placed: Dict) -> float:
@@ -581,11 +623,14 @@ class ForceDirectedSolver(BaseSolver, VisualDebugMixin):
         score += len(placed) * 10
         
         # Adjacencies
-        for adj in self.graph.adjacencies:
-            r1 = placed.get(adj.room_a)
-            r2 = placed.get(adj.room_b)
-            if r1 and r2 and r1.rect.touches(r2.rect):
-                score += 15
+        for room_id, neighbors in self.graph.adjacencies.items():
+            r1 = placed.get(room_id)
+            if not r1:
+                continue
+            for neighbor_id in neighbors:
+                r2 = placed.get(neighbor_id)
+                if r2 and r1.rect.touches(r2.rect):
+                    score += 15
         
         return score
 
@@ -639,98 +684,204 @@ class SpaceColonizationSolver(BaseSolver, VisualDebugMixin):
         return SolverType.SPACE_COLONIZATION
     
     def solve(self, max_iterations: int = 10000) -> PlacedLayout:
-        """Run space colonization."""
+        """Run space colonization with improved growth strategy."""
         self._start_timer()
         print(f"[SpaceCol] Growing from entry with {len(self.graph.rooms)} attractors")
-        
-        # Create attractors for each room
+
+        # Sort rooms by connection distance from entry for better ordering
+        # Use BFS to calculate distances
+        def bfs_distance(start):
+            distances = {start: 0}
+            queue = [start]
+            while queue:
+                current = queue.pop(0)
+                for neighbor in self.graph.adjacencies.get(current, []):
+                    if neighbor not in distances:
+                        distances[neighbor] = distances[current] + 1
+                        queue.append(neighbor)
+            return distances
+
+        entry_connections = {room_id: 99 for room_id in self.graph.rooms}
+        if 'entry' in self.graph.rooms:
+            entry_connections = bfs_distance('entry')
+
+        sorted_rooms = sorted(self.graph.rooms.keys(), key=lambda r: entry_connections.get(r, 99))
+
+        # Create attractors for each room in strategic positions
         attractors: List[Attractor] = []
-        for room_id in self.graph.rooms:
-            x = random.uniform(self.width * 0.1, self.width * 0.9)
-            y = random.uniform(self.depth * 0.1, self.depth * 0.9)
+        for i, room_id in enumerate(sorted_rooms):
+            # Distribute attractors more evenly across the space
+            angle = (i / len(sorted_rooms)) * 2 * math.pi if len(sorted_rooms) > 1 else 0
+            radius = min(self.width, self.depth) * 0.35
+
+            base_x = self.width / 2 + math.cos(angle) * radius
+            base_y = self.depth / 2 + math.sin(angle) * radius
+
+            # Add some randomness
+            x = base_x + random.uniform(-2, 2)
+            y = base_y + random.uniform(-2, 2)
+
+            # Keep within bounds
+            x = max(self.width * 0.1, min(self.width * 0.9, x))
+            y = max(self.depth * 0.1, min(self.depth * 0.9, y))
+
             attractors.append(Attractor(x, y, room_id))
-        
-        # Seed growth from entry
-        root = Node(x=self.width / 2, y=0)
-        nodes = [root]
-        
+
+        # Seed growth from entry (multiple initial nodes)
+        nodes = []
+        for i in range(3):
+            offset = (i - 1) * 2
+            root = Node(x=self.width / 2 + offset, y=self.depth * 0.05)
+            nodes.append(root)
+
+        active_nodes = nodes[:]  # Nodes that can still grow
+        reached_rooms = set()
         iteration = 0
-        while attractors and iteration < max_iterations:
-            # For each node, find influencing attractors
-            for node in nodes:
-                if node.room_id:  # Already assigned
+
+        while attractors and iteration < max_iterations and active_nodes:
+            new_nodes = []
+
+            # For each active node, grow toward nearby attractors
+            for node in active_nodes:
+                if node.room_id:  # Already assigned - can spawn new growth
+                    # Spawn new growth from reached nodes to spread
+                    if random.random() < 0.3:  # 30% chance to branch
+                        angle = random.uniform(0, 2 * math.pi)
+                        new_x = node.x + math.cos(angle) * self.segment_length
+                        new_y = node.y + math.sin(angle) * self.segment_length
+
+                        if 0 <= new_x <= self.width and 0 <= new_y <= self.depth:
+                            child = Node(x=new_x, y=new_y, parent=node)
+                            node.children.append(child)
+                            nodes.append(child)
+                            new_nodes.append(child)
                     continue
-                
+
                 # Find attractors in influence radius
-                nearby = [a for a in attractors 
+                nearby = [a for a in attractors
                          if math.sqrt((a.x - node.x)**2 + (a.y - node.y)**2) < self.influence_radius]
-                
+
                 if nearby:
                     # Grow toward average of nearby attractors
                     avg_x = sum(a.x for a in nearby) / len(nearby)
                     avg_y = sum(a.y for a in nearby) / len(nearby)
-                    
+
                     dx = avg_x - node.x
                     dy = avg_y - node.y
                     dist = math.sqrt(dx**2 + dy**2)
-                    
+
                     if dist > 0:
                         new_x = node.x + dx / dist * self.segment_length
                         new_y = node.y + dy / dist * self.segment_length
-                        
+
                         child = Node(x=new_x, y=new_y, parent=node)
                         node.children.append(child)
                         nodes.append(child)
-                        
-                        # Check if reached attractor
+                        new_nodes.append(child)
+
+                        # Check if reached any attractor
                         for a in nearby:
                             if math.sqrt((a.x - new_x)**2 + (a.y - new_y)**2) < self.kill_distance:
-                                a.reached = True
-                                child.room_id = a.room_id
-            
+                                if not a.reached:
+                                    a.reached = True
+                                    child.room_id = a.room_id
+                                    reached_rooms.add(a.room_id)
+                                    # This node becomes a source for new growth
+                                    break
+
+            # Also try random growth from unassigned nodes occasionally
+            if iteration % 50 == 0:
+                unassigned = [n for n in nodes if not n.room_id]
+                if unassigned and len(reached_rooms) < len(self.graph.rooms) * 0.5:
+                    node = random.choice(unassigned)
+                    angle = random.uniform(0, 2 * math.pi)
+                    new_x = node.x + math.cos(angle) * self.segment_length * 2
+                    new_y = node.y + math.sin(angle) * self.segment_length * 2
+
+                    if 0 <= new_x <= self.width and 0 <= new_y <= self.depth:
+                        child = Node(x=new_x, y=new_y, parent=node)
+                        node.children.append(child)
+                        nodes.append(child)
+                        new_nodes.append(child)
+
+            active_nodes = [n for n in nodes if not n.room_id or n in new_nodes]
+
             # Remove reached attractors
             attractors = [a for a in attractors if not a.reached]
-            
+
             iteration += 1
-            
-            # Record frame
-            if iteration % 100 == 0:
+
+            # Record frame occasionally
+            if iteration % 500 == 0:
                 placed = self._nodes_to_placed(nodes)
-                self.record_frame(placed, iteration, f"Iteration {iteration}")
-        
+                self.record_frame(placed, iteration, f"Iteration {iteration}, {len(reached_rooms)} rooms")
+
         # Convert to layout
         placed = self._nodes_to_placed(nodes)
-        
+
         layout = PlacedLayout(
             rooms=placed,
-            walls=[],
-            building_bounds=Rect(0, 0, self.width, self.depth),
             is_complete=len(placed) >= len(self.graph.rooms) * 0.5,
-            unplaced_rooms=[r for r in self.graph.rooms if r not in placed],
-            score=len(placed) * 10
+            score=len(placed) * 10 + len(reached_rooms) * 50
         )
-        
+
         print(f"[SpaceCol] Complete: {len(placed)}/{len(self.graph.rooms)} rooms, "
               f"Score: {layout.score:.1f}, Time: {self._elapsed():.2f}s")
-        
+
         return layout
     
     def _nodes_to_placed(self, nodes: List[Node]) -> Dict[str, PlacedRoom]:
-        """Convert nodes to placed rooms."""
+        """Convert nodes to placed rooms with overlap resolution."""
         placed = {}
-        
+
+        # First pass: create rooms at node positions
         for node in nodes:
-            if node.room_id:
-                # Create room around node
-                area = self.graph.rooms[node.room_id].min_area or 100
-                w = math.sqrt(area)
-                h = area / w
-                
-                placed[node.room_id] = PlacedRoom(
-                    node.room_id,
-                    Rect(node.x - w/2, node.y - h/2, w, h)
-                )
-        
+            if node.room_id and node.room_id not in placed:
+                room_node = self.graph.rooms.get(node.room_id)
+                if room_node:
+                    area = room_node.min_area or 100
+                    w = math.sqrt(area)
+                    h = area / w
+
+                    # Keep room in bounds
+                    x = max(w/2, min(node.x, self.width - w/2))
+                    y = max(h/2, min(node.y, self.depth - h/2))
+
+                    placed[node.room_id] = PlacedRoom(
+                        room_node,
+                        Rect(x - w/2, y - h/2, w, h)
+                    )
+
+        # Second pass: resolve overlaps
+        for _ in range(50):  # Iterative overlap resolution
+            overlaps_found = False
+            room_list = list(placed.values())
+            for i, r1 in enumerate(room_list):
+                for r2 in room_list[i+1:]:
+                    if r1.rect.intersects(r2.rect):
+                        overlaps_found = True
+                        # Separate overlapping rooms
+                        dx = r1.rect.center.x - r2.rect.center.x
+                        dy = r1.rect.center.y - r2.rect.center.y
+                        dist = math.sqrt(dx*dx + dy*dy) + 0.001
+
+                        sep_x = (dx / dist) * 0.5
+                        sep_y = (dy / dist) * 0.5
+
+                        # Move both rooms apart
+                        new_x1 = max(0, min(r1.rect.x + sep_x, self.width - r1.rect.width))
+                        new_y1 = max(0, min(r1.rect.y + sep_y, self.depth - r1.rect.height))
+                        new_x2 = max(0, min(r2.rect.x - sep_x, self.width - r2.rect.width))
+                        new_y2 = max(0, min(r2.rect.y - sep_y, self.depth - r2.rect.height))
+
+                        r1.rect.x = new_x1
+                        r1.rect.y = new_y1
+                        r2.rect.x = new_x2
+                        r2.rect.y = new_y2
+
+            if not overlaps_found:
+                break
+
         return placed
 
 

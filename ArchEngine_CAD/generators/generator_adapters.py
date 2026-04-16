@@ -10,6 +10,8 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
+# IMPORTANT: Import CAD sheets module BEFORE adding kernel scripts to path
+# to prevent the kernel scripts' sheets module from shadowing it
 from sheets.models import SheetType, SheetConfig
 
 # Add kernel scripts to path for imports

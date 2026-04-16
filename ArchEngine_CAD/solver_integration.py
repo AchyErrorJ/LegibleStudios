@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from enum import Enum
 
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-                          QComboBox, QProgressBar, QTextEdit, QGroupBox, QGridLayout
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QComboBox, QProgressBar, QTextEdit, QGroupBox, QGridLayout
+)
 
 # Add solver paths
 _solver_path = Path(__file__).parent

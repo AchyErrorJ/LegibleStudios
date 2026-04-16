@@ -287,6 +287,22 @@ class QBDQuestionnaireDialog(QDialog):
         card7 = QuestionCard("What architectural style?", self._style)
         content_layout.addWidget(card7)
 
+        # Question 8: Solver Algorithm
+        self._solver = QComboBox()
+        self._solver.addItem("Normalized Constraint - Rect/L-shape layouts (recommended)", "normalized_constraint")
+        self._solver.addItem("Grid Solver - Simple, rectangular (fast)", "grid")
+        self._solver.addItem("Constraint Solver - CSP with backtracking", "constraint")
+        self._solver.addItem("Wave Function Collapse - Complex constraints", "wave_collapse")
+        self._solver.addItem("Perfect Adjacency - Maximum adjacency satisfaction", "perfect_adjacency")
+        self._solver.addItem("Tree Subdivision - Fast, hierarchical (experimental)", "tree")
+        self._solver.addItem("Genetic Algorithm - Evolutionary optimization", "genetic")
+        self._solver.addItem("Simulated Annealing - Statistical optimization", "annealing")
+        self._solver.addItem("Force Directed - Physics-based layout", "force_directed")
+        self._solver.addItem("Space Colonization - Organic growth", "space_colonization")
+        self._solver.setCurrentIndex(0)
+        card8 = QuestionCard("Room layout algorithm?", self._solver)
+        content_layout.addWidget(card8)
+
         content_layout.addStretch()
         scroll.setWidget(content_widget)
         layout.addWidget(scroll, 1)
@@ -368,7 +384,8 @@ class QBDQuestionnaireDialog(QDialog):
             "sqft": self._sqft.value(),
             "garage": self._garage.currentText().lower(),
             "special_rooms": special_rooms,
-            "style": self._style.currentText().lower()
+            "style": self._style.currentText().lower(),
+            "solver": self._solver.currentData()
         }
 
         # Emit signal

@@ -279,6 +279,15 @@ class PlanGenerator:
 .dim-line {{ stroke: #000; stroke-width: 3; }}
 .dim-ext {{ stroke: #000; stroke-width: 2; }}
 .dim-text {{ font: bold {self.dim_text_size}px Arial; text-anchor: middle; }}
+/* Tier-specific dimension styling */
+.tier-1 {{ stroke: #000; stroke-width: 4; }} /* Overall - thicker */
+.tier-1.dim-text {{ font: bold {self.dim_text_size}px Arial; fill: #000; }}
+.tier-2 {{ stroke: #333; stroke-width: 3; }} /* Structural */
+.tier-2.dim-text {{ font: bold {self.dim_text_size}px Arial; fill: #333; }}
+.tier-3 {{ stroke: #666; stroke-width: 2; }} /* Opening */
+.tier-3.dim-text {{ font: bold {self.dim_text_size}px Arial; fill: #666; }}
+.tier-4 {{ stroke: #999; stroke-width: 2; }} /* Interior */
+.tier-4.dim-text {{ font: bold {self.dim_text_size}px Arial; fill: #999; }}
 .title {{ font: bold {self.title_text_size}px Arial; }}
 /* LOD visibility control - hidden by viewer based on zoom */
 .lod-hide {{ opacity: 0; pointer-events: none; }}
@@ -1221,11 +1230,12 @@ class PlanGenerator:
             if all_segments:
                 all_x_vals = [s[0] for s in all_segments] + [s[1] for s in all_segments]
                 line_min_x, line_max_x = min(all_x_vals), max(all_x_vals)
-                builder.line(tx(line_min_x), y_pos, tx(line_max_x), y_pos, "dim-line")
-                
+                tier_num = tier.value
+                builder.line(tx(line_min_x), y_pos, tx(line_max_x), y_pos, f"dim-line tier-{tier_num}")
+
                 # Extension line down to building edge
                 ext_bottom = min_z - 100
-                
+
                 drawn_x = set()
                 labeled_dims = set()
                 for start, end, value_mm in all_segments:
@@ -1233,14 +1243,14 @@ class PlanGenerator:
                         x_key = round(x / 50)
                         if x_key not in drawn_x:
                             drawn_x.add(x_key)
-                            builder.line(tx(x), y_pos, tx(x), ext_bottom, "dim-ext")
-                    
+                            builder.line(tx(x), y_pos, tx(x), ext_bottom, f"dim-ext tier-{tier_num}")
+
                     mid_x = (start + end) / 2
                     dim_key = (round(start/100), round(end/100))
                     if dim_key not in labeled_dims:
                         labeled_dims.add(dim_key)
                         if value_mm > 300 and (tier != DimTier.STRUCTURAL or value_mm > 1000):
-                            builder.text(tx(mid_x), y_pos - 12, format_dim(value_mm), "dim-text")
+                            builder.text(tx(mid_x), y_pos - 12, format_dim(value_mm), f"dim-text tier-{tier_num}")
             
             y_pos -= tier_spacing
         
@@ -1252,28 +1262,28 @@ class PlanGenerator:
                 # Short dimension line just outside the wall at opening location
                 # Position it slightly above the building (y = min_z - 200)
                 dim_y = min_z - 300
-                builder.line(tx(start), dim_y, tx(end), dim_y, "dim-line")
+                builder.line(tx(start), dim_y, tx(end), dim_y, "dim-line tier-3")
                 # Small ticks reaching to opening edges
-                builder.line(tx(start), dim_y - 5, tx(start), dim_y + 5, "dim-ext")
-                builder.line(tx(end), dim_y - 5, tx(end), dim_y + 5, "dim-ext")
+                builder.line(tx(start), dim_y - 5, tx(start), dim_y + 5, "dim-ext tier-3")
+                builder.line(tx(end), dim_y - 5, tx(end), dim_y + 5, "dim-ext tier-3")
                 # Label centered on opening
-                builder.text(tx((start + end) / 2), dim_y - 8, format_dim(value_mm), "dim-text")
+                builder.text(tx((start + end) / 2), dim_y - 8, format_dim(value_mm), "dim-text tier-3")
         
         # --- INTERIOR DIMENSIONS (inside each room) ---
         interior_h_chains = [c for c in horizontal_chains if c.tier == DimTier.INTERIOR]
         for chain in interior_h_chains:
             # Use the stored y_pos (already positioned inside the room)
             y_pos = chain.y_pos if chain.y_pos > 0 else min_z + 1000  # Fallback
-            
+
             for start, end, value_mm in chain.segments:
                 # Short dimension line inside room
-                builder.line(tx(start), y_pos, tx(end), y_pos, "dim-line")
+                builder.line(tx(start), y_pos, tx(end), y_pos, "dim-line tier-4")
                 # Small ticks at ends
-                builder.line(tx(start), y_pos - 5, tx(start), y_pos + 5, "dim-ext")
-                builder.line(tx(end), y_pos - 5, tx(end), y_pos + 5, "dim-ext")
+                builder.line(tx(start), y_pos - 5, tx(start), y_pos + 5, "dim-ext tier-4")
+                builder.line(tx(end), y_pos - 5, tx(end), y_pos + 5, "dim-ext tier-4")
                 # Label above
                 if value_mm > 500:
-                    builder.text(tx((start + end) / 2), y_pos - 8, format_dim(value_mm), "dim-text")
+                    builder.text(tx((start + end) / 2), y_pos - 8, format_dim(value_mm), "dim-text tier-4")
         
         # --- BOTTOM DIMENSIONS (below building) ---
         # OVERALL and STRUCTURAL tiers go outside

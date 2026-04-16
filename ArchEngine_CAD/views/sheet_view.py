@@ -179,9 +179,16 @@ class SheetView(QGraphicsView):
         self._zoom_by(0.8)
 
     def zoom_fit(self):
-        """Zoom to fit the drawing."""
+        """Zoom to fit the drawing including dimensions."""
         if self._svg_item:
+            # Get bounding rect of SVG item and all dimension items
             rect = self._svg_item.boundingRect()
+
+            # Include dimension items in bounding rect
+            for dim_item in self._dimension_items:
+                dim_rect = dim_item.mapRectToScene(dim_item.boundingRect())
+                rect = rect.united(dim_rect)
+
             if not rect.isEmpty():
                 # Add margin
                 margin = min(rect.width(), rect.height()) * 0.05
@@ -270,8 +277,8 @@ class SheetView(QGraphicsView):
             self._svg_item.setSharedRenderer(self._renderer)
             self._scene.addItem(self._svg_item)
 
-            # Create editable dimension items
-            self._create_dimension_items(dimensions)
+            # Create editable dimension items (with coordinate transformation)
+            self._create_dimension_items(dimensions, svg_content)
 
             # Restore transform or fit to view
             if preserve_transform and old_transform:
@@ -305,12 +312,36 @@ class SheetView(QGraphicsView):
 
         self._scene.clear()
 
-    def _create_dimension_items(self, dimensions: List[DimensionData]):
-        """Create editable dimension overlay items."""
+    def _create_dimension_items(self, dimensions: List[DimensionData], svg_content: str = None):
+        """Create editable dimension overlay items with coordinate transformation."""
+        # Get SVG viewBox for coordinate transformation
+        viewbox = self._parse_viewbox(svg_content) if svg_content else None
+        svg_rect = self._svg_item.boundingRect() if self._svg_item else None
+
         for dim_data in dimensions:
+            # Transform coordinates from SVG viewBox to scene pixels
+            if viewbox and svg_rect:
+                x = (dim_data.x - viewbox[0]) / viewbox[2] * svg_rect.width()
+                y = (dim_data.y - viewbox[1]) / viewbox[3] * svg_rect.height()
+                dim_data.x = x
+                dim_data.y = y
+
             dim_item = DimensionItem(dim_data, on_changed=self._on_dimension_changed)
             self._scene.addItem(dim_item)
             self._dimension_items.append(dim_item)
+
+    def _parse_viewbox(self, svg_content: str) -> Optional[Tuple[float, float, float, float]]:
+        """Parse viewBox from SVG content."""
+        import re
+        match = re.search(r'viewBox="([^"]+)"', svg_content)
+        if match:
+            parts = match.group(1).split()
+            if len(parts) == 4:
+                try:
+                    return tuple(float(p) for p in parts)
+                except ValueError:
+                    pass
+        return None
 
     def _on_dimension_changed(self, dim_data: DimensionData):
         """Handle dimension value change."""

@@ -70,9 +70,11 @@ def create_app(
     # Include routers
     from api.routes.projects import router as projects_router
     from api.routes.buildings import router as buildings_router
+    from api.routes.solvers import router as solvers_router
 
     app.include_router(projects_router, prefix="/api/v1")
     app.include_router(buildings_router, prefix="/api/v1")
+    app.include_router(solvers_router, prefix="/api/v1")
 
     # Health check endpoint
     @app.get("/health")

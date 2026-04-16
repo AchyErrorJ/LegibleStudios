@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 import json
 from dataclasses import dataclass
 
-from solver_suite import SolverSuite, SolverType
+from solver_suite import SolverType, PlacedLayout, SOLVER_INFO
 from room_relationships import SpatialGraph
 
 

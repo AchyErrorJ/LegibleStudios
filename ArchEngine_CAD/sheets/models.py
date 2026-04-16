@@ -107,6 +107,8 @@ class SheetConfig:
     # Preset configuration (for PRESET_* sheet types)
     preset_name: Optional[str] = None    # Name of preset used
     preset_config: Optional[Dict[str, Any]] = None  # Serialized preset config
+    # Generation metadata (solver used, generation timestamp, etc.)
+    generation_metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def category(self) -> str:
@@ -144,6 +146,7 @@ class SheetConfig:
             'dimension_overrides': self.dimension_overrides,
             'preset_name': self.preset_name,
             'preset_config': self.preset_config,
+            'generation_metadata': self.generation_metadata,
             # Note: svg_content not saved - regenerated on load
         }
 
@@ -163,6 +166,7 @@ class SheetConfig:
             dimension_overrides=data.get('dimension_overrides', {}),
             preset_name=data.get('preset_name'),
             preset_config=data.get('preset_config'),
+            generation_metadata=data.get('generation_metadata', {}),
         )
 
 

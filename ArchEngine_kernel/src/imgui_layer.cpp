@@ -2787,11 +2787,13 @@ void ImGuiLayer::drawLLMAssistantWindow(Renderer& renderer) {
                                 renderer.setIBLSpecularIntensity(sug.suggestedValue);
                             else if (sug.paramName == "fresnelIntensity")
                                 renderer.setFresnelIntensity(sug.suggestedValue);
-                            else if (sug.paramName == "exposure")
-                                renderer.getPostProcess()->setCompositeConfig(
-                                    {sug.suggestedValue,
-                                     renderer.getPostProcess()->getCompositeConfig().tonemapMode,
-                                     renderer.getPostProcess()->getCompositeConfig().enabled});
+                            else if (sug.paramName == "exposure") {
+                                CompositeConfig cfg;
+                                cfg.exposure = sug.suggestedValue;
+                                cfg.tonemapMode = renderer.getPostProcess()->getCompositeConfig().tonemapMode;
+                                cfg.enabled = renderer.getPostProcess()->getCompositeConfig().enabled;
+                                renderer.getPostProcess()->setCompositeConfig(cfg);
+                            }
                             else if (sug.paramName == "bloomIntensity") {
                                 auto cfg = renderer.getPostProcess()->getBloomConfig();
                                 cfg.intensity = sug.suggestedValue;

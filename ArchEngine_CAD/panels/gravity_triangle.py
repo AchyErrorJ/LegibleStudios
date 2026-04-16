@@ -183,17 +183,27 @@ class GravityTriangleWidget(QWidget):
 
     def _get_blend_color(self) -> QColor:
         """Get the current blended color based on weights."""
-        r = int(self._design_weight * self.DESIGN_COLOR.red() +
-                self._client_weight * self.CLIENT_COLOR.red() +
-                self._build_weight * self.BUILD_COLOR.red())
-        g = int(self._design_weight * self.DESIGN_COLOR.green() +
-                self._client_weight * self.CLIENT_COLOR.green() +
-                self._build_weight * self.BUILD_COLOR.green())
-        b = int(self._design_weight * self.DESIGN_COLOR.blue() +
-                self._client_weight * self.CLIENT_COLOR.blue() +
-                self._build_weight * self.BUILD_COLOR.blue())
+        # Clamp weights to valid range [0, 1]
+        dw = max(0.0, min(1.0, self._design_weight))
+        cw = max(0.0, min(1.0, self._client_weight))
+        bw = max(0.0, min(1.0, self._build_weight))
 
-        return QColor(min(255, r), min(255, g), min(255, b))
+        r = int(dw * self.DESIGN_COLOR.red() +
+                cw * self.CLIENT_COLOR.red() +
+                bw * self.BUILD_COLOR.red())
+        g = int(dw * self.DESIGN_COLOR.green() +
+                cw * self.CLIENT_COLOR.green() +
+                bw * self.BUILD_COLOR.green())
+        b = int(dw * self.DESIGN_COLOR.blue() +
+                cw * self.CLIENT_COLOR.blue() +
+                bw * self.BUILD_COLOR.blue())
+
+        # Clamp to valid range [0, 255]
+        r = max(0, min(255, r))
+        g = max(0, min(255, g))
+        b = max(0, min(255, b))
+
+        return QColor(r, g, b)
 
     def paintEvent(self, event):
         """Draw the triangle and puck."""

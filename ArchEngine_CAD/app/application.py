@@ -46,7 +46,8 @@ from panels.onboarding_overlay import OnboardingOverlay
 from panels.smart_panel_container import SmartPanelContainer
 from generators.generator_service import GeneratorService
 from dialogs.qbd_questionnaire import QBDQuestionnaireDialog
-from dialogs.site_dialog import SiteDialog
+# Use simplified site dialog (interactive map + LiDAR only)
+from dialogs.site_dialog_simple import SimpleSiteDialog as SiteDialog
 
 # Viewport import (Vulkan only - UE5 viewport removed)
 try:
@@ -484,6 +485,14 @@ class ArchEngineApplication(QMainWindow):
         draw_menu.addAction(self.action_door)
         draw_menu.addAction(self.action_window)
         draw_menu.addAction(self.action_room)
+
+        # Design menu
+        design_menu = menubar.addMenu("&Design")
+        self.action_solver_comparison = QAction("Compare &Solvers...", self)
+        self.action_solver_comparison.setShortcut(QKeySequence("Ctrl+Shift+R"))
+        self.action_solver_comparison.setStatusTip("Compare room layout algorithms")
+        self.action_solver_comparison.triggered.connect(self._on_solver_comparison)
+        design_menu.addAction(self.action_solver_comparison)
 
         # Tools menu
         tools_menu = menubar.addMenu("&Tools")
@@ -1182,7 +1191,7 @@ class ArchEngineApplication(QMainWindow):
             return
 
         # Show site dialog first to get location and terrain data
-        from dialogs.site_dialog import show_site_dialog
+        from dialogs.site_dialog_simple import show_site_dialog
 
         site_data = show_site_dialog(self)
 
@@ -1257,7 +1266,7 @@ class ArchEngineApplication(QMainWindow):
                 if 'terrain_mesh' in self.document._data:
                     del self.document._data['terrain_mesh']
                     print("[App] Removed test terrain - C++ will generate from LiDAR data")
-            elif 'terrain_mesh' in site_data:
+            elif 'terrain_mesh' in site_data and site_data['terrain_mesh'] is not None:
                 self.document._data['terrain_mesh'] = site_data['terrain_mesh']
                 print(f"[App] New document with site terrain: {site_data['terrain_mesh']['vertex_count']} vertices")
 
@@ -1272,34 +1281,373 @@ class ArchEngineApplication(QMainWindow):
 
         # Update 3D viewport
         if HAS_VIEWPORT and self.viewport_3d:
+            # Debug: Check terrain data
+            if 'terrain_mesh' in self.document._data:
+                mesh = self.document._data['terrain_mesh']
+                print(f"[App] Passing terrain_mesh to viewport: {mesh.get('vertex_count', 0)} vertices, {mesh.get('triangle_count', 0)} triangles")
+            elif 'google_maps' in self.document._data and 'elevation_grid' in self.document._data['google_maps']:
+                print(f"[App] Passing elevation_grid to viewport: {len(self.document._data['google_maps']['elevation_grid'])} points")
+            else:
+                print("[App] No terrain data in document")
             self.viewport_3d.load_json(self.document._data)
             self.viewport_3d.reset_camera()
             print("[App] 3D viewport updated")
 
     def _generate_building_from_qbd_algebra(self, answers: dict, site_data: dict = None):
-        """Generate building layout using QBD algebra system."""
+        """Generate building layout using QBD algebra system or CLI solver."""
+        # Check if user selected a specific solver
+        solver = answers.get('solver', 'qbd')
+        print(f"[App] Using solver: {solver}")
+
+        # Use CLI solver if selected
+        if solver and solver != 'qbd':
+            result = self._generate_with_cli_solver(answers, solver, site_data)
+        else:
+            # Use standard QBD generator
+            result = self._generate_with_qbd(answers, site_data)
+
+        # Process result (same for both paths)
+        if result.get('success'):
+            print(f"[App] Layout generated: {result.get('summary', '')}")
+
+            # Merge generated data into document
+            self.document._data['walls_batch'] = result.get('walls_batch', [])
+            self.document._data['doors'] = result.get('doors', [])
+            self.document._data['windows'] = result.get('windows', [])
+            self.document._data['rooms'] = result.get('rooms', {})
+            self.document._data['levels'] = result.get('levels', [])
+            self.document._data['width'] = result.get('width', 0)
+            self.document._data['depth'] = result.get('depth', 0)
+            self.document._data['sqft'] = result.get('sqft', 0)
+            self.document._data['qbd_answers'] = answers
+            self.document._data['is_complete'] = result.get('is_complete', False)
+            self.document._data['_solver_used'] = solver  # Track which solver was used
+
+            # Parse the generated data into document objects
+            self.document._parse_data()
+            self.document.set_modified()
+            # Trigger 2D view refresh
+            self.document.document_changed.emit()
+
+            self.status_bar.showMessage(
+                f"Building generated with {solver} solver: {len(result.get('walls_batch', []))} walls, "
+                f"{len(result.get('rooms', {}))} rooms",
+                5000
+            )
+        else:
+            error = result.get('error', 'Unknown error')
+            print(f"[App] Generation failed: {error}")
+            self.status_bar.showMessage(f"Generation failed: {error}", 5000)
+
+    def _generate_with_qbd(self, answers: dict, site_data: dict = None):
+        """Generate layout using standard QBD generator."""
+        import sys
+        import os
+
+        # Handle both development and frozen (PyInstaller) modes
+        if getattr(sys, 'frozen', False):
+            render_server_path = os.path.join(sys._MEIPASS, 'render_server')
+        else:
+            render_server_path = os.path.abspath(os.path.join(
+                os.path.dirname(__file__), '..', '..', 'ArchEngine_kernel', 'render_server'
+            ))
+
+        if render_server_path not in sys.path:
+            sys.path.insert(0, render_server_path)
+
+        from qbd_layout_generator import generate_floor_plan_from_qbd, OutputFormat
+
+        print(f"[App] Generating with QBD: {answers}")
+
+        result = generate_floor_plan_from_qbd(
+            answers,
+            width=None,
+            depth=None,
+            output_format=OutputFormat.ARCHENGINE
+        )
+        return result
+
+    def _generate_with_cli_solver(self, answers: dict, solver: str, site_data: dict = None):
+        """Generate layout using CLI solver suite."""
+        from complete_solver_suite import CompleteSolverSuite, SolverType, SOLVER_INFO
+        from room_relationships import SpatialGraph, Zone
+
+        print(f"[App] Generating with CLI solver: {solver}")
+
+        # Calculate building dimensions from sqft
+        sqft = answers.get('sqft', 2000)
+        # Approximate width/depth from sqft (assume rectangular)
+        area_m2 = sqft * 0.0929
+        width_m = (area_m2 * 1.3) ** 0.5  # Slightly stretched
+        depth_m = (area_m2 / 1.3) ** 0.5
+
+        print(f"[App] Building dimensions: {width_m:.1f}m x {depth_m:.1f}m ({sqft} sqft)")
+
+        # Create room graph from answers
+        graph = self._create_room_graph_from_answers(answers)
+
+        # Run selected solver
         try:
-            # Import the QBD layout generator
-            import sys
-            import os
+            solver_type = SolverType(solver)
+        except ValueError:
+            print(f"[App] Unknown solver: {solver}, using tree")
+            solver_type = SolverType.TREE
 
-            # Handle both development and frozen (PyInstaller) modes
-            if getattr(sys, 'frozen', False):
-                # Frozen mode: render_server is bundled in _MEIPASS/render_server/
-                render_server_path = os.path.join(sys._MEIPASS, 'render_server')
+        # Show solver info
+        info = SOLVER_INFO.get(solver_type)
+        if info:
+            print(f"[App] Solver: {info.name} - {info.description}")
+
+        suite = CompleteSolverSuite(graph, width_m, depth_m, grid_size=0.5)
+        layout = suite.solve(solver_type, max_iterations=10000)
+
+        total_rooms = len(graph.rooms)
+        placed_rooms = len(layout.rooms)
+        placement_rate = placed_rooms / total_rooms if total_rooms > 0 else 0
+
+        print(f"[App] Solver result: {placed_rooms}/{total_rooms} rooms placed ({placement_rate:.0%}), "
+              f"score: {layout.score:.2f}, time: {layout.solve_time_ms:.1f}ms")
+
+        # Fallback to QBD generator if solver placed less than 50% of rooms
+        if placement_rate < 0.5:
+            print(f"[App] WARNING: {solver} only placed {placed_rooms}/{total_rooms} rooms. "
+                  f"Falling back to QBD generator...")
+            return self._generate_with_qbd(answers, site_data)
+
+        # Convert solver layout to ArchEngine format
+        result = self._convert_solver_layout_to_archengine(layout, answers, width_m, depth_m)
+        return result
+
+    def _create_room_graph_from_answers(self, answers: dict) -> 'SpatialGraph':
+        """Create a spatial graph from QBD answers."""
+        from room_relationships import SpatialGraph, Zone
+
+        graph = SpatialGraph()
+
+        # Add standard rooms based on answers
+        bedrooms = answers.get('bedrooms', 3)
+        bathrooms = answers.get('bathrooms', 2)
+        garage = answers.get('garage', '1 car')
+        special_rooms = answers.get('special_rooms', [])
+
+        # Entry/Living
+        graph.add_room('entry', 'entry', 6.0, target_area=8.0, zone=Zone.PUBLIC)
+        graph.add_room('living', 'living', 20.0, target_area=25.0, zone=Zone.PUBLIC)
+
+        # Kitchen/Dining
+        graph.add_room('kitchen', 'kitchen', 12.0, target_area=15.0, zone=Zone.PUBLIC)
+        graph.add_room('dining', 'dining', 12.0, target_area=15.0, zone=Zone.PUBLIC)
+
+        # Bedrooms
+        for i in range(bedrooms):
+            if i == 0:
+                graph.add_room(f'bedroom_{i+1}', 'primary_bedroom', 14.0, target_area=18.0, zone=Zone.PRIVATE)
+                graph.add_room(f'closet_{i+1}', 'walk_in_closet', 4.0, target_area=6.0, zone=Zone.PRIVATE)
             else:
-                # Development mode: render_server is in sibling kernel directory
-                render_server_path = os.path.abspath(os.path.join(
-                    os.path.dirname(__file__), '..', '..', 'ArchEngine_kernel', 'render_server'
-                ))
+                graph.add_room(f'bedroom_{i+1}', 'bedroom', 10.0, target_area=12.0, zone=Zone.PRIVATE)
+                graph.add_room(f'closet_{i+1}', 'closet', 2.0, target_area=3.0, zone=Zone.PRIVATE)
 
-            if render_server_path not in sys.path:
-                sys.path.insert(0, render_server_path)
-                print(f"[App] Added to sys.path: {render_server_path}")
+        # Bathrooms
+        for i in range(int(bathrooms)):
+            if i == 0:
+                graph.add_room(f'bathroom_{i+1}', 'primary_bath', 8.0, target_area=10.0, zone=Zone.PRIVATE)
+            else:
+                graph.add_room(f'bathroom_{i+1}', 'bathroom', 5.0, target_area=6.0, zone=Zone.PRIVATE)
 
-            from qbd_layout_generator import generate_floor_plan_from_qbd, OutputFormat
+        # Garage
+        if garage and 'car' in garage:
+            cars = int(garage.split()[0]) if garage[0].isdigit() else 1
+            graph.add_room('garage', 'garage', 20.0 * cars, target_area=24.0 * cars, zone=Zone.SERVICE)
 
-            print(f"[App] Generating building from QBD algebra: {answers}")
+        # Special rooms
+        for room_key in special_rooms:
+            room_types = {
+                'office': ('office', 10.0, Zone.PUBLIC),
+                'laundry': ('laundry', 5.0, Zone.SERVICE),
+                'guest': ('guest_bedroom', 12.0, Zone.PRIVATE),
+                'workshop': ('workshop', 15.0, Zone.SERVICE),
+                'gym': ('gym', 15.0, Zone.PRIVATE),
+                'library': ('library', 10.0, Zone.PUBLIC),
+                'mudroom': ('mudroom', 6.0, Zone.TRANSITION),
+                'porch': ('porch', 10.0, Zone.OUTDOOR),
+                'deck': ('deck', 15.0, Zone.OUTDOOR),
+            }
+            if room_key in room_types:
+                room_type, area, zone = room_types[room_key]
+                graph.add_room(room_key, room_type, area, target_area=area * 1.2, zone=zone)
+
+        # Set up adjacencies
+        graph.connect('entry', 'living', weight=2.0)
+        graph.connect('living', 'kitchen', weight=2.0)
+        graph.connect('kitchen', 'dining', weight=2.0)
+
+        if 'bedroom_1' in graph.rooms:
+            graph.connect('bedroom_1', 'bathroom_1', weight=3.0)
+            graph.connect('bedroom_1', 'closet_1', weight=3.0)
+
+        for i in range(1, bedrooms):
+            if f'bedroom_{i+1}' in graph.rooms:
+                graph.connect(f'bedroom_{i+1}', f'closet_{i+1}', weight=2.0)
+                bath = 'bathroom_2' if 'bathroom_2' in graph.rooms else 'bathroom_1'
+                graph.connect(f'bedroom_{i+1}', bath, weight=1.0)
+
+        if 'mudroom' in graph.rooms:
+            graph.connect('mudroom', 'entry', weight=2.0)
+            if 'garage' in graph.rooms:
+                graph.connect('mudroom', 'garage', weight=2.0)
+
+        if 'laundry' in graph.rooms:
+            if 'mudroom' in graph.rooms:
+                graph.connect('laundry', 'mudroom', weight=1.5)
+            elif 'garage' in graph.rooms:
+                graph.connect('laundry', 'garage', weight=1.0)
+
+        return graph
+
+    def _convert_solver_layout_to_archengine(self, layout, answers: dict, width_m: float, depth_m: float):
+        """Convert solver layout to ArchEngine walls_batch format."""
+        walls_batch = []
+        rooms = {}
+        doors = []
+        room_id_to_idx = {}
+
+        # Convert rooms
+        for idx, (room_id, placed) in enumerate(layout.rooms.items()):
+            room_id_to_idx[room_id] = idx
+
+            # Room data - C++ expects bounds as object with x, y, width, height
+            rooms[room_id] = {
+                'name': room_id.replace('_', ' ').title(),
+                'room_type': placed.room_type if hasattr(placed, 'room_type') else 'room',
+                'bounds': {
+                    'x': placed.rect.x,
+                    'y': placed.rect.y,
+                    'width': placed.rect.width,
+                    'height': placed.rect.height
+                },
+                'area': placed.area if hasattr(placed, 'area') else placed.rect.width * placed.rect.height,
+                'vertices': [
+                    [placed.rect.x * 1000, placed.rect.y * 1000],
+                    [(placed.rect.x + placed.rect.width) * 1000, placed.rect.y * 1000],
+                    [(placed.rect.x + placed.rect.width) * 1000, (placed.rect.y + placed.rect.height) * 1000],
+                    [placed.rect.x * 1000, (placed.rect.y + placed.rect.height) * 1000],
+                ]
+            }
+
+            # Generate walls for this room
+            x1 = placed.rect.x * 1000
+            y1 = placed.rect.y * 1000
+            x2 = (placed.rect.x + placed.rect.width) * 1000
+            y2 = (placed.rect.y + placed.rect.height) * 1000
+
+            room_walls = [
+                {'start': [x1, 0, y1], 'end': [x2, 0, y1], 'category': 'interior'},
+                {'start': [x2, 0, y1], 'end': [x2, 0, y2], 'category': 'interior'},
+                {'start': [x2, 0, y2], 'end': [x1, 0, y2], 'category': 'interior'},
+                {'start': [x1, 0, y2], 'end': [x1, 0, y1], 'category': 'interior'},
+            ]
+
+            for wall in room_walls:
+                wall['height'] = 2700
+                wall['wall_type'] = 'interior'
+                wall['is_structural'] = True
+                wall['bound_room_id'] = room_id
+                walls_batch.append(wall)
+
+        # Mark exterior walls
+        margin = 0.1
+        for wall in walls_batch:
+            x1, z1 = wall['start'][0] / 1000, wall['start'][2] / 1000
+            x2, z2 = wall['end'][0] / 1000, wall['end'][2] / 1000
+
+            on_perimeter = (
+                abs(x1) < margin or abs(x1 - width_m) < margin or
+                abs(x2) < margin or abs(x2 - width_m) < margin or
+                abs(z1) < margin or abs(z1 - depth_m) < margin or
+                abs(z2) < margin or abs(z2 - depth_m) < margin
+            )
+
+            if on_perimeter:
+                wall['category'] = 'exterior'
+                wall['wall_type'] = 'exterior'
+
+        return {
+            'success': len(layout.rooms) > 0,
+            'walls_batch': walls_batch,
+            'doors': doors,
+            'windows': [],
+            'rooms': rooms,
+            'levels': [{'name': 'Level 1', 'elevation': 0}],
+            'width': width_m * 1000,
+            'depth': depth_m * 1000,
+            'sqft': answers.get('sqft', 2000),
+            'is_complete': len(layout.rooms) >= len(layout.rooms) * 0.8 if hasattr(layout, 'rooms') else True,
+            'summary': f"{len(walls_batch)} walls, {len(rooms)} rooms"
+        }
+
+    def _on_solver_comparison(self):
+        """Open solver comparison dialog."""
+        try:
+            from dialogs.solver_comparison_dialog import SolverComparisonDialog
+            from room_relationships import SpatialGraph, Zone
+
+            # Create room graph from current document or use defaults
+            if hasattr(self, 'document') and self.document._rooms:
+                # Use existing rooms
+                graph = SpatialGraph()
+                for room_id, room in self.document._rooms.items():
+                    graph.add_room(
+                        room_id,
+                        room.room_type,
+                        room.min_area or room.area,
+                        target_area=room.area,
+                        zone=Zone.PUBLIC if room.room_type in ['living', 'kitchen', 'dining'] else Zone.PRIVATE
+                    )
+                # Add adjacencies from connections
+                for conn in self.document._room_connections:
+                    graph.connect(conn.room_a_id, conn.room_b_id, 1.0)
+            else:
+                # Default test rooms
+                graph = SpatialGraph()
+                graph.add_room("living", "living", 20, target_area=25, zone=Zone.PUBLIC)
+                graph.add_room("kitchen", "kitchen", 12, target_area=15, zone=Zone.PUBLIC)
+                graph.add_room("dining", "dining", 12, target_area=15, zone=Zone.PUBLIC)
+                graph.add_room("bed1", "bedroom", 12, target_area=15, zone=Zone.PRIVATE)
+                graph.add_room("bed2", "bedroom", 10, target_area=12, zone=Zone.PRIVATE)
+                graph.add_room("bath", "bathroom", 6, target_area=8, zone=Zone.PRIVATE)
+
+                graph.connect("living", "kitchen", 2.0)
+                graph.connect("living", "dining", 2.0)
+                graph.connect("kitchen", "dining", 2.0)
+
+            # Calculate dimensions from document or use defaults
+            if hasattr(self, 'document') and self.document._data.get('width'):
+                width_m = self.document._data.get('width', 15000) / 1000
+                depth_m = self.document._data.get('depth', 12000) / 1000
+            else:
+                width_m = 15
+                depth_m = 12
+
+            dialog = SolverComparisonDialog(graph, width_m, depth_m, self)
+
+            # Handle selected layout
+            def on_layout_selected(solver_type, layout):
+                print(f"[App] Selected {solver_type.value} solver layout with {len(layout.rooms)} rooms")
+                # Convert to ArchEngine format and apply
+                # TODO: Apply the selected layout to the document
+
+            dialog.layout_selected.connect(on_layout_selected)
+            dialog.exec()
+
+        except Exception as e:
+            print(f"[App] Solver comparison error: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.warning(self, "Solver Comparison", f"Error: {e}")
+
+    def _old_generate_building_from_qbd_algebra(self, answers: dict, site_data: dict = None):
+        """OLD: Generate building layout using QBD algebra system."""
+        try:
 
             # DON'T use site dimensions as building size!
             # The building size should be calculated from sqft in the answers.

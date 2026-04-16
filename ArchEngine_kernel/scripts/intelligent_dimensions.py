@@ -176,19 +176,25 @@ class DimensionChain:
     label: str = ""
     
     def to_svg(self, tx, tz, builder, format_fn):
-        """Render this chain to SVG."""
+        """Render this chain to SVG with tier-specific styling."""
         if not self.segments:
             return
-        
+
+        # Create tier-specific CSS classes
+        tier_num = self.tier.value
+        line_class = f"dim-line tier-{tier_num}"
+        ext_class = f"dim-ext tier-{tier_num}"
+        text_class = f"dim-text tier-{tier_num}"
+
         # Draw dimension line
         if self.orientation == 'horizontal':
             # Find full extent
             all_x = [s[0] for s in self.segments] + [s[1] for s in self.segments]
             min_x, max_x = min(all_x), max(all_x)
-            
+
             y = self.y_pos
-            builder.line(tx(min_x), y, tx(max_x), y, "dim-line")
-            
+            builder.line(tx(min_x), y, tx(max_x), y, line_class)
+
             # Draw ticks and labels
             drawn_positions = set()
             for start, end, value_mm in self.segments:
@@ -197,31 +203,31 @@ class DimensionChain:
                     x_key = round(x / 10)  # Round to 10mm for dedup
                     if x_key not in drawn_positions:
                         drawn_positions.add(x_key)
-                        builder.line(tx(x), y - 5, tx(x), y + 5, "dim-ext")
-                
+                        builder.line(tx(x), y - 5, tx(x), y + 5, ext_class)
+
                 # Label
                 mid_x = (start + end) / 2
                 if value_mm > 200:  # Only label if significant
-                    builder.text(tx(mid_x), y - 12, format_fn(value_mm), "dim-text")
-        
+                    builder.text(tx(mid_x), y - 12, format_fn(value_mm), text_class)
+
         else:  # vertical
             all_z = [s[0] for s in self.segments] + [s[1] for s in self.segments]
             min_z, max_z = min(all_z), max(all_z)
-            
+
             x = self.y_pos  # Actually X position for vertical dims
-            builder.line(x, tz(max_z), x, tz(min_z), "dim-line")
-            
+            builder.line(x, tz(max_z), x, tz(min_z), line_class)
+
             drawn_positions = set()
             for start, end, value_mm in self.segments:
                 for z in [start, end]:
                     z_key = round(z / 10)
                     if z_key not in drawn_positions:
                         drawn_positions.add(z_key)
-                        builder.line(x - 5, tz(z), x + 5, tz(z), "dim-ext")
-                
+                        builder.line(x - 5, tz(z), x + 5, tz(z), ext_class)
+
                 mid_z = (start + end) / 2
                 if value_mm > 200:
-                    builder.text(x - 12, tz(mid_z), format_fn(value_mm), "dim-text")
+                    builder.text(x - 12, tz(mid_z), format_fn(value_mm), text_class)
 
 
 class IntelligentDimensioning:

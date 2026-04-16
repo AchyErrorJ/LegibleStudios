@@ -10,8 +10,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QMessageBox
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QUrl
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QMessageBox
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QUrl, Qt
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebChannel import QWebChannel
 
@@ -33,37 +33,46 @@ class MapBridge(QObject):
     @pyqtSlot(float, float, float, float, float, float, str, str)
     def set_boundary(self, lat_min, lat_max, lng_min, lng_max, width_ft, depth_ft, vertices_json, vertices_ft_json):
         """Called from JavaScript when boundary is drawn."""
-        print(f"[MapBridge] Boundary set: {width_ft:.0f}' x {depth_ft:.0f}'")
-        self.boundary_data = {
-            'lat_min': lat_min,
-            'lat_max': lat_max,
-            'lng_min': lng_min,
-            'lng_max': lng_max,
-            'width_ft': width_ft,
-            'depth_ft': depth_ft,
-            'vertices': json.loads(vertices_json) if vertices_json else None,
-            'vertices_ft': json.loads(vertices_ft_json) if vertices_ft_json else None
-        }
-        self.boundary_set.emit(lat_min, lat_max, lng_min, lng_max, width_ft, depth_ft, vertices_json, vertices_ft_json)
+        try:
+            print(f"[MapBridge] Boundary set: {width_ft:.0f}' x {depth_ft:.0f}'")
+            self.boundary_data = {
+                'lat_min': lat_min,
+                'lat_max': lat_max,
+                'lng_min': lng_min,
+                'lng_max': lng_max,
+                'width_ft': width_ft,
+                'depth_ft': depth_ft,
+                'vertices': json.loads(vertices_json) if vertices_json else None,
+                'vertices_ft': json.loads(vertices_ft_json) if vertices_ft_json else None
+            }
+            self.boundary_set.emit(lat_min, lat_max, lng_min, lng_max, width_ft, depth_ft, vertices_json, vertices_ft_json)
+        except Exception as e:
+            print(f"[MapBridge] Error in set_boundary: {e}")
 
     @pyqtSlot(float, float, float, float, float)
     def set_building_origin(self, lat, lng, x_ft, z_ft, rotation_deg):
         """Called from JavaScript when building placement is set."""
-        print(f"[MapBridge] Building origin: ({x_ft:.1f}', {z_ft:.1f}') rotation={rotation_deg:.1f}°")
-        self.building_data = {
-            'lat': lat,
-            'lng': lng,
-            'x_ft': x_ft,
-            'z_ft': z_ft,
-            'rotation_deg': rotation_deg
-        }
-        self.building_set.emit(lat, lng, x_ft, z_ft, rotation_deg)
+        try:
+            print(f"[MapBridge] Building origin: ({x_ft:.1f}', {z_ft:.1f}') rotation={rotation_deg:.1f}°")
+            self.building_data = {
+                'lat': lat,
+                'lng': lng,
+                'x_ft': x_ft,
+                'z_ft': z_ft,
+                'rotation_deg': rotation_deg
+            }
+            self.building_set.emit(lat, lng, x_ft, z_ft, rotation_deg)
+        except Exception as e:
+            print(f"[MapBridge] Error in set_building_origin: {e}")
 
     @pyqtSlot()
     def save_and_close(self):
         """Called from JavaScript when user clicks Save & Close."""
-        print("[MapBridge] Save requested")
-        self.save_requested.emit()
+        try:
+            print("[MapBridge] Save requested")
+            self.save_requested.emit()
+        except Exception as e:
+            print(f"[MapBridge] Error in save_and_close: {e}")
 
     @pyqtSlot(str)
     def log(self, message):
@@ -71,9 +80,9 @@ class MapBridge(QObject):
         print(f"[MapJS] {message}")
 
 
-class EmbeddedMapWidget(QWidget):
+class EmbeddedMapWidget(QDialog):
     """
-    Qt widget with embedded OpenStreetMap using QWebEngineView.
+    Qt dialog with embedded OpenStreetMap using QWebEngineView.
     """
 
     boundary_changed = pyqtSignal(float, float, float, float, float, float, object, object)
@@ -81,12 +90,21 @@ class EmbeddedMapWidget(QWidget):
     close_requested = pyqtSignal()
 
     def __init__(self, lat=45.4215, lng=-75.6972, zoom=16, api_key=None, parent=None):
+        print("[EmbeddedMapWidget] __init__ starting...")
         super().__init__(parent)
+
+        # Ensure it's a proper window, not a popup/tool
+        self.setWindowFlag(Qt.WindowType.Tool, False)
+        self.setWindowFlag(Qt.WindowType.Dialog, False)
+
         self._lat = lat
         self._lng = lng
         self._zoom = zoom
         self._api_key = api_key or ''
         self._initialized = False
+        self._web_view = None
+        self._channel = None
+        self._bridge = None
 
         print(f"[EmbeddedMapWidget] Initializing at ({lat}, {lng}), zoom={zoom}")
 
@@ -109,18 +127,26 @@ class EmbeddedMapWidget(QWidget):
             # Setup web channel for JS<->Python communication
             print("[EmbeddedMapWidget] Setting up QWebChannel...")
             self._channel = QWebChannel()
+            print("[EmbeddedMapWidget] QWebChannel created")
+
             self._bridge = MapBridge(self._api_key)
+            print("[EmbeddedMapWidget] MapBridge created")
+
             self._channel.registerObject('pyBridge', self._bridge)
+            print("[EmbeddedMapWidget] Bridge registered")
+
             self._web_view.page().setWebChannel(self._channel)
             print("[EmbeddedMapWidget] QWebChannel configured")
 
             # Connect bridge signals
+            print("[EmbeddedMapWidget] Connecting bridge signals...")
             self._bridge.boundary_set.connect(self._on_boundary_set)
             self._bridge.building_set.connect(self._on_building_set)
             self._bridge.save_requested.connect(self._on_save_requested)
             print("[EmbeddedMapWidget] Bridge signals connected")
 
             # Load the map
+            print("[EmbeddedMapWidget] Loading map...")
             self._load_map()
             self._initialized = True
             print("[EmbeddedMapWidget] Initialization complete")
@@ -134,13 +160,16 @@ class EmbeddedMapWidget(QWidget):
             error_label = QLabel(f"Map failed to load:\n{e}")
             error_label.setStyleSheet("color: red; padding: 20px;")
             layout.addWidget(error_label)
-            raise
 
     def _on_boundary_set(self, lat_min, lat_max, lng_min, lng_max, width_ft, depth_ft, vertices_json, vertices_ft_json):
         """Handle boundary set from JS."""
-        vertices = json.loads(vertices_json) if vertices_json else None
-        vertices_ft = json.loads(vertices_ft_json) if vertices_ft_json else None
-        self.boundary_changed.emit(lat_min, lat_max, lng_min, lng_max, width_ft, depth_ft, vertices, vertices_ft)
+        try:
+            vertices = json.loads(vertices_json) if vertices_json else None
+            vertices_ft = json.loads(vertices_ft_json) if vertices_ft_json else None
+            print(f"[EmbeddedMapWidget] Emitting boundary_changed")
+            self.boundary_changed.emit(lat_min, lat_max, lng_min, lng_max, width_ft, depth_ft, vertices, vertices_ft)
+        except Exception as e:
+            print(f"[EmbeddedMapWidget] Error in _on_boundary_set: {e}")
 
     def _on_building_set(self, lat, lng, x_ft, z_ft, rotation_deg):
         """Handle building placement from JS."""
@@ -148,7 +177,11 @@ class EmbeddedMapWidget(QWidget):
 
     def _on_save_requested(self):
         """Handle save request from JS."""
-        self.close_requested.emit()
+        print("[EmbeddedMapWidget] Save requested, emitting close_requested")
+        try:
+            self.close_requested.emit()
+        except Exception as e:
+            print(f"[EmbeddedMapWidget] Error emitting close_requested: {e}")
 
     def get_boundary_data(self):
         """Get the current boundary data."""
@@ -157,6 +190,12 @@ class EmbeddedMapWidget(QWidget):
     def get_building_data(self):
         """Get the current building placement data."""
         return self._bridge.building_data
+
+    def closeEvent(self, event):
+        """Handle window close event (X button)."""
+        print("[EmbeddedMapWidget] closeEvent called")
+        self.close_requested.emit()
+        event.accept()
 
     def _load_map(self):
         """Load the Leaflet map HTML."""
@@ -292,11 +331,21 @@ class EmbeddedMapWidget(QWidget):
         var zoom = {self._zoom};
 
         // Initialize QWebChannel
-        new QWebChannel(qt.webChannelTransport, function(channel) {{
-            pyBridge = channel.objects.pyBridge;
-            console.log('QWebChannel connected');
-            initMap();
-        }});
+        try {{
+            new QWebChannel(qt.webChannelTransport, function(channel) {{
+                pyBridge = channel.objects.pyBridge;
+                console.log('QWebChannel connected');
+                try {{
+                    initMap();
+                }} catch(e) {{
+                    console.error('Error initializing map:', e);
+                    document.getElementById('info').innerHTML = 'Error loading map: ' + e.message;
+                }}
+            }});
+        }} catch(e) {{
+            console.error('QWebChannel error:', e);
+            document.getElementById('info').innerHTML = 'Error connecting to Python: ' + e.message;
+        }}
 
         function initMap() {{
             map = L.map('map').setView([lat, lng], zoom);

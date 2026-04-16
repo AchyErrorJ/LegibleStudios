@@ -191,6 +191,8 @@ class Room:
     # Constraint fields
     is_pinned: bool = False
     locked_properties: List[str] = field(default_factory=list)
+    # Floor elevation for terrain placement
+    floor_z: float = 0.0
 
 
 # Room types that default to 'open' connections with each other
@@ -1046,13 +1048,239 @@ class ArchDocument(QObject):
                 self.generate_walls_from_rooms()
             else:
                 print(f"[Document] Walls already loaded ({len(self._walls)}) - skipping regeneration")
+
+        # Lift building to sit on terrain BEFORE generating roof/floors
+        # This ensures roof sits on top of lifted walls
+        lift_mm = self._lift_building_to_terrain()
+
+        # Store lift amount for new elements (floors generated later)
+        if lift_mm > 0:
+            self._data['_terrain_lift_mm'] = lift_mm
+            print(f"[Document] Stored terrain lift: {lift_mm:.0f} mm for new elements")
+
+        # Generate floors and roof after lifting (so they use correct heights)
+        if len(self._rooms) > 0:
             self.generate_floors_from_rooms()
             print(f"[Document] After floor gen: {len(self._walls)} walls, {len(self._floors)} floors")
-            self.generate_roof(roof_type='hip', pitch=30.0)
+            # Generate roof at standard wall height (2700mm)
+            # C++ will lift the roof along with all other elements
+            roof_wall_height = 2700.0
+            print(f"[RoofGen] Generating roof at wall_height={roof_wall_height:.0f}mm (C++ will handle terrain lift)")
+            self.generate_roof(roof_type='hip', pitch=30.0, wall_height=roof_wall_height)
 
         # Validate and regenerate terrain if it has buggy data
         # Old terrain data has all Z values = 0 (was a bug in terrain generation)
         self._validate_and_regenerate_terrain()
+
+    def _lift_building_to_terrain(self) -> float:
+        """Lift building elements to sit on terrain surface.
+
+        Samples terrain elevation at building origin and lifts all walls,
+        doors, windows, and floors to sit on the terrain surface.
+        Roof generation depends on correct wall heights, so this must be
+        called BEFORE generate_roof().
+
+        Returns:
+            Lift amount in mm, or 0 if no lift was applied.
+        """
+        # Check if we have terrain and building origin
+        building_origin = self._data.get('building_origin')
+        if not building_origin:
+            return 0.0  # No building origin, nothing to lift
+
+        # Check for terrain mesh or elevation data
+        terrain_mesh = self._data.get('terrain_mesh')
+        elevation_grid = self._data.get('google_maps', {}).get('elevation_grid', {})
+
+        if not terrain_mesh and not elevation_grid:
+            return 0.0  # No terrain data
+
+        # Use mm fields if available, otherwise convert from ft
+        if 'x_mm' in building_origin:
+            origin_x_ft = building_origin['x_mm'] / 304.8
+        else:
+            origin_x_ft = building_origin.get('x_ft', 0)
+
+        if 'z_mm' in building_origin:
+            origin_z_ft = building_origin['z_mm'] / 304.8
+        else:
+            origin_z_ft = building_origin.get('z_ft', 0)
+
+        # Check if C++ terrain generation will handle the lift
+        # If so, skip Python lift to avoid double-lifting
+        terrain_settings = self._data.get('terrain_generation_settings', {})
+        if terrain_settings.get('use_cpp_generation', False):
+            print(f"[Document] C++ terrain generation enabled - skipping Python building lift (C++ will handle it)")
+            # Return the expected lift amount so it can be stored for floor generation
+            lift_ft = self._sample_terrain_elevation_ft(origin_x_ft, origin_z_ft)
+            return lift_ft * 304.8 if lift_ft > 0 else 0.0
+
+        # Sample terrain elevation at building origin
+        lift_ft = self._sample_terrain_elevation_ft(origin_x_ft, origin_z_ft)
+        if lift_ft == 0:
+            return 0.0  # No lift needed
+
+        print(f"[Document] Lifting building by {lift_ft:.2f} ft to sit on terrain")
+
+        MM_PER_FT = 304.8
+        lift_mm = lift_ft * MM_PER_FT
+
+        # Lift walls_batch (raw data)
+        if 'walls_batch' in self._data:
+            for wall in self._data['walls_batch']:
+                if 'start' in wall and len(wall['start']) >= 3:
+                    wall['start'][1] += lift_mm
+                if 'end' in wall and len(wall['end']) >= 3:
+                    wall['end'][1] += lift_mm
+
+        # Lift parsed walls
+        for wall in self._walls:
+            wall.start = (wall.start[0], wall.start[1] + lift_mm, wall.start[2])
+            wall.end = (wall.end[0], wall.end[1] + lift_mm, wall.end[2])
+
+        # Lift doors (raw data)
+        if 'doors' in self._data:
+            for door in self._data['doors']:
+                if 'position' in door and len(door['position']) >= 3:
+                    door['position'][1] += lift_mm
+
+        # Lift parsed doors
+        for door in self._doors:
+            # Doors don't store position directly, they're relative to walls
+            pass
+
+        # Lift windows (raw data)
+        if 'windows' in self._data:
+            for window in self._data['windows']:
+                if 'position' in window and len(window['position']) >= 3:
+                    window['position'][1] += lift_mm
+                if 'sill_height' in window:
+                    window['sill_height'] += lift_mm
+
+        # Lift rooms (raw data and parsed)
+        if 'rooms' in self._data and isinstance(self._data['rooms'], dict):
+            for room_id, room in self._data['rooms'].items():
+                if 'floor_z' in room:
+                    room['floor_z'] += lift_mm
+                if 'ceiling_z' in room:
+                    room['ceiling_z'] += lift_mm
+
+        for room in self._rooms.values():
+            room.floor_z += lift_mm
+            room.ceiling_z += lift_mm
+
+        # Lift levels
+        if 'levels' in self._data:
+            for level in self._data['levels']:
+                if 'elevation' in level:
+                    level['elevation'] += lift_mm
+
+        print(f"[Document] Building lifted by {lift_ft:.2f} ft ({lift_mm:.0f} mm)")
+        return lift_mm
+
+    def _sample_terrain_elevation_ft(self, x_ft: float, z_ft: float) -> float:
+        """Sample terrain elevation at a given x_ft, z_ft position.
+
+        Uses IDW interpolation from elevation_grid data.
+        Returns elevation in feet, normalized so min_elevation is ~0.
+        """
+        elevation_grid = self._data.get('google_maps', {}).get('elevation_grid', {})
+        if not elevation_grid:
+            # Try terrain_mesh vertices
+            terrain_mesh = self._data.get('terrain_mesh')
+            if terrain_mesh and 'vertices' in terrain_mesh:
+                return self._sample_mesh_elevation_ft(terrain_mesh, x_ft, z_ft)
+            return 0.0
+
+        elev_points = list(elevation_grid.values())
+        if not elev_points:
+            return 0.0
+
+        # Get elevation range to compute offset
+        elevations = [p.get('elevation_ft', 0) for p in elev_points]
+        min_elev = min(elevations)
+
+        # Elevation offset so min_elevation maps to ~0 (same as terrain.py)
+        elevation_offset = -min_elev - 0.0328  # -0.0328 ft = -10 mm
+
+        # Find nearest points and interpolate
+        import math
+
+        # Convert target position to lat/lng
+        # Get bounds from google_maps
+        google_maps = self._data.get('google_maps', {})
+        boundary = google_maps.get('boundary', {})
+        lat_min = boundary.get('lat_min', 0)
+        lat_max = boundary.get('lat_max', 0)
+        lng_min = boundary.get('lng_min', 0)
+        lng_max = boundary.get('lng_max', 0)
+
+        # Get property dimensions
+        width_ft = self._data.get('property_width_ft', 100)
+        depth_ft = self._data.get('property_depth_ft', 100)
+
+        # Normalize position to [0, 1] within property
+        frac_x = x_ft / width_ft if width_ft > 0 else 0.5
+        frac_z = z_ft / depth_ft if depth_ft > 0 else 0.5
+
+        # Map to lat/lng
+        lat_range = lat_max - lat_min
+        lng_range = lng_max - lng_min
+        target_lat = lat_min + frac_z * lat_range
+        target_lng = lng_min + frac_x * lng_range
+
+        # IDW interpolation
+        weights = []
+        values = []
+
+        for pt in elev_points:
+            pt_lat = pt.get('lat', 0)
+            pt_lng = pt.get('lng', 0)
+            dist = math.sqrt((pt_lat - target_lat)**2 + (pt_lng - target_lng)**2)
+
+            if dist < 0.000001:  # Very close, use this value directly
+                return pt.get('elevation_ft', 0) + elevation_offset
+
+            weight = 1.0 / (dist * dist)
+            weights.append(weight)
+            values.append(pt.get('elevation_ft', 0))
+
+        if not weights:
+            return 0.0
+
+        # Weighted average
+        weighted_sum = sum(w * v for w, v in zip(weights, values))
+        total_weight = sum(weights)
+        sampled_elev = weighted_sum / total_weight
+
+        return sampled_elev + elevation_offset
+
+    def _sample_mesh_elevation_ft(self, terrain_mesh: dict, x_ft: float, z_ft: float) -> float:
+        """Sample elevation from terrain mesh vertices."""
+        vertices = terrain_mesh.get('vertices', [])
+        if not vertices:
+            return 0.0
+
+        import math
+
+        # Convert ft to mm for comparison
+        x_mm = x_ft * 304.8
+        z_mm = z_ft * 304.8
+
+        # Find nearest vertices
+        best_dist = float('inf')
+        best_elev_mm = 0
+
+        for v in vertices:
+            pos = v.get('position', [0, 0, 0])
+            vx, vy, vz = pos[0], pos[1], pos[2]
+            dist = math.sqrt((vx - x_mm)**2 + (vz - z_mm)**2)
+            if dist < best_dist:
+                best_dist = dist
+                best_elev_mm = vy
+
+        # Convert back to feet
+        return best_elev_mm / 304.8
 
     def _validate_and_regenerate_terrain(self):
         """Check if terrain data is valid, regenerate if buggy."""
@@ -1643,11 +1871,14 @@ class ArchDocument(QObject):
             if len(floor_vertices) < 3:
                 continue
 
+            # Generate floors at Y=0 - C++ will lift them to terrain height
+            floor_elevation = 0
+
             floor = Floor(
                 index=floor_index,
                 vertices=floor_vertices,
                 thickness=thickness,
-                elevation=0,
+                elevation=floor_elevation,
                 room_ids=group_room_ids
             )
             self._floors.append(floor)
