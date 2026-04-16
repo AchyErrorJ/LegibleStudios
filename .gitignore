@@ -44,7 +44,11 @@ app_output.log
 test_*.py
 test_*.html
 test_*.json
+test_*.svg
 osm_map.html
+example_*.json
+floorplan.json
+diagnose_dll.py
 
 # Render outputs and models
 renders/
