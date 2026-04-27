@@ -32,7 +32,11 @@ def extract_openings(data: dict) -> tuple[List[ScheduleEntry], List[ScheduleEntr
     window_count = 0
     
     room_names = {}
-    for room in data.get('rooms', []):
+    rooms_in = data.get('rooms', [])
+    if isinstance(rooms_in, dict):
+        rooms_in = [{**v, 'id': v.get('id', k)} if isinstance(v, dict) else {'id': k, 'name': k}
+                    for k, v in rooms_in.items()]
+    for room in rooms_in:
         room_names[room.get('id', '')] = room.get('name', 'Unknown')
     
     # Map wall indices to room names

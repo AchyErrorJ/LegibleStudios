@@ -113,11 +113,9 @@ set(ENGINE_SOURCES
     src/instance_batch.cpp
     src/shadow_map.cpp
     src/environment_map.cpp
-    src/ipc_server.cpp
     src/post_process.cpp
     src/texture.cpp
     src/project.cpp
-    src/llm_assistant.cpp
     src/memory_test.cpp
     src/bvh.cpp
     src/path_tracer.cpp
@@ -142,11 +140,9 @@ set(ENGINE_HEADERS
     include/instance_batch.hpp
     include/shadow_map.hpp
     include/environment_map.hpp
-    include/ipc_server.hpp
     include/post_process.hpp
     include/texture.hpp
     include/project.hpp
-    include/llm_assistant.hpp
     include/bvh.hpp
     include/path_tracer.hpp
 )
@@ -170,12 +166,10 @@ set(LIB_SOURCES
     src/instance_batch.cpp
     src/shadow_map.cpp
     src/environment_map.cpp
-    src/ipc_server.cpp
     src/post_process.cpp
     src/arch_api.cpp
     src/texture.cpp
     src/project.cpp
-    src/llm_assistant.cpp
     src/memory_test.cpp
     src/bvh.cpp
     src/path_tracer.cpp

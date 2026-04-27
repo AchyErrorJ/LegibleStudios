@@ -63,3 +63,6 @@ TestData/.history/
 
 # Dependencies
 MapWidgetLib/
+
+# Smoke test artifacts (regenerated each run)
+smoke_test_output/

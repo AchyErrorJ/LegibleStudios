@@ -14,7 +14,7 @@ import sys
 import json
 from pathlib import Path
 
-sys.path.insert(0, '/root/ArchEngine/ArchEngine_kernel/scripts')
+sys.path.insert(0, str(Path(__file__).parent / 'ArchEngine_kernel' / 'scripts'))
 
 from generate_elevations import generate_elevation, render_elevation_svg
 from generate_plans import PlanGenerator
@@ -191,7 +191,24 @@ def create_permit_drawing_set(
 
 
 def convert_to_kernel_format(data: dict) -> dict:
-    """Convert test pipeline format to kernel format."""
+    """Convert test pipeline format to kernel format. If input already has
+    walls_batch (QBD/kernel format), short-circuit with normalization."""
+    if 'walls_batch' in data:
+        return {
+            'name': data.get('name', 'House'),
+            'width': data.get('width', data.get('width_m', 10) * 1000),
+            'depth': data.get('depth', data.get('depth_m', 10) * 1000),
+            'building_type': data.get('structure_type', 'residential'),
+            'rooms': data.get('rooms', {}) if isinstance(data.get('rooms'), dict) else {
+                (r.get('id') or f'room_{i}'): r for i, r in enumerate(data.get('rooms') or [])
+            },
+            'walls_batch': data.get('walls_batch', []),
+            'doors': data.get('doors', []) or [],
+            'windows': data.get('windows', []) or [],
+            'roofs': data.get('roofs') or [
+                {'type': 'gable', 'pitch': 6, 'overhang': 450, 'height': 3500}
+            ],
+        }
     kernel_data = {
         'name': data.get('name', 'Test House'),
         'width': data.get('width_m', 10) * 1000,
@@ -204,8 +221,12 @@ def convert_to_kernel_format(data: dict) -> dict:
         'roofs': []
     }
     
-    # Convert rooms
-    for room in data.get('rooms', []):
+    # Convert rooms - rooms can be a dict (keyed by id) or a list
+    rooms_in = data.get('rooms', [])
+    if isinstance(rooms_in, dict):
+        rooms_in = [{**v, 'id': v.get('id', k)} if isinstance(v, dict) else {'id': k, 'name': k}
+                    for k, v in rooms_in.items()]
+    for room in rooms_in:
         room_id = room.get('id', 'unknown')
         bounds = room.get('bounds', {})
         kernel_data['rooms'][room_id] = {

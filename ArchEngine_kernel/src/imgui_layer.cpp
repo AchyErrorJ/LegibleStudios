@@ -1,7 +1,6 @@
 #include "imgui_layer.hpp"
 #include "physics_bridge.hpp"
 #include "renderer.hpp"
-#include "llm_assistant.hpp"
 #include "memory_test.hpp"
 #include <GLFW/glfw3.h>
 #include <algorithm>
@@ -139,8 +138,6 @@ void ImGuiLayer::drawMainMenuBar(VisualizationMode& mode, bool& showDemo, bool& 
             ImGui::MenuItem("Material Inspector", nullptr, &m_showMaterialInspector);
             ImGui::MenuItem("Material Test (PBR)", nullptr, &m_showMaterialTestWindow);
             ImGui::MenuItem("Render Preview", nullptr, &m_showRenderPreviewPanel);
-            ImGui::Separator();
-            ImGui::MenuItem("AI Tuning Assistant", nullptr, &m_showLLMAssistantWindow);
             ImGui::Separator();
             if (ImGui::MenuItem("Run Memory Test")) {
                 m_runMemoryTest = true;
@@ -2718,175 +2715,6 @@ void ImGuiLayer::drawMaterialTestWindow(Renderer& renderer, Camera& camera) {
                 "If everything looks washed out:\n"
                 "- Reduce Overall Intensity"
             );
-        }
-    }
-    ImGui::End();
-}
-
-// ============================================================================
-// LLM Render Tuning Assistant
-// ============================================================================
-
-void ImGuiLayer::drawLLMAssistantWindow(Renderer& renderer) {
-    if (!m_showLLMAssistantWindow) return;
-
-    // Create assistant on first use
-    if (!m_llmAssistant) {
-        m_llmAssistant = std::make_unique<LLMAssistant>();
-    }
-
-    ImGui::SetNextWindowSize(ImVec2(500, 600), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("AI Tuning Assistant", &m_showLLMAssistantWindow)) {
-        // Header
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Render Tuning Assistant");
-        ImGui::TextWrapped("Describe rendering issues and get parameter suggestions.");
-        ImGui::Separator();
-
-        // Connection status
-        bool connected = m_llmAssistant->isConnected();
-        if (connected) {
-            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Connected to LM Studio");
-        } else {
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f), "Not connected");
-            if (ImGui::Button("Connect to LM Studio")) {
-                m_llmAssistant->testConnection();
-            }
-            ImGui::SameLine();
-            ImGui::TextDisabled("(localhost:1234)");
-        }
-
-        ImGui::Separator();
-
-        // Chat history
-        ImGui::BeginChild("ChatHistory", ImVec2(0, -100), true);
-        for (const auto& msg : m_llmAssistant->getChatHistory()) {
-            if (msg.role == ChatMessage::Role::User) {
-                ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "You:");
-                ImGui::TextWrapped("%s", msg.content.c_str());
-            } else {
-                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Assistant:");
-                ImGui::TextWrapped("%s", msg.content.c_str());
-
-                // Show parameter suggestions with apply buttons
-                if (msg.hasSuggestions()) {
-                    ImGui::Spacing();
-                    ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.4f, 1.0f), "Suggested Changes:");
-                    for (const auto& sug : msg.suggestions) {
-                        ImGui::BulletText("%s: %.2f -> %.2f",
-                            sug.displayName.c_str(), sug.currentValue, sug.suggestedValue);
-
-                        ImGui::SameLine();
-                        std::string btnId = "Apply##" + sug.paramName;
-                        if (ImGui::SmallButton(btnId.c_str())) {
-                            // Apply the suggestion
-                            if (sug.paramName == "iblIntensity")
-                                renderer.setIBLIntensity(sug.suggestedValue);
-                            else if (sug.paramName == "iblDiffuseIntensity")
-                                renderer.setIBLDiffuseIntensity(sug.suggestedValue);
-                            else if (sug.paramName == "iblSpecularIntensity")
-                                renderer.setIBLSpecularIntensity(sug.suggestedValue);
-                            else if (sug.paramName == "fresnelIntensity")
-                                renderer.setFresnelIntensity(sug.suggestedValue);
-                            else if (sug.paramName == "exposure") {
-                                CompositeConfig cfg;
-                                cfg.exposure = sug.suggestedValue;
-                                cfg.tonemapMode = renderer.getPostProcess()->getCompositeConfig().tonemapMode;
-                                cfg.enabled = renderer.getPostProcess()->getCompositeConfig().enabled;
-                                renderer.getPostProcess()->setCompositeConfig(cfg);
-                            }
-                            else if (sug.paramName == "bloomIntensity") {
-                                auto cfg = renderer.getPostProcess()->getBloomConfig();
-                                cfg.intensity = sug.suggestedValue;
-                                renderer.getPostProcess()->setBloomConfig(cfg);
-                            }
-                            else if (sug.paramName == "ssaoIntensity") {
-                                auto cfg = renderer.getPostProcess()->getSSAOConfig();
-                                cfg.intensity = sug.suggestedValue;
-                                renderer.getPostProcess()->setSSAOConfig(cfg);
-                            }
-                        }
-                    }
-                }
-            }
-            ImGui::Spacing();
-            ImGui::Separator();
-        }
-
-        // Auto-scroll to bottom
-        if (m_llmAssistant->hasResponse()) {
-            ImGui::SetScrollHereY(1.0f);
-            m_llmAssistant->getLatestResponse();  // Clear the flag
-        }
-
-        // Show processing indicator
-        if (m_llmAssistant->isProcessing()) {
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.4f, 1.0f), "Thinking...");
-        }
-
-        ImGui::EndChild();
-
-        // Input area
-        ImGui::Separator();
-        bool sendMessage = false;
-
-        ImGui::PushItemWidth(-80);
-        if (ImGui::InputText("##llm_input", m_llmInputBuffer, sizeof(m_llmInputBuffer),
-                            ImGuiInputTextFlags_EnterReturnsTrue)) {
-            sendMessage = true;
-        }
-        ImGui::PopItemWidth();
-
-        ImGui::SameLine();
-        if (ImGui::Button("Send") || sendMessage) {
-            if (strlen(m_llmInputBuffer) > 0 && !m_llmAssistant->isProcessing()) {
-                // Build render state snapshot
-                RenderStateSnapshot state;
-                state.iblIntensity = renderer.getIBLIntensity();
-                state.iblDiffuseIntensity = renderer.getIBLDiffuseIntensity();
-                state.iblSpecularIntensity = renderer.getIBLSpecularIntensity();
-                state.fresnelIntensity = renderer.getFresnelIntensity();
-                state.exposure = renderer.getPostProcess()->getCompositeConfig().exposure;
-                state.bloomIntensity = renderer.getPostProcess()->getBloomConfig().intensity;
-                state.bloomThreshold = renderer.getPostProcess()->getBloomConfig().threshold;
-                state.ssaoIntensity = renderer.getPostProcess()->getSSAOConfig().intensity;
-                state.ssaoRadius = renderer.getPostProcess()->getSSAOConfig().radius;
-                state.iblEnabled = renderer.getIBLEnabled();
-                state.directLightEnabled = renderer.getDirectLightEnabled();
-                state.normalMappingEnabled = renderer.getNormalMappingEnabled();
-                state.ssaoEnabled = renderer.getPostProcess()->getSSAOConfig().enabled;
-                state.bloomEnabled = renderer.getPostProcess()->getBloomConfig().enabled;
-                state.defaultRoughness = renderer.getDefaultRoughness();
-                state.defaultMetallic = renderer.getDefaultMetallic();
-
-                m_llmAssistant->sendMessage(m_llmInputBuffer, state);
-                m_llmInputBuffer[0] = '\0';
-            }
-        }
-
-        // Quick prompts
-        ImGui::Spacing();
-        ImGui::TextDisabled("Quick prompts:");
-        if (ImGui::SmallButton("White film on surfaces")) {
-            strcpy(m_llmInputBuffer, "There's a white film on surfaces, especially when I zoom in");
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Too bright")) {
-            strcpy(m_llmInputBuffer, "The scene looks too bright and washed out");
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Metals wrong")) {
-            strcpy(m_llmInputBuffer, "Metallic surfaces don't look right");
-        }
-
-        // Clear button
-        if (ImGui::Button("Clear Chat")) {
-            m_llmAssistant->clearHistory();
-        }
-
-        // Error display
-        if (!m_llmAssistant->getLastError().empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s",
-                              m_llmAssistant->getLastError().c_str());
         }
     }
     ImGui::End();

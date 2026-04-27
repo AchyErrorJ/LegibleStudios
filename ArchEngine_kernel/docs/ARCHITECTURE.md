@@ -98,7 +98,6 @@ ArchEngine is a modular Vulkan-based architectural visualization and structural 
 |-----------|--------|-------------|
 | **Types** | `types.hpp` | Core data structures (Vertex, Camera, Building, WallType) |
 | **Window** | `window.hpp` | GLFW window management, input handling |
-| **IPCServer** | `ipc_server.hpp` | Named pipe communication with CAD applications |
 | **ImGuiLayer** | `imgui_layer.hpp` | UI overlay for settings and debugging |
 
 ---

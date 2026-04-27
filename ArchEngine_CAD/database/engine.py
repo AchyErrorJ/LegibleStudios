@@ -74,8 +74,17 @@ def get_engine(echo: bool = False):
             @event.listens_for(_engine, "connect")
             def set_sqlite_pragma(dbapi_connection, connection_record):
                 cursor = dbapi_connection.cursor()
-                cursor.execute("PRAGMA foreign_keys=ON")
-                cursor.execute("PRAGMA journal_mode=WAL")
+                try:
+                    cursor.execute("PRAGMA foreign_keys=ON")
+                except Exception:
+                    pass
+                # WAL mode can fail on Windows when a file watcher (OneDrive,
+                # antivirus, indexing) holds the .db file. Don't let that
+                # crash connection setup — fall back to default journal mode.
+                try:
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                except Exception:
+                    pass
                 cursor.close()
 
     return _engine

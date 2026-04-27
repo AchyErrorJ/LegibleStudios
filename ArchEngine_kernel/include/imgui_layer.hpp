@@ -308,11 +308,6 @@ public:
     void setMaterialTestWindowVisibility(bool show) { m_showMaterialTestWindow = show; }
     bool getMaterialTestWindowVisibility() const { return m_showMaterialTestWindow; }
 
-    // LLM Render Tuning Assistant
-    void drawLLMAssistantWindow(Renderer& renderer);
-    void setLLMAssistantWindowVisibility(bool show) { m_showLLMAssistantWindow = show; }
-    bool getLLMAssistantWindowVisibility() const { return m_showLLMAssistantWindow; }
-
     // Compass overlay (shows N/S/E/W directions)
     void drawCompassOverlay(float cameraYaw);
     void setCompassVisibility(bool show) { m_showCompass = show; }
@@ -489,11 +484,6 @@ private:
     // Material Test Window state (PBR validation)
     bool m_showMaterialTestWindow = false;
     int m_materialTestPreset = 0;  // 0=Full Grid, 1=Dielectrics, 2=Metals, 3=Roughness Row, 4=Metallic Column
-
-    // LLM Assistant Window state
-    bool m_showLLMAssistantWindow = false;
-    char m_llmInputBuffer[512] = "";
-    std::unique_ptr<class LLMAssistant> m_llmAssistant;
 
     // Memory test flag
     bool m_runMemoryTest = false;

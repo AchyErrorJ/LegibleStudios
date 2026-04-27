@@ -110,3 +110,35 @@ class ConstraintLens(ABC):
         """
         result = self.analyze(geometry, intensity=1.0)
         return result.get_critical_count() == 0
+
+    @staticmethod
+    def _normalize_rooms(rooms):
+        if isinstance(rooms, dict):
+            out = []
+            for room_id, data in rooms.items():
+                if isinstance(data, dict):
+                    out.append({**data, "id": data.get("id", room_id)})
+                else:
+                    out.append({"id": room_id, "name": room_id})
+            return out
+        return rooms or []
+
+    @staticmethod
+    def _normalize_openings(geometry):
+        openings = geometry.get("openings")
+        if openings:
+            return openings
+        merged = []
+        for d in geometry.get("doors", []) or []:
+            merged.append({**d, "type": d.get("type", "door")})
+        for w in geometry.get("windows", []) or []:
+            merged.append({**w, "type": w.get("type", "window")})
+        return merged
+
+    @staticmethod
+    def _normalize_walls(geometry):
+        return geometry.get("walls") or geometry.get("walls_batch") or []
+
+    @staticmethod
+    def _normalize_floors(geometry):
+        return geometry.get("floors") or geometry.get("floors_batch") or []

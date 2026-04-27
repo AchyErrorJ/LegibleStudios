@@ -104,82 +104,108 @@ class ProjectRepository(BaseRepository[Project]):
         self.session.flush()
 
         # Import wall types
-        for wt_data in data.get("wall_types", {}).values():
+        wall_types_in = data.get("wall_types", {})
+        if isinstance(wall_types_in, dict):
+            wall_types_iter = wall_types_in.values()
+        else:
+            wall_types_iter = wall_types_in or []
+        for wt_data in wall_types_iter:
             wt = WallType(
                 project_id=project.id,
-                type_key=wt_data.get("id", ""),
+                type_key=wt_data.get("id") or wt_data.get("type_key", ""),
                 name=wt_data.get("name", ""),
-                thickness=wt_data.get("thickness", 140),
+                total_thickness=wt_data.get("total_thickness", wt_data.get("thickness", 140)),
+                total_r_value=wt_data.get("total_r_value", 0),
                 layers=wt_data.get("layers", []),
             )
             self.session.add(wt)
 
-        # Import walls
-        wall_map = {}  # old index -> new id
-        for wall_data in data.get("walls_batch", []):
+        # Import walls — keep mapping from input wall_index/index to new id
+        wall_map = {}
+        for i, wall_data in enumerate(data.get("walls_batch", [])):
+            wall_index = wall_data.get("wall_index", wall_data.get("index", i))
+            start = wall_data.get("start") or [0, 0, 0]
+            end = wall_data.get("end") or [0, 0, 0]
+            rooms_pair = wall_data.get("rooms") or []
             wall = Wall(
                 project_id=project.id,
-                index=wall_data.get("index", 0),
-                start_x=wall_data["start"][0],
-                start_y=wall_data["start"][1],
-                start_z=wall_data["start"][2],
-                end_x=wall_data["end"][0],
-                end_y=wall_data["end"][1],
-                end_z=wall_data["end"][2],
+                index=wall_index,
+                start_x=start[0], start_y=start[1] if len(start) > 1 else 0, start_z=start[2] if len(start) > 2 else 0,
+                end_x=end[0], end_y=end[1] if len(end) > 1 else 0, end_z=end[2] if len(end) > 2 else 0,
                 height=wall_data.get("height", 2700),
-                category=wall_data.get("category", "exterior"),
-                wall_type_id=None,  # Link later if needed
+                category=wall_data.get("category", "interior"),
+                level_name=wall_data.get("level_name", "Level 1"),
+                wall_type_id=None,
+                room_ids=list(rooms_pair),
                 is_pinned=wall_data.get("is_pinned", False),
             )
             self.session.add(wall)
             self.session.flush()
-            wall_map[wall_data.get("index", 0)] = wall.id
+            wall_map[wall_index] = wall.id
 
         # Import doors
-        for door_data in data.get("doors", []):
+        for i, door_data in enumerate(data.get("doors", [])):
             door = Door(
                 project_id=project.id,
                 wall_id=wall_map.get(door_data.get("wall_index")),
-                offset=door_data.get("offset", 500),
-                width=door_data.get("width", 900),
-                height=door_data.get("height", 2100),
-                door_type=door_data.get("type", "single"),
-                swing=door_data.get("swing", "left"),
+                index=i,
+                wall_index=door_data.get("wall_index", 0),
+                offset=door_data.get("offset", 0),
+                width=door_data.get("width", 914),
+                height=door_data.get("height", 2134),
+                door_type=door_data.get("type", "swing"),
+                swing=door_data.get("swing", "left_in"),
+                room1=door_data.get("room1"),
+                room2=door_data.get("room2"),
             )
             self.session.add(door)
 
         # Import windows
-        for win_data in data.get("windows", []):
+        for i, win_data in enumerate(data.get("windows", [])):
             window = Window(
                 project_id=project.id,
                 wall_id=wall_map.get(win_data.get("wall_index")),
-                offset=win_data.get("offset", 500),
+                index=i,
+                wall_index=win_data.get("wall_index", 0),
+                offset=win_data.get("offset", 0),
                 width=win_data.get("width", 1200),
                 height=win_data.get("height", 1200),
                 sill_height=win_data.get("sill_height", 900),
+                window_type=win_data.get("type", "casement"),
+                room=win_data.get("room"),
             )
             self.session.add(window)
 
-        # Import rooms
-        for room_key, room_data in data.get("rooms", {}).items():
+        # Import rooms — bounds in schema is an object {x, y, width, height}
+        for room_key, room_data in (data.get("rooms") or {}).items():
+            bounds = room_data.get("bounds") or {}
+            center = room_data.get("center") or {}
             room = Room(
                 project_id=project.id,
                 room_key=room_key,
                 name=room_data.get("name", room_key),
-                room_type=room_data.get("type", "other"),
-                bounds=room_data.get("bounds", {}),
+                room_type=room_data.get("room_type") or room_data.get("type") or "other",
+                bounds_x=bounds.get("x", 0),
+                bounds_y=bounds.get("y", 0),
+                bounds_width=bounds.get("width", 0),
+                bounds_height=bounds.get("height", 0),
+                center_x=center.get("x") if center else None,
+                center_z=center.get("y") if center else None,
                 area=room_data.get("area", 0),
+                zone=room_data.get("zone"),
             )
             self.session.add(room)
 
         # Import roofs
-        for roof_data in data.get("roofs", []):
+        for roof_data in (data.get("roofs") or []):
             roof = Roof(
                 project_id=project.id,
                 roof_type=roof_data.get("type", "gable"),
                 pitch=roof_data.get("pitch", 6),
+                overhang=roof_data.get("overhang", 600),
+                material=roof_data.get("material", "asphalt_shingle"),
                 surfaces=roof_data.get("surfaces", []),
-                framing=roof_data.get("framing", {}),
+                edges=roof_data.get("edges", []),
             )
             self.session.add(roof)
 

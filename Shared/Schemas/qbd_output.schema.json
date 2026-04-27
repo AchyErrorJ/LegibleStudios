@@ -34,7 +34,11 @@
     "unit": {
       "type": "string",
       "enum": ["feet", "mm"],
-      "description": "Unit of measurement for all dimensions"
+      "description": "Unit of measurement for all linear dimensions and as the squared unit for areas (i.e., area is in mm^2 when unit=mm, sqft when unit=feet)"
+    },
+    "creative_mode": {
+      "type": "boolean",
+      "description": "Whether the layout used organic/creative growth instead of rectangular"
     },
     "is_complete": {
       "type": "boolean",
@@ -183,6 +187,10 @@
           "minItems": 2,
           "maxItems": 2,
           "description": "[room1_id, room2_id] rooms on each side"
+        },
+        "wall_index": {
+          "type": "integer",
+          "description": "Stable index of this wall in walls_batch (used by doors/windows to reference parent wall)"
         }
       }
     },
@@ -367,7 +375,7 @@
         },
         "area": {
           "type": "number",
-          "description": "Room area in sqft"
+          "description": "Room area in unit^2 (mm^2 when building.unit=mm, sqft when building.unit=feet)"
         },
         "center": {
           "type": "object",
