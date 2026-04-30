@@ -1346,14 +1346,14 @@ class ArchEngineApplication(QMainWindow):
 
         # Handle both development and frozen (PyInstaller) modes
         if getattr(sys, 'frozen', False):
-            render_server_path = os.path.join(sys._MEIPASS, 'render_server')
+            qbd_path = os.path.join(sys._MEIPASS, 'qbd')
         else:
-            render_server_path = os.path.abspath(os.path.join(
-                os.path.dirname(__file__), '..', '..', 'ArchEngine_kernel', 'render_server'
+            qbd_path = os.path.abspath(os.path.join(
+                os.path.dirname(__file__), '..', '..', 'ArchEngine_kernel', 'qbd'
             ))
 
-        if render_server_path not in sys.path:
-            sys.path.insert(0, render_server_path)
+        if qbd_path not in sys.path:
+            sys.path.insert(0, qbd_path)
 
         from qbd_layout_generator import generate_floor_plan_from_qbd, OutputFormat
 

@@ -1602,7 +1602,7 @@ void ImGuiLayer::drawRenderSettingsPanel(Renderer& renderer, bool& show) {
                 if (ImGui::Button("Stop Render Server")) {
                     m_stopRenderServerRequested = true;
                 }
-                ImGui::Text("Script: render_server/start_render_server.ps1");
+                ImGui::Text("Script: enhancer/start_render_server.ps1");
                 ImGui::DragInt("Port", &m_renderServerPort, 1.0f, 1, 65535);
 
                 ImGui::InputText("Name", m_materialName, sizeof(m_materialName));

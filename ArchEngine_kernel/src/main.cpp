@@ -64,7 +64,7 @@ static std::string buildMaterialGenerateCommand(const ImGuiLayer::MaterialGenera
 static std::string buildStartRenderServerCommand(int port) {
     std::ostringstream cmd;
     cmd << "powershell -ExecutionPolicy Bypass -File "
-        << quoteShellArg("render_server/start_render_server.ps1")
+        << quoteShellArg("enhancer/start_render_server.ps1")
         << " -Port " << port;
     return cmd.str();
 }
@@ -72,7 +72,7 @@ static std::string buildStartRenderServerCommand(int port) {
 static std::string buildStopRenderServerCommand() {
     std::ostringstream cmd;
     cmd << "powershell -ExecutionPolicy Bypass -File "
-        << quoteShellArg("render_server/stop_render_server.ps1");
+        << quoteShellArg("enhancer/stop_render_server.ps1");
     return cmd.str();
 }
 
@@ -1747,7 +1747,7 @@ int main(int argc, char* argv[]) {
                                 std::string preset = presetNames[request.postProcessPreset];
 
                                 // Build post-process command with manual overrides
-                                std::string postCmd = "python ../../render_server/postprocess_cli.py "
+                                std::string postCmd = "python ../../enhancer/postprocess_cli.py "
                                             "--input \"" + outputPath + "\" "
                                             "--output \"" + outputPath + "\" "
                                             "--preset " + preset;
@@ -1781,7 +1781,7 @@ int main(int argc, char* argv[]) {
                                 highResRenderStatus = "Fixing color profile...";
                                 imgui.setHighResRenderState(true, highResRenderStatus, 0.95f);
 
-                                std::string fixCmd = "python ../../render_server/fix_color_profile.py \"" + outputPath + "\"";
+                                std::string fixCmd = "python ../../enhancer/fix_color_profile.py \"" + outputPath + "\"";
                                 int fixResult = std::system(fixCmd.c_str());
                                 if (fixResult != 0) {
                                     std::cout << "[Renderer] Color profile fix failed (colors may print incorrectly)" << std::endl;

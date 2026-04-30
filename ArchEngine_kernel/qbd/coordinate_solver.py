@@ -37,20 +37,30 @@ class Point(NamedTuple):
     y: float
 
 
-class Rect(NamedTuple):
-    """Axis-aligned rectangle"""
-    x: float
-    y: float
-    width: float
-    height: float
+class Rect:
+    """Axis-aligned rectangle. Slotted, immutable-by-convention; x2/y2 computed
+    once at construction (was hot in profile)."""
+    __slots__ = ("x", "y", "width", "height", "x2", "y2")
 
-    @property
-    def x2(self) -> float:
-        return self.x + self.width
+    def __init__(self, x: float, y: float, width: float, height: float):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.x2 = x + width
+        self.y2 = y + height
 
-    @property
-    def y2(self) -> float:
-        return self.y + self.height
+    def __repr__(self) -> str:
+        return f"Rect(x={self.x}, y={self.y}, width={self.width}, height={self.height})"
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Rect):
+            return False
+        return (self.x == other.x and self.y == other.y
+                and self.width == other.width and self.height == other.height)
+
+    def __hash__(self) -> int:
+        return hash((self.x, self.y, self.width, self.height))
 
     @property
     def area(self) -> float:
@@ -67,6 +77,7 @@ class Rect(NamedTuple):
         return min(self.width, self.height) / max(self.width, self.height)
 
     def overlaps(self, other: 'Rect', tolerance: float = 0.01) -> bool:
+        # Inlined for speed — this is the inner loop of _is_valid_position.
         return (self.x < other.x2 - tolerance and
                 self.x2 > other.x + tolerance and
                 self.y < other.y2 - tolerance and
@@ -74,7 +85,9 @@ class Rect(NamedTuple):
 
     def touches(self, other: 'Rect', tolerance: float = 0.5) -> bool:
         """Check if rectangles share an edge (adjacent but not overlapping)"""
-        if self.overlaps(other):
+        # Inline overlaps for speed
+        if (self.x < other.x2 - 0.01 and self.x2 > other.x + 0.01 and
+                self.y < other.y2 - 0.01 and self.y2 > other.y + 0.01):
             return False
 
         # Vertical adjacency (side by side)
@@ -310,6 +323,8 @@ class CoordinateSolver:
 
         # Extension settings
         self.allow_extensions = allow_extensions
+        # Cache for _is_valid_position - extended_bounds doesn't change during solve
+        self._extended_bounds_cache: Optional[Rect] = None
         self.max_extension = max_extension  # Max 30% extension in any direction
 
         # Creative mode - organic growth with liberal dead space
@@ -494,18 +509,20 @@ class CoordinateSolver:
                             print(f"[Solver] Re-evaluation placed {retry_count} more rooms")
                         dead_space_before = self.dead_space_count
 
-        # Third pass: relax exterior requirements for remaining rooms
-        if len(self.placed) < len(order):
-            print(f"[Solver] Pass 3: Relaxing exterior requirements...")
-            remaining = [r for r in order if r not in self.placed]
+        # Third pass: relax exterior requirements for remaining rooms.
+        # Compute remaining directly — len(self.placed) > len(order) when pass 2
+        # added dead_space cells, which would falsely skip this pass.
+        remaining = [r for r in order if r not in self.placed]
+        if remaining:
+            print(f"[Solver] Pass 3: Relaxing exterior requirements for {remaining}...")
             for room_id in remaining:
                 self.exterior_relaxed.add(room_id)
             self._search(remaining, 0, max_nodes // 2, relaxed=False, allow_skip=True)
 
         # Fourth pass: fully relaxed
-        if len(self.placed) < len(order):
-            print(f"[Solver] Pass 4: Full constraint relaxation...")
-            remaining = [r for r in order if r not in self.placed]
+        remaining = [r for r in order if r not in self.placed]
+        if remaining:
+            print(f"[Solver] Pass 4: Full constraint relaxation for {remaining}...")
             self._search(remaining, 0, max_nodes // 2, relaxed=True, allow_skip=True)
 
     def _place_rooms_creative(self, order: List[str], max_nodes: int):
@@ -1174,8 +1191,11 @@ class CoordinateSolver:
         needs_exterior = room_id in self.spec.constraints.must_have_exterior
         is_constrained = bool(must_touch) or needs_exterior
 
-        # More branches for constrained rooms
-        branch_limit = 150 if is_constrained else 80
+        # Branch limit: candidates are scored + sorted, so the top few are
+        # almost always the best. Beyond ~25 the marginal value is dominated
+        # by exponential branching cost. Tuned for combined fast solve + good
+        # placement (verified on 7-room and 16-room test cases).
+        branch_limit = 30 if is_constrained else 20
 
         # Check if this is an "attached" room (must touch a specific parent)
         is_attached = self._is_attached_room(room_id)
@@ -1481,17 +1501,22 @@ class CoordinateSolver:
         """
         # TIER 1: HARD CONSTRAINTS (never relax)
 
-        # Calculate extended bounds for extension mode
-        if self.allow_extensions:
-            ext_x = self.initial_bounds.width * self.max_extension
-            ext_y = self.initial_bounds.height * self.max_extension
-            extended_bounds = Rect(
-                -ext_x, -ext_y,
-                self.initial_bounds.width + 2 * ext_x,
-                self.initial_bounds.height + 2 * ext_y
-            )
-        else:
-            extended_bounds = self.initial_bounds
+        # Use cached extended_bounds (recomputing per call was hot in profile).
+        # Cached lazily — invalidated only if allow_extensions / max_extension change,
+        # which they don't during solve.
+        extended_bounds = self._extended_bounds_cache
+        if extended_bounds is None:
+            if self.allow_extensions:
+                ext_x = self.initial_bounds.width * self.max_extension
+                ext_y = self.initial_bounds.height * self.max_extension
+                extended_bounds = Rect(
+                    -ext_x, -ext_y,
+                    self.initial_bounds.width + 2 * ext_x,
+                    self.initial_bounds.height + 2 * ext_y
+                )
+            else:
+                extended_bounds = self.initial_bounds
+            self._extended_bounds_cache = extended_bounds
 
         # Must fit in bounds (or extended bounds)
         if rect.x < extended_bounds.x - 0.01 or rect.y < extended_bounds.y - 0.01:
@@ -1506,66 +1531,72 @@ class CoordinateSolver:
                        rect.x2 > self.initial_bounds.width + 0.01 or
                        rect.y2 > self.initial_bounds.height + 0.01)
 
+        # Local alias — avoids dict lookup overhead in inner loops
+        placed_values = self.placed.values()
+
         if is_extension and self.placed:
-            # Must touch at least one placed room to maintain connectivity
-            touches_any_placed = any(
-                rect.touches(p.rect) for p in self.placed.values()
-            )
+            # Must touch at least one placed room to maintain connectivity.
+            # Inlined any(genexpr) for speed (was 85K calls in profile).
+            touches_any_placed = False
+            for p in placed_values:
+                if rect.touches(p.rect):
+                    touches_any_placed = True
+                    break
             if not touches_any_placed:
                 return False
 
         # Must not overlap with placed rooms
-        for placed in self.placed.values():
+        for placed in placed_values:
             if rect.overlaps(placed.rect):
                 return False
 
         # TIER 1b: Must-not-touch constraints (always strict)
         must_not = self.spec.constraints.must_not_touch.get(room_id, set())
-        for other_id in must_not:
-            if other_id in self.placed:
-                if rect.touches(self.placed[other_id].rect):
+        if must_not:
+            for other_id in must_not:
+                placed_other = self.placed.get(other_id)
+                if placed_other is not None and rect.touches(placed_other.rect):
                     return False
 
         # TIER 2: SOFT CONSTRAINTS (relax in relaxed mode)
 
         must_touch = self.spec.constraints.must_touch.get(room_id, set())
-        placed_must_touch = [other_id for other_id in must_touch if other_id in self.placed]
+        if must_touch:
+            placed_must_touch = [other_id for other_id in must_touch if other_id in self.placed]
 
-        # Dead space counts as circulation - if room needs hallway, dead_space works too
-        dead_space_rooms = [r for r in self.placed.keys() if r.startswith('dead_space_')]
-        if 'hallway' in must_touch and dead_space_rooms:
-            placed_must_touch.extend(dead_space_rooms)
+            # Dead space counts as circulation - only check if 'hallway' is required.
+            if 'hallway' in must_touch:
+                for r_id in self.placed:
+                    if r_id.startswith('dead_space_'):
+                        placed_must_touch.append(r_id)
 
-        if placed_must_touch:
-            if relaxed or room_id in self.relaxed_constraints:
-                # Relaxed: just need to be "nearby" (within 1 grid cell gap)
-                nearby_threshold = self.grid * 2  # Stricter: 1 grid cell gap
-                is_nearby = any(
-                    self._is_nearby(rect, self.placed[other_id].rect, nearby_threshold)
-                    for other_id in placed_must_touch
-                )
-                if not is_nearby:
-                    return False
-            else:
-                # Strict: must touch at least ONE of the placed must-touch rooms
-                touches_any = any(
-                    rect.touches(self.placed[other_id].rect)
-                    for other_id in placed_must_touch
-                )
-                if not touches_any:
-                    return False
+            if placed_must_touch:
+                if relaxed or room_id in self.relaxed_constraints:
+                    # Relaxed: just need to be "nearby" (within 1 grid cell gap)
+                    nearby_threshold = self.grid * 2
+                    is_nearby = False
+                    for other_id in placed_must_touch:
+                        if self._is_nearby(rect, self.placed[other_id].rect, nearby_threshold):
+                            is_nearby = True
+                            break
+                    if not is_nearby:
+                        return False
+                else:
+                    # Strict: must touch at least ONE of the placed must-touch rooms
+                    touches_any = False
+                    for other_id in placed_must_touch:
+                        if rect.touches(self.placed[other_id].rect):
+                            touches_any = True
+                            break
+                    if not touches_any:
+                        return False
 
-        # TIER 3: PREFERENCE CONSTRAINTS (fully relaxable)
-
-        # For exterior requirement, check against actual bounds (which may extend)
-        current_bounds = self._get_current_bounds()
-
+        # TIER 3: PREFERENCE CONSTRAINTS (fully relaxable).
+        # Defer _get_current_bounds() call — only needed if exterior matters and not relaxed.
         if room_id in self.spec.constraints.must_have_exterior:
-            if relaxed or room_id in self.exterior_relaxed:
-                # Relaxed: exterior not required, just preferred
-                pass
-            else:
+            if not (relaxed or room_id in self.exterior_relaxed):
                 # Strict: must touch building boundary (or be an extension)
+                current_bounds = self._get_current_bounds()
                 if not rect.touches_any_boundary(current_bounds) and not is_extension:
                     return False
 
@@ -1576,10 +1607,23 @@ class CoordinateSolver:
         if not self.placed:
             return self.initial_bounds
 
-        min_x = min(r.rect.x for r in self.placed.values())
-        min_y = min(r.rect.y for r in self.placed.values())
-        max_x = max(r.rect.x2 for r in self.placed.values())
-        max_y = max(r.rect.y2 for r in self.placed.values())
+        # Single pass over placed.values() instead of 4 separate min/max generators.
+        it = iter(self.placed.values())
+        first = next(it).rect
+        min_x = first.x
+        min_y = first.y
+        max_x = first.x2
+        max_y = first.y2
+        for r in it:
+            rect = r.rect
+            if rect.x < min_x:
+                min_x = rect.x
+            if rect.y < min_y:
+                min_y = rect.y
+            if rect.x2 > max_x:
+                max_x = rect.x2
+            if rect.y2 > max_y:
+                max_y = rect.y2
 
         # Expand to include initial bounds
         min_x = min(min_x, 0)

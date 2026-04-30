@@ -23,12 +23,13 @@ except Exception:
     pass
 
 REPO_ROOT = Path(__file__).parent.resolve()
-RENDER_SERVER = REPO_ROOT / "ArchEngine_kernel" / "render_server"
+QBD = REPO_ROOT / "ArchEngine_kernel" / "qbd"
+ENHANCER = REPO_ROOT / "ArchEngine_kernel" / "enhancer"
 CAD = REPO_ROOT / "ArchEngine_CAD"
 SCRIPTS = REPO_ROOT / "ArchEngine_kernel" / "scripts"
 
 sys.path.insert(0, str(SCRIPTS))
-sys.path.insert(0, str(RENDER_SERVER))
+sys.path.insert(0, str(QBD))
 sys.path.insert(0, str(CAD))
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -62,6 +63,17 @@ def stage(name):
 
 @stage("1. Synthesize Ontario residential answers")
 def synthesize_answers():
+    if "--small" in sys.argv:
+        # Tiny program for fast iteration: 1-bed, 1-bath, ~800 sqft.
+        # Use this for solver perf work where the cached run isn't applicable.
+        return {
+            "bedrooms": 1,
+            "bathrooms": 1,
+            "sqft": 800,
+            "garage": "none",
+            "stories": 1,
+            "style": "ranch",
+        }
     return {
         "bedrooms": 3,
         "bathrooms": 2,
@@ -75,12 +87,41 @@ def synthesize_answers():
 @stage("2. QBD answers -> building JSON (qbd_layout_generator)")
 def generate_layout(answers):
     from qbd_layout_generator import generate_floor_plan_from_qbd, OutputFormat
-    result = generate_floor_plan_from_qbd(
-        answers,
-        width=None,
-        depth=None,
-        output_format=OutputFormat.ARCHENGINE,
-    )
+
+    def _do_solve():
+        return generate_floor_plan_from_qbd(
+            answers,
+            width=None,
+            depth=None,
+            output_format=OutputFormat.ARCHENGINE,
+        )
+
+    if "--profile-solver" in sys.argv:
+        import cProfile, pstats, io
+        prof = cProfile.Profile()
+        prof.enable()
+        result = _do_solve()
+        prof.disable()
+        prof_path = OUTPUT_DIR / "solver_profile.prof"
+        prof.dump_stats(str(prof_path))
+        # Top 25 by cumulative time
+        s = io.StringIO()
+        ps = pstats.Stats(prof, stream=s).sort_stats("cumulative")
+        ps.print_stats(25)
+        print(f"   --- top 25 by cumulative ---")
+        for line in s.getvalue().splitlines():
+            print(f"   {line}")
+        # Top 15 by total (own time)
+        s = io.StringIO()
+        ps = pstats.Stats(prof, stream=s).sort_stats("tottime")
+        ps.print_stats(15)
+        print(f"   --- top 15 by tottime ---")
+        for line in s.getvalue().splitlines():
+            print(f"   {line}")
+        print(f"   Profile dumped: {prof_path}")
+    else:
+        result = _do_solve()
+
     print(f"   Building keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
     if isinstance(result, dict):
         for key in ["walls_batch", "doors", "windows", "rooms", "floors_batch"]:

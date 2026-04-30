@@ -757,7 +757,24 @@ def generate_floor_plan_from_qbd(answers: Dict,
     # Calculate dimensions if not provided
     sqft = int(answers.get("sqft", answers.get("com_sqft", answers.get("mixed_sqft", "1200"))))
 
-    if width is None or depth is None:
+    # Step 1: Create spatial graph from answers
+    graph = create_spatial_graph_from_qbd(answers)
+    print(f"[QBD Layout] Created graph with {len(graph.rooms)} rooms")
+
+    # Step 1b: Auto-size building if program demands more than user requested.
+    # Sum of min_area across all rooms is the floor; +20% covers walls and
+    # circulation. If user provided explicit width/depth, respect them.
+    user_provided_dims = (width is not None and depth is not None)
+    if not user_provided_dims:
+        total_min_area = sum(r.min_area for r in graph.rooms.values())
+        required_sqft = int(total_min_area * 1.25)  # 25% overhead for walls + circulation
+        if required_sqft > sqft:
+            print(
+                f"[QBD Layout] Program requires {required_sqft} sqft "
+                f"({len(graph.rooms)} rooms, min_area sum {total_min_area:.0f} sqft + 25% overhead). "
+                f"User requested {sqft} sqft. Auto-resizing to {required_sqft} sqft."
+            )
+            sqft = required_sqft
         ratio = 1.4  # Golden ratio-ish
         depth = math.sqrt(sqft / ratio)
         width = sqft / depth
@@ -767,10 +784,6 @@ def generate_floor_plan_from_qbd(answers: Dict,
 
     format_name = output_format.value.upper()
     print(f"[QBD Layout] Generating {width}x{depth} ({sqft} sqft) for {format_name}")
-
-    # Step 1: Create spatial graph from answers
-    graph = create_spatial_graph_from_qbd(answers)
-    print(f"[QBD Layout] Created graph with {len(graph.rooms)} rooms")
 
     # Validate
     issues = graph.validate()

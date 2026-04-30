@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 import sys
 sys.path.insert(0, '/root/ArchEngine/ArchEngine_kernel/scripts/sheets')
 sys.path.insert(0, '/root/ArchEngine/ArchEngine_CAD')
-sys.path.insert(0, '/root/ArchEngine/ArchEngine_kernel/render_server')
+sys.path.insert(0, '/root/ArchEngine/ArchEngine_kernel/qbd')
 
 from interactive_sheet import InteractiveSheet
 from sheet_sizes import SheetSize, get_sheet_size
