@@ -738,7 +738,8 @@ def generate_floor_plan_from_qbd(answers: Dict,
                                  grid_size: float = 2.0,
                                  max_nodes: int = 50000,
                                  output_format: OutputFormat = OutputFormat.REVIT,
-                                 creative_mode: bool = False) -> Dict:
+                                 creative_mode: bool = False,
+                                 solver_mode: str = "subdivision") -> Dict:
     """
     Generate a complete floor plan from QBD answers.
 
@@ -767,7 +768,7 @@ def generate_floor_plan_from_qbd(answers: Dict,
     user_provided_dims = (width is not None and depth is not None)
     if not user_provided_dims:
         total_min_area = sum(r.min_area for r in graph.rooms.values())
-        required_sqft = int(total_min_area * 1.25)  # 25% overhead for walls + circulation
+        required_sqft = int(total_min_area * 1.35)  # 35% overhead — L-shape needs more slack than free-form
         if required_sqft > sqft:
             print(
                 f"[QBD Layout] Program requires {required_sqft} sqft "
@@ -790,8 +791,13 @@ def generate_floor_plan_from_qbd(answers: Dict,
     if issues:
         print(f"[QBD Layout] Validation issues: {issues}")
 
-    # Step 2: Solve layout
-    layout = solve_layout(graph, width, depth, grid_size, max_nodes, creative_mode=creative_mode)
+    # Step 2: Solve layout (subdivision = new top-down BSP, backtracking = legacy)
+    if solver_mode == "subdivision":
+        from subdivision_solver import solve_layout_subdivision
+        entry_edge = getattr(graph, "entry_edge", "south") or "south"
+        layout = solve_layout_subdivision(graph, width, depth, entry_edge=entry_edge)
+    else:
+        layout = solve_layout(graph, width, depth, grid_size, max_nodes, creative_mode=creative_mode)
 
     if not layout.rooms:
         return {

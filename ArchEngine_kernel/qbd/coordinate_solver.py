@@ -1507,12 +1507,16 @@ class CoordinateSolver:
         extended_bounds = self._extended_bounds_cache
         if extended_bounds is None:
             if self.allow_extensions:
+                # L-shape constraint: only allow extensions in +x and +y (no negative
+                # growth). Keeps building anchored at origin; upper-right is the only
+                # corner that can extend. Result is naturally rectangular OR L-shaped,
+                # never T/U/+/organic. Per user spec 2026-04-30.
                 ext_x = self.initial_bounds.width * self.max_extension
                 ext_y = self.initial_bounds.height * self.max_extension
                 extended_bounds = Rect(
-                    -ext_x, -ext_y,
-                    self.initial_bounds.width + 2 * ext_x,
-                    self.initial_bounds.height + 2 * ext_y
+                    0, 0,
+                    self.initial_bounds.width + ext_x,
+                    self.initial_bounds.height + ext_y
                 )
             else:
                 extended_bounds = self.initial_bounds
@@ -1929,17 +1933,293 @@ class CoordinateSolver:
         return (open_start, open_end, opening.opening_type)
 
     def _generate_exterior_walls(self) -> List[WallCoordinate]:
-        """Generate exterior wall coordinates for room edges on the boundary."""
+        """Compute the building envelope (rectangle or L) and emit exterior walls
+        along its perimeter — exactly 4 walls for rectangular, 6 for L-shape.
 
-        walls = []
+        Per-room edge generation produced staircase walls when rooms in the wing
+        had different depths. Envelope-based generation gives the clean shape
+        the permit drawing wants. Per user spec 2026-04-30.
+        """
+        if not self.placed:
+            return []
+
+        envelope_rects = self._compute_envelope()
+        perimeter = self._envelope_perimeter(envelope_rects)
+        return self._build_perimeter_walls(perimeter)
+
+    def _compute_envelope(self) -> List[Rect]:
+        """Return 1 Rect (rectangular building) or 2 Rects (L-shape, decomposed
+        as main body + wing, non-overlapping)."""
+        rects = [r.rect for r in self.placed.values()]
+        if not rects:
+            return []
+
+        min_x = min(r.x for r in rects)
+        min_y = min(r.y for r in rects)
+        max_x = max(r.x2 for r in rects)
+        max_y = max(r.y2 for r in rects)
+        bbox = Rect(min_x, min_y, max_x - min_x, max_y - min_y)
+        bbox_area = bbox.width * bbox.height
+
+        # Try each corner; pick the one with the largest empty rectangle that
+        # passes the significance threshold (>15% of bbox area).
+        best = None
+        best_area = 0.15 * bbox_area
+        for corner in ('ne', 'nw', 'se', 'sw'):
+            cutout = self._max_empty_corner_rect(rects, bbox, corner)
+            if cutout is None:
+                continue
+            area = cutout.width * cutout.height
+            if area > best_area:
+                best_area = area
+                best = (corner, cutout)
+
+        if best is None:
+            return [bbox]
+        return self._l_envelope_from_cutout(bbox, best[1], best[0])
+
+    def _max_empty_corner_rect(self, rects: List[Rect], bbox: Rect, corner: str) -> Optional[Rect]:
+        """Find the largest axis-aligned empty rectangle anchored at the given
+        corner of bbox. corner ∈ {'ne','nw','se','sw'} (compass)."""
+        tol = 1.0
+
+        # Build candidate (lo_x, lo_y, hi_x, hi_y) tuples from room edges.
+        # The empty rect is bounded on two sides by room edges and on the
+        # other two by bbox edges.
+        if corner == 'ne':  # upper-right: rect = (cx, cy) -> (bbox.x2, bbox.y2)
+            cx_cands = sorted({r.x2 for r in rects} | {bbox.x})
+            cy_cands = sorted({r.y2 for r in rects} | {bbox.y})
+            best = None; best_area = 0
+            for cx in cx_cands:
+                if cx >= bbox.x2 - tol: continue
+                for cy in cy_cands:
+                    if cy >= bbox.y2 - tol: continue
+                    # Check empty: no room has (r.x2 > cx AND r.y2 > cy AND r.x < bbox.x2 AND r.y < bbox.y2)
+                    if any(r.x2 > cx + tol and r.y2 > cy + tol for r in rects):
+                        continue
+                    area = (bbox.x2 - cx) * (bbox.y2 - cy)
+                    if area > best_area:
+                        best_area = area
+                        best = Rect(cx, cy, bbox.x2 - cx, bbox.y2 - cy)
+            return best
+
+        if corner == 'nw':  # upper-left: rect = (bbox.x, cy) -> (cx, bbox.y2)
+            cx_cands = sorted({r.x for r in rects} | {bbox.x2})
+            cy_cands = sorted({r.y2 for r in rects} | {bbox.y})
+            best = None; best_area = 0
+            for cx in cx_cands:
+                if cx <= bbox.x + tol: continue
+                for cy in cy_cands:
+                    if cy >= bbox.y2 - tol: continue
+                    if any(r.x < cx - tol and r.y2 > cy + tol for r in rects):
+                        continue
+                    area = (cx - bbox.x) * (bbox.y2 - cy)
+                    if area > best_area:
+                        best_area = area
+                        best = Rect(bbox.x, cy, cx - bbox.x, bbox.y2 - cy)
+            return best
+
+        if corner == 'se':  # lower-right: rect = (cx, bbox.y) -> (bbox.x2, cy)
+            cx_cands = sorted({r.x2 for r in rects} | {bbox.x})
+            cy_cands = sorted({r.y for r in rects} | {bbox.y2})
+            best = None; best_area = 0
+            for cx in cx_cands:
+                if cx >= bbox.x2 - tol: continue
+                for cy in cy_cands:
+                    if cy <= bbox.y + tol: continue
+                    if any(r.x2 > cx + tol and r.y < cy - tol for r in rects):
+                        continue
+                    area = (bbox.x2 - cx) * (cy - bbox.y)
+                    if area > best_area:
+                        best_area = area
+                        best = Rect(cx, bbox.y, bbox.x2 - cx, cy - bbox.y)
+            return best
+
+        # sw: lower-left
+        cx_cands = sorted({r.x for r in rects} | {bbox.x2})
+        cy_cands = sorted({r.y for r in rects} | {bbox.y2})
+        best = None; best_area = 0
+        for cx in cx_cands:
+            if cx <= bbox.x + tol: continue
+            for cy in cy_cands:
+                if cy <= bbox.y + tol: continue
+                if any(r.x < cx - tol and r.y < cy - tol for r in rects):
+                    continue
+                area = (cx - bbox.x) * (cy - bbox.y)
+                if area > best_area:
+                    best_area = area
+                    best = Rect(bbox.x, bbox.y, cx - bbox.x, cy - bbox.y)
+        return best
+
+    def _l_envelope_from_cutout(self, bbox: Rect, cutout: Rect, corner: str) -> List[Rect]:
+        """Decompose bbox minus a corner cutout into 2 non-overlapping rectangles."""
+        if corner == 'ne':
+            main = Rect(bbox.x, bbox.y, bbox.width, cutout.y - bbox.y)
+            wing = Rect(bbox.x, cutout.y, cutout.x - bbox.x, bbox.y2 - cutout.y)
+        elif corner == 'nw':
+            main = Rect(bbox.x, bbox.y, bbox.width, cutout.y - bbox.y)
+            wing = Rect(cutout.x2, cutout.y, bbox.x2 - cutout.x2, bbox.y2 - cutout.y)
+        elif corner == 'se':
+            main = Rect(bbox.x, cutout.y2, bbox.width, bbox.y2 - cutout.y2)
+            wing = Rect(bbox.x, bbox.y, cutout.x - bbox.x, cutout.y2 - bbox.y)
+        else:  # sw
+            main = Rect(bbox.x, cutout.y2, bbox.width, bbox.y2 - cutout.y2)
+            wing = Rect(cutout.x2, bbox.y, bbox.x2 - cutout.x2, cutout.y2 - bbox.y)
+        if wing.width < 1 or wing.height < 1:
+            return [bbox]
+        if main.width < 1 or main.height < 1:
+            return [bbox]
+        return [main, wing]
+
+    def _envelope_perimeter(self, envelope: List[Rect]) -> List[Tuple[Point, Point]]:
+        """Return ordered (CCW) perimeter edges as (start, end) pairs.
+        Length: 4 for rectangle, 6 for L."""
+        if len(envelope) == 1:
+            r = envelope[0]
+            return [
+                (Point(r.x, r.y), Point(r.x2, r.y)),    # south
+                (Point(r.x2, r.y), Point(r.x2, r.y2)),  # east
+                (Point(r.x2, r.y2), Point(r.x, r.y2)),  # north
+                (Point(r.x, r.y2), Point(r.x, r.y)),    # west
+            ]
+        # L-shape (main + wing). Detect orientation by comparing y-levels.
+        main, wing = envelope
+        # Possible configurations (main is always the larger horizontal strip):
+        # NE cutout: main on bottom (full width), wing on top-left
+        # NW cutout: main on bottom (full width), wing on top-right
+        # SE cutout: main on top (full width), wing on bottom-left
+        # SW cutout: main on top (full width), wing on bottom-right
+        if main.y < wing.y:  # main below wing => NE or NW cutout
+            if abs(wing.x - main.x) < 1:  # wing on left => NE cutout
+                return [
+                    (Point(main.x, main.y),  Point(main.x2, main.y)),     # south
+                    (Point(main.x2, main.y), Point(main.x2, main.y2)),    # east of main
+                    (Point(main.x2, main.y2), Point(wing.x2, main.y2)),   # step inward
+                    (Point(wing.x2, wing.y), Point(wing.x2, wing.y2)),    # east of wing
+                    (Point(wing.x2, wing.y2), Point(wing.x, wing.y2)),    # north of wing
+                    (Point(wing.x, wing.y2), Point(wing.x, main.y)),      # west (full)
+                ]
+            else:  # wing on right => NW cutout
+                return [
+                    (Point(main.x, main.y),  Point(main.x2, main.y)),     # south
+                    (Point(main.x2, main.y), Point(main.x2, wing.y2)),    # east (full)
+                    (Point(main.x2, wing.y2), Point(wing.x, wing.y2)),    # north of wing
+                    (Point(wing.x, wing.y2), Point(wing.x, main.y2)),     # west of wing
+                    (Point(wing.x, main.y2), Point(main.x, main.y2)),     # step inward (north of main)
+                    (Point(main.x, main.y2), Point(main.x, main.y)),      # west (main only)
+                ]
+        else:  # main above wing => SE or SW cutout
+            if abs(wing.x - main.x) < 1:  # wing on left-bottom => SE cutout
+                return [
+                    (Point(wing.x, wing.y),  Point(wing.x2, wing.y)),     # south of wing
+                    (Point(wing.x2, wing.y), Point(wing.x2, main.y)),     # step inward (east of wing)
+                    (Point(wing.x2, main.y), Point(main.x2, main.y)),     # south of main
+                    (Point(main.x2, main.y), Point(main.x2, main.y2)),    # east (full)
+                    (Point(main.x2, main.y2), Point(main.x, main.y2)),    # north
+                    (Point(main.x, main.y2), Point(main.x, wing.y)),      # west (full)
+                ]
+            else:  # wing on right-bottom => SW cutout
+                return [
+                    (Point(main.x, main.y), Point(wing.x, main.y)),       # south of main left part
+                    (Point(wing.x, main.y), Point(wing.x, wing.y)),       # step inward (west of wing)
+                    (Point(wing.x, wing.y), Point(wing.x2, wing.y)),      # south of wing
+                    (Point(wing.x2, wing.y), Point(wing.x2, main.y2)),    # east (full)
+                    (Point(wing.x2, main.y2), Point(main.x, main.y2)),    # north
+                    (Point(main.x, main.y2), Point(main.x, main.y)),      # west
+                ]
+
+    def _build_perimeter_walls(self, perimeter: List[Tuple[Point, Point]]) -> List[WallCoordinate]:
+        """Create WallCoordinate objects for each perimeter edge, attach entry door."""
+        # Find the entry door position (if entry room is placed)
+        entry_door = None
+        if 'entry' in self.placed:
+            entry_rect = self.placed['entry'].rect
+            edge = self.spec.entry_edge
+            half_door = 1.5
+            if edge == 'south':
+                door_x, door_y = entry_rect.center.x, entry_rect.y
+                entry_door = (Point(door_x - half_door, door_y),
+                              Point(door_x + half_door, door_y), OpeningType.DOOR)
+            elif edge == 'north':
+                door_x, door_y = entry_rect.center.x, entry_rect.y2
+                entry_door = (Point(door_x - half_door, door_y),
+                              Point(door_x + half_door, door_y), OpeningType.DOOR)
+            elif edge == 'west':
+                door_x, door_y = entry_rect.x, entry_rect.center.y
+                entry_door = (Point(door_x, door_y - half_door),
+                              Point(door_x, door_y + half_door), OpeningType.DOOR)
+            else:  # east
+                door_x, door_y = entry_rect.x2, entry_rect.center.y
+                entry_door = (Point(door_x, door_y - half_door),
+                              Point(door_x, door_y + half_door), OpeningType.DOOR)
+
+        def segment_contains(seg_start, seg_end, opening):
+            """True if the door opening lies on this perimeter segment."""
+            o_start, o_end, _ = opening
+            tol = 1.0
+            # Both door endpoints should be on the line of the segment
+            if abs(seg_start.y - seg_end.y) < tol:  # horizontal segment
+                if abs(o_start.y - seg_start.y) > tol or abs(o_end.y - seg_start.y) > tol:
+                    return False
+                seg_lo, seg_hi = min(seg_start.x, seg_end.x), max(seg_start.x, seg_end.x)
+                door_lo, door_hi = min(o_start.x, o_end.x), max(o_start.x, o_end.x)
+                return seg_lo - tol <= door_lo and door_hi <= seg_hi + tol
+            else:  # vertical segment
+                if abs(o_start.x - seg_start.x) > tol or abs(o_end.x - seg_start.x) > tol:
+                    return False
+                seg_lo, seg_hi = min(seg_start.y, seg_end.y), max(seg_start.y, seg_end.y)
+                door_lo, door_hi = min(o_start.y, o_end.y), max(o_start.y, o_end.y)
+                return seg_lo - tol <= door_lo and door_hi <= seg_hi + tol
+
+        walls: List[WallCoordinate] = []
+        compass = ['s', 'e', 'n', 'w', 'inner1', 'inner2']  # for naming
+        for i, (start, end) in enumerate(perimeter):
+            wall = WallCoordinate(
+                wall_id=f"ext_perim_{i}",
+                start=start, end=end,
+                wall_type=WallType.EXTERIOR,
+                room1="exterior", room2="exterior",
+            )
+            if entry_door and segment_contains(start, end, entry_door):
+                wall.openings.append(entry_door)
+            walls.append(wall)
+        return walls
+
+    def _generate_exterior_walls_OLD(self) -> List[WallCoordinate]:
+        """OLD per-room exterior wall generation. Kept as fallback reference;
+        not called. Replaced by envelope-based generator above."""
+        walls: List[WallCoordinate] = []
         processed_edges = set()
-        tol = 0.1
+        tol = 1.0  # mm-scale tolerance for floating-point coordinate matches
 
-        # For each room, check which edges are on the building boundary
-        for room_id, room in self.placed.items():
+        # Build a dict of rooms by id, excluding self for neighbor checks
+        placed_items = list(self.placed.items())
+
+        def has_neighbor_on(rect: Rect, edge_name: str, self_room_id: str) -> bool:
+            """True if another placed room shares (covers any portion of) this edge."""
+            for other_id, other_room in placed_items:
+                if other_id == self_room_id:
+                    continue
+                other = other_room.rect
+                if edge_name == "south":
+                    # Other room's NORTH edge meets our SOUTH edge?
+                    if abs(other.y2 - rect.y) < tol and other.x < rect.x2 - tol and other.x2 > rect.x + tol:
+                        return True
+                elif edge_name == "north":
+                    if abs(other.y - rect.y2) < tol and other.x < rect.x2 - tol and other.x2 > rect.x + tol:
+                        return True
+                elif edge_name == "west":
+                    if abs(other.x2 - rect.x) < tol and other.y < rect.y2 - tol and other.y2 > rect.y + tol:
+                        return True
+                elif edge_name == "east":
+                    if abs(other.x - rect.x2) < tol and other.y < rect.y2 - tol and other.y2 > rect.y + tol:
+                        return True
+            return False
+
+        # For each room, check which edges have no neighbor (= exterior)
+        for room_id, room in placed_items:
             rect = room.rect
 
-            # Define the 4 edges of this room
             room_edges = [
                 ("south", Point(rect.x, rect.y), Point(rect.x2, rect.y)),
                 ("east", Point(rect.x2, rect.y), Point(rect.x2, rect.y2)),
@@ -1948,21 +2228,10 @@ class CoordinateSolver:
             ]
 
             for edge_name, start, end in room_edges:
-                # Check if this edge is on the building boundary
-                is_on_boundary = False
-                if edge_name == "south" and abs(rect.y) < tol:
-                    is_on_boundary = True
-                elif edge_name == "north" and abs(rect.y2 - self.bounds.height) < tol:
-                    is_on_boundary = True
-                elif edge_name == "west" and abs(rect.x) < tol:
-                    is_on_boundary = True
-                elif edge_name == "east" and abs(rect.x2 - self.bounds.width) < tol:
-                    is_on_boundary = True
-
-                if not is_on_boundary:
+                # Skip if a neighbor occupies this side — that's an interior wall
+                if has_neighbor_on(rect, edge_name, room_id):
                     continue
 
-                # Create edge key to avoid duplicates
                 edge_key = self._edge_key(start, end)
                 if edge_key in processed_edges:
                     continue
@@ -1996,7 +2265,94 @@ class CoordinateSolver:
 
                 walls.append(wall_coord)
 
-        return walls
+        # Merge collinear adjacent exterior walls into single perimeter segments.
+        # An L-shape should have 6 walls; a rectangle 4. Per-room edges produce
+        # one segment per room edge, which gets messy along long perimeters.
+        return self._merge_collinear_walls(walls)
+
+    def _merge_collinear_walls(self, walls: List[WallCoordinate]) -> List[WallCoordinate]:
+        """Merge adjacent collinear walls (sharing endpoint, same orientation, same coord)."""
+        if not walls:
+            return walls
+        tol = 1.0
+
+        def is_horizontal(w):
+            return abs(w.start.y - w.end.y) < tol
+
+        # Group by (orientation, fixed coordinate). For horizontal walls, group
+        # by y; for vertical, by x.
+        groups: Dict[Tuple[str, float], List[WallCoordinate]] = {}
+        for w in walls:
+            if is_horizontal(w):
+                key = ("h", round(w.start.y, 1))
+            else:
+                key = ("v", round(w.start.x, 1))
+            groups.setdefault(key, []).append(w)
+
+        merged: List[WallCoordinate] = []
+        for (orient, _coord), group in groups.items():
+            # Sort by start position along the wall direction
+            if orient == "h":
+                group.sort(key=lambda w: min(w.start.x, w.end.x))
+            else:
+                group.sort(key=lambda w: min(w.start.y, w.end.y))
+
+            # Walk through and merge adjacent (touching/overlapping) walls
+            current = group[0]
+            cur_start, cur_end = current.start, current.end
+            cur_openings = list(current.openings)
+            cur_room2 = current.room2  # We lose specific room2 on merge — set to "exterior"
+
+            def normalize(w):
+                """Return (min_endpoint, max_endpoint) along the wall axis."""
+                if orient == "h":
+                    if w.start.x <= w.end.x:
+                        return (w.start, w.end)
+                    return (w.end, w.start)
+                else:
+                    if w.start.y <= w.end.y:
+                        return (w.start, w.end)
+                    return (w.end, w.start)
+
+            cur_lo, cur_hi = normalize(current)
+            for w in group[1:]:
+                w_lo, w_hi = normalize(w)
+                # Check if w starts at or before current ends (touching/overlap)
+                gap = (w_lo.x - cur_hi.x) if orient == "h" else (w_lo.y - cur_hi.y)
+                if gap <= tol:
+                    # Merge: extend cur_hi if w_hi is further
+                    if orient == "h":
+                        if w_hi.x > cur_hi.x:
+                            cur_hi = w_hi
+                    else:
+                        if w_hi.y > cur_hi.y:
+                            cur_hi = w_hi
+                    cur_openings.extend(w.openings)
+                    cur_room2 = "exterior"  # mark as merged
+                else:
+                    # Emit current, start new
+                    new_wall = WallCoordinate(
+                        wall_id=f"ext_merged_{len(merged)}",
+                        start=cur_lo, end=cur_hi,
+                        wall_type=WallType.EXTERIOR,
+                        room1="exterior", room2=cur_room2,
+                    )
+                    new_wall.openings = cur_openings
+                    merged.append(new_wall)
+                    cur_lo, cur_hi = w_lo, w_hi
+                    cur_openings = list(w.openings)
+                    cur_room2 = w.room2
+            # Emit the last one
+            new_wall = WallCoordinate(
+                wall_id=f"ext_merged_{len(merged)}",
+                start=cur_lo, end=cur_hi,
+                wall_type=WallType.EXTERIOR,
+                room1="exterior", room2=cur_room2,
+            )
+            new_wall.openings = cur_openings
+            merged.append(new_wall)
+
+        return merged
 
     def _calculate_score(self) -> float:
         """Calculate layout quality score"""
@@ -2041,7 +2397,8 @@ def solve_layout(spatial_graph: SpatialGraph,
                 width: float, depth: float,
                 grid_size: float = 2.0,
                 max_nodes: int = 50000,
-                creative_mode: bool = False) -> PlacedLayout:
+                creative_mode: bool = False,
+                allow_extensions: bool = True) -> PlacedLayout:
     """
     Convenience function to solve a layout from a spatial graph.
 
@@ -2053,12 +2410,18 @@ def solve_layout(spatial_graph: SpatialGraph,
         max_nodes: Max search nodes
         creative_mode: If True, use organic growth with liberal dead space
                       for interesting non-rectangular building shapes
+        allow_extensions: If True (default), rooms can extend in +x/+y only,
+                         producing rectangular or L-shaped footprints. The
+                         constraint is enforced in _is_valid_position by
+                         anchoring extended_bounds at origin. If False, strict
+                         rectangular; relies on auto-size to fit program.
 
     Returns:
         PlacedLayout with room and wall coordinates
     """
     spec = LayoutSpec.from_spatial_graph(spatial_graph, width, depth)
-    solver = CoordinateSolver(spec, grid_size, creative_mode=creative_mode)
+    solver = CoordinateSolver(spec, grid_size, creative_mode=creative_mode,
+                              allow_extensions=allow_extensions)
     return solver.solve(max_nodes)
 
 

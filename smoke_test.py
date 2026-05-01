@@ -29,8 +29,11 @@ CAD = REPO_ROOT / "ArchEngine_CAD"
 SCRIPTS = REPO_ROOT / "ArchEngine_kernel" / "scripts"
 
 sys.path.insert(0, str(SCRIPTS))
-sys.path.insert(0, str(QBD))
 sys.path.insert(0, str(CAD))
+# QBD inserted AFTER CAD so its room_relationships.py wins — matches the
+# live pipeline (application.py:1356 inserts qbd_path first). The CAD/qbd
+# duplicates are a known pending strategic decision.
+sys.path.insert(0, str(QBD))
 sys.path.insert(0, str(REPO_ROOT))
 
 OUTPUT_DIR = REPO_ROOT / "smoke_test_output"
