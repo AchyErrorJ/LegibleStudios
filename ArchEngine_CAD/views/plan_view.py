@@ -968,6 +968,11 @@ class WallItem(QGraphicsItem):
         self._drag_old_start: Optional[tuple] = None
         self._drag_old_end: Optional[tuple] = None
         self._drag_grip_type: Optional[str] = None
+        # Co-moved walls — other walls whose endpoint coincides with the
+        # dragged grip, captured at drag start so they follow the move and
+        # the corner stays attached. Format: list of dicts with wall_idx,
+        # which_end ('start'|'end'), and pre-drag start/end tuples for undo.
+        self._drag_connected: List[dict] = []
 
         # Enable selection
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
@@ -1059,29 +1064,84 @@ class WallItem(QGraphicsItem):
         self._drag_old_end = self.wall.end
         self._drag_grip_type = grip_type
 
+        # Find OTHER walls whose endpoint coincides with the dragged grip,
+        # so they can follow the corner and stay attached. Only meaningful
+        # for endpoint grips ('start' / 'end') — center drags translate the
+        # whole wall and would cascade unhelpfully through the network.
+        self._drag_connected = []
+        if grip_type not in ('start', 'end') or self.document is None:
+            return
+        if grip_type == 'start':
+            ax, az = self.wall.start[0], self.wall.start[2]
+        else:
+            ax, az = self.wall.end[0], self.wall.end[2]
+        tol = 50.0  # mm — well below any realistic wall thickness
+        for w in self.document.walls:
+            if w.index == self.wall.index:
+                continue
+            if abs(w.start[0] - ax) < tol and abs(w.start[2] - az) < tol:
+                self._drag_connected.append({
+                    'wall_idx': w.index, 'which_end': 'start',
+                    'old_start': w.start, 'old_end': w.end,
+                })
+            if abs(w.end[0] - ax) < tol and abs(w.end[2] - az) < tol:
+                self._drag_connected.append({
+                    'wall_idx': w.index, 'which_end': 'end',
+                    'old_start': w.start, 'old_end': w.end,
+                })
+
     def _on_drag_end(self, grip_type: str):
-        """Called when grip drag ends - create undo command."""
+        """Called when grip drag ends - create undo command(s)."""
         if self._drag_old_start is None or self._drag_old_end is None:
             return
 
         # Check if position actually changed
         if (self._drag_old_start == self.wall.start and
             self._drag_old_end == self.wall.end):
+            self._drag_connected = []
             return  # No change, no undo needed
 
-        # Create undo command
+        # Create undo command(s). When the corner had connected walls, group
+        # them into a single macro so one Ctrl+Z undoes the whole corner move.
         if self.document:
             from core.commands import MoveWallCommand
-            cmd = MoveWallCommand(
-                self.document,
-                self.wall.index,
-                grip_type,
-                self._drag_old_start,
-                self._drag_old_end,
-                self.wall.start,
-                self.wall.end
-            )
-            self.document.undo_stack.push(cmd)
+            using_macro = bool(self._drag_connected)
+            if using_macro:
+                self.document.undo_stack.beginMacro("Move Corner")
+            try:
+                cmd = MoveWallCommand(
+                    self.document,
+                    self.wall.index,
+                    grip_type,
+                    self._drag_old_start,
+                    self._drag_old_end,
+                    self.wall.start,
+                    self.wall.end
+                )
+                self.document.undo_stack.push(cmd)
+
+                walls = self.document._walls
+                for conn in self._drag_connected:
+                    idx = conn['wall_idx']
+                    if not (0 <= idx < len(walls)):
+                        continue
+                    w = walls[idx]
+                    # Skip if nothing changed (defensive — shouldn't normally hit)
+                    if w.start == conn['old_start'] and w.end == conn['old_end']:
+                        continue
+                    self.document.undo_stack.push(MoveWallCommand(
+                        self.document,
+                        idx,
+                        conn['which_end'],
+                        conn['old_start'],
+                        conn['old_end'],
+                        w.start,
+                        w.end,
+                    ))
+            finally:
+                if using_macro:
+                    self.document.undo_stack.endMacro()
+
             # Notify 3D viewport of change
             self.document.document_changed.emit()
 
@@ -1089,6 +1149,7 @@ class WallItem(QGraphicsItem):
         self._drag_old_start = None
         self._drag_old_end = None
         self._drag_grip_type = None
+        self._drag_connected = []
 
     def _on_grip_moved(self, grip_type: str, new_pos: QPointF):
         """Handle grip movement (visual feedback, no undo yet)."""
@@ -1099,10 +1160,12 @@ class WallItem(QGraphicsItem):
             if self.document:
                 # Use direct modify (no undo) during drag
                 self.document.modify_wall(self.wall.index, start=new_start)
+                self._propagate_endpoint(x, z)
         elif grip_type == 'end':
             new_end = (x, self.wall.end[1], z)
             if self.document:
                 self.document.modify_wall(self.wall.index, end=new_end)
+                self._propagate_endpoint(x, z)
         elif grip_type == 'center':
             # Move both endpoints by delta
             old_cx = (self.wall.start[0] + self.wall.end[0]) / 2
@@ -1115,6 +1178,22 @@ class WallItem(QGraphicsItem):
                 self.document.modify_wall(self.wall.index, start=new_start, end=new_end)
 
         self.update()
+
+    def _propagate_endpoint(self, x: float, z: float):
+        """Drag the matching endpoint of every co-moved wall to (x, z) so the
+        corner stays welded together as the grip moves."""
+        if not self._drag_connected or self.document is None:
+            return
+        walls = self.document._walls
+        for conn in self._drag_connected:
+            idx = conn['wall_idx']
+            if not (0 <= idx < len(walls)):
+                continue
+            w = walls[idx]
+            if conn['which_end'] == 'start':
+                self.document.modify_wall(idx, start=(x, w.start[1], z))
+            else:
+                self.document.modify_wall(idx, end=(x, w.end[1], z))
 
     def hoverEnterEvent(self, event):
         """Show grips and highlight when hovering over wall."""
