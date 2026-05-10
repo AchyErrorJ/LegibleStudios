@@ -79,7 +79,7 @@ def synthesize_answers():
         }
     return {
         "bedrooms": 3,
-        "bathrooms": 2,
+        "bathrooms": 3,  # primary_bath + bathroom_2 (shared) + powder_room (public)
         "sqft": 1800,
         "garage": "double",
         "stories": 1,

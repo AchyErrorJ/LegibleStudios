@@ -73,6 +73,10 @@ class SubdivisionResult:
     free: List[Rect] = field(default_factory=list)
     unplaced: List[str] = field(default_factory=list)
     iterations: int = 1
+    # (child_id, parent_id) en-suite/J&J pairs. A child may appear multiple
+    # times with different parents → that's a Jack-and-Jill arrangement
+    # (bath shared between two bedrooms, with a door to each).
+    suite_pairs: List[Tuple[str, str]] = field(default_factory=list)
 
     @property
     def success(self) -> bool:
@@ -84,6 +88,7 @@ class SubdivisionSolver:
     ENTRY_WIDTH = 6.0
     ENTRY_DEPTH = 8.0
     MIN_ROOM_DIM = 4.0  # feet — minimum closet depth; below this is unusable
+    MIN_BEDROOM_DEPTH = 10.0  # feet — narrow dim for a livable bedroom
 
     def __init__(self, graph: SpatialGraph, envelope: Rect, entry_edge: str = "south"):
         self.graph = graph
@@ -91,40 +96,34 @@ class SubdivisionSolver:
         self.entry_edge = entry_edge
 
     def solve(self) -> SubdivisionResult:
-        """BSP with hallway as first-class spine. Layout is three strips:
-        public-side, hallway, private-side. Each room slice spans the strip's
-        SHORT axis, so by construction every room shares an edge with the
-        hallway — every room is one door away from circulation."""
+        """Two-strip layout: public strip + private wing. The hallway is a
+        SHORT stub inside the private wing, with bedrooms clustered on its
+        three non-public sides (left/right/back). Each bedroom shares only a
+        short edge with the hallway and extends deep into its zone — cuts
+        corridor sqft ~70-80% vs a full-width spine."""
         rooms_dict = self.graph.rooms
 
-        # Categorize rooms by zone
         entry_room = rooms_dict.get("entry")
         hallway_room = rooms_dict.get("hallway")
 
-        public_rooms = []   # entry-side: living, dining, kitchen, garage, mudroom
-        private_rooms = []  # back: bedrooms, baths, closets, office, laundry
+        public_rooms = []
+        private_rooms = []
 
-        # Bundle small rooms inside larger parent rooms — small rooms can't
-        # span the full strip depth without becoming unusable slivers.
-        # Architectural pairings (Ontario residential):
-        #   - bedroom suites: closets + primary bath inside parent bedroom
-        #   - service area: mudroom + laundry inside garage zone
-        #   - public area: entry inside living (foyer), dining inside kitchen (open plan)
+        # Suite bundling — small rooms placed inside their parent's slice.
         suite_pairs = {
-            # Bedroom suites
             "primary_closet": "primary_bedroom",
             "primary_bath": "primary_bedroom",
             "closet_2": "bedroom_2",
             "closet_3": "bedroom_3",
             "closet_4": "bedroom_4",
-            # Service area
             "mudroom": "garage",
             "laundry": "garage",
-            # Public area (avoid sliver rooms)
-            "entry": "living",          # entry vestibule inside living's slice
-            "dining": "kitchen",        # open kit-din
+            "entry": "living",
+            "dining": "kitchen",
+            # Powder room sits off the entry — bundle it inside living's slice
+            # so it doesn't slice the public strip and break garage→living.
+            "powder_room": "living",
         }
-        # Map parent_id -> list of (child_id, child_room)
         bundles: Dict[str, List] = defaultdict(list)
         for child_id, parent_id in suite_pairs.items():
             if child_id in rooms_dict and parent_id in rooms_dict:
@@ -133,7 +132,7 @@ class SubdivisionSolver:
         for rid, r in rooms_dict.items():
             if rid == "hallway":
                 continue
-            if rid in suite_pairs:  # skip bundled children — placed via parent
+            if rid in suite_pairs:
                 continue
             z = _zone_of(rid, r.room_type)
             if z in ("public", "service"):
@@ -141,7 +140,6 @@ class SubdivisionSolver:
             else:
                 private_rooms.append(r)
 
-        # Set target areas. Bedroom parents inherit their children's area too.
         for r in rooms_dict.values():
             r.target_area = max(r.min_area * 1.10, r.min_area)
         for parent_id, children in bundles.items():
@@ -149,79 +147,344 @@ class SubdivisionSolver:
             if parent:
                 child_total = sum(c.target_area for _, c in children)
                 parent.target_area = parent.target_area + child_total
-                parent._bundled_children = children  # remember for sub-placement
+                parent._bundled_children = children
 
         env = self.envelope
-        hallway_t = self.HALLWAY_WIDTH
 
-        # Compute strip dimensions (entry is now bundled inside living, no separate add)
+        # Hallway is INSIDE the private wing now — only two strips at top level.
         public_area = sum(r.target_area for r in public_rooms)
         private_area = sum(r.target_area for r in private_rooms)
 
+        # Wing depth budget — back zone (primary, ≥10ft) + side zones (≥10ft
+        # for a single bedroom, +6ft for an extra stacked bath). Grow when
+        # 4+ private rooms force stacking on a side.
+        if len(private_rooms) >= 4:
+            min_wing_depth = self.MIN_BEDROOM_DEPTH + self.MIN_BEDROOM_DEPTH + self.MIN_ROOM_DIM * 1.5
+        else:
+            min_wing_depth = self.MIN_BEDROOM_DEPTH * 2
+
         if self.entry_edge in ("south", "north"):
-            avail_h = env.height - hallway_t
-            public_h = avail_h * (public_area / max(public_area + private_area, 1))
-            private_h = avail_h - public_h
-            # Ensure both have minimum room depth
+            public_h = env.height * (public_area / max(public_area + private_area, 1))
             public_h = max(self.MIN_ROOM_DIM * 2, public_h)
-            private_h = max(self.MIN_ROOM_DIM * 2, env.height - hallway_t - public_h)
+            private_wing_h = env.height - public_h
+            if private_wing_h < min_wing_depth:
+                private_wing_h = min(min_wing_depth, env.height - self.MIN_ROOM_DIM * 2)
+                public_h = env.height - private_wing_h
 
             if self.entry_edge == "south":
                 public_strip = Rect(env.x, env.y, env.width, public_h)
-                hallway_strip = Rect(env.x, env.y + public_h, env.width, hallway_t)
-                private_strip = Rect(env.x, env.y + public_h + hallway_t,
-                                     env.width, private_h)
+                private_wing = Rect(env.x, env.y + public_h, env.width, private_wing_h)
             else:  # north
-                private_strip = Rect(env.x, env.y, env.width, private_h)
-                hallway_strip = Rect(env.x, env.y + private_h, env.width, hallway_t)
-                public_strip = Rect(env.x, env.y + private_h + hallway_t,
-                                    env.width, public_h)
+                private_wing = Rect(env.x, env.y, env.width, private_wing_h)
+                public_strip = Rect(env.x, env.y + private_wing_h, env.width, public_h)
         else:
-            # Vertical strips (entry on west/east)
-            avail_w = env.width - hallway_t
-            public_w = avail_w * (public_area / max(public_area + private_area, 1))
-            private_w = avail_w - public_w
+            public_w = env.width * (public_area / max(public_area + private_area, 1))
             public_w = max(self.MIN_ROOM_DIM * 2, public_w)
-            private_w = max(self.MIN_ROOM_DIM * 2, env.width - hallway_t - public_w)
+            private_wing_w = env.width - public_w
+            if private_wing_w < min_wing_depth:
+                private_wing_w = min(min_wing_depth, env.width - self.MIN_ROOM_DIM * 2)
+                public_w = env.width - private_wing_w
 
             if self.entry_edge == "west":
                 public_strip = Rect(env.x, env.y, public_w, env.height)
-                hallway_strip = Rect(env.x + public_w, env.y, hallway_t, env.height)
-                private_strip = Rect(env.x + public_w + hallway_t, env.y,
-                                     private_w, env.height)
+                private_wing = Rect(env.x + public_w, env.y, private_wing_w, env.height)
             else:  # east
-                private_strip = Rect(env.x, env.y, private_w, env.height)
-                hallway_strip = Rect(env.x + private_w, env.y, hallway_t, env.height)
-                public_strip = Rect(env.x + private_w + hallway_t, env.y,
-                                    public_w, env.height)
+                private_wing = Rect(env.x, env.y, private_wing_w, env.height)
+                public_strip = Rect(env.x + private_wing_w, env.y, public_w, env.height)
 
-        placed: Dict[str, Rect] = {}
-        if hallway_room:
-            placed["hallway"] = hallway_strip
-
-        # Bathroom min width: ≥6ft for any bath in a strip. Bump target_area
-        # so BSP allocates enough width. Computed here because we need the
-        # actual strip depth (private_strip.height).
+        # Bathroom min width — use a conservative depth proxy (~half the wing
+        # short axis) to ensure BSP allocates ≥6ft width to baths.
         BATH_MIN_WIDTH = 6.0
-        priv_strip_depth = (private_strip.height
-                            if private_strip.width >= private_strip.height
-                            else private_strip.width)
+        if self.entry_edge in ("south", "north"):
+            bath_proxy_depth = max(private_wing.height * 0.45, BATH_MIN_WIDTH)
+        else:
+            bath_proxy_depth = max(private_wing.width * 0.45, BATH_MIN_WIDTH)
         for r in private_rooms:
             rt = r.room_type
             base = rt if rt in PRIVATE_ZONE else r.id.split("_")[0]
             if base in ("bathroom", "primary_bath", "powder_room"):
-                r.target_area = max(r.target_area, BATH_MIN_WIDTH * priv_strip_depth)
+                r.target_area = max(r.target_area, BATH_MIN_WIDTH * bath_proxy_depth)
 
-        # BSP public strip (entry bundled inside living, dining bundled inside kitchen)
+        placed: Dict[str, Rect] = {}
+
         for rid, rect in self._bsp_strip(public_strip, list(public_rooms)).items():
             placed[rid] = rect
 
-        # BSP private strip
-        for rid, rect in self._bsp_strip(private_strip, private_rooms).items():
-            placed[rid] = rect
+        placed.update(self._layout_private_clustered(
+            private_wing, hallway_room, private_rooms, self.entry_edge))
+
+        # Build the suite_pairs list. Static entries from the bundling dict,
+        # plus J&J entries for any shared bath placed in the asymmetric layout.
+        pair_list: List[Tuple[str, str]] = list(suite_pairs.items())
+        # Detect the J&J shared bath (smallest non-primary bath, if 4+ private rooms).
+        if len(private_rooms) >= 4:
+            def _is_bath(r):
+                base = r.room_type if r.room_type in PRIVATE_ZONE else r.id.split("_")[0]
+                return base in ("bathroom", "powder_room") and r.id != "primary_bath"
+            sorted_priv = sorted(private_rooms, key=lambda r: -r.target_area)
+            non_bath = [r for r in sorted_priv if not _is_bath(r)]
+            bath_share = next((r for r in reversed(sorted_priv) if _is_bath(r)), None)
+            if bath_share and len(non_bath) >= 3:
+                # Asymmetric layout pairs bath_share with bed_back (non_bath[1])
+                # and bed_side (non_bath[2]). Add both pairs.
+                pair_list.append((bath_share.id, non_bath[1].id))
+                pair_list.append((bath_share.id, non_bath[2].id))
 
         unplaced = [rid for rid in rooms_dict if rid not in placed]
-        return SubdivisionResult(placed=placed, free=[], unplaced=unplaced)
+        return SubdivisionResult(placed=placed, free=[], unplaced=unplaced,
+                                  suite_pairs=pair_list)
+
+    def _layout_private_clustered(self, wing: Rect, hallway_room,
+                                   rooms: List, entry_edge: str) -> Dict[str, Rect]:
+        """Asymmetric cluster: primary on one full-height side, secondary
+        bedrooms flanking a short hallway, shared bath as Jack-and-Jill.
+
+        For south entry with 4 rooms (primary + 2 bedrooms + 1 bath):
+            +--------+----+--------+--------+
+            |        |    |                 |
+            | primary|    |   bed_2         |  <- back zone (north)
+            | suite  |    |                 |
+            |        |hall+--------+--------+
+            |        |    | bed_3  | bath_2 |  <- side_b (south of back),
+            |        |    |        |        |     bath_2 in NE corner pocket
+            +--------+----+--------+--------+
+            |          public area          |
+            +-------------------------------+
+
+        bath_2 borders bed_2 (north) and bed_3 (west) → J&J doors on both,
+        no en-suite trap. All bedrooms have direct hallway access:
+        - primary via hallway west edge
+        - bed_3 via hallway east edge
+        - bed_2 via hallway tip (4ft segment)
+        """
+        if not rooms:
+            return {}
+
+        HW = self.HALLWAY_WIDTH
+        MIN = self.MIN_ROOM_DIM
+        BEDROOM_D = self.MIN_BEDROOM_DEPTH
+
+        # Currently this layout strategy is south-only; fall back to the
+        # symmetric cluster for other entry edges.
+        if entry_edge != "south":
+            return self._layout_private_symmetric(wing, hallway_room, rooms, entry_edge)
+
+        rooms_sorted = sorted(rooms, key=lambda r: -r.target_area)
+
+        # Identify the J&J shared bath (smallest non-primary bath room).
+        def is_bath(r):
+            base = r.room_type if r.room_type in PRIVATE_ZONE else r.id.split("_")[0]
+            return base in ("bathroom", "powder_room") and r.id != "primary_bath"
+
+        bath_share = next((r for r in reversed(rooms_sorted) if is_bath(r)), None)
+        non_bath = [r for r in rooms_sorted if r is not bath_share]
+
+        # Pick rooms by role.
+        primary = non_bath[0] if non_bath else None
+        bed_back = non_bath[1] if len(non_bath) >= 2 else None    # in back zone
+        bed_side = non_bath[2] if len(non_bath) >= 3 else None    # in side_b lower
+        # If <3 non-bath rooms, fall back to symmetric layout.
+        if not (primary and bed_back and bed_side):
+            return self._layout_private_symmetric(wing, hallway_room, rooms, entry_edge)
+
+        placed: Dict[str, Rect] = {}
+
+        # Geometry: hallway is CENTERED on wing.width — the public BSP also
+        # places the central pass-through public room (living) in the wing's
+        # middle x range, so a centered hallway lands over a pass-through
+        # neighbor and gets a working egress door.
+        hall_x = wing.x + (wing.width - HW) / 2
+
+        # side_a (primary): full wing height, west of hallway
+        a_w = hall_x - wing.x
+        side_a_zone = Rect(wing.x, wing.y, a_w, wing.height)
+
+        # Lower-east zone (bed_side, the secondary bedroom touching hallway)
+        lower_east_w = wing.x2 - (hall_x + HW)
+        hall_len = max(BEDROOM_D, bed_side.target_area / max(lower_east_w, 1))
+        # Keep some depth for upper zone.
+        hall_len = min(hall_len, wing.height - BEDROOM_D)
+        upper_h = wing.height - hall_len
+        if upper_h < BEDROOM_D:
+            upper_h = BEDROOM_D
+            hall_len = wing.height - upper_h
+
+        hallway_rect = Rect(hall_x, wing.y, HW, hall_len)
+        bed_side_zone = Rect(hall_x + HW, wing.y, lower_east_w, hall_len)
+
+        # Upper east zone (above hallway tip): extends from hall_x to wing.x2
+        # — absorbs the strip directly above the hallway. Holds bed_back +
+        # bath_share in a NE pocket arrangement.
+        upper_zone = Rect(hall_x, wing.y + hall_len,
+                          wing.x2 - hall_x, upper_h)
+
+        if bath_share:
+            pocket_w = max(BEDROOM_D, bath_share.target_area / max(upper_h, 1))
+            pocket_w = min(pocket_w, upper_zone.width * 0.5)
+            bed_back_zone = Rect(upper_zone.x, upper_zone.y,
+                                 upper_zone.width - pocket_w, upper_h)
+            pocket_zone = Rect(upper_zone.x2 - pocket_w, upper_zone.y,
+                               pocket_w, upper_h)
+        else:
+            bed_back_zone = upper_zone
+            pocket_zone = None
+
+        # --- Placement ---
+        if hallway_room:
+            placed["hallway"] = hallway_rect
+
+        # Primary in side_a — bundler handles its bath/closet children.
+        placed[primary.id] = side_a_zone
+        children = getattr(primary, "_bundled_children", None)
+        if children:
+            placed.update(self._place_bundled_children(
+                side_a_zone, primary, children, "y"))
+
+        # bed_side in lower east
+        placed[bed_side.id] = bed_side_zone
+        children_side = getattr(bed_side, "_bundled_children", None)
+        if children_side:
+            placed.update(self._place_bundled_children(
+                bed_side_zone, bed_side, children_side, "y"))
+
+        # bed_back in upper east zone (west portion if bath_share present)
+        placed[bed_back.id] = bed_back_zone
+        children_back = getattr(bed_back, "_bundled_children", None)
+        if children_back:
+            placed.update(self._place_bundled_children(
+                bed_back_zone, bed_back, children_back,
+                "x" if bed_back_zone.width >= bed_back_zone.height else "y"))
+
+        # bath_share in NE pocket
+        if bath_share and pocket_zone is not None:
+            placed[bath_share.id] = pocket_zone
+
+        # Place any remaining rooms (>4 case) — stack via BSP within bed_back_zone.
+        remaining = [r for r in rooms
+                     if r.id not in placed and r is not primary
+                     and r is not bed_back and r is not bed_side
+                     and r is not bath_share]
+        if remaining:
+            back_set = [bed_back] + remaining
+            del placed[bed_back.id]
+            sub = self._bsp_strip(
+                bed_back_zone, back_set,
+                axis="x" if bed_back_zone.width >= bed_back_zone.height else "y")
+            placed.update(sub)
+
+        return placed
+
+    def _layout_private_symmetric(self, wing: Rect, hallway_room,
+                                   rooms: List, entry_edge: str) -> Dict[str, Rect]:
+        """Symmetric 3-side cluster (used when asymmetric doesn't apply)."""
+        if not rooms:
+            return {}
+
+        HW = self.HALLWAY_WIDTH
+        MIN = self.MIN_ROOM_DIM
+        BEDROOM_D = self.MIN_BEDROOM_DEPTH
+
+        rooms_sorted = sorted(rooms, key=lambda r: -r.target_area)
+        back_rooms = [rooms_sorted[0]] if rooms_sorted else []
+        side_a_rooms = [rooms_sorted[1]] if len(rooms_sorted) >= 2 else []
+        side_b_rooms = [rooms_sorted[2]] if len(rooms_sorted) >= 3 else []
+        for r in rooms_sorted[3:]:
+            if (sum(rr.target_area for rr in side_a_rooms) <=
+                sum(rr.target_area for rr in side_b_rooms)):
+                side_a_rooms.append(r)
+            else:
+                side_b_rooms.append(r)
+
+        side_area = (sum(r.target_area for r in side_a_rooms) +
+                     sum(r.target_area for r in side_b_rooms))
+
+        def stacked_depth(side_list):
+            d = 0.0
+            for r in side_list:
+                base = r.room_type if r.room_type in PRIVATE_ZONE else r.id.split("_")[0]
+                d += BEDROOM_D if base in ("bedroom", "primary_bedroom",
+                                            "office") else MIN * 1.5
+            return d
+
+        min_side_extent = max(stacked_depth(side_a_rooms),
+                              stacked_depth(side_b_rooms), MIN * 1.5)
+        min_back_extent = BEDROOM_D if back_rooms else MIN * 1.5
+
+        if entry_edge in ("south", "north"):
+            side_zone_h_avail = wing.width - HW
+            area_side_h = (side_area / max(side_zone_h_avail, MIN)
+                           if side_area > 0 else MIN)
+            side_zone_h = max(min_side_extent, area_side_h)
+            max_side_extent = wing.height - min_back_extent
+            if side_zone_h > max_side_extent:
+                side_zone_h = max(MIN * 1.5, max_side_extent)
+            back_h = wing.height - side_zone_h
+            if back_h < MIN * 1.5:
+                back_h = MIN * 1.5
+                side_zone_h = wing.height - back_h
+
+            hall_x = wing.x + (wing.width - HW) / 2
+
+            if entry_edge == "south":
+                hall_y = wing.y
+                west_zone = Rect(wing.x, wing.y, hall_x - wing.x, side_zone_h)
+                east_zone = Rect(hall_x + HW, wing.y,
+                                 wing.x2 - (hall_x + HW), side_zone_h)
+                back_zone = Rect(wing.x, wing.y + side_zone_h, wing.width, back_h)
+            else:
+                hall_y = wing.y2 - side_zone_h
+                west_zone = Rect(wing.x, hall_y, hall_x - wing.x, side_zone_h)
+                east_zone = Rect(hall_x + HW, hall_y,
+                                 wing.x2 - (hall_x + HW), side_zone_h)
+                back_zone = Rect(wing.x, wing.y, wing.width, back_h)
+
+            hallway_rect = Rect(hall_x, hall_y, HW, side_zone_h)
+            side_a_zone, side_b_zone = west_zone, east_zone
+            side_axis = "y"
+            back_axis = "x" if back_zone.width >= back_zone.height else "y"
+        else:
+            side_zone_w_avail = wing.height - HW
+            area_side_w = (side_area / max(side_zone_w_avail, MIN)
+                           if side_area > 0 else MIN)
+            side_zone_w = max(min_side_extent, area_side_w)
+            max_side_extent = wing.width - min_back_extent
+            if side_zone_w > max_side_extent:
+                side_zone_w = max(MIN * 1.5, max_side_extent)
+            back_w = wing.width - side_zone_w
+            if back_w < MIN * 1.5:
+                back_w = MIN * 1.5
+                side_zone_w = wing.width - back_w
+
+            hall_y = wing.y + (wing.height - HW) / 2
+
+            if entry_edge == "west":
+                hall_x = wing.x
+                south_zone = Rect(wing.x, wing.y, side_zone_w, hall_y - wing.y)
+                north_zone = Rect(wing.x, hall_y + HW,
+                                  side_zone_w, wing.y2 - (hall_y + HW))
+                back_zone = Rect(wing.x + side_zone_w, wing.y, back_w, wing.height)
+            else:
+                hall_x = wing.x2 - side_zone_w
+                south_zone = Rect(hall_x, wing.y, side_zone_w, hall_y - wing.y)
+                north_zone = Rect(hall_x, hall_y + HW,
+                                  side_zone_w, wing.y2 - (hall_y + HW))
+                back_zone = Rect(wing.x, wing.y, back_w, wing.height)
+
+            hallway_rect = Rect(hall_x, hall_y, side_zone_w, HW)
+            side_a_zone, side_b_zone = south_zone, north_zone
+            side_axis = "x"
+            back_axis = "x" if back_zone.width >= back_zone.height else "y"
+
+        placed: Dict[str, Rect] = {}
+        if hallway_room:
+            placed["hallway"] = hallway_rect
+        if side_a_rooms and side_a_zone.width >= MIN and side_a_zone.height >= MIN:
+            placed.update(self._bsp_strip(side_a_zone, side_a_rooms, axis=side_axis))
+        if side_b_rooms and side_b_zone.width >= MIN and side_b_zone.height >= MIN:
+            placed.update(self._bsp_strip(side_b_zone, side_b_rooms, axis=side_axis))
+        if back_rooms and back_zone.width >= MIN and back_zone.height >= MIN:
+            placed.update(self._bsp_strip(back_zone, back_rooms, axis=back_axis))
+        return placed
 
     def _bsp_strip(self, strip: Rect, rooms: List, axis: Optional[str] = None) -> Dict[str, Rect]:
         """Recursive BSP within a strip. ALL cuts use the same axis (the strip's
@@ -279,93 +542,118 @@ class SubdivisionSolver:
 
     def _place_bundled_children(self, parent_slice: Rect, parent, children: List,
                                  strip_axis: str) -> Dict[str, Rect]:
-        """Place children (closets, en-suite bath, etc.) inside the parent
-        slice. Children get a thin strip on the FAR side (away from hallway)
-        so the parent keeps its hallway adjacency.
-
-        If any child is a BATH, the strip depth gets bumped to ≥6ft so the
-        bath has walkable proportions (closets are happy with 4ft)."""
-        BATH_MIN_DEPTH = 6.5  # ft — bath needs walkable depth in a strip layout
+        """Place bundled children (closets, en-suite bath, etc.) inside the
+        parent slice. Picks the cut orientation (height-wise band vs width-wise
+        band) that leaves the parent with the most livable shape — important
+        for shallow back zones where a height-wise bath strip would starve
+        the bedroom remainder."""
+        BATH_MIN_DEPTH = 6.5
+        LIVABLE_MIN = self.MIN_ROOM_DIM * 1.5
         has_bath = any(
             c.room_type in ("primary_bath", "bathroom") or c.id.split("_")[0] == "bathroom"
             for _, c in children
         )
-        # Total child area
         child_area = sum(c.target_area for _, c in children)
         result: Dict[str, Rect] = {}
 
-        # Determine the FAR side of the parent slice (away from hallway).
-        # The hallway runs along ONE of the long edges of the strip:
-        # - For a horizontal strip (axis='x'), hallway is along y=top or y=bottom
-        # - We don't have explicit hallway info here, so use the side opposite
-        #   to the parent's LARGEST shared edge with the rest of the building.
-        # Heuristic: place children on the side OPPOSITE to the strip's long axis.
-        # Specifically: for axis='x', children get a slice along the short (y)
-        # direction at one end; the bedroom keeps the hallway-facing edge.
+        # Compute candidate band dimensions for both orientations.
+        band_h = max(child_area / max(parent_slice.width, 1.0), self.MIN_ROOM_DIM)
+        if has_bath:
+            band_h = max(band_h, BATH_MIN_DEPTH)
+        rem_h = parent_slice.height - band_h
 
-        if strip_axis == "x":
-            # Strip cuts vertically; rooms span full height. Place closet at the
-            # TOP (far from south hallway) or BOTTOM (far from north hallway).
-            # For simplicity, place closet on the side AWAY from y=center of envelope.
-            # Better heuristic: closet on the back wall.
-            # Use parent_slice.y vs envelope center: closet farther from center.
-            env_cy = self.envelope.y + self.envelope.height / 2
-            closet_at_top = parent_slice.y + parent_slice.height / 2 > env_cy
-            closet_h = child_area / parent_slice.width
-            if closet_h < self.MIN_ROOM_DIM:
-                closet_h = self.MIN_ROOM_DIM
-            if has_bath and closet_h < BATH_MIN_DEPTH:
-                closet_h = BATH_MIN_DEPTH
-            if closet_at_top:
-                closet_strip = Rect(parent_slice.x, parent_slice.y2 - closet_h,
-                                     parent_slice.width, closet_h)
-                bedroom_slice = Rect(parent_slice.x, parent_slice.y,
-                                      parent_slice.width, parent_slice.height - closet_h)
-            else:
-                closet_strip = Rect(parent_slice.x, parent_slice.y,
-                                     parent_slice.width, closet_h)
-                bedroom_slice = Rect(parent_slice.x, parent_slice.y + closet_h,
-                                      parent_slice.width, parent_slice.height - closet_h)
-            result[parent.id] = bedroom_slice
-            # If multiple children, subdivide closet_strip among them
-            if len(children) == 1:
-                result[children[0][0]] = closet_strip
-            else:
-                # Subdivide along x
-                total_child = sum(c.target_area for _, c in children)
-                cursor = closet_strip.x
-                for child_id, c in children:
-                    w = closet_strip.width * (c.target_area / total_child)
-                    result[child_id] = Rect(cursor, closet_strip.y, w, closet_strip.height)
-                    cursor += w
+        band_w = max(child_area / max(parent_slice.height, 1.0), self.MIN_ROOM_DIM)
+        if has_bath:
+            band_w = max(band_w, BATH_MIN_DEPTH)
+        rem_w = parent_slice.width - band_w
+
+        h_ok = rem_h >= LIVABLE_MIN and parent_slice.width >= LIVABLE_MIN
+        w_ok = rem_w >= LIVABLE_MIN and parent_slice.height >= LIVABLE_MIN
+
+        # Pick orientation. Default to strip-axis natural ('h' for axis='x',
+        # 'w' for axis='y') when both viable; force the viable one when only
+        # one works; pick the less-bad when neither is great.
+        natural = "h" if strip_axis == "x" else "w"
+        if h_ok and w_ok:
+            cut = natural
+        elif h_ok:
+            cut = "h"
+        elif w_ok:
+            cut = "w"
         else:
-            # axis='y' — vertical strip, cuts horizontal. Closet on far x side.
+            cut = "h" if rem_h > rem_w else "w"
+
+        if cut == "h":
+            env_cy = self.envelope.y + self.envelope.height / 2
+            band_at_top = parent_slice.y + parent_slice.height / 2 > env_cy
+            if band_at_top:
+                band = Rect(parent_slice.x, parent_slice.y2 - band_h,
+                            parent_slice.width, band_h)
+                parent_rect = Rect(parent_slice.x, parent_slice.y,
+                                   parent_slice.width, parent_slice.height - band_h)
+            else:
+                band = Rect(parent_slice.x, parent_slice.y,
+                            parent_slice.width, band_h)
+                parent_rect = Rect(parent_slice.x, parent_slice.y + band_h,
+                                   parent_slice.width, parent_slice.height - band_h)
+            result[parent.id] = parent_rect
+        else:  # cut == 'w'
             env_cx = self.envelope.x + self.envelope.width / 2
-            closet_at_right = parent_slice.x + parent_slice.width / 2 > env_cx
-            closet_w = child_area / parent_slice.height
-            if closet_w < self.MIN_ROOM_DIM:
-                closet_w = self.MIN_ROOM_DIM
-            if has_bath and closet_w < BATH_MIN_DEPTH:
-                closet_w = BATH_MIN_DEPTH
-            if closet_at_right:
-                closet_strip = Rect(parent_slice.x2 - closet_w, parent_slice.y,
-                                     closet_w, parent_slice.height)
-                bedroom_slice = Rect(parent_slice.x, parent_slice.y,
-                                      parent_slice.width - closet_w, parent_slice.height)
+            band_at_right = parent_slice.x + parent_slice.width / 2 > env_cx
+            if band_at_right:
+                band = Rect(parent_slice.x2 - band_w, parent_slice.y,
+                            band_w, parent_slice.height)
+                parent_rect = Rect(parent_slice.x, parent_slice.y,
+                                   parent_slice.width - band_w, parent_slice.height)
             else:
-                closet_strip = Rect(parent_slice.x, parent_slice.y,
-                                     closet_w, parent_slice.height)
-                bedroom_slice = Rect(parent_slice.x + closet_w, parent_slice.y,
-                                      parent_slice.width - closet_w, parent_slice.height)
-            result[parent.id] = bedroom_slice
-            if len(children) == 1:
-                result[children[0][0]] = closet_strip
+                band = Rect(parent_slice.x, parent_slice.y,
+                            band_w, parent_slice.height)
+                parent_rect = Rect(parent_slice.x + band_w, parent_slice.y,
+                                   parent_slice.width - band_w, parent_slice.height)
+            result[parent.id] = parent_rect
+
+        # Split the band among children. Pick the longer axis of the band so
+        # children come out closer to square. Enforce MIN_ROOM_DIM per child
+        # along the cut axis so smaller children don't end up as slivers when
+        # area-proportional split would starve them.
+        if len(children) == 1:
+            result[children[0][0]] = band
+        else:
+            cut_along = "x" if band.width >= band.height else "y"
+            total_extent = band.width if cut_along == "x" else band.height
+            n = len(children)
+            min_per = self.MIN_ROOM_DIM
+            # If even MIN per child won't fit, fall back to proportional.
+            if total_extent < min_per * n:
+                sizes = [total_extent * (c.target_area / sum(cc.target_area for _, cc in children))
+                         for _, c in children]
             else:
-                total_child = sum(c.target_area for _, c in children)
-                cursor = closet_strip.y
-                for child_id, c in children:
-                    h = closet_strip.height * (c.target_area / total_child)
-                    result[child_id] = Rect(closet_strip.x, cursor, closet_strip.width, h)
+                # Each child gets max(MIN, area-proportional). Renormalize so
+                # the sum equals total_extent.
+                total_area = sum(c.target_area for _, c in children)
+                raw = [max(min_per, total_extent * (c.target_area / total_area))
+                       for _, c in children]
+                # If raw sums > total_extent, scale down — but never below MIN.
+                # Iteratively shave from largest until fits.
+                while sum(raw) > total_extent + 1e-3:
+                    overshoot = sum(raw) - total_extent
+                    # Find largest reducible (above MIN)
+                    cuttable = [(i, raw[i]) for i in range(n) if raw[i] > min_per + 1e-3]
+                    if not cuttable:
+                        break
+                    cuttable.sort(key=lambda t: -t[1])
+                    take = min(cuttable[0][1] - min_per, overshoot)
+                    raw[cuttable[0][0]] -= take
+                sizes = raw
+            if cut_along == "x":
+                cursor = band.x
+                for (child_id, _), w in zip(children, sizes):
+                    result[child_id] = Rect(cursor, band.y, w, band.height)
+                    cursor += w
+            else:
+                cursor = band.y
+                for (child_id, _), h in zip(children, sizes):
+                    result[child_id] = Rect(band.x, cursor, band.width, h)
                     cursor += h
         return result
 
@@ -977,7 +1265,8 @@ def solve_layout_subdivision(graph: SpatialGraph, width: float, depth: float,
 
     placed_rooms = {rid: PlacedRoom(rid, rect) for rid, rect in result.placed.items()}
     walls = _generate_walls(result.placed, envelope, entry_edge)
-    _add_egress_doors(walls, result.placed, envelope, graph)
+    _add_egress_doors(walls, result.placed, envelope, graph,
+                      suite_pairs_dict=result.suite_pairs)
 
     return PlacedLayout(
         rooms=placed_rooms,
@@ -1010,7 +1299,8 @@ def _can_pass_through(room_id: str, graph: SpatialGraph) -> bool:
 def _add_egress_doors(walls: List[WallCoordinate],
                       placed: Dict[str, Rect],
                       envelope: Rect,
-                      graph: SpatialGraph) -> None:
+                      graph: SpatialGraph,
+                      suite_pairs_dict=None) -> None:
     """Mutate walls to add DOOR openings forming a spanning tree from entry.
     Constrained BFS: routes through public/circulation rooms only — never
     crosses private rooms (bedrooms, baths, closets). If a room can't be
@@ -1022,12 +1312,20 @@ def _add_egress_doors(walls: List[WallCoordinate],
         return
 
     # Build adjacency: room_id -> [(neighbor_id, wall_index)]
+    # Only consider walls long enough to fit a door — otherwise BFS can latch
+    # onto a 2ft sliver of shared edge and never give the room a real opening.
+    door_width = 0.9 / 0.3048  # 900mm in feet
+    min_door_wall = door_width * 1.2
     adjacency: Dict[str, List[Tuple[str, int]]] = defaultdict(list)
     for i, w in enumerate(walls):
         if w.wall_type == WallType.EXTERIOR:
             continue
         a, b = w.room1, w.room2
         if a in placed and b in placed and a != b:
+            seg_len = ((w.end.x - w.start.x) ** 2 +
+                       (w.end.y - w.start.y) ** 2) ** 0.5
+            if seg_len < min_door_wall:
+                continue
             adjacency[a].append((b, i))
             adjacency[b].append((a, i))
 
@@ -1039,21 +1337,25 @@ def _add_egress_doors(walls: List[WallCoordinate],
     visited = {"entry"}
     paired = set()  # room ids already connected via en-suite
 
-    # Must mirror the bundle list in solve() — keep these in sync.
-    suite_pairs = [
-        # Bedroom suites
-        ("primary_bath", "primary_bedroom"),
-        ("primary_closet", "primary_bedroom"),
-        ("closet_2", "bedroom_2"),
-        ("closet_3", "bedroom_3"),
-        ("closet_4", "bedroom_4"),
-        # Service area
-        ("mudroom", "garage"),
-        ("laundry", "garage"),
-        # Public area
-        ("entry", "living"),
-        ("dining", "kitchen"),
-    ]
+    # Suite pairs come from the solver. Accept either a list of tuples
+    # (preferred — supports J&J via duplicate child entries with different
+    # parents) or a legacy dict. Fall back to a default static set.
+    if suite_pairs_dict is None:
+        suite_pairs = [
+            ("primary_bath", "primary_bedroom"),
+            ("primary_closet", "primary_bedroom"),
+            ("closet_2", "bedroom_2"),
+            ("closet_3", "bedroom_3"),
+            ("closet_4", "bedroom_4"),
+            ("mudroom", "garage"),
+            ("laundry", "garage"),
+            ("entry", "living"),
+            ("dining", "kitchen"),
+        ]
+    elif isinstance(suite_pairs_dict, dict):
+        suite_pairs = list(suite_pairs_dict.items())
+    else:
+        suite_pairs = list(suite_pairs_dict)
     for child, parent in suite_pairs:
         if child not in placed or parent not in placed:
             continue
@@ -1064,32 +1366,47 @@ def _add_egress_doors(walls: List[WallCoordinate],
                 paired.add(child)
                 break
 
-    # PASS 2 — Constrained BFS from entry. Only expand FROM pass-through rooms.
+    # PASS 2a — BFS through PASS-THROUGH rooms only (build the circulation
+    # spine: entry → public rooms → hallway). Private rooms are deferred so
+    # the next pass can attach them to the highest-priority neighbor (hallway).
     queue = deque(["entry"])
+    while queue:
+        current = queue.popleft()
+        if not _can_pass_through(current, graph):
+            continue
+        for neighbor, wall_idx in adjacency[current]:
+            if neighbor in visited:
+                continue
+            if not _can_pass_through(neighbor, graph):
+                continue  # destinations attached in pass 2b
+            visited.add(neighbor)
+            tree_edges.append((current, neighbor, wall_idx))
+            queue.append(neighbor)
 
+    # PASS 2b — Attach each destination room to its BEST pass-through
+    # neighbor. "Best" = hallway > other pass-through. This ensures bedroom
+    # doors come off the corridor when possible, not off the living room.
     def neighbor_priority(nb_id: str) -> int:
         if nb_id == "hallway" or nb_id.startswith("hallway_"):
             return 0
         return 1
 
-    while queue:
-        current = queue.popleft()
-        # Only continue routing through pass-through rooms (public/circulation).
-        # Private rooms (bedrooms etc.) get a door but don't extend the path —
-        # except via en-suite paired children, which were placed in Pass 1.
-        if not _can_pass_through(current, graph):
-            # If this is a parent bedroom whose en-suite children we paired,
-            # mark them as visited too (they're reachable via the parent).
-            for child, parent in suite_pairs:
-                if parent == current and child in placed:
-                    visited.add(child)
+    for room_id in list(placed):
+        if room_id in visited or room_id == "entry":
             continue
-        for neighbor, wall_idx in sorted(adjacency[current],
-                                          key=lambda nb: neighbor_priority(nb[0])):
-            if neighbor not in visited:
-                visited.add(neighbor)
-                tree_edges.append((current, neighbor, wall_idx))
-                queue.append(neighbor)
+        if room_id in paired:
+            continue  # already has an en-suite door from pass 1
+        best = None  # (priority, parent_id, wall_idx)
+        for neighbor, wall_idx in adjacency.get(room_id, []):
+            if neighbor in visited and _can_pass_through(neighbor, graph):
+                pri = neighbor_priority(neighbor)
+                if best is None or pri < best[0]:
+                    best = (pri, neighbor, wall_idx)
+        if best:
+            _, parent, wall_idx = best
+            tree_edges.append((parent, room_id, wall_idx))
+            visited.add(room_id)
+
     # After BFS, mark en-suite children visited if their parent is reachable
     for child, parent in suite_pairs:
         if parent in visited and child in placed:
@@ -1102,7 +1419,6 @@ def _add_egress_doors(walls: List[WallCoordinate],
         print(f"[Egress]   Need hallway extension to bridge these.")
 
     # Add one door opening per tree edge, centered on the shared wall
-    door_width = 0.9 / 0.3048  # 900mm in feet
     for parent, child, wall_idx in tree_edges:
         wall = walls[wall_idx]
         seg_start, seg_end = wall.start, wall.end
