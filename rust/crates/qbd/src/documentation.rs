@@ -6,10 +6,11 @@
 
 use archgeometry::SchemaDocument;
 use drawing::{
-    export_to_svg, generate_elevation_sheet_svg, generate_section_sheet_svg,
-    generate_site_plan_svg, generate_wall_detail, wall_detail_to_svg, Config, ElevationDirection,
-    ElevationInput, ElevationOpeningInput, ElevationWallInput, SectionCut, SectionInput,
-    SectionWallInput, SitePlan, WallSectionDetail,
+    drawing_info_for, export_to_svg, generate_elevation_sheet_svg, generate_section_sheet_svg,
+    generate_site_plan_svg, generate_title_block, generate_wall_detail, wall_detail_to_svg,
+    Config, DrawingType, ElevationDirection, ElevationInput, ElevationOpeningInput,
+    ElevationWallInput, ProjectInfo, SectionCut, SectionInput, SectionWallInput, SitePlan,
+    WallSectionDetail,
 };
 
 use crate::floor_plan::generate_floor_plan_with_openings;
@@ -56,16 +57,74 @@ pub fn generate_documentation(
     // mixed-unit space). The schema is mm; we use 1219 mm (≈4 ft).
     let cut_height = 1219.0;
     let result = generate_floor_plan_with_openings(doc, cut_height, &config);
-    let svg = export_to_svg(&result, 10.0);
+    let mut floor_plan_raw = export_to_svg(&result, 10.0);
+    // Inject Tier-1 dimensions on the floor plan: overall width below the
+    // footprint, overall depth to the left. Coordinates in plan view are
+    // (X, Z), so Y in 2D space is the schema's Z.
+    if doc.width > 0.0 && doc.depth > 0.0 {
+        let width_dim = drawing::LinearDim::horizontal_mm(0.0, doc.width, doc.depth + 500.0);
+        let depth_dim = drawing::LinearDim::vertical_mm(0.0, doc.depth, -500.0);
+        let mut dims = String::new();
+        dims.push_str(&drawing::render_horizontal_dim(&width_dim, 250.0));
+        dims.push_str(&drawing::render_vertical_dim(&depth_dim, 250.0));
+        floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &dims);
+    }
+    let project_name: String = project_name.into();
+    let date = today_iso();
+
+    let project = ProjectInfo {
+        name: project_name.clone(),
+        number: doc.building_id.clone(),
+        solver: "QBD Layout".into(),
+        ..Default::default()
+    };
+
+    // Inject a title block into each generated SVG so the bundle reads
+    // like a permit set (project info, drawing number, scale, sheet
+    // count) rather than a bare geometry dump.
+    let with_tb = |svg: String, dt: DrawingType, scale: &str| -> String {
+        let info = drawing_info_for(dt, scale, &date);
+        let tb = generate_title_block(doc.width, doc.depth, &project, &info, 500.0);
+        inject_before_svg_close(&svg, &tb)
+    };
 
     Documentation {
-        project_name: project_name.into(),
-        generated_date: today_iso(),
-        site_plan_svg: generate_site_plan(doc),
-        floor_plan_svg: svg,
-        elevations: generate_elevations(doc),
-        section_svg: generate_section(doc),
+        project_name: project_name.clone(),
+        generated_date: date.clone(),
+        site_plan_svg: with_tb(generate_site_plan(doc), DrawingType::FloorPlan, "1:200"),
+        floor_plan_svg: with_tb(floor_plan_raw, DrawingType::FloorPlan, "1:100"),
+        elevations: generate_elevations(doc)
+            .into_iter()
+            .map(|e| Elevation {
+                direction: e.direction,
+                svg: with_tb(e.svg, drawing_type_for_direction(e.direction), "1:100"),
+            })
+            .collect(),
+        section_svg: with_tb(generate_section(doc), DrawingType::SectionA, "1:100"),
         wall_details: generate_wall_details(doc, &config),
+    }
+}
+
+/// Inject SVG content before the closing `</svg>` tag. If the input has
+/// no `</svg>`, returns the input unchanged.
+fn inject_before_svg_close(svg: &str, fragment: &str) -> String {
+    if let Some(idx) = svg.rfind("</svg>") {
+        let mut out = String::with_capacity(svg.len() + fragment.len() + 1);
+        out.push_str(&svg[..idx]);
+        out.push_str(fragment);
+        out.push_str(&svg[idx..]);
+        out
+    } else {
+        svg.to_string()
+    }
+}
+
+fn drawing_type_for_direction(d: ElevationDirection) -> DrawingType {
+    match d {
+        ElevationDirection::North => DrawingType::ElevationNorth,
+        ElevationDirection::South => DrawingType::ElevationSouth,
+        ElevationDirection::East => DrawingType::ElevationEast,
+        ElevationDirection::West => DrawingType::ElevationWest,
     }
 }
 

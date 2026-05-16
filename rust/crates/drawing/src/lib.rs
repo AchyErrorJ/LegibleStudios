@@ -14,6 +14,7 @@
 pub mod annotate;
 pub mod config;
 pub mod detail;
+pub mod dimensions;
 pub mod elevation_sheet;
 pub mod primitives;
 pub mod section_sheet;
@@ -21,6 +22,7 @@ pub mod site_plan;
 pub mod slice;
 pub mod slice_plane;
 pub mod svg;
+pub mod title_block;
 
 pub use annotate::{
     AnnotationSet, Dimension, GridLine, Leader, PlanType, RoofAnnotation, RoofAnnotationType,
@@ -34,6 +36,10 @@ pub use detail::{
 pub use primitives::{
     Arc2D, Circle2D, Dimension2D, Hatch2D, Line2D, Point2D, Polyline2D, SliceResult, Text2D,
 };
+pub use dimensions::{
+    overall_envelope_dims, render_horizontal as render_horizontal_dim,
+    render_vertical as render_vertical_dim, LinearDim,
+};
 pub use elevation_sheet::{
     generate_elevation_sheet_svg, sheet_name as elevation_sheet_name,
     Direction as ElevationDirection, ElevationInput, ElevationOpeningInput, ElevationWallInput,
@@ -43,6 +49,9 @@ pub use section_sheet::{
     SectionWallInput, ViewDirection,
 };
 pub use site_plan::{generate_site_plan_svg, SitePlan};
+pub use title_block::{
+    drawing_info_for, generate_title_block, DrawingInfo, DrawingType, ProjectInfo,
+};
 pub use slice::{
     create_material_hatch, generate_floor_plan, generate_section, slice_box, slice_building,
     slice_element, slice_wall,
