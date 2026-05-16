@@ -10,6 +10,10 @@ description = "2D drawing pipeline: slice / annotate / svg / dxf (merged slicer_
 [lib]
 name = "drawing"
 
+[[bin]]
+name = "drawing_dump"
+path = "src/bin/dump.rs"
+
 [lints]
 workspace = true
 
@@ -17,5 +21,6 @@ workspace = true
 glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+anyhow.workspace = true
 ls-domain.workspace = true
 # dxf = "0.5"  # add when implementing dxf emission

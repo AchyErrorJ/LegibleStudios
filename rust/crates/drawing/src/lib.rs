@@ -1,9 +1,42 @@
 //! 2D drawing pipeline — merged port of `slicer_2d` and `plan_generator`.
 //!
-//! Sub-modules:
-//! - `slice`    — 3D mesh → 2D plane slicing
-//! - `annotate` — dimensions, grids, north arrow, symbols, roof pitch
-//! - `svg`      — SVG emission
-//! - `dxf`      — DXF emission (via `dxf` crate)
-//!
 //! See port plan §8 Q1 for the merge rationale.
+//!
+//! Module layout:
+//! - `primitives` — Line2D, Polyline2D, Arc2D, Circle2D, Text2D,
+//!   Dimension2D, Hatch2D, SliceResult.
+//! - `slice_plane` — SlicePlane + 3D→2D projection math.
+//! - `config` — Layer + material-hatch defaults.
+//! - `slice` — element / wall / building slicing into SliceResults.
+//! - `svg` — SVG emission.
+//! - `dxf` — DXF emission.
+
+pub mod annotate;
+pub mod config;
+pub mod detail;
+pub mod primitives;
+pub mod slice;
+pub mod slice_plane;
+pub mod svg;
+
+pub use annotate::{
+    AnnotationSet, Dimension, GridLine, Leader, PlanType, RoofAnnotation, RoofAnnotationType,
+    Symbol, SymbolType, TextLabel,
+};
+pub use config::{Config, HatchSpec, LayerConfig};
+pub use detail::{
+    detail_to_slice_result, generate_wall_detail, wall_detail_to_svg, LayerDetail,
+    WallSectionDetail,
+};
+pub use primitives::{
+    Arc2D, Circle2D, Dimension2D, Hatch2D, Line2D, Point2D, Polyline2D, SliceResult, Text2D,
+};
+pub use slice::{
+    create_material_hatch, generate_floor_plan, generate_section, slice_box, slice_building,
+    slice_element, slice_wall,
+};
+pub use slice_plane::{intersect_line_with_plane, project_to_2d, SlicePlane, SlicePlaneType};
+pub use svg::{
+    color_to_svg, cpp_double, export_to_svg, svg_arc, svg_circle, svg_hatch, svg_line,
+    svg_polyline, svg_text,
+};
