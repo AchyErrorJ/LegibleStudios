@@ -1,0 +1,24 @@
+[package]
+name = "ls-qbd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "QBD JSON ingest + building conversion + orchestration"
+
+[lib]
+name = "qbd"
+
+[lints]
+workspace = true
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ls-domain.workspace = true
+ls-archgeometry.workspace = true
+ls-obc.workspace = true
+ls-drawing.workspace = true

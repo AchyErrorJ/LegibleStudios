@@ -1,0 +1,21 @@
+//! Schema parser + canonical geometry generators.
+//!
+//! Port of `Shared/ArchGeometry/`. See `docs/VULKAN_KERNEL_PORT_PLAN.md` §2.
+
+pub mod floor_geometry;
+pub mod geometry_types;
+pub mod schema_parser;
+pub mod schema_types;
+pub mod wall_geometry;
+pub mod wire;
+
+pub use geometry_types::{
+    Arc2D, BuildingGeometry, DoorGeometry, FloorGeometry, Geometry2D, Line2D, Mesh3D,
+    OpeningCutout, Point2D, Polygon2D, RoofGeometry, RoomBoundary, Text2D, Triangle, Vertex3D,
+    WallGeometry, WindowGeometry,
+};
+pub use schema_parser::{ParseError, parse_file, parse_json};
+pub use schema_types::{
+    QBDAnswers, RoofRidge, RoofSurface, RoomBounds, SchemaDocument, SchemaDoor, SchemaFloor,
+    SchemaLevel, SchemaRoof, SchemaRoom, SchemaWall, SchemaWindow, WallLayer, WallType,
+};

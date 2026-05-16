@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.swp
+.DS_Store
+
+# We want Cargo.lock in version control for the binary crates,
+# but allow it for the workspace root since we ship binaries.

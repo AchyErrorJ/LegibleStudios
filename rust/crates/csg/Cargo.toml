@@ -1,0 +1,18 @@
+[package]
+name = "ls-csg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "BSP-based CSG (union / intersection / difference)"
+
+[lib]
+name = "csg"
+
+[lints]
+workspace = true
+
+[dependencies]
+glam.workspace = true
+ls-domain.workspace = true
