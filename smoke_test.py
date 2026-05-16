@@ -138,6 +138,28 @@ def generate_layout(answers):
     return result
 
 
+@stage("2b. Schema conformance (qbd_output.schema.json)")
+def validate_schema(building):
+    """Cross-language regression oracle: the live generator output MUST validate
+    against the locked schema. If this fails, either the generator drifted or the
+    schema is wrong — both are bugs that will break the Rust port's round-trip
+    contract."""
+    import jsonschema
+    schema_path = REPO_ROOT / "Shared" / "Schemas" / "qbd_output.schema.json"
+    schema = json.loads(schema_path.read_text())
+    validator = jsonschema.Draft7Validator(schema)
+    errors = sorted(validator.iter_errors(building), key=lambda e: e.path)
+    if errors:
+        for e in errors[:10]:
+            loc = "/".join(str(p) for p in e.absolute_path) or "<root>"
+            print(f"   [schema] {loc}: {e.message[:200]}")
+        if len(errors) > 10:
+            print(f"   ... and {len(errors) - 10} more")
+        raise AssertionError(f"{len(errors)} schema violations in qbd_layout_generator output")
+    print(f"   {len(building)} top-level keys validated against {schema_path.name}")
+    return True
+
+
 @stage("3a. Code validation (CodeStudio)")
 def validate_code(building):
     sys.path.insert(0, str(CAD))
@@ -326,6 +348,7 @@ else:
     building = generate_layout(answers) if answers else None
 
 if building:
+    validate_schema(building)
     validate_code(building)
     validate_cost(building)
     generate_drawings(building)

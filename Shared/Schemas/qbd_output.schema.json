@@ -12,15 +12,15 @@
     },
     "width": {
       "type": "number",
-      "description": "Building width in feet"
+      "description": "Building width in the document's `unit` (mm when unit=mm, feet when unit=feet)"
     },
     "depth": {
       "type": "number",
-      "description": "Building depth in feet"
+      "description": "Building depth in the document's `unit` (mm when unit=mm, feet when unit=feet)"
     },
     "sqft": {
       "type": "number",
-      "description": "Total square footage"
+      "description": "Requested floor area in square feet, regardless of the document's linear `unit`. This is the user-input QBD answer, not a derived metric."
     },
     "building_id": {
       "type": "string",
@@ -155,18 +155,18 @@
           "items": {"type": "number"},
           "minItems": 3,
           "maxItems": 3,
-          "description": "[x, y, z] start point in feet"
+          "description": "[x, y, z] start point in the document's `unit` (mm or feet)"
         },
         "end": {
           "type": "array",
           "items": {"type": "number"},
           "minItems": 3,
           "maxItems": 3,
-          "description": "[x, y, z] end point in feet"
+          "description": "[x, y, z] end point in the document's `unit` (mm or feet)"
         },
         "height": {
           "type": "number",
-          "description": "Wall height in feet"
+          "description": "Wall height in the document's `unit` (mm or feet)"
         },
         "wall_type": {
           "type": "string",
@@ -208,7 +208,7 @@
         },
         "width": {
           "type": "number",
-          "description": "Door width in feet"
+          "description": "Door width in the document's `unit` (mm or feet)"
         },
         "height": {
           "type": "number",
@@ -411,13 +411,13 @@
     },
     "qbd_answers": {
       "type": "object",
-      "description": "Original QBD session answers",
+      "description": "Original QBD session answers. Numeric fields accept either strings (from text-input forms) or numbers (from spinbox inputs); the generator coerces on read.",
       "properties": {
         "start": {"type": "string"},
         "res_type": {"type": "string"},
-        "bedrooms": {"type": "string"},
-        "bathrooms": {"type": "string"},
-        "sqft": {"type": "string"},
+        "bedrooms": {"type": ["string", "number"]},
+        "bathrooms": {"type": ["string", "number"]},
+        "sqft": {"type": ["string", "number"]},
         "garage": {"type": "string"},
         "special_rooms": {
           "oneOf": [
