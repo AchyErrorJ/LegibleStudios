@@ -18,7 +18,12 @@ glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+anyhow.workspace = true
 ls-domain.workspace = true
 ls-archgeometry.workspace = true
 ls-obc.workspace = true
 ls-drawing.workspace = true
+
+[[bin]]
+name = "qbd_dump"
+path = "src/bin/dump.rs"

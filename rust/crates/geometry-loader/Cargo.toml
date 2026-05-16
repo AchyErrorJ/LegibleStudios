@@ -19,3 +19,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 ls-domain.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

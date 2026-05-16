@@ -78,6 +78,7 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "ls-domain",
+ "serde_json",
 ]
 
 [[package]]
@@ -93,6 +94,7 @@ dependencies = [
 name = "ls-drawing"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "glam",
  "ls-domain",
  "serde",
@@ -141,6 +143,7 @@ dependencies = [
 name = "ls-qbd"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "glam",
  "ls-archgeometry",
  "ls-domain",
