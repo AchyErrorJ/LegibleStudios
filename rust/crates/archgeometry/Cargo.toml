@@ -10,6 +10,10 @@ description = "Schema parser + canonical geometry generators (port of Shared/Arc
 [lib]
 name = "archgeometry"
 
+[[bin]]
+name = "archgeometry_dump"
+path = "src/bin/dump.rs"
+
 [lints]
 workspace = true
 
@@ -18,4 +22,5 @@ glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+anyhow.workspace = true
 ls-domain.workspace = true

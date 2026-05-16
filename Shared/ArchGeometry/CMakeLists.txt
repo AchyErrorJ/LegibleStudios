@@ -84,6 +84,13 @@ if(ARCHGEOMETRY_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
+# Tools — built unconditionally; small CLI utilities that link against the lib.
+add_executable(archgeometry_dump tools/archgeometry_dump.cpp)
+target_link_libraries(archgeometry_dump PRIVATE archgeometry)
+set_target_properties(archgeometry_dump PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tools"
+)
+
 # Install rules (simplified - no export for FetchContent dependencies)
 install(TARGETS archgeometry
     RUNTIME DESTINATION bin
