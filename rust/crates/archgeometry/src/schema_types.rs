@@ -8,7 +8,7 @@
 //! and `QBDInterface::parseWithArchGeometry`). The Rust port collapses to
 //! this one — these types ARE the wire format.
 
-use crate::wire::{map_or_empty_array, vec2_array, vec3_array, vec3_array_vec};
+use crate::wire::{map_or_empty_array, vec2_xy_object, vec3_array, vec3_array_vec};
 use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -354,7 +354,10 @@ pub struct SchemaRoom {
     pub bounds: RoomBounds,
     #[serde(default)]
     pub area: f32,
-    #[serde(default, with = "vec2_array")]
+    /// Wire format is `{"x": …, "y": …}` object (per the locked
+    /// `qbd_output.schema.json`), unlike the wall/floor coordinate vectors
+    /// which are JSON arrays.
+    #[serde(default, with = "vec2_xy_object")]
     pub center: Vec2,
     #[serde(default)]
     pub zone: String,

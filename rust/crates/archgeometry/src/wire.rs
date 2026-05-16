@@ -40,6 +40,30 @@ pub mod vec2_array {
     use serde::Serialize as _;
 }
 
+/// `#[serde(with = "wire::vec2_xy_object")]` — Vec2 ↔ `{"x": ..., "y": ...}`.
+///
+/// QBD writes `center` and similar 2D points as `{x, y}` objects per the
+/// locked `qbd_output.schema.json` contract. Glam's default Vec2 serde is
+/// the array form, so this helper is required for object-shaped points.
+pub mod vec2_xy_object {
+    use super::{Deserialize, Deserializer, Serialize, Serializer, Vec2};
+
+    #[derive(Serialize, Deserialize)]
+    struct Xy {
+        x: f32,
+        y: f32,
+    }
+
+    pub fn serialize<S: Serializer>(v: &Vec2, s: S) -> Result<S::Ok, S::Error> {
+        Xy { x: v.x, y: v.y }.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec2, D::Error> {
+        let xy = Xy::deserialize(d)?;
+        Ok(Vec2::new(xy.x, xy.y))
+    }
+}
+
 /// `#[serde(default, deserialize_with = "wire::map_or_empty_array::deserialize")]`
 /// for fields that the Python QBD generator writes as `[]` when empty and
 /// `{...}` when populated.

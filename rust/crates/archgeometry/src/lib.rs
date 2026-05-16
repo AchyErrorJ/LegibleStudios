@@ -2,13 +2,16 @@
 //!
 //! Port of `Shared/ArchGeometry/`. See `docs/VULKAN_KERNEL_PORT_PLAN.md` §2.
 
+pub mod dump_hash;
 pub mod floor_geometry;
+pub mod generate;
 pub mod geometry_types;
 pub mod schema_parser;
 pub mod schema_types;
 pub mod wall_geometry;
 pub mod wire;
 
+pub use generate::generate_from_schema;
 pub use geometry_types::{
     Arc2D, BuildingGeometry, DoorGeometry, FloorGeometry, Geometry2D, Line2D, Mesh3D,
     OpeningCutout, Point2D, Polygon2D, RoofGeometry, RoomBoundary, Text2D, Triangle, Vertex3D,
