@@ -60,7 +60,15 @@ EXPECTED_PY_SHEETS = [
 
 # What the Rust pipeline produces today. Anything in EXPECTED_PY_SHEETS not
 # in this list is STUB (M5+ generator work).
-RUST_PRODUCES = {"02_floor_plan.svg"}
+RUST_PRODUCES = {
+    "01_site_plan.svg",
+    "02_floor_plan.svg",
+    "03_elevation_north.svg",
+    "03_elevation_south.svg",
+    "03_elevation_east.svg",
+    "03_elevation_west.svg",
+    "04_section_aa.svg",
+}
 
 _USE_COLOR = sys.stdout.isatty() and sys.platform != "win32"
 GREEN = "\033[32m" if _USE_COLOR else ""
@@ -153,20 +161,26 @@ def classify(sheet: str) -> SheetReport:
         return SheetReport(sheet, "DIFF", f"Rust expected to produce but missing: {rust_path}")
 
     # Both produced. Today we don't do byte-diff (Rust output lacks the
-    # annotation layer + uses raw-mm coordinates while Python is scaled). We
-    # assert both are non-empty SVG with at least one <polygon> as a smoke
-    # check the geometry pipeline ran.
+    # annotation layer + uses raw-mm coordinates while Python is scaled).
+    # Smoke check: both are non-empty SVG with at least one drawing primitive
+    # (polygon, rect, or line). Different sheet types favour different
+    # primitives — site_plan is all <rect>, sections mix <rect> + <polygon>,
+    # elevations mix <rect> + <polygon> + <line>.
     py_text = py_path.read_text(encoding="utf-8", errors="replace")
     rust_text = rust_path.read_text(encoding="utf-8", errors="replace")
-    py_polys = py_text.count("<polygon")
-    rust_polys = rust_text.count("<polygon")
-    if py_polys == 0 or rust_polys == 0:
+
+    def shape_count(s: str) -> int:
+        return s.count("<polygon") + s.count("<rect") + s.count("<line")
+
+    py_shapes = shape_count(py_text)
+    rust_shapes = shape_count(rust_text)
+    if py_shapes == 0 or rust_shapes == 0:
         return SheetReport(sheet, "DIFF",
-            f"empty geometry — py polygons={py_polys}, rust polygons={rust_polys}")
+            f"empty geometry - py shapes={py_shapes}, rust shapes={rust_shapes}")
 
     note = (
-        f"py {py_path.stat().st_size}B/{py_polys} polys, "
-        f"rust {rust_path.stat().st_size}B/{rust_polys} polys"
+        f"py {py_path.stat().st_size}B/{py_shapes} shapes, "
+        f"rust {rust_path.stat().st_size}B/{rust_shapes} shapes"
     )
     return SheetReport(sheet, "PASS", note)
 

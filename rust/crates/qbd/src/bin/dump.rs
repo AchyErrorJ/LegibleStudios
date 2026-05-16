@@ -58,33 +58,53 @@ fn main() -> anyhow::Result<()> {
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("failed to create bundle dir {}", dir.display()))?;
 
-        // Sheets the Rust pipeline can produce today. The Python permit
-        // pipeline writes 9 sheets total (site plan, floor plan, 4
-        // elevations, section, door+window schedules); the Rust crates
-        // currently support floor plan + per-category wall section
-        // details. Missing generators are flagged in M5_GAPS below.
-        let fp = dir.join("02_floor_plan.svg");
-        std::fs::write(&fp, &docs.floor_plan_svg)
-            .with_context(|| format!("failed to write {}", fp.display()))?;
-        eprintln!("  wrote {} ({} bytes)", fp.display(), docs.floor_plan_svg.len());
+        // Rust-side bundle: all 8 sheets that the Rust pipeline can produce
+        // today (site plan, floor plan, 4 elevations, section, plus
+        // per-category wall section details). The Python's 9-sheet bundle
+        // adds 2 schedule sheets that the Rust pipeline doesn't yet emit
+        // (schedule generator is M5+ scope; the Python pipeline doesn't
+        // actually write them today either due to a `extract_openings` bug
+        // — see m5_diff.py for the picture).
+        let write_sheet = |name: &str, body: &str| -> anyhow::Result<()> {
+            let p = dir.join(name);
+            std::fs::write(&p, body)
+                .with_context(|| format!("failed to write {}", p.display()))?;
+            eprintln!("  wrote {} ({} bytes)", p.display(), body.len());
+            Ok(())
+        };
+
+        write_sheet("01_site_plan.svg", &docs.site_plan_svg)?;
+        write_sheet("02_floor_plan.svg", &docs.floor_plan_svg)?;
+        for elev in &docs.elevations {
+            let name = drawing::elevation_sheet_name(elev.direction);
+            write_sheet(&name, &elev.svg)?;
+        }
+        write_sheet("04_section_aa.svg", &docs.section_svg)?;
 
         for (i, detail) in docs.wall_details.iter().enumerate() {
             let name = format!("07_wall_detail_{:02}_{}.svg", i + 1, detail.detail.wall_type_id);
-            let p = dir.join(&name);
-            std::fs::write(&p, &detail.svg)
-                .with_context(|| format!("failed to write {}", p.display()))?;
-            eprintln!("  wrote {} ({} bytes)", p.display(), detail.svg.len());
+            write_sheet(&name, &detail.svg)?;
         }
 
-        // Manifest so the M5 oracle knows what's present vs deferred.
+        // Manifest declaring what's present vs M5+ deferred.
+        let elev_lines: String = docs
+            .elevations
+            .iter()
+            .map(|e| format!(",\n    \"{}\"", drawing::elevation_sheet_name(e.direction)))
+            .collect();
+        let detail_lines: String = (0..docs.wall_details.len())
+            .map(|i| {
+                format!(
+                    ",\n    \"07_wall_detail_{:02}_{}.svg\"",
+                    i + 1,
+                    docs.wall_details[i].detail.wall_type_id
+                )
+            })
+            .collect();
         let manifest = format!(
-            "{{\n  \"project\": \"{}\",\n  \"generated_date\": \"{}\",\n  \"produced\": [\n    \"02_floor_plan.svg\"{}\n  ],\n  \"deferred_to_m5_plus\": [\n    \"01_site_plan.svg\",\n    \"03_elevation_north.svg\",\n    \"03_elevation_south.svg\",\n    \"03_elevation_east.svg\",\n    \"03_elevation_west.svg\",\n    \"04_section_aa.svg\",\n    \"05_door_schedule.svg\",\n    \"05_window_schedule.svg\"\n  ]\n}}\n",
+            "{{\n  \"project\": \"{}\",\n  \"generated_date\": \"{}\",\n  \"produced\": [\n    \"01_site_plan.svg\",\n    \"02_floor_plan.svg\"{elev_lines},\n    \"04_section_aa.svg\"{detail_lines}\n  ],\n  \"deferred_to_m5_plus\": [\n    \"05_door_schedule.svg\",\n    \"05_window_schedule.svg\"\n  ]\n}}\n",
             docs.project_name,
             docs.generated_date,
-            (0..docs.wall_details.len())
-                .map(|i| format!(",\n    \"07_wall_detail_{:02}_{}.svg\"",
-                    i + 1, docs.wall_details[i].detail.wall_type_id))
-                .collect::<String>()
         );
         std::fs::write(dir.join("manifest.json"), manifest)?;
         eprintln!("  wrote {}/manifest.json", dir.display());

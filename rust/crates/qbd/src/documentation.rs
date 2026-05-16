@@ -6,7 +6,10 @@
 
 use archgeometry::SchemaDocument;
 use drawing::{
-    export_to_svg, generate_wall_detail, wall_detail_to_svg, Config, WallSectionDetail,
+    export_to_svg, generate_elevation_sheet_svg, generate_section_sheet_svg,
+    generate_site_plan_svg, generate_wall_detail, wall_detail_to_svg, Config, ElevationDirection,
+    ElevationInput, ElevationOpeningInput, ElevationWallInput, SectionCut, SectionInput,
+    SectionWallInput, SitePlan, WallSectionDetail,
 };
 
 use crate::floor_plan::generate_floor_plan_with_openings;
@@ -19,13 +22,24 @@ pub struct WallDetail {
     pub svg: String,
 }
 
-/// Permit-set bundle. Carries the floor-plan SVG plus one detail SVG
-/// per unique wall-type category referenced by the layout.
+/// One elevation drawing.
+#[derive(Debug, Clone)]
+pub struct Elevation {
+    pub direction: ElevationDirection,
+    pub svg: String,
+}
+
+/// Permit-set bundle. Carries the floor-plan SVG plus the surrounding
+/// permit-set sheets (site plan, elevations, section, wall details) for
+/// the parts the Rust pipeline ports today.
 #[derive(Debug, Clone, Default)]
 pub struct Documentation {
     pub project_name: String,
     pub generated_date: String,
+    pub site_plan_svg: String,
     pub floor_plan_svg: String,
+    pub elevations: Vec<Elevation>,
+    pub section_svg: String,
     pub wall_details: Vec<WallDetail>,
 }
 
@@ -47,9 +61,102 @@ pub fn generate_documentation(
     Documentation {
         project_name: project_name.into(),
         generated_date: today_iso(),
+        site_plan_svg: generate_site_plan(doc),
         floor_plan_svg: svg,
+        elevations: generate_elevations(doc),
+        section_svg: generate_section(doc),
         wall_details: generate_wall_details(doc, &config),
     }
+}
+
+/// Compute SitePlan from the schema document's overall building footprint
+/// (in mm) and render the site-plan SVG.
+fn generate_site_plan(doc: &SchemaDocument) -> String {
+    let building_width_m = doc.width / 1000.0;
+    let building_depth_m = doc.depth / 1000.0;
+    let site = SitePlan::from_building_metres(building_width_m, building_depth_m);
+    generate_site_plan_svg(&site)
+}
+
+/// Build a SectionInput from the schema document and render the default
+/// (transverse, centre, looking-east) section.
+fn generate_section(doc: &SchemaDocument) -> String {
+    let input = SectionInput {
+        width: doc.width,
+        walls: doc
+            .walls
+            .iter()
+            .map(|w| SectionWallInput {
+                start: w.start,
+                end: w.end,
+                height: w.height,
+                category: w.category.clone(),
+            })
+            .collect(),
+        // Use the tallest ridge height across all roofs, fallback to 1000mm
+        // if no roof structure (matches the section module's documented
+        // fallback). Empty vec -> no roof element rendered.
+        ridge_heights_above_plate: doc
+            .roofs
+            .iter()
+            .map(|r| {
+                r.ridges
+                    .iter()
+                    .map(|ridge| ridge.height)
+                    .fold(1000.0_f32, f32::max)
+            })
+            .collect(),
+    };
+    let cut = drawing::default_cut(&input);
+    generate_section_sheet_svg(&input, &cut, 0.05)
+}
+
+/// Build an ElevationInput from the schema document and render one
+/// elevation per cardinal direction.
+fn generate_elevations(doc: &SchemaDocument) -> Vec<Elevation> {
+    let input = ElevationInput {
+        width: doc.width,
+        depth: doc.depth,
+        walls: doc
+            .walls
+            .iter()
+            .map(|w| ElevationWallInput {
+                start: w.start,
+                end: w.end,
+                height: w.height,
+            })
+            .collect(),
+        openings: doc
+            .doors
+            .iter()
+            .map(|d| ElevationOpeningInput {
+                wall_index: d.wall_index.max(0) as usize,
+                offset: d.offset,
+                width: d.width,
+                height: d.height,
+                sill_height: 0.0,
+                is_door: true,
+            })
+            .chain(doc.windows.iter().map(|w| ElevationOpeningInput {
+                wall_index: w.wall_index.max(0) as usize,
+                offset: w.offset,
+                width: w.width,
+                height: w.height,
+                sill_height: w.sill_height,
+                is_door: false,
+            }))
+            .collect(),
+        // Default to a 1.2m gable ridge if a roof is present in the schema;
+        // disable otherwise so the elevation is a flat-roof silhouette.
+        gable_ridge_above_plate: if doc.roofs.is_empty() { 0.0 } else { 1200.0 },
+    };
+    ElevationDirection::ALL
+        .iter()
+        .map(|&dir| Elevation {
+            direction: dir,
+            svg: generate_elevation_sheet_svg(&input, dir, 0.05),
+        })
+        .collect()
 }
 
 /// One detail per wall category actually present in the layout.
