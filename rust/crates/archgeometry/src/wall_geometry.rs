@@ -146,7 +146,12 @@ pub fn solid_mesh(start: Vec3, end: Vec3, height: f32, thickness: f32, color: Ve
     if len < 0.001 {
         return mesh;
     }
-    let dir = dir / len;
+    // Use `dir * (1.0 / len)` (matches C++ wall_geometry.cpp:155) instead
+    // of `dir / len`. For non-integer wall lengths the two patterns yield
+    // bit-different `dir` vectors because `x * (1/x)` is not always 1.0 in
+    // IEEE-754 even when `x / x` is — and the divergence propagates into
+    // downstream vertex Z coordinates. The diff oracle catches it.
+    let dir = dir * (1.0 / len);
     let perp = dir.perp();
     let half_t = thickness * 0.5;
 
@@ -193,7 +198,9 @@ pub fn mesh_with_cutouts(
     if wall_length < 0.001 {
         return mesh;
     }
-    let dir = dir / wall_length;
+    // Match C++'s `dir = dir * (1.0f / wallLength)` (wall_geometry.cpp:216)
+    // for bit-identical normalisation. See `solid_mesh` for the why.
+    let dir = dir * (1.0 / wall_length);
 
     // Sort cutouts by offset (stable so duplicates keep insertion order).
     let mut sorted: Vec<OpeningCutout> = cutouts.to_vec();

@@ -11,8 +11,8 @@
 //!   M1 diff oracle depends on the same bytes coming out.
 
 use crate::geometry_types::BuildingGeometry;
-use crate::schema_types::{SchemaDocument, WallLayer, WallType};
-use crate::{floor_geometry, wall_geometry};
+use crate::schema_types::{SchemaDocument, SchemaRoom, WallLayer, WallType};
+use crate::{floor_geometry, opening_geometry, roof_geometry, room_geometry, wall_geometry};
 
 /// Generate full building geometry from a parsed schema document.
 #[must_use]
@@ -64,10 +64,61 @@ pub fn generate_from_schema(doc: &SchemaDocument) -> BuildingGeometry {
         result.floors.push(floor_geometry::generate(floor));
     }
 
-    // Roofs / doors / windows / rooms: generators not yet ported.
-    // Leaving result.roofs / .doors / .windows / .rooms empty matches the
-    // pre-implementation state of those modules; the diff oracle treats
-    // their dump lines as UNIMPLEMENTED until the generators land.
+    // Roofs.
+    for roof in &doc.roofs {
+        result.roofs.push(roof_geometry::generate(roof));
+    }
+
+    // Doors — only those whose `wall_index` references a valid wall.
+    for door in &doc.doors {
+        if door.wall_index < 0 {
+            continue;
+        }
+        let Ok(idx) = usize::try_from(door.wall_index) else { continue };
+        if idx >= doc.walls.len() {
+            continue;
+        }
+        let wall = &doc.walls[idx];
+        let thickness = wall_type_by_id(&wall.wall_type)
+            .map_or(150.0, WallType::total_thickness);
+        result
+            .doors
+            .push(opening_geometry::generate_door(door, wall, thickness));
+    }
+
+    // Windows.
+    for window in &doc.windows {
+        if window.wall_index < 0 {
+            continue;
+        }
+        let Ok(idx) = usize::try_from(window.wall_index) else { continue };
+        if idx >= doc.walls.len() {
+            continue;
+        }
+        let wall = &doc.walls[idx];
+        let thickness = wall_type_by_id(&wall.wall_type)
+            .map_or(150.0, WallType::total_thickness);
+        result
+            .windows
+            .push(opening_geometry::generate_window(window, wall, thickness));
+    }
+
+    // Rooms — iterate the schema map. The JSON encodes room ids as map keys,
+    // not as fields inside each room object, so SchemaRoom.id deserializes to
+    // "" by default. Inject the key here so the generated RoomBoundary.room_id
+    // is populated (matches C++ parseRoom() which sets room.id = key). Without
+    // this, all rooms share an empty id and the dump's sort-by-id becomes
+    // non-deterministic.
+    for (id, room) in &doc.rooms {
+        let room_with_id = if room.id.is_empty() {
+            SchemaRoom { id: id.clone(), ..room.clone() }
+        } else {
+            room.clone()
+        };
+        result
+            .rooms
+            .push(room_geometry::generate_boundary(&room_with_id, &doc.walls));
+    }
 
     result
 }

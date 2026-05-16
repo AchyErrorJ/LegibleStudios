@@ -117,15 +117,27 @@ std::vector<size_t> sortedOrder(const std::vector<T>& items, KeyFn keyOf) {
 
 }  // namespace
 
+// Debug mode: print one float per line in canonical form so a Rust-side diff
+// can pinpoint the first divergent value. Enabled when --bytes-of-wall N is
+// passed; emits the vertex stream of WALL N (after sort) and exits.
+int dumpBytesOfWall(const archgeometry::BuildingGeometry& g, int target);
+
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::fprintf(stderr, "usage: archgeometry_dump <building.json>\n");
+    if (argc < 2) {
+        std::fprintf(stderr, "usage: archgeometry_dump <building.json> [--bytes-of-wall N]\n");
         return 2;
     }
     const std::string path = argv[1];
     if (!fs::exists(path)) {
         std::fprintf(stderr, "error: file not found: %s\n", path.c_str());
         return 2;
+    }
+    int bytes_of_wall = -1;
+    bool dump_rooms = false;
+    if (argc == 4 && std::string(argv[2]) == "--bytes-of-wall") {
+        bytes_of_wall = std::atoi(argv[3]);
+    } else if (argc == 3 && std::string(argv[2]) == "--dump-rooms") {
+        dump_rooms = true;
     }
 
     auto result = ArchGeometry::generateFromFile(path);
@@ -136,6 +148,10 @@ int main(int argc, char** argv) {
         return 1;
     }
     const BuildingGeometry& g = getValue(result);
+
+    if (bytes_of_wall >= 0) {
+        return dumpBytesOfWall(g, bytes_of_wall);
+    }
 
     std::printf("ARCHGEOMETRY_DUMP v1\n");
     std::printf("INPUT %s\n", fs::path(path).filename().string().c_str());
@@ -161,6 +177,13 @@ int main(int argc, char** argv) {
                  &WindowGeometry::mesh_3d);
 
     // Rooms are 2D boundaries, no Mesh3D. Hash polygon points + area + label.
+    //
+    // RoomBoundary has dual aliased fields (`boundary`/`polygon` and
+    // `center`/`centroid`). The library's room_geometry.cpp only populates
+    // `polygon` and `centroid`; `boundary` and `center` are left at default
+    // (empty / zero). We read the populated alias here so the hash reflects
+    // real data, matching the Rust port which has no aliases and writes the
+    // canonical fields directly.
     {
         Hasher h;
         auto order = sortedOrder(g.rooms, [](const RoomBoundary& r) { return r.room_id; });
@@ -168,8 +191,8 @@ int main(int argc, char** argv) {
             const auto& r = g.rooms[idx];
             h.feed(r.room_id); h.feed(" ");
             h.feedf(r.area);
-            h.feedf(r.center.x); h.feedf(r.center.y);
-            for (const auto& p : r.boundary.points) {
+            h.feedf(r.centroid.x); h.feedf(r.centroid.y);
+            for (const auto& p : r.polygon.points) {
                 h.feedf(p.x); h.feedf(p.y);
             }
         }
@@ -179,5 +202,32 @@ int main(int argc, char** argv) {
     }
 
     std::printf("END\n");
+    return 0;
+}
+
+int dumpBytesOfWall(const BuildingGeometry& g, int target) {
+    auto order = sortedOrder(g.walls,
+        [](const WallGeometry& w) { return std::pair{w.wall_index, w.wall_id}; });
+    if (target < 0 || target >= static_cast<int>(order.size())) {
+        std::fprintf(stderr, "wall index %d out of range [0,%zu)\n", target, order.size());
+        return 2;
+    }
+    const auto& m = g.walls[order[target]].mesh_3d;
+    std::printf("WALL %d: %zu verts, %zu tris, wall_id=%s\n",
+                target, m.vertices.size(), m.faces.size(),
+                g.walls[order[target]].wall_id.c_str());
+    for (size_t i = 0; i < m.vertices.size(); ++i) {
+        const auto& v = m.vertices[i];
+        std::printf("v[%zu] pos %.4f %.4f %.4f | n %.4f %.4f %.4f | c %.4f %.4f %.4f | uv %.4f %.4f | s %.4f\n",
+            i,
+            v.position.x, v.position.y, v.position.z,
+            v.normal.x, v.normal.y, v.normal.z,
+            v.color.x, v.color.y, v.color.z,
+            v.uv.x, v.uv.y, v.stress);
+    }
+    for (size_t i = 0; i < m.faces.size(); ++i) {
+        std::printf("t[%zu] %u %u %u\n", i,
+            m.faces[i].v0, m.faces[i].v1, m.faces[i].v2);
+    }
     return 0;
 }
