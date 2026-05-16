@@ -157,6 +157,55 @@ pub fn overall_envelope_dims(
     (width, height)
 }
 
+/// Tier-4 (per-room interior) dimensions: width along the top inside
+/// edge + height along the left inside edge for each room rect. Useful
+/// for the floor plan where each room gets its own dim pair.
+#[must_use]
+pub fn room_interior_dims(
+    room_x: f32,
+    room_y: f32,
+    room_width: f32,
+    room_height: f32,
+    inset: f32,
+) -> (LinearDim, LinearDim) {
+    let width = LinearDim::horizontal_mm(
+        room_x,
+        room_x + room_width,
+        room_y + inset,
+    );
+    let height = LinearDim::vertical_mm(
+        room_y,
+        room_y + room_height,
+        room_x + inset,
+    );
+    (width, height)
+}
+
+/// Tier-2 (structural grid) chain dimensions: given a sorted list of
+/// stop positions along an axis and a fixed perpendicular offset, emit
+/// one dimension per adjacent pair. Useful for showing wall-to-wall
+/// spacings along an exterior wall.
+///
+/// Returns one LinearDim per gap. Sort the input first if it isn't
+/// already; consecutive duplicates produce zero-length dims and should
+/// be deduped by the caller.
+#[must_use]
+pub fn chain_dims(stops: &[f32], offset: f32, horizontal: bool) -> Vec<LinearDim> {
+    if stops.len() < 2 {
+        return Vec::new();
+    }
+    stops
+        .windows(2)
+        .map(|w| {
+            if horizontal {
+                LinearDim::horizontal_mm(w[0], w[1], offset)
+            } else {
+                LinearDim::vertical_mm(w[0], w[1], offset)
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +258,36 @@ mod tests {
     fn negative_endpoints_handled() {
         let d = LinearDim::horizontal_mm(-100.0, 100.0, 0.0);
         assert_eq!(d.value, "200 mm");
+    }
+
+    #[test]
+    fn room_interior_dims_inset_inside_the_room_rect() {
+        let (w, h) = room_interior_dims(1000.0, 2000.0, 4000.0, 3000.0, 100.0);
+        assert_eq!(w.value, "4000 mm");
+        assert_eq!(h.value, "3000 mm");
+        // Width dim runs along y = room_y + inset = 2100 (just inside top edge).
+        assert_eq!(w.offset, 2100.0);
+        // Height dim runs along x = room_x + inset = 1100.
+        assert_eq!(h.offset, 1100.0);
+    }
+
+    #[test]
+    fn chain_dims_emits_one_dim_per_gap() {
+        let stops = vec![0.0_f32, 1000.0, 3000.0, 5000.0];
+        let dims = chain_dims(&stops, -800.0, true);
+        assert_eq!(dims.len(), 3);
+        assert_eq!(dims[0].value, "1000 mm");
+        assert_eq!(dims[1].value, "2000 mm");
+        assert_eq!(dims[2].value, "2000 mm");
+        // All sit at the same perpendicular offset.
+        for d in &dims {
+            assert_eq!(d.offset, -800.0);
+        }
+    }
+
+    #[test]
+    fn chain_dims_with_fewer_than_2_stops_is_empty() {
+        assert!(chain_dims(&[], 0.0, true).is_empty());
+        assert!(chain_dims(&[100.0], 0.0, true).is_empty());
     }
 }

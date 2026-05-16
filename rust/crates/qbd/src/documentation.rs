@@ -74,8 +74,10 @@ pub fn generate_documentation(
     if !doc.rooms.is_empty() {
         let mut rooms: Vec<_> = doc.rooms.iter().collect();
         rooms.sort_by(|a, b| a.0.cmp(b.0));
+
+        // Room labels.
         let room_labels: Vec<drawing::RoomLabelInput> = rooms
-            .into_iter()
+            .iter()
             .map(|(_id, r)| drawing::RoomLabelInput {
                 name: if r.name.is_empty() {
                     r.id.clone()
@@ -91,6 +93,63 @@ pub fn generate_documentation(
             .collect();
         let labels_svg = drawing::render_room_labels(&room_labels, 250.0);
         floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &labels_svg);
+
+        // Tier-4: per-room interior dimensions (width along top inside
+        // edge, height along left inside edge).
+        let mut tier4 = String::new();
+        for (_id, r) in &rooms {
+            if r.bounds.width < 600.0 || r.bounds.height < 600.0 {
+                // Skip rooms too small to fit a labelled dim chain.
+                continue;
+            }
+            let (w_dim, h_dim) = drawing::room_interior_dims(
+                r.bounds.x,
+                r.bounds.y,
+                r.bounds.width,
+                r.bounds.height,
+                150.0,
+            );
+            tier4.push_str(&drawing::render_horizontal_dim(&w_dim, 140.0));
+            tier4.push_str(&drawing::render_vertical_dim(&h_dim, 140.0));
+        }
+        if !tier4.is_empty() {
+            floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &tier4);
+        }
+
+        // Tier-2: structural-grid chain dimensions. Collect the unique
+        // X coordinates where any room edge falls (rounded to 1mm to
+        // suppress floating-point near-duplicates), and chain them along
+        // a horizontal line above the floor plan. Same for Z along the
+        // right side.
+        let dedup = |mut vs: Vec<f32>| -> Vec<f32> {
+            vs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            vs.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+            vs
+        };
+        let xs: Vec<f32> = dedup(
+            rooms
+                .iter()
+                .flat_map(|(_, r)| [r.bounds.x, r.bounds.x + r.bounds.width])
+                .collect(),
+        );
+        let zs: Vec<f32> = dedup(
+            rooms
+                .iter()
+                .flat_map(|(_, r)| [r.bounds.y, r.bounds.y + r.bounds.height])
+                .collect(),
+        );
+        let mut tier2 = String::new();
+        // Horizontal chain along top (Y = -1100, above Tier-1 width).
+        for d in drawing::chain_dims(&xs, -1100.0, true) {
+            tier2.push_str(&drawing::render_horizontal_dim(&d, 180.0));
+        }
+        // Vertical chain along right (X = doc.width + 1100, right of plan).
+        for d in drawing::chain_dims(&zs, doc.width + 1100.0, false) {
+            tier2.push_str(&drawing::render_vertical_dim(&d, 180.0));
+        }
+        if !tier2.is_empty() {
+            floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &tier2);
+        }
     }
     let project_name: String = project_name.into();
     let date = today_iso();

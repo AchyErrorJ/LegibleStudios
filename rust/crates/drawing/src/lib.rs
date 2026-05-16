@@ -38,8 +38,8 @@ pub use primitives::{
     Arc2D, Circle2D, Dimension2D, Hatch2D, Line2D, Point2D, Polyline2D, SliceResult, Text2D,
 };
 pub use dimensions::{
-    overall_envelope_dims, render_horizontal as render_horizontal_dim,
-    render_vertical as render_vertical_dim, LinearDim,
+    chain_dims, overall_envelope_dims, render_horizontal as render_horizontal_dim,
+    render_vertical as render_vertical_dim, room_interior_dims, LinearDim,
 };
 pub use elevation_sheet::{
     generate_elevation_sheet_svg, sheet_name as elevation_sheet_name,
