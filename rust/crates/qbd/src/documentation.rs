@@ -69,6 +69,29 @@ pub fn generate_documentation(
         dims.push_str(&drawing::render_vertical_dim(&depth_dim, 250.0));
         floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &dims);
     }
+    // Inject room labels (name + area). Sort by id so output is
+    // deterministic regardless of HashMap iteration order.
+    if !doc.rooms.is_empty() {
+        let mut rooms: Vec<_> = doc.rooms.iter().collect();
+        rooms.sort_by(|a, b| a.0.cmp(b.0));
+        let room_labels: Vec<drawing::RoomLabelInput> = rooms
+            .into_iter()
+            .map(|(_id, r)| drawing::RoomLabelInput {
+                name: if r.name.is_empty() {
+                    r.id.clone()
+                } else {
+                    r.name.clone()
+                },
+                bounds_x: r.bounds.x,
+                bounds_y: r.bounds.y,
+                width: r.bounds.width,
+                height: r.bounds.height,
+                area_mm2: r.area,
+            })
+            .collect();
+        let labels_svg = drawing::render_room_labels(&room_labels, 250.0);
+        floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &labels_svg);
+    }
     let project_name: String = project_name.into();
     let date = today_iso();
 

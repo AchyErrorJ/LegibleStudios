@@ -170,7 +170,13 @@ def classify(sheet: str) -> SheetReport:
     rust_text = rust_path.read_text(encoding="utf-8", errors="replace")
 
     def shape_count(s: str) -> int:
-        return s.count("<polygon") + s.count("<rect") + s.count("<line")
+        # Include <text> so room labels and dimension callouts contribute.
+        return (
+            s.count("<polygon")
+            + s.count("<rect")
+            + s.count("<line")
+            + s.count("<text")
+        )
 
     py_shapes = shape_count(py_text)
     rust_shapes = shape_count(rust_text)

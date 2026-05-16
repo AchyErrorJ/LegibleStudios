@@ -17,6 +17,7 @@ pub mod detail;
 pub mod dimensions;
 pub mod elevation_sheet;
 pub mod primitives;
+pub mod room_labels;
 pub mod section_sheet;
 pub mod site_plan;
 pub mod slice;
@@ -48,6 +49,7 @@ pub use section_sheet::{
     default_cut, generate_section_sheet_svg, CutDirection, SectionCut, SectionInput,
     SectionWallInput, ViewDirection,
 };
+pub use room_labels::{render_room_label, render_room_labels, RoomLabelInput};
 pub use site_plan::{generate_site_plan_svg, SitePlan};
 pub use title_block::{
     drawing_info_for, generate_title_block, DrawingInfo, DrawingType, ProjectInfo,

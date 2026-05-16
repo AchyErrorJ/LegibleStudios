@@ -295,7 +295,7 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
         x2 = max_x + 500.0,
     );
 
-    // Overall envelope dimensions (Tier-1 only): width along the bottom,
+    // Overall envelope dimensions (Tier-1): width along the bottom,
     // height along the left. Skip if the building bounds are degenerate.
     if max_x > min_x {
         let width_dim = crate::dimensions::LinearDim::horizontal_mm(min_x, max_x, -500.0);
@@ -304,6 +304,17 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
     if max_y > 0.0 {
         let height_dim = crate::dimensions::LinearDim::vertical_mm(0.0, max_y, min_x - 500.0);
         s.push_str(&crate::dimensions::render_vertical(&height_dim, 250.0));
+    }
+
+    // Per-opening width dimensions (Tier-3): each door/window gets a
+    // small width callout just below the elevation grade line.
+    for op in &openings {
+        let dim = crate::dimensions::LinearDim::horizontal_mm(
+            op.center_x - op.width * 0.5,
+            op.center_x + op.width * 0.5,
+            -200.0,
+        );
+        s.push_str(&crate::dimensions::render_horizontal(&dim, 150.0));
     }
 
     s.push_str("  </g>\n");
