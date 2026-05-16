@@ -50,6 +50,10 @@ example_*.json
 floorplan.json
 diagnose_dll.py
 
+# Exception: Rust port test corpus is checked in (parallel agent's
+# rust/crates/archgeometry/tests/ reference these fixtures).
+!rust/test-data/test_*.json
+
 # Render outputs and models
 renders/
 models/
