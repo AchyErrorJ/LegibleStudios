@@ -34,9 +34,8 @@ pub fn generate_from_schema(doc: &SchemaDocument) -> BuildingGeometry {
 
     // Walls. The schema's `wall_types` is a Vec; the C++ uses a map keyed
     // by id, so look up by id linearly here.
-    let wall_type_by_id = |id: &str| -> Option<&WallType> {
-        doc.wall_types.iter().find(|wt| wt.id == id)
-    };
+    let wall_type_by_id =
+        |id: &str| -> Option<&WallType> { doc.wall_types.iter().find(|wt| wt.id == id) };
 
     for (i, wall) in doc.walls.iter().enumerate() {
         let wt = wall_type_by_id(&wall.wall_type).unwrap_or(&default_wall_type);
@@ -74,13 +73,14 @@ pub fn generate_from_schema(doc: &SchemaDocument) -> BuildingGeometry {
         if door.wall_index < 0 {
             continue;
         }
-        let Ok(idx) = usize::try_from(door.wall_index) else { continue };
+        let Ok(idx) = usize::try_from(door.wall_index) else {
+            continue;
+        };
         if idx >= doc.walls.len() {
             continue;
         }
         let wall = &doc.walls[idx];
-        let thickness = wall_type_by_id(&wall.wall_type)
-            .map_or(150.0, WallType::total_thickness);
+        let thickness = wall_type_by_id(&wall.wall_type).map_or(150.0, WallType::total_thickness);
         result
             .doors
             .push(opening_geometry::generate_door(door, wall, thickness));
@@ -91,13 +91,14 @@ pub fn generate_from_schema(doc: &SchemaDocument) -> BuildingGeometry {
         if window.wall_index < 0 {
             continue;
         }
-        let Ok(idx) = usize::try_from(window.wall_index) else { continue };
+        let Ok(idx) = usize::try_from(window.wall_index) else {
+            continue;
+        };
         if idx >= doc.walls.len() {
             continue;
         }
         let wall = &doc.walls[idx];
-        let thickness = wall_type_by_id(&wall.wall_type)
-            .map_or(150.0, WallType::total_thickness);
+        let thickness = wall_type_by_id(&wall.wall_type).map_or(150.0, WallType::total_thickness);
         result
             .windows
             .push(opening_geometry::generate_window(window, wall, thickness));
@@ -111,7 +112,10 @@ pub fn generate_from_schema(doc: &SchemaDocument) -> BuildingGeometry {
     // non-deterministic.
     for (id, room) in &doc.rooms {
         let room_with_id = if room.id.is_empty() {
-            SchemaRoom { id: id.clone(), ..room.clone() }
+            SchemaRoom {
+                id: id.clone(),
+                ..room.clone()
+            }
         } else {
             room.clone()
         };

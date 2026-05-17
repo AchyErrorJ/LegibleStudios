@@ -185,7 +185,7 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
         .collect();
 
     // Compute bounds across all elements (walls + openings + roof if any).
-    let (mut min_x, mut max_x, mut min_y, mut max_y) =
+    let (mut min_x, mut max_x, min_y, mut max_y) =
         (f32::INFINITY, f32::NEG_INFINITY, 0.0_f32, f32::NEG_INFINITY);
     for w in &walls {
         min_x = min_x.min(w.start_x);
@@ -403,8 +403,10 @@ mod tests {
         let svg = generate_elevation_sheet_svg(&input, Direction::South, 0.05);
         assert!(svg.contains(r#"class="door""#), "south view must show door");
         // Window is on east-facing wall — should not appear in south view.
-        assert!(!svg.contains(r#"class="opening""#),
-            "south view should not show east-facing window: {svg}");
+        assert!(
+            !svg.contains(r#"class="opening""#),
+            "south view should not show east-facing window: {svg}"
+        );
     }
 
     #[test]
@@ -412,8 +414,10 @@ mod tests {
         let input = rectangular_input();
         let svg = generate_elevation_sheet_svg(&input, Direction::East, 0.05);
         assert!(svg.contains(r#"class="opening""#));
-        assert!(!svg.contains(r#"class="door""#),
-            "east view should not show south-facing door: {svg}");
+        assert!(
+            !svg.contains(r#"class="door""#),
+            "east view should not show south-facing door: {svg}"
+        );
     }
 
     #[test]

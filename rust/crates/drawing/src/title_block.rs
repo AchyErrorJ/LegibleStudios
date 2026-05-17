@@ -247,14 +247,25 @@ fn pick<'a>(value: &'a str, default: &'a str) -> &'a str {
     if value.is_empty() { default } else { value }
 }
 
-fn write_label_value(s: &mut String, x: f32, tb_y: f32, label: &str, value: &str, smaller_value: bool) {
+fn write_label_value(
+    s: &mut String,
+    x: f32,
+    tb_y: f32,
+    label: &str,
+    value: &str,
+    smaller_value: bool,
+) {
     let value_size = if smaller_value { 100 } else { 120 };
     let _ = writeln!(
         s,
         r##"  <text x="{x}" y="{y}" font-family="Arial" font-size="80" fill="#666">{label}</text>"##,
         y = tb_y + 970.0,
     );
-    let weight = if smaller_value { "" } else { r##" font-weight="bold""## };
+    let weight = if smaller_value {
+        ""
+    } else {
+        r##" font-weight="bold""##
+    };
     let _ = writeln!(
         s,
         r##"  <text x="{x}" y="{y}" font-family="Arial" font-size="{value_size}"{weight}>{value}</text>"##,

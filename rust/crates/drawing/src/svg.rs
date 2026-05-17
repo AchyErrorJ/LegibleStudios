@@ -31,7 +31,7 @@ use std::fmt::Write;
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
+    clippy::cast_sign_loss
 )]
 pub fn cpp_double(x: f32) -> String {
     // Promote to f64 to match C++ where stream operators convert through
@@ -41,7 +41,11 @@ pub fn cpp_double(x: f32) -> String {
     // Preserve sign of zero — MSVC's `cout << -0.0` emits "-0"
     // (confirmed by the M4 diff oracle).
     if x == 0.0 {
-        return if x.is_sign_negative() { "-0".to_string() } else { "0".to_string() };
+        return if x.is_sign_negative() {
+            "-0".to_string()
+        } else {
+            "0".to_string()
+        };
     }
 
     // Decide fixed vs scientific the same way %g does: scientific if the
@@ -136,7 +140,12 @@ pub fn svg_polyline(poly: &Polyline2D, scale: f32) -> String {
     let mut out = String::new();
     let _ = write!(out, r#"<{tag} points=""#);
     for p in &poly.points {
-        let _ = write!(out, "{},{} ", cpp_double(p.x * scale), cpp_double(-p.y * scale));
+        let _ = write!(
+            out,
+            "{},{} ",
+            cpp_double(p.x * scale),
+            cpp_double(-p.y * scale)
+        );
     }
     let _ = write!(
         out,
@@ -236,7 +245,12 @@ pub fn svg_hatch(hatch: &Hatch2D, scale: f32) -> String {
         }
         let _ = write!(out, r#"<polygon points=""#);
         for p in &boundary.points {
-            let _ = write!(out, "{},{} ", cpp_double(p.x * scale), cpp_double(-p.y * scale));
+            let _ = write!(
+                out,
+                "{},{} ",
+                cpp_double(p.x * scale),
+                cpp_double(-p.y * scale)
+            );
         }
         let _ = write!(
             out,

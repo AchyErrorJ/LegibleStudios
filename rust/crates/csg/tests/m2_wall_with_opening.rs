@@ -12,7 +12,7 @@
 //! style) is left as future work — these unit tests assert spatial
 //! correctness, which is the M2 acceptance criterion.
 
-use csg::{mesh_difference, Mesh, Triangle};
+use csg::{Mesh, Triangle, mesh_difference};
 use glam::Vec3;
 
 /// Axis-aligned box from `min` to `max`. 12 triangles, CCW outward.
@@ -31,12 +31,18 @@ fn make_box(min: Vec3, max: Vec3) -> Mesh {
     let mut push = |i: usize, j: usize, k: usize| {
         triangles.push(Triangle::new(v[i], v[j], v[k]));
     };
-    push(0, 1, 2); push(0, 2, 3);     // -Y bottom
-    push(4, 7, 6); push(4, 6, 5);     // +Y top
-    push(0, 4, 5); push(0, 5, 1);     // -Z front
-    push(3, 2, 6); push(3, 6, 7);     // +Z back
-    push(0, 3, 7); push(0, 7, 4);     // -X left
-    push(1, 5, 6); push(1, 6, 2);     // +X right
+    push(0, 1, 2);
+    push(0, 2, 3); // -Y bottom
+    push(4, 7, 6);
+    push(4, 6, 5); // +Y top
+    push(0, 4, 5);
+    push(0, 5, 1); // -Z front
+    push(3, 2, 6);
+    push(3, 6, 7); // +Z back
+    push(0, 3, 7);
+    push(0, 7, 4); // -X left
+    push(1, 5, 6);
+    push(1, 6, 2); // +X right
     Mesh { triangles }
 }
 

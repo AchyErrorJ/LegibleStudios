@@ -22,7 +22,11 @@ fn fixture_parses_and_converts_to_building() {
 
     let building = layout_to_building(&doc);
     assert_eq!(building.parametric_walls.len(), 8, "8 walls → 8 parametric");
-    assert_eq!(building.elements.len(), 3, "3 floors → 3 floor elements (no doors/windows in fixture)");
+    assert_eq!(
+        building.elements.len(),
+        3,
+        "3 floors → 3 floor elements (no doors/windows in fixture)"
+    );
     // All walls are exterior in the fixture → single default wall type.
     assert_eq!(building.wall_types.len(), 1);
     assert_eq!(building.wall_types[0].id, "ext_2x6_r21");
@@ -35,13 +39,19 @@ fn fixture_generates_permit_floor_plan_svg() {
 
     // Smoke checks on the SVG.
     assert!(docs.floor_plan_svg.starts_with("<?xml version=\"1.0\""));
-    assert!(docs.floor_plan_svg.contains("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+    assert!(
+        docs.floor_plan_svg
+            .contains("<svg xmlns=\"http://www.w3.org/2000/svg\"")
+    );
     assert!(docs.floor_plan_svg.ends_with("</svg>\n"));
     // The fixture has 8 walls but they're split across two levels (Y=0
     // and Y=3048). The default 1219mm cut height (≈4 ft) only intersects
     // the ground-floor 4 walls → 4 outlines + 4 hatches = 8 polygons.
     let polygon_count = docs.floor_plan_svg.matches("<polygon").count();
-    assert_eq!(polygon_count, 8, "4 outlines + 4 hatches (ground floor only at 1219mm cut)");
+    assert_eq!(
+        polygon_count, 8,
+        "4 outlines + 4 hatches (ground floor only at 1219mm cut)"
+    );
 
     // viewBox present.
     assert!(docs.floor_plan_svg.contains("viewBox="));

@@ -21,7 +21,9 @@
 //! constituent lines + text — but they look schematic, not pictorial.
 //! Flagged for follow-up when a path primitive is added.
 
-use crate::primitives::{Arc2D, Circle2D, Dimension2D, Line2D, Point2D, Polyline2D, SliceResult, Text2D};
+use crate::primitives::{
+    Arc2D, Circle2D, Dimension2D, Line2D, Point2D, Polyline2D, SliceResult, Text2D,
+};
 use domain::Building;
 use glam::Vec2;
 
@@ -648,7 +650,9 @@ fn flatten_roof_annotation(r: &RoofAnnotation, out: &mut SliceResult) {
                 ..Default::default()
             });
         }
-        RoofAnnotationType::RidgeLine | RoofAnnotationType::HipLine | RoofAnnotationType::ValleyLine => {
+        RoofAnnotationType::RidgeLine
+        | RoofAnnotationType::HipLine
+        | RoofAnnotationType::ValleyLine => {
             out.lines.push(Line2D {
                 start: r.position,
                 end: r.end_position,
@@ -786,7 +790,11 @@ mod tests {
         assert_eq!(set.name, "Floor Plan - Level 1");
         assert_eq!(set.dimensions.len(), 3);
         assert!(!set.grid_lines.is_empty());
-        assert!(set.symbols.iter().any(|s| s.symbol_type == SymbolType::NorthArrow));
+        assert!(
+            set.symbols
+                .iter()
+                .any(|s| s.symbol_type == SymbolType::NorthArrow)
+        );
     }
 
     #[test]
@@ -797,7 +805,11 @@ mod tests {
         assert_eq!(set.level, "Roof");
         assert!(set.dimensions.is_empty());
         assert!(!set.grid_lines.is_empty());
-        assert!(set.symbols.iter().any(|s| s.symbol_type == SymbolType::NorthArrow));
+        assert!(
+            set.symbols
+                .iter()
+                .any(|s| s.symbol_type == SymbolType::NorthArrow)
+        );
     }
 
     #[test]

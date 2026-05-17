@@ -9,7 +9,7 @@
 //!     drawing_dump <fixture.json>
 
 use domain::{Building, LayerFunction, ParametricWall, WallLayer, WallType};
-use drawing::{export_to_svg, generate_floor_plan, Config};
+use drawing::{Config, export_to_svg, generate_floor_plan};
 use glam::{Vec2, Vec3};
 use serde::Deserialize;
 use std::fs;
@@ -54,8 +54,8 @@ fn main() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("usage: drawing_dump <fixture.json>"))?
         .into();
 
-    let bytes = fs::read(&path)
-        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
+    let bytes =
+        fs::read(&path).map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
     let fixture: FixtureJson = serde_json::from_slice(&bytes)?;
 
     let mut building = Building::default();

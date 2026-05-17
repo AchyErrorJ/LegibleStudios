@@ -202,7 +202,7 @@ mod tests {
     fn bounds_2d_to_3d_maps_y_axis_to_z_axis() {
         let b = RoomBounds {
             x: 0.0,
-            y: 1000.0,    // y here is Z in 3D
+            y: 1000.0, // y here is Z in 3D
             width: 4000.0,
             height: 3500.0,
         };

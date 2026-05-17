@@ -6,18 +6,16 @@
 use crate::convert::layout_to_building;
 use archgeometry::{SchemaDocument, SchemaDoor, SchemaWall, SchemaWindow};
 use domain::Building;
-use drawing::{generate_floor_plan, Arc2D, Config, Hatch2D, Line2D, Point2D, Polyline2D, SliceResult};
+use drawing::{
+    Arc2D, Config, Hatch2D, Line2D, Point2D, Polyline2D, SliceResult, generate_floor_plan,
+};
 use glam::{Vec2, Vec3};
 
 /// Wall thickness assumed for door/window-on-wall geometry when the
 /// schema doesn't pin one. Matches `qbd_interface.cpp:994` (exterior)
 /// and `:995` (interior).
 fn wall_thickness_for(category: &str) -> f32 {
-    if category == "interior" {
-        115.0
-    } else {
-        175.0
-    }
+    if category == "interior" { 115.0 } else { 175.0 }
 }
 
 /// Generate the full floor-plan SliceResult, including doors and windows.
@@ -114,9 +112,7 @@ fn add_door_primitives(result: &mut SliceResult, door: &SchemaDoor, walls: &[Sch
     }
 
     // Swing door: leaf line + 90° arc from the hinge.
-    let swing_left = door.swing == "left_in"
-        || door.swing == "left_out"
-        || door.swing == "left";
+    let swing_left = door.swing == "left_in" || door.swing == "left_out" || door.swing == "left";
     let swing_in = door.swing == "left_in" || door.swing == "right_in";
 
     let (hinge_pos, swing_dir) = if swing_left {

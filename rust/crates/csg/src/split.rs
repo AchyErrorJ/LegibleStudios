@@ -85,13 +85,21 @@ pub fn split_triangle(
     // Fan-triangulate the front polygon.
     if front_verts.len() >= 3 {
         for i in 1..front_verts.len() - 1 {
-            front.push(Triangle::new(front_verts[0], front_verts[i], front_verts[i + 1]));
+            front.push(Triangle::new(
+                front_verts[0],
+                front_verts[i],
+                front_verts[i + 1],
+            ));
         }
     }
     // Fan-triangulate the back polygon.
     if back_verts.len() >= 3 {
         for i in 1..back_verts.len() - 1 {
-            back.push(Triangle::new(back_verts[0], back_verts[i], back_verts[i + 1]));
+            back.push(Triangle::new(
+                back_verts[0],
+                back_verts[i],
+                back_verts[i + 1],
+            ));
         }
     }
 }

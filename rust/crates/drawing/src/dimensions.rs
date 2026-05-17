@@ -168,16 +168,8 @@ pub fn room_interior_dims(
     room_height: f32,
     inset: f32,
 ) -> (LinearDim, LinearDim) {
-    let width = LinearDim::horizontal_mm(
-        room_x,
-        room_x + room_width,
-        room_y + inset,
-    );
-    let height = LinearDim::vertical_mm(
-        room_y,
-        room_y + room_height,
-        room_x + inset,
-    );
+    let width = LinearDim::horizontal_mm(room_x, room_x + room_width, room_y + inset);
+    let height = LinearDim::vertical_mm(room_y, room_y + room_height, room_x + inset);
     (width, height)
 }
 

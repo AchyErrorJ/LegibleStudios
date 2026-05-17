@@ -33,7 +33,6 @@ pub struct LayerFastener {
     pub withdrawal_capacity: f32,
 }
 
-
 /// Code requirement an assembly must meet. Port of `types.hpp:561-568`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct AssemblyConstraint {

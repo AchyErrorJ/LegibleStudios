@@ -5,7 +5,7 @@
 //! and `:802-817` (`Slicer2D::wallDetailToSVG`).
 
 use crate::config::Config;
-use crate::primitives::{Dimension2D, Hatch2D, Point2D, Polyline2D, SliceResult, Text2D};
+use crate::primitives::{Dimension2D, Hatch2D, Polyline2D, SliceResult, Text2D};
 use crate::slice::create_material_hatch;
 use crate::svg::export_to_svg;
 use domain::WallType;

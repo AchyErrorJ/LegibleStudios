@@ -188,11 +188,15 @@ pub fn generate_section_sheet_svg(input: &SectionInput, cut: &SectionCut, scale:
     let (min_x, max_x) = elements
         .iter()
         .map(|e| e.x)
-        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), x| (a.min(x), b.max(x)));
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), x| {
+            (a.min(x), b.max(x))
+        });
     let (min_y, max_y) = elements
         .iter()
         .flat_map(|e| [e.y_bottom, e.y_top])
-        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), y| (a.min(y), b.max(y)));
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), y| {
+            (a.min(y), b.max(y))
+        });
 
     let (min_x, max_x) = if elements.is_empty() {
         (0.0_f32, 10_000.0_f32)
@@ -235,9 +239,13 @@ pub fn generate_section_sheet_svg(input: &SectionInput, cut: &SectionCut, scale:
     s.push_str("    .roof { fill: url(#shingle-pattern); stroke: #000; stroke-width: 6; }\n");
     s.push_str("    .grade { stroke: #666; stroke-width: 6; fill: none; }\n");
     s.push_str("    .level-line { stroke: #999; stroke-width: 2; stroke-dasharray: 50,25; }\n");
-    s.push_str("    .level-text { font-family: Arial, sans-serif; font-size: 200px; fill: #666; }\n");
+    s.push_str(
+        "    .level-text { font-family: Arial, sans-serif; font-size: 200px; fill: #666; }\n",
+    );
     s.push_str("    .title { font-family: Arial, sans-serif; font-size: 400px; font-weight: bold; fill: #333; }\n");
-    s.push_str("    .dimension { font-family: Arial, sans-serif; font-size: 180px; fill: #333; }\n");
+    s.push_str(
+        "    .dimension { font-family: Arial, sans-serif; font-size: 180px; fill: #333; }\n",
+    );
     s.push_str("    .label { font-family: Arial, sans-serif; font-size: 250px; fill: #333; }\n");
     s.push_str("    .cut-line { stroke: #c00; stroke-width: 4; stroke-dasharray: 20,10; }\n");
     s.push_str("  </style>\n");
@@ -384,9 +392,15 @@ mod tests {
         // and intersect cut_x=2500; the 2 Z-running walls (left/right) have
         // a single X coordinate (0 or 5000), neither within ±100 of 2500.
         // So 2 walls hit. Plus the floor slab = 1 floor element.
-        let wall_count = elements.iter().filter(|e| e.element_type == ElementType::Wall).count();
+        let wall_count = elements
+            .iter()
+            .filter(|e| e.element_type == ElementType::Wall)
+            .count();
         assert_eq!(wall_count, 2);
-        let floor_count = elements.iter().filter(|e| e.element_type == ElementType::Floor).count();
+        let floor_count = elements
+            .iter()
+            .filter(|e| e.element_type == ElementType::Floor)
+            .count();
         assert_eq!(floor_count, 1);
     }
 
@@ -409,7 +423,10 @@ mod tests {
             view_direction: ViewDirection::East,
         };
         let elements = generate_section_elements(&input, &cut);
-        let walls: Vec<_> = elements.iter().filter(|e| e.element_type == ElementType::Wall).collect();
+        let walls: Vec<_> = elements
+            .iter()
+            .filter(|e| e.element_type == ElementType::Wall)
+            .collect();
         // 2 Z-running walls don't hit (X-extent is a single value); 2 X-running
         // walls (at Z=0 and Z=4000) span X=[0,5000] so both hit; plus the
         // new X-running wall in the middle hits too. 3 hits.

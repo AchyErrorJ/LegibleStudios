@@ -6,11 +6,10 @@
 
 use archgeometry::SchemaDocument;
 use drawing::{
+    Config, DrawingType, ElevationDirection, ElevationInput, ElevationOpeningInput,
+    ElevationWallInput, ProjectInfo, SectionInput, SectionWallInput, SitePlan, WallSectionDetail,
     drawing_info_for, export_to_svg, generate_elevation_sheet_svg, generate_section_sheet_svg,
     generate_site_plan_svg, generate_title_block, generate_wall_detail, wall_detail_to_svg,
-    Config, DrawingType, ElevationDirection, ElevationInput, ElevationOpeningInput,
-    ElevationWallInput, ProjectInfo, SectionCut, SectionInput, SectionWallInput, SitePlan,
-    WallSectionDetail,
 };
 
 use crate::floor_plan::generate_floor_plan_with_openings;
@@ -490,7 +489,11 @@ mod tests {
         });
         let docs = generate_documentation(&doc, "Mixed");
         assert_eq!(docs.wall_details.len(), 3);
-        let ids: Vec<_> = docs.wall_details.iter().map(|d| d.detail.wall_type_id.as_str()).collect();
+        let ids: Vec<_> = docs
+            .wall_details
+            .iter()
+            .map(|d| d.detail.wall_type_id.as_str())
+            .collect();
         assert!(ids.contains(&"ext_2x6_r21"));
         assert!(ids.contains(&"int_2x4"));
         assert!(ids.contains(&"wet_2x6"));

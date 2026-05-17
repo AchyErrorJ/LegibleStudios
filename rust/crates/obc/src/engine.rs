@@ -10,9 +10,8 @@
 use crate::format::{cpp_float, cpp_int};
 use crate::report::{ComplianceCheck, ComplianceReport, ComplianceStatus};
 use crate::tables::{
-    HeaderEntry, SpanTable, StudTable, load_header_tables_from_json,
-    load_joist_tables_from_json, load_rafter_tables_from_json, load_stud_tables_from_json,
-    make_table_key,
+    HeaderEntry, SpanTable, StudTable, load_header_tables_from_json, load_joist_tables_from_json,
+    load_rafter_tables_from_json, load_stud_tables_from_json, make_table_key,
 };
 use domain::{Building, ElementType, LayerFunction, WallType};
 use std::collections::HashMap;
@@ -78,7 +77,9 @@ impl OBCEngine {
         self.library_path = library_path.display().to_string();
         let tables_dir = library_path.join("tables");
         if !tables_dir.exists() {
-            return Err(InitError::TablesDirNotFound(tables_dir.display().to_string()));
+            return Err(InitError::TablesDirNotFound(
+                tables_dir.display().to_string(),
+            ));
         }
 
         for (filename, kind) in [
@@ -106,7 +107,11 @@ impl OBCEngine {
         Ok(())
     }
 
-    fn load_table_kind(&mut self, kind: TableKind, json_str: &str) -> Result<(), serde_json::Error> {
+    fn load_table_kind(
+        &mut self,
+        kind: TableKind,
+        json_str: &str,
+    ) -> Result<(), serde_json::Error> {
         match kind {
             TableKind::Joists => {
                 for (k, v) in load_joist_tables_from_json(json_str)? {
@@ -373,7 +378,8 @@ impl OBCEngine {
         };
 
         // Height check
-        let max_height = self.stud_max_height(size, spacing_inches, is_load_bearing, stories_supported);
+        let max_height =
+            self.stud_max_height(size, spacing_inches, is_load_bearing, stories_supported);
         let mut height_check = ComplianceCheck {
             rule_name: "Maximum Wall Height".into(),
             code_section: "OBC 9.23.10.1".into(),
@@ -397,9 +403,12 @@ impl OBCEngine {
                 height_check.requirement = format!("Max height: {} ft", cpp_float(max));
                 height_check.actual = format!("{} ft", cpp_float(height_ft));
                 let mut msg = String::from("Wall height exceeds maximum. ");
-                if let Some(required) =
-                    self.required_stud_size(height_ft, spacing_inches, is_load_bearing, stories_supported)
-                {
+                if let Some(required) = self.required_stud_size(
+                    height_ft,
+                    spacing_inches,
+                    is_load_bearing,
+                    stories_supported,
+                ) {
                     msg = format!("{msg}Recommended: {required}");
                 }
                 height_check.message = msg;
@@ -492,7 +501,8 @@ impl OBCEngine {
                 check.status = ComplianceStatus::Fail;
                 check.requirement = format!("Max span: {} ft", cpp_float(max));
                 check.actual = format!("{} ft", cpp_float(opening_width_ft));
-                check.message = match self.required_header_size(opening_width_ft, stories_supported) {
+                check.message = match self.required_header_size(opening_width_ft, stories_supported)
+                {
                     Some(required) => format!("Header undersized. Recommended: {required}"),
                     None => {
                         "No standard header size available for this span. Engineering required."
@@ -708,7 +718,8 @@ mod tests {
             max_stories_supported: 2,
             notes: String::new(),
         });
-        e.stud_tables.insert("load_bearing_exterior".into(), stud_table);
+        e.stud_tables
+            .insert("load_bearing_exterior".into(), stud_table);
 
         // Header: 2-2x10 with realistic spans.
         e.header_table.push(HeaderEntry {
@@ -739,7 +750,10 @@ mod tests {
     fn joist_max_span_lookup() {
         let e = engine_with_minimal_tables();
         // 2x10 SPF No.2 @ 16" oc → 16 ft.
-        assert_eq!(e.joist_max_span("SPF", "No.2", "2x10", 16, 40.0), Some(16.0));
+        assert_eq!(
+            e.joist_max_span("SPF", "No.2", "2x10", 16, 40.0),
+            Some(16.0)
+        );
     }
 
     #[test]
@@ -786,8 +800,10 @@ mod tests {
         // 2-2x10 max 1-story span = 9 ft. 12-ft opening fails.
         let r = e.validate_header("2-2x10", 12.0, 1);
         assert_eq!(r.overall_status, ComplianceStatus::Fail);
-        assert!(r.checks[0].message.contains("Engineering required") ||
-                r.checks[0].message.contains("undersized"));
+        assert!(
+            r.checks[0].message.contains("Engineering required")
+                || r.checks[0].message.contains("undersized")
+        );
     }
 
     #[test]

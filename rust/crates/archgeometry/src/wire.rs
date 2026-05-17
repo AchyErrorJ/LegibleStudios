@@ -80,9 +80,7 @@ pub mod map_or_empty_array {
         let v = Value::deserialize(d)?;
         match v {
             Value::Array(a) if a.is_empty() => Ok(HashMap::new()),
-            Value::Object(_) => {
-                serde_json::from_value(v).map_err(serde::de::Error::custom)
-            }
+            Value::Object(_) => serde_json::from_value(v).map_err(serde::de::Error::custom),
             _ => Err(serde::de::Error::custom(
                 "expected an object or empty array",
             )),
@@ -101,7 +99,10 @@ pub mod vec3_array_vec {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec3>, D::Error> {
         let arrays = Vec::<[f32; 3]>::deserialize(d)?;
-        Ok(arrays.into_iter().map(|a| Vec3::new(a[0], a[1], a[2])).collect())
+        Ok(arrays
+            .into_iter()
+            .map(|a| Vec3::new(a[0], a[1], a[2]))
+            .collect())
     }
 }
 
@@ -165,7 +166,10 @@ mod tests {
             pts: vec![Vec3::ZERO, Vec3::X, Vec3::new(1.0, 2.0, 3.0)],
         };
         let json = serde_json::to_string(&v).unwrap();
-        assert_eq!(json, r#"{"pts":[[0.0,0.0,0.0],[1.0,0.0,0.0],[1.0,2.0,3.0]]}"#);
+        assert_eq!(
+            json,
+            r#"{"pts":[[0.0,0.0,0.0],[1.0,0.0,0.0],[1.0,2.0,3.0]]}"#
+        );
         let back: WithVec3Vec = serde_json::from_str(&json).unwrap();
         assert_eq!(back, v);
     }

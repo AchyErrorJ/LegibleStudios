@@ -77,7 +77,9 @@ fn required_joist_size_picks_smallest_fit() {
     //   2x6  spacing_16 = 9.5   (too small)
     //   2x8  spacing_16 = 12.5  (too small)
     //   2x10 spacing_16 = 16.0  (fits)
-    let size = e.required_joist_size("SPF", "No.2", 13.0, 16, 40.0).unwrap();
+    let size = e
+        .required_joist_size("SPF", "No.2", 13.0, 16, 40.0)
+        .unwrap();
     assert_eq!(size, "2x10");
 }
 

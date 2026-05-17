@@ -14,10 +14,7 @@ use archgeometry::{
     SchemaDocument, SchemaDoor, SchemaFloor, SchemaRoof, SchemaWall, SchemaWindow,
     WallType as SchemaWallType,
 };
-use domain::{
-    Building, ElementType, ParametricWall, StructuralElement, WallType,
-    materials,
-};
+use domain::{Building, ElementType, ParametricWall, StructuralElement, WallType, materials};
 use glam::{Vec2, Vec3};
 
 use crate::wall_types;
@@ -142,7 +139,9 @@ fn door_to_element(door: &SchemaDoor, walls: &[SchemaWall]) -> Option<Structural
     let wall_dir = (wall.end - wall.start).normalize_or_zero();
     let wall_length_xz = Vec2::new(wall.end.x - wall.start.x, wall.end.z - wall.start.z).length();
 
-    let door_offset = door.offset.clamp(0.0, (wall_length_xz - door.width).max(0.0));
+    let door_offset = door
+        .offset
+        .clamp(0.0, (wall_length_xz - door.width).max(0.0));
     let door_center = wall.start + wall_dir * (door_offset + door.width * 0.5);
 
     let start = Vec3::new(
@@ -175,7 +174,9 @@ fn window_to_element(window: &SchemaWindow, walls: &[SchemaWall]) -> Option<Stru
     let wall_dir = (wall.end - wall.start).normalize_or_zero();
     let wall_length_xz = Vec2::new(wall.end.x - wall.start.x, wall.end.z - wall.start.z).length();
 
-    let win_offset = window.offset.clamp(0.0, (wall_length_xz - window.width).max(0.0));
+    let win_offset = window
+        .offset
+        .clamp(0.0, (wall_length_xz - window.width).max(0.0));
     let win_center = wall.start + wall_dir * (win_offset + window.width * 0.5);
     let sill_y = wall.start.y + window.sill_height;
 
@@ -352,10 +353,7 @@ mod tests {
     #[test]
     fn walls_to_parametric_one_per_wall_with_xz_projection() {
         let mut b = Building::default();
-        let walls = vec![
-            ext_wall(0.0, 5000.0, 0.0),
-            ext_wall(5000.0, 5000.0, 4000.0),
-        ];
+        let walls = vec![ext_wall(0.0, 5000.0, 0.0), ext_wall(5000.0, 5000.0, 4000.0)];
         walls_to_parametric(&mut b, &walls);
         assert_eq!(b.parametric_walls.len(), 2);
         assert_eq!(b.parametric_walls[0].start_point, Vec2::ZERO);
@@ -427,7 +425,10 @@ mod tests {
             ..Default::default()
         };
         let b = layout_to_building(&doc);
-        let door = b.elements.iter().find(|e| e.element_type == ElementType::Door);
+        let door = b
+            .elements
+            .iter()
+            .find(|e| e.element_type == ElementType::Door);
         assert!(door.is_some());
         let door = door.unwrap();
         assert_eq!(door.width, 900.0);
@@ -449,7 +450,11 @@ mod tests {
             ..Default::default()
         };
         let b = layout_to_building(&doc);
-        assert!(b.elements.iter().all(|e| e.element_type != ElementType::Door));
+        assert!(
+            b.elements
+                .iter()
+                .all(|e| e.element_type != ElementType::Door)
+        );
     }
 
     #[test]
@@ -467,7 +472,10 @@ mod tests {
             ..Default::default()
         };
         let b = layout_to_building(&doc);
-        let win = b.elements.iter().find(|e| e.element_type == ElementType::Window);
+        let win = b
+            .elements
+            .iter()
+            .find(|e| e.element_type == ElementType::Window);
         assert!(win.is_some());
         let win = win.unwrap();
         // Start should be at sill height (Y).

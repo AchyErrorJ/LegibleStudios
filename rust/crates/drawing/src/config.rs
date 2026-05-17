@@ -233,10 +233,13 @@ impl Config {
     /// (`slicer_2d.cpp:476`).
     #[must_use]
     pub fn hatch_for(&self, material: &str) -> HatchSpec {
-        self.material_hatches.get(material).cloned().unwrap_or(HatchSpec {
-            pattern: "ANSI31".into(),
-            scale: 1.0,
-        })
+        self.material_hatches
+            .get(material)
+            .cloned()
+            .unwrap_or(HatchSpec {
+                pattern: "ANSI31".into(),
+                scale: 1.0,
+            })
     }
 }
 

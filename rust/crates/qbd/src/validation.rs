@@ -33,7 +33,11 @@ impl ValidationResult {
         use std::fmt::Write as _;
         let mut out = String::from("=== QBD Validation Summary ===\n");
         let pass_label = if self.overall_pass { "PASS" } else { "FAIL" };
-        let thermal_label = if self.thermal_compliance { "PASS" } else { "FAIL" };
+        let thermal_label = if self.thermal_compliance {
+            "PASS"
+        } else {
+            "FAIL"
+        };
         #[allow(clippy::cast_possible_truncation)]
         let r_int = self.average_r_value as i32;
         let _ = writeln!(out, "Overall: {pass_label}");

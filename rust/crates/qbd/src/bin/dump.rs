@@ -87,8 +87,7 @@ fn main() -> anyhow::Result<()> {
         // — see m5_diff.py for the picture).
         let write_sheet = |name: &str, body: &str| -> anyhow::Result<()> {
             let p = dir.join(name);
-            std::fs::write(&p, body)
-                .with_context(|| format!("failed to write {}", p.display()))?;
+            std::fs::write(&p, body).with_context(|| format!("failed to write {}", p.display()))?;
             eprintln!("  wrote {} ({} bytes)", p.display(), body.len());
             Ok(())
         };
@@ -111,7 +110,11 @@ fn main() -> anyhow::Result<()> {
         }
 
         for (i, detail) in docs.wall_details.iter().enumerate() {
-            let name = format!("07_wall_detail_{:02}_{}.svg", i + 1, detail.detail.wall_type_id);
+            let name = format!(
+                "07_wall_detail_{:02}_{}.svg",
+                i + 1,
+                detail.detail.wall_type_id
+            );
             write_sheet(&name, &detail.svg)?;
         }
 
@@ -132,8 +135,7 @@ fn main() -> anyhow::Result<()> {
             .collect();
         let manifest = format!(
             "{{\n  \"project\": \"{}\",\n  \"generated_date\": \"{}\",\n  \"produced\": [\n    \"01_site_plan.svg\",\n    \"02_floor_plan.svg\"{elev_lines},\n    \"04_section_aa.svg\"{detail_lines}\n  ],\n  \"deferred_to_m5_plus\": [\n    \"05_door_schedule.svg\",\n    \"05_window_schedule.svg\"\n  ]\n}}\n",
-            docs.project_name,
-            docs.generated_date,
+            docs.project_name, docs.generated_date,
         );
         std::fs::write(dir.join("manifest.json"), manifest)?;
         eprintln!("  wrote {}/manifest.json", dir.display());
@@ -145,7 +147,11 @@ fn main() -> anyhow::Result<()> {
         Some(out_path) => {
             std::fs::write(&out_path, &docs.floor_plan_svg)
                 .with_context(|| format!("failed to write {}", out_path.display()))?;
-            eprintln!("wrote {} ({} bytes)", out_path.display(), docs.floor_plan_svg.len());
+            eprintln!(
+                "wrote {} ({} bytes)",
+                out_path.display(),
+                docs.floor_plan_svg.len()
+            );
         }
         None => {
             print!("{}", docs.floor_plan_svg);

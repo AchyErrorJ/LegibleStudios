@@ -9,7 +9,7 @@
 //! on the Rust side. The diff oracle slot is wired in the docs.
 
 use domain::{Building, ParametricWall, WallLayer, WallType};
-use drawing::{export_to_svg, generate_floor_plan, Config};
+use drawing::{Config, export_to_svg, generate_floor_plan};
 use glam::Vec2;
 
 /// 5 m × 4 m room, four walls, 150 mm thick.

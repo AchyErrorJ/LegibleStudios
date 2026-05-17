@@ -15,9 +15,9 @@ pub mod schedule;
 pub mod validation;
 pub mod wall_types;
 
-pub use convert::{layout_to_building, walls_to_parametric, wall_type_for_wall};
-pub use documentation::{generate_documentation, Documentation};
+pub use convert::{layout_to_building, wall_type_for_wall, walls_to_parametric};
+pub use documentation::{Documentation, generate_documentation};
 pub use floor_plan::generate_floor_plan_with_openings;
 pub use schedule::{door_entries, window_entries};
-pub use validation::{validate_layout, validate_wall, ValidationResult};
+pub use validation::{ValidationResult, validate_layout, validate_wall};
 pub use wall_types::{exterior_2x6_r21, for_category, interior_2x4, wet_2x6};

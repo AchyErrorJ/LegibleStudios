@@ -113,11 +113,7 @@ impl SchemaWall {
         let dz = self.end.z - self.start.z;
         let dir = Vec2::new(dx, dz);
         let len = dir.length();
-        if len > 0.0001 {
-            dir / len
-        } else {
-            Vec2::ZERO
-        }
+        if len > 0.0001 { dir / len } else { Vec2::ZERO }
     }
 }
 

@@ -141,7 +141,11 @@ pub fn slice_element(
             (element.end.z - element.start.z).abs() * 0.5,
         ),
         // Same as Column for any other element type — matches the C++ default branch.
-        _ => Vec3::new(element.width * 0.5, element.depth * 0.5, element.width * 0.5),
+        _ => Vec3::new(
+            element.width * 0.5,
+            element.depth * 0.5,
+            element.width * 0.5,
+        ),
     };
     #[allow(clippy::match_same_arms)] // intentional: keep arms parallel to the C++ switch
 
@@ -189,14 +193,25 @@ pub fn slice_box(center: Vec3, extents: Vec3, plane: &SlicePlane) -> Vec<Line2D>
 
     // 12 edges.
     let edges: [(usize, usize); 12] = [
-        (0, 1), (1, 2), (2, 3), (3, 0),     // bottom face
-        (4, 5), (5, 6), (6, 7), (7, 4),     // top face
-        (0, 4), (1, 5), (2, 6), (3, 7),     // vertical edges
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 0), // bottom face
+        (4, 5),
+        (5, 6),
+        (6, 7),
+        (7, 4), // top face
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7), // vertical edges
     ];
 
     let mut intersections: Vec<Vec2> = Vec::with_capacity(12);
     for (i, j) in edges {
-        if let Some(pt) = crate::slice_plane::intersect_line_with_plane(corners[i], corners[j], plane) {
+        if let Some(pt) =
+            crate::slice_plane::intersect_line_with_plane(corners[i], corners[j], plane)
+        {
             intersections.push(pt);
         }
     }
@@ -333,21 +348,36 @@ mod tests {
     #[test]
     fn horizontal_slice_below_wall_returns_empty() {
         let plane = SlicePlane::horizontal(-100.0, "Below");
-        let r = slice_wall(&straight_wall(), &simple_wall_type(), &plane, &Config::with_defaults());
+        let r = slice_wall(
+            &straight_wall(),
+            &simple_wall_type(),
+            &plane,
+            &Config::with_defaults(),
+        );
         assert!(r.is_empty());
     }
 
     #[test]
     fn horizontal_slice_above_wall_returns_empty() {
         let plane = SlicePlane::horizontal(5000.0, "Above");
-        let r = slice_wall(&straight_wall(), &simple_wall_type(), &plane, &Config::with_defaults());
+        let r = slice_wall(
+            &straight_wall(),
+            &simple_wall_type(),
+            &plane,
+            &Config::with_defaults(),
+        );
         assert!(r.is_empty());
     }
 
     #[test]
     fn horizontal_slice_at_wall_height_produces_outline_and_hatch() {
         let plane = SlicePlane::horizontal(1500.0, "Plan");
-        let r = slice_wall(&straight_wall(), &simple_wall_type(), &plane, &Config::with_defaults());
+        let r = slice_wall(
+            &straight_wall(),
+            &simple_wall_type(),
+            &plane,
+            &Config::with_defaults(),
+        );
         assert_eq!(r.polylines.len(), 1);
         assert_eq!(r.polylines[0].points.len(), 4);
         assert_eq!(r.polylines[0].layer, "A-WALL");

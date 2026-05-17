@@ -157,11 +157,8 @@ mod tests {
     fn intersect_horizontal_returns_midpoint_for_crossing_segment() {
         // Vertical segment from y=0 to y=10, plane at y=5 → midpoint.
         let plane = SlicePlane::horizontal(5.0, "Cut");
-        let p = intersect_line_with_plane(
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(2.0, 10.0, 4.0),
-            &plane,
-        );
+        let p =
+            intersect_line_with_plane(Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 10.0, 4.0), &plane);
         let p = p.unwrap();
         // Y=5 is halfway, so x=1, z=2.
         assert!((p - Vec2::new(1.0, 2.0)).length() < 1e-6);
@@ -170,11 +167,8 @@ mod tests {
     #[test]
     fn intersect_returns_none_when_segment_does_not_cross() {
         let plane = SlicePlane::horizontal(5.0, "Cut");
-        let p = intersect_line_with_plane(
-            Vec3::new(0.0, 10.0, 0.0),
-            Vec3::new(0.0, 20.0, 0.0),
-            &plane,
-        );
+        let p =
+            intersect_line_with_plane(Vec3::new(0.0, 10.0, 0.0), Vec3::new(0.0, 20.0, 0.0), &plane);
         assert!(p.is_none());
     }
 
@@ -182,11 +176,8 @@ mod tests {
     fn intersect_segment_with_one_endpoint_on_plane_returns_that_endpoint() {
         let plane = SlicePlane::horizontal(0.0, "Cut");
         // p1 at y=0 (on plane), p2 at y=5 → d1=0, d2=5, d1*d2=0 (not strictly > 0).
-        let p = intersect_line_with_plane(
-            Vec3::new(3.0, 0.0, 4.0),
-            Vec3::new(3.0, 5.0, 4.0),
-            &plane,
-        );
+        let p =
+            intersect_line_with_plane(Vec3::new(3.0, 0.0, 4.0), Vec3::new(3.0, 5.0, 4.0), &plane);
         assert_eq!(p, Some(Vec2::new(3.0, 4.0)));
     }
 }

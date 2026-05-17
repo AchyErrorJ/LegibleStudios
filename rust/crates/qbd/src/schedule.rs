@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use archgeometry::SchemaDocument;
-use drawing::{door_type_for_width, window_type_for_width, ScheduleEntry};
+use drawing::{ScheduleEntry, door_type_for_width, window_type_for_width};
 
 /// `"Living - Kitchen"` if both rooms known; one-sided if only one;
 /// `"Wall <idx>"` fallback when neither is set. Matches the Python
@@ -25,7 +25,12 @@ fn location_for(
         if id.is_empty() {
             None
         } else {
-            Some(room_names.get(id).cloned().unwrap_or_else(|| id.to_string()))
+            Some(
+                room_names
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| id.to_string()),
+            )
         }
     };
     match (lookup(room1), lookup(room2)) {
@@ -39,7 +44,11 @@ fn room_name_map(doc: &SchemaDocument) -> HashMap<String, String> {
     doc.rooms
         .iter()
         .map(|(id, r)| {
-            let name = if r.name.is_empty() { id.clone() } else { r.name.clone() };
+            let name = if r.name.is_empty() {
+                id.clone()
+            } else {
+                r.name.clone()
+            };
             (id.clone(), name)
         })
         .collect()
@@ -105,9 +114,24 @@ mod tests {
     fn door_entries_label_by_width() {
         let doc = doc_with(
             vec![
-                SchemaDoor { wall_index: 0, width: 800.0, height: 2100.0, ..Default::default() },
-                SchemaDoor { wall_index: 1, width: 1500.0, height: 2100.0, ..Default::default() },
-                SchemaDoor { wall_index: 2, width: 2200.0, height: 2100.0, ..Default::default() },
+                SchemaDoor {
+                    wall_index: 0,
+                    width: 800.0,
+                    height: 2100.0,
+                    ..Default::default()
+                },
+                SchemaDoor {
+                    wall_index: 1,
+                    width: 1500.0,
+                    height: 2100.0,
+                    ..Default::default()
+                },
+                SchemaDoor {
+                    wall_index: 2,
+                    width: 2200.0,
+                    height: 2100.0,
+                    ..Default::default()
+                },
             ],
             vec![],
         );
@@ -124,9 +148,24 @@ mod tests {
         let doc = doc_with(
             vec![],
             vec![
-                SchemaWindow { wall_index: 0, width: 600.0, sill_height: 1100.0, ..Default::default() },
-                SchemaWindow { wall_index: 1, width: 1000.0, sill_height: 900.0, ..Default::default() },
-                SchemaWindow { wall_index: 2, width: 1800.0, sill_height: 600.0, ..Default::default() },
+                SchemaWindow {
+                    wall_index: 0,
+                    width: 600.0,
+                    sill_height: 1100.0,
+                    ..Default::default()
+                },
+                SchemaWindow {
+                    wall_index: 1,
+                    width: 1000.0,
+                    sill_height: 900.0,
+                    ..Default::default()
+                },
+                SchemaWindow {
+                    wall_index: 2,
+                    width: 1800.0,
+                    sill_height: 600.0,
+                    ..Default::default()
+                },
             ],
         );
         let rows = window_entries(&doc);
@@ -146,7 +185,11 @@ mod tests {
     #[test]
     fn missing_room_info_falls_back_to_wall_index() {
         let doc = doc_with(
-            vec![SchemaDoor { wall_index: 7, width: 900.0, ..Default::default() }],
+            vec![SchemaDoor {
+                wall_index: 7,
+                width: 900.0,
+                ..Default::default()
+            }],
             vec![],
         );
         assert_eq!(door_entries(&doc)[0].location, "Wall 7");

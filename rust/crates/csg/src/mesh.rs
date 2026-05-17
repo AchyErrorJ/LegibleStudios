@@ -18,7 +18,10 @@ impl Triangle {
     #[must_use]
     pub fn new(a: Vec3, b: Vec3, c: Vec3) -> Self {
         let normal = (b - a).cross(c - a).normalize();
-        Self { v: [a, b, c], normal }
+        Self {
+            v: [a, b, c],
+            normal,
+        }
     }
 
     #[must_use]
@@ -274,17 +277,23 @@ pub(crate) mod tests {
         // Verified by hand: each cross((b-a), (c-a)) → expected axis sign.
         let faces = vec![
             // -Y (bottom, normal points down)
-            [0, 1, 2], [0, 2, 3],
+            [0, 1, 2],
+            [0, 2, 3],
             // +Y (top, normal points up)
-            [4, 7, 6], [4, 6, 5],
+            [4, 7, 6],
+            [4, 6, 5],
             // -Z (front)
-            [0, 4, 5], [0, 5, 1],
+            [0, 4, 5],
+            [0, 5, 1],
             // +Z (back)
-            [3, 2, 6], [3, 6, 7],
+            [3, 2, 6],
+            [3, 6, 7],
             // -X (left)
-            [0, 3, 7], [0, 7, 4],
+            [0, 3, 7],
+            [0, 7, 4],
             // +X (right)
-            [1, 5, 6], [1, 6, 2],
+            [1, 5, 6],
+            [1, 6, 2],
         ];
         Mesh::from_vertices_indices(&verts, &faces)
     }

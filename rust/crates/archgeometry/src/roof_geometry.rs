@@ -71,7 +71,8 @@ pub fn generate(roof: &SchemaRoof) -> RoofGeometry {
         ..Default::default()
     };
     for surface in &roof.surfaces {
-        plan.polygons.push(generate_plan_polygon(surface, &roof.material));
+        plan.polygons
+            .push(generate_plan_polygon(surface, &roof.material));
     }
 
     RoofGeometry {
@@ -279,22 +280,32 @@ pub fn generate_hip_default(
         // Ridge runs along Z — the C++ uses hand-picked approximate normals
         // here rather than re-deriving via cross products (see `roof_geometry.cpp:335`+).
         mesh.add_quad(
-            c3, c0, ridge_start, ridge_end,
+            c3,
+            c0,
+            ridge_start,
+            ridge_end,
             Vec3::new(-1.0, 0.5, 0.0).normalize(),
             color,
         );
         mesh.add_quad(
-            c1, c2, ridge_end, ridge_start,
+            c1,
+            c2,
+            ridge_end,
+            ridge_start,
             Vec3::new(1.0, 0.5, 0.0).normalize(),
             color,
         );
         mesh.add_triangle(
-            c0, c1, ridge_start,
+            c0,
+            c1,
+            ridge_start,
             Vec3::new(0.0, 0.5, -1.0).normalize(),
             color,
         );
         mesh.add_triangle(
-            c2, c3, ridge_end,
+            c2,
+            c3,
+            ridge_end,
             Vec3::new(0.0, 0.5, 1.0).normalize(),
             color,
         );

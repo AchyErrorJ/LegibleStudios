@@ -369,7 +369,10 @@ pub struct Geometry2D {
 impl Geometry2D {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.lines.is_empty() && self.polygons.is_empty() && self.arcs.is_empty() && self.texts.is_empty()
+        self.lines.is_empty()
+            && self.polygons.is_empty()
+            && self.arcs.is_empty()
+            && self.texts.is_empty()
     }
 
     /// Merge `other` into this collection.

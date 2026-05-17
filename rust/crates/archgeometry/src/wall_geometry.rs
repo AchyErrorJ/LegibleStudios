@@ -156,8 +156,16 @@ pub fn solid_mesh(start: Vec3, end: Vec3, height: f32, thickness: f32, color: Ve
     let half_t = thickness * 0.5;
 
     // Bottom corners.
-    let b0 = Vec3::new(start.x + perp.x * half_t, start.y, start.z + perp.y * half_t);
-    let b1 = Vec3::new(start.x - perp.x * half_t, start.y, start.z - perp.y * half_t);
+    let b0 = Vec3::new(
+        start.x + perp.x * half_t,
+        start.y,
+        start.z + perp.y * half_t,
+    );
+    let b1 = Vec3::new(
+        start.x - perp.x * half_t,
+        start.y,
+        start.z - perp.y * half_t,
+    );
     let b2 = Vec3::new(end.x - perp.x * half_t, start.y, end.z - perp.y * half_t);
     let b3 = Vec3::new(end.x + perp.x * half_t, start.y, end.z + perp.y * half_t);
 
@@ -204,7 +212,11 @@ pub fn mesh_with_cutouts(
 
     // Sort cutouts by offset (stable so duplicates keep insertion order).
     let mut sorted: Vec<OpeningCutout> = cutouts.to_vec();
-    sorted.sort_by(|a, b| a.start_offset.partial_cmp(&b.start_offset).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        a.start_offset
+            .partial_cmp(&b.start_offset)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut current_offset = 0.0_f32;
 
@@ -241,7 +253,13 @@ pub fn mesh_with_cutouts(
                 start.z + dir.y * cut_end,
             );
             let above_height = height - opening_top;
-            mesh.merge(&solid_mesh(above_start, above_end, above_height, thickness, color));
+            mesh.merge(&solid_mesh(
+                above_start,
+                above_end,
+                above_height,
+                thickness,
+                color,
+            ));
         }
 
         // Wall below opening (for windows).

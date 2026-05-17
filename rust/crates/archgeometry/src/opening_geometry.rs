@@ -44,13 +44,23 @@ pub fn generate_door(door: &SchemaDoor, wall: &SchemaWall, wall_thickness: f32) 
     let wall_perp = wall_dir.perp();
 
     let mut frame = generate_door_frame(
-        position, wall_dir, wall_perp, door.width, door.height, wall_thickness,
+        position,
+        wall_dir,
+        wall_perp,
+        door.width,
+        door.height,
+        wall_thickness,
     );
     frame.element_type = "door_frame".to_string();
     frame.lod_hint = 2;
 
     let mut panel = generate_door_panel(
-        position, wall_dir, wall_perp, door.width, door.height, &door.swing,
+        position,
+        wall_dir,
+        wall_perp,
+        door.width,
+        door.height,
+        &door.swing,
     );
     panel.element_type = "door_panel".to_string();
     panel.lod_hint = 2;
@@ -91,7 +101,14 @@ pub fn generate_door_frame(
         position.z - wall_dir.y * half_width,
     );
     push_frame_member(
-        &mut mesh, left_base, frame_width, height, frame_depth, wall_dir, wall_perp, frame_color,
+        &mut mesh,
+        left_base,
+        frame_width,
+        height,
+        frame_depth,
+        wall_dir,
+        wall_perp,
+        frame_color,
     );
 
     let right_base = Vec3::new(
@@ -100,7 +117,14 @@ pub fn generate_door_frame(
         position.z + wall_dir.y * half_width,
     );
     push_frame_member(
-        &mut mesh, right_base, frame_width, height, frame_depth, wall_dir, wall_perp, frame_color,
+        &mut mesh,
+        right_base,
+        frame_width,
+        height,
+        frame_depth,
+        wall_dir,
+        wall_perp,
+        frame_color,
     );
 
     let head_base = Vec3::new(
@@ -109,7 +133,14 @@ pub fn generate_door_frame(
         position.z - wall_dir.y * half_width,
     );
     push_frame_member_horizontal(
-        &mut mesh, head_base, width, frame_width, frame_depth, wall_dir, wall_perp, frame_color,
+        &mut mesh,
+        head_base,
+        width,
+        frame_width,
+        frame_depth,
+        wall_dir,
+        wall_perp,
+        frame_color,
     );
 
     mesh
@@ -139,11 +170,7 @@ pub fn generate_door_panel(
     );
 
     let b0 = panel_base;
-    let b1 = Vec3::new(
-        b0.x + wall_dir.x * width,
-        b0.y,
-        b0.z + wall_dir.y * width,
-    );
+    let b1 = Vec3::new(b0.x + wall_dir.x * width, b0.y, b0.z + wall_dir.y * width);
     let b2 = Vec3::new(
         b1.x - wall_perp.x * panel_thickness,
         b1.y,
@@ -167,12 +194,18 @@ pub fn generate_door_panel(
     mesh.add_quad(b2, t2, t3, b3, back_normal, panel_color);
 
     mesh.add_quad(
-        b0, b3, t3, t0,
+        b0,
+        b3,
+        t3,
+        t0,
         Vec3::new(-wall_dir.x, 0.0, -wall_dir.y),
         panel_color,
     );
     mesh.add_quad(
-        b1, t1, t2, b2,
+        b1,
+        t1,
+        t2,
+        b2,
         Vec3::new(wall_dir.x, 0.0, wall_dir.y),
         panel_color,
     );
@@ -281,12 +314,18 @@ pub fn generate_window(
     let wall_perp = wall_dir.perp();
 
     let mut frame = generate_window_frame(
-        position, wall_dir, wall_perp, window.width, window.height, wall_thickness,
+        position,
+        wall_dir,
+        wall_perp,
+        window.width,
+        window.height,
+        wall_thickness,
     );
     frame.element_type = "window_frame".to_string();
     frame.lod_hint = 2;
 
-    let mut glass = generate_window_glass(position, wall_dir, wall_perp, window.width, window.height);
+    let mut glass =
+        generate_window_glass(position, wall_dir, wall_perp, window.width, window.height);
     glass.element_type = "window_glass".to_string();
     glass.lod_hint = 3;
 
@@ -326,7 +365,14 @@ pub fn generate_window_frame(
         position.z - wall_dir.y * half_width,
     );
     push_frame_member(
-        &mut mesh, left_base, frame_width, height, frame_depth, wall_dir, wall_perp, frame_color,
+        &mut mesh,
+        left_base,
+        frame_width,
+        height,
+        frame_depth,
+        wall_dir,
+        wall_perp,
+        frame_color,
     );
 
     let right_base = Vec3::new(
@@ -335,7 +381,14 @@ pub fn generate_window_frame(
         position.z + wall_dir.y * half_width,
     );
     push_frame_member(
-        &mut mesh, right_base, frame_width, height, frame_depth, wall_dir, wall_perp, frame_color,
+        &mut mesh,
+        right_base,
+        frame_width,
+        height,
+        frame_depth,
+        wall_dir,
+        wall_perp,
+        frame_color,
     );
 
     let sill_base = Vec3::new(
@@ -344,7 +397,14 @@ pub fn generate_window_frame(
         position.z - wall_dir.y * half_width,
     );
     push_frame_member_horizontal(
-        &mut mesh, sill_base, width, frame_width, frame_depth, wall_dir, wall_perp, frame_color,
+        &mut mesh,
+        sill_base,
+        width,
+        frame_width,
+        frame_depth,
+        wall_dir,
+        wall_perp,
+        frame_color,
     );
 
     let head_base = Vec3::new(
@@ -353,7 +413,14 @@ pub fn generate_window_frame(
         position.z - wall_dir.y * half_width,
     );
     push_frame_member_horizontal(
-        &mut mesh, head_base, width, frame_width, frame_depth, wall_dir, wall_perp, frame_color,
+        &mut mesh,
+        head_base,
+        width,
+        frame_width,
+        frame_depth,
+        wall_dir,
+        wall_perp,
+        frame_color,
     );
 
     mesh
@@ -506,26 +573,46 @@ fn push_frame_member(
         base.y,
         base.z + wall_perp.y * half_depth,
     );
-    let b2 = Vec3::new(
-        b1.x + wall_dir.x * width,
-        b1.y,
-        b1.z + wall_dir.y * width,
-    );
-    let b3 = Vec3::new(
-        b0.x + wall_dir.x * width,
-        b0.y,
-        b0.z + wall_dir.y * width,
-    );
+    let b2 = Vec3::new(b1.x + wall_dir.x * width, b1.y, b1.z + wall_dir.y * width);
+    let b3 = Vec3::new(b0.x + wall_dir.x * width, b0.y, b0.z + wall_dir.y * width);
 
     let t0 = Vec3::new(b0.x, b0.y + height, b0.z);
     let t1 = Vec3::new(b1.x, b1.y + height, b1.z);
     let t2 = Vec3::new(b2.x, b2.y + height, b2.z);
     let t3 = Vec3::new(b3.x, b3.y + height, b3.z);
 
-    mesh.add_quad(b0, t0, t1, b1, Vec3::new(-wall_perp.x, 0.0, -wall_perp.y), color);
-    mesh.add_quad(b1, t1, t2, b2, Vec3::new(wall_dir.x, 0.0, wall_dir.y), color);
-    mesh.add_quad(b2, t2, t3, b3, Vec3::new(wall_perp.x, 0.0, wall_perp.y), color);
-    mesh.add_quad(b3, t3, t0, b0, Vec3::new(-wall_dir.x, 0.0, -wall_dir.y), color);
+    mesh.add_quad(
+        b0,
+        t0,
+        t1,
+        b1,
+        Vec3::new(-wall_perp.x, 0.0, -wall_perp.y),
+        color,
+    );
+    mesh.add_quad(
+        b1,
+        t1,
+        t2,
+        b2,
+        Vec3::new(wall_dir.x, 0.0, wall_dir.y),
+        color,
+    );
+    mesh.add_quad(
+        b2,
+        t2,
+        t3,
+        b3,
+        Vec3::new(wall_perp.x, 0.0, wall_perp.y),
+        color,
+    );
+    mesh.add_quad(
+        b3,
+        t3,
+        t0,
+        b0,
+        Vec3::new(-wall_dir.x, 0.0, -wall_dir.y),
+        color,
+    );
     mesh.add_quad(t0, t3, t2, t1, Vec3::new(0.0, 1.0, 0.0), color);
     mesh.add_quad(b0, b1, b2, b3, Vec3::new(0.0, -1.0, 0.0), color);
 }
@@ -556,26 +643,46 @@ fn push_frame_member_horizontal(
         base.y,
         base.z + wall_perp.y * half_depth,
     );
-    let b2 = Vec3::new(
-        b1.x + wall_dir.x * width,
-        b1.y,
-        b1.z + wall_dir.y * width,
-    );
-    let b3 = Vec3::new(
-        b0.x + wall_dir.x * width,
-        b0.y,
-        b0.z + wall_dir.y * width,
-    );
+    let b2 = Vec3::new(b1.x + wall_dir.x * width, b1.y, b1.z + wall_dir.y * width);
+    let b3 = Vec3::new(b0.x + wall_dir.x * width, b0.y, b0.z + wall_dir.y * width);
 
     let t0 = Vec3::new(b0.x, b0.y + height, b0.z);
     let t1 = Vec3::new(b1.x, b1.y + height, b1.z);
     let t2 = Vec3::new(b2.x, b2.y + height, b2.z);
     let t3 = Vec3::new(b3.x, b3.y + height, b3.z);
 
-    mesh.add_quad(b0, t0, t1, b1, Vec3::new(-wall_dir.x, 0.0, -wall_dir.y), color);
-    mesh.add_quad(b2, t2, t3, b3, Vec3::new(wall_dir.x, 0.0, wall_dir.y), color);
-    mesh.add_quad(b0, b3, t3, t0, Vec3::new(-wall_perp.x, 0.0, -wall_perp.y), color);
-    mesh.add_quad(b1, t1, t2, b2, Vec3::new(wall_perp.x, 0.0, wall_perp.y), color);
+    mesh.add_quad(
+        b0,
+        t0,
+        t1,
+        b1,
+        Vec3::new(-wall_dir.x, 0.0, -wall_dir.y),
+        color,
+    );
+    mesh.add_quad(
+        b2,
+        t2,
+        t3,
+        b3,
+        Vec3::new(wall_dir.x, 0.0, wall_dir.y),
+        color,
+    );
+    mesh.add_quad(
+        b0,
+        b3,
+        t3,
+        t0,
+        Vec3::new(-wall_perp.x, 0.0, -wall_perp.y),
+        color,
+    );
+    mesh.add_quad(
+        b1,
+        t1,
+        t2,
+        b2,
+        Vec3::new(wall_perp.x, 0.0, wall_perp.y),
+        color,
+    );
     mesh.add_quad(t0, t3, t2, t1, Vec3::new(0.0, 1.0, 0.0), color);
     mesh.add_quad(b0, b1, b2, b3, Vec3::new(0.0, -1.0, 0.0), color);
 }

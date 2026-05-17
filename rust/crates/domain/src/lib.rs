@@ -18,7 +18,7 @@ pub mod mesh;
 pub mod walls;
 
 pub use analysis::{AcousticData, LightingData, ThermalData};
-pub use building::{ROTATION_UNSET, StructuralElement, Building};
+pub use building::{Building, ROTATION_UNSET, StructuralElement};
 pub use colors::{AcousticColors, LightingColors, StressColors, ThermalColors};
 pub use culling::{AABB, Frustum, Plane};
 pub use enums::{

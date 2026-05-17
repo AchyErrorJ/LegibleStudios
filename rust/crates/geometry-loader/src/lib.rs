@@ -137,6 +137,10 @@ impl TypeField {
 struct WireBuilding {
     #[serde(default)]
     name: String,
+    // Consumed by serde to absorb the field — never read by the loader.
+    // The kernel format requires it; without it serde would happily
+    // deserialize but downstream re-emitters would lose the value.
+    #[allow(dead_code)]
     #[serde(default = "default_units")]
     units: String,
     #[serde(default)]
@@ -155,7 +159,11 @@ fn wire_to_element(w: WireElement) -> StructuralElement {
     let mesh = w
         .mesh
         .map(|m| MeshData {
-            vertices: m.vertices.into_iter().map(|v| Vec3::new(v[0], v[1], v[2])).collect(),
+            vertices: m
+                .vertices
+                .into_iter()
+                .map(|v| Vec3::new(v[0], v[1], v[2]))
+                .collect(),
             faces: m.faces,
         })
         .unwrap_or_default();

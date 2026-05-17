@@ -86,16 +86,40 @@ fn main() -> ExitCode {
     println!("INPUT {filename}");
     print_building(&g);
 
-    print_mesh_category("WALLS", &g.walls, |w| (w.wall_index, w.wall_id.as_str()), |w| &w.mesh_3d, verbose);
-    print_mesh_category("FLOORS", &g.floors, |f| (f.floor_index, f.floor_id.as_str()), |f| &f.mesh_3d, verbose);
+    print_mesh_category(
+        "WALLS",
+        &g.walls,
+        |w| (w.wall_index, w.wall_id.as_str()),
+        |w| &w.mesh_3d,
+        verbose,
+    );
+    print_mesh_category(
+        "FLOORS",
+        &g.floors,
+        |f| (f.floor_index, f.floor_id.as_str()),
+        |f| &f.mesh_3d,
+        verbose,
+    );
 
     if IMPLEMENTED_ROOFS {
-        print_mesh_category("ROOFS", &g.roofs, |r| (r.roof_index, r.roof_id.as_str()), |r| &r.mesh_3d, verbose);
+        print_mesh_category(
+            "ROOFS",
+            &g.roofs,
+            |r| (r.roof_index, r.roof_id.as_str()),
+            |r| &r.mesh_3d,
+            verbose,
+        );
     } else {
         unimpl_mesh_category("ROOFS", &g.roofs);
     }
     if IMPLEMENTED_DOORS {
-        print_mesh_category("DOORS", &g.doors, |d| (d.door_index, d.door_id.as_str()), |d| &d.mesh_3d, verbose);
+        print_mesh_category(
+            "DOORS",
+            &g.doors,
+            |d| (d.door_index, d.door_id.as_str()),
+            |d| &d.mesh_3d,
+            verbose,
+        );
     } else {
         unimpl_mesh_category("DOORS", &g.doors);
     }
@@ -272,10 +296,18 @@ fn dump_bytes_of_wall(g: &BuildingGeometry, target: i32) -> ExitCode {
     for (i, v) in m.vertices.iter().enumerate() {
         println!(
             "v[{i}] pos {:.4} {:.4} {:.4} | n {:.4} {:.4} {:.4} | c {:.4} {:.4} {:.4} | uv {:.4} {:.4} | s {:.4}",
-            v.position.x, v.position.y, v.position.z,
-            v.normal.x, v.normal.y, v.normal.z,
-            v.color.x, v.color.y, v.color.z,
-            v.uv.x, v.uv.y, v.stress,
+            v.position.x,
+            v.position.y,
+            v.position.z,
+            v.normal.x,
+            v.normal.y,
+            v.normal.z,
+            v.color.x,
+            v.color.y,
+            v.color.z,
+            v.uv.x,
+            v.uv.y,
+            v.stress,
         );
     }
     for (i, t) in m.faces.iter().enumerate() {

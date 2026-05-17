@@ -202,7 +202,9 @@ impl Frustum {
     /// True if the point is inside or on every frustum plane.
     #[must_use]
     pub fn test_point(&self, point: Vec3) -> bool {
-        self.planes.iter().all(|p| p.distance_to_point(point) >= 0.0)
+        self.planes
+            .iter()
+            .all(|p| p.distance_to_point(point) >= 0.0)
     }
 }
 
@@ -260,14 +262,8 @@ mod tests {
         // Box near origin is visible.
         assert!(f.test_aabb(Vec3::splat(-1.0), Vec3::splat(1.0)));
         // Box behind the camera is culled.
-        assert!(!f.test_aabb(
-            Vec3::new(-1.0, -1.0, 50.0),
-            Vec3::new(1.0, 1.0, 60.0)
-        ));
+        assert!(!f.test_aabb(Vec3::new(-1.0, -1.0, 50.0), Vec3::new(1.0, 1.0, 60.0)));
         // Box well past the far plane is culled.
-        assert!(!f.test_aabb(
-            Vec3::new(-1.0, -1.0, -1000.0),
-            Vec3::new(1.0, 1.0, -990.0)
-        ));
+        assert!(!f.test_aabb(Vec3::new(-1.0, -1.0, -1000.0), Vec3::new(1.0, 1.0, -990.0)));
     }
 }

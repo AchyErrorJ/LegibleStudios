@@ -174,13 +174,7 @@ mod tests {
             triangles: mesh
                 .triangles
                 .iter()
-                .map(|t| {
-                    Triangle::new(
-                        t.v[0] + offset,
-                        t.v[1] + offset,
-                        t.v[2] + offset,
-                    )
-                })
+                .map(|t| Triangle::new(t.v[0] + offset, t.v[1] + offset, t.v[2] + offset))
                 .collect(),
         }
     }

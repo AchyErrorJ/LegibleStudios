@@ -26,8 +26,8 @@ pub mod split;
 pub use bsp::BSPNode;
 pub use mesh::{Mesh, Plane, Triangle};
 pub use ops::{
-    mesh_difference, mesh_intersection, mesh_to_vertices_indices, mesh_union,
-    vertices_indices_to_mesh, OutVertex,
+    OutVertex, mesh_difference, mesh_intersection, mesh_to_vertices_indices, mesh_union,
+    vertices_indices_to_mesh,
 };
 pub use split::split_triangle;
 
