@@ -1,0 +1,102 @@
+name: Rust port — tests + bundled-fixture smoke
+
+# Runs the parts of the regression net that don't need the C++ kernel
+# (which would require Vulkan SDK + MSVC + a separate private repo).
+# The full cross-language oracles (m1_diff / m4_diff / m5_cpp_diff)
+# still need to be run locally via rust/tests/run_oracles.ps1.
+
+on:
+  push:
+    branches: [main, cad, kernel]
+    paths:
+      - 'rust/**'
+      - 'ArchEngine_kernel/scripts/generate_schedules.py'
+      - 'smoke_test.py'
+      - '.github/workflows/rust-port.yml'
+  pull_request:
+    paths:
+      - 'rust/**'
+      - 'ArchEngine_kernel/scripts/generate_schedules.py'
+      - 'smoke_test.py'
+      - '.github/workflows/rust-port.yml'
+
+# Cancel an in-flight run for the same ref when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: cargo test + smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run all tests
+        run: cargo test --workspace --no-fail-fast
+
+      # Lint info-only (not a gate): the workspace has historical
+      # warnings/fmt drift that we don't want to hold CI hostage to.
+      # Surface them in the job log but don't fail the run.
+      - name: Lint (advisory)
+        continue-on-error: true
+        run: |
+          cargo fmt --all --check || echo "(fmt drift — not blocking)"
+          cargo clippy --workspace --all-targets || echo "(clippy warnings — not blocking)"
+
+      - name: Build release qbd_dump
+        run: cargo build --release --bin qbd_dump
+
+      - name: "Smoke: run qbd_dump on bundled fixture"
+        # Validates the binary actually runs end-to-end on the
+        # bundled QBD fixture and produces a non-empty SVG that
+        # at least *looks* like a permit floor plan.
+        run: |
+          ./target/release/qbd_dump test-data/test_building_qbd.json > /tmp/floor_plan.svg
+          test -s /tmp/floor_plan.svg
+          head -c 200 /tmp/floor_plan.svg | grep -q '<svg'
+          grep -q '</svg>' /tmp/floor_plan.svg
+          echo "qbd_dump output: $(wc -c < /tmp/floor_plan.svg) bytes"
+
+      - name: "Smoke: run qbd_dump --bare"
+        # Bare mode (no annotation overlay) is what the C++↔Rust
+        # oracle uses locally. Verify it still works headlessly.
+        run: |
+          ./target/release/qbd_dump test-data/test_building_qbd.json --bare > /tmp/bare.svg
+          test -s /tmp/bare.svg
+          # Bare output should NOT contain dimension/title-block text.
+          ! grep -q 'font-family="Arial' /tmp/bare.svg
+          echo "qbd_dump --bare output: $(wc -c < /tmp/bare.svg) bytes"
+
+      - name: "Smoke: run qbd_dump --bundle"
+        run: |
+          mkdir -p /tmp/bundle
+          ./target/release/qbd_dump test-data/test_building_qbd.json --bundle /tmp/bundle
+          # Expect the canonical sheets to land.
+          test -s /tmp/bundle/01_site_plan.svg
+          test -s /tmp/bundle/02_floor_plan.svg
+          test -s /tmp/bundle/04_section_aa.svg
+          test -s /tmp/bundle/manifest.json
+          echo "bundle contents:"
+          ls -la /tmp/bundle/
