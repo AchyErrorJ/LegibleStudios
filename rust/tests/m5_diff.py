@@ -59,7 +59,9 @@ EXPECTED_PY_SHEETS = [
 ]
 
 # What the Rust pipeline produces today. Anything in EXPECTED_PY_SHEETS not
-# in this list is STUB (M5+ generator work).
+# in this list is STUB (M5+ generator work). Schedules are conditional —
+# the Rust pipeline emits them only when the building has the matching
+# openings (door schedule iff doors > 0, window schedule iff windows > 0).
 RUST_PRODUCES = {
     "01_site_plan.svg",
     "02_floor_plan.svg",
@@ -68,6 +70,8 @@ RUST_PRODUCES = {
     "03_elevation_east.svg",
     "03_elevation_west.svg",
     "04_section_aa.svg",
+    "05_door_schedule.svg",
+    "05_window_schedule.svg",
 }
 
 _USE_COLOR = sys.stdout.isatty() and sys.platform != "win32"
