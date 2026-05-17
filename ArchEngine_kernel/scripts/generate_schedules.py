@@ -24,13 +24,20 @@ class ScheduleEntry:
 
 
 def extract_openings(data: dict) -> tuple[List[ScheduleEntry], List[ScheduleEntry]]:
-    """Extract doors and windows from building data."""
-    
+    """Extract doors and windows from building data.
+
+    Reads the canonical qbd schema's top-level `doors` / `windows`
+    arrays first; falls back to the legacy `wall.openings` shape if the
+    top-level arrays are absent. The fallback was the only path the
+    original implementation supported, but qbd_layout_generator never
+    populates `wall.openings` — it writes top-level arrays. The Rust
+    port (ls-qbd::schedule) uses the same precedence.
+    """
     doors = []
     windows = []
     door_count = 0
     window_count = 0
-    
+
     room_names = {}
     rooms_in = data.get('rooms', [])
     if isinstance(rooms_in, dict):
@@ -38,26 +45,90 @@ def extract_openings(data: dict) -> tuple[List[ScheduleEntry], List[ScheduleEntr
                     for k, v in rooms_in.items()]
     for room in rooms_in:
         room_names[room.get('id', '')] = room.get('name', 'Unknown')
-    
-    # Map wall indices to room names
+
+    def room_label(rid: str) -> str:
+        if not rid:
+            return ''
+        return room_names.get(rid, rid)
+
+    def location_for(wall_idx: int, room1: str, room2: str) -> str:
+        r1, r2 = room_label(room1), room_label(room2)
+        if r1 and r2:
+            return f"{r1} - {r2}"
+        if r1:
+            return r1
+        if r2:
+            return r2
+        return f"Wall {wall_idx}"
+
+    # Canonical path: top-level doors/windows.
+    top_doors = data.get('doors', []) or []
+    top_windows = data.get('windows', []) or []
+
+    for d in top_doors:
+        door_count += 1
+        width_mm = float(d.get('width', 914))
+        height_mm = float(d.get('height', 2134))
+        if width_mm < 1000:
+            type_name = "Single Door"
+        elif width_mm < 2000:
+            type_name = "Double Door"
+        else:
+            type_name = "Sliding Door"
+        doors.append(ScheduleEntry(
+            mark=f"D{door_count}",
+            qty=1,
+            width_mm=width_mm,
+            height_mm=height_mm,
+            type_name=type_name,
+            location=location_for(int(d.get('wall_index', 0)),
+                                  d.get('room1', ''), d.get('room2', '')),
+            remarks="",
+        ))
+
+    for w in top_windows:
+        window_count += 1
+        width_mm = float(w.get('width', 1200))
+        height_mm = float(w.get('height', 1200))
+        sill_mm = float(w.get('sill_height', 900))
+        if width_mm < 800:
+            type_name = "Casement"
+        elif width_mm < 1500:
+            type_name = "Double Hung"
+        else:
+            type_name = "Picture Window"
+        windows.append(ScheduleEntry(
+            mark=f"W{window_count}",
+            qty=1,
+            width_mm=width_mm,
+            height_mm=height_mm,
+            type_name=type_name,
+            location=location_for(int(w.get('wall_index', 0)),
+                                  w.get('room', ''), ''),
+            remarks=f"Sill {int(sill_mm)}mm",
+        ))
+
+    # If the canonical path produced any output, return it.
+    if doors or windows:
+        return doors, windows
+
+    # Legacy fallback: walls with nested .openings (kernel internal format).
     wall_rooms = {}
     for wall in data.get('walls', []):
         idx = wall.get('id', '')
         r1 = room_names.get(wall.get('room1', ''), wall.get('room1', ''))
         r2 = room_names.get(wall.get('room2', ''), wall.get('room2', ''))
         wall_rooms[idx] = f"{r1} - {r2}"
-    
-    # Process wall openings
+
     for wall_idx, wall in enumerate(data.get('walls', [])):
         for opening in wall.get('openings', []):
             o_type = opening.get('type', 'door')
             width_ft = opening.get('width_ft', 3)
             width_mm = width_ft * 304.8
-            
-            # Get room names for this wall
+
             wall_id = wall.get('id', '')
             location = wall_rooms.get(wall_id, f"Wall {wall_idx}")
-            
+
             if o_type == 'door':
                 door_count += 1
                 height_mm = 2100  # Standard door height

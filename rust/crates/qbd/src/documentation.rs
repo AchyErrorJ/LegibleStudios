@@ -42,6 +42,10 @@ pub struct Documentation {
     pub elevations: Vec<Elevation>,
     pub section_svg: String,
     pub wall_details: Vec<WallDetail>,
+    /// Door schedule SVG, empty string if the building has no doors.
+    pub door_schedule_svg: String,
+    /// Window schedule SVG, empty string if the building has no windows.
+    pub window_schedule_svg: String,
 }
 
 /// Generate documentation from a parsed schema. `scale` follows the C++
@@ -184,6 +188,24 @@ pub fn generate_documentation(
             .collect(),
         section_svg: with_tb(generate_section(doc), DrawingType::SectionA, "1:100"),
         wall_details: generate_wall_details(doc, &config),
+        door_schedule_svg: render_schedule_svg(
+            &crate::schedule::door_entries(doc),
+            "DOOR SCHEDULE",
+        ),
+        window_schedule_svg: render_schedule_svg(
+            &crate::schedule::window_entries(doc),
+            "WINDOW SCHEDULE",
+        ),
+    }
+}
+
+/// Wrap `drawing::schedule_to_svg` with an empty-input short-circuit:
+/// permit sets traditionally suppress empty schedule sheets.
+fn render_schedule_svg(entries: &[drawing::ScheduleEntry], title: &str) -> String {
+    if entries.is_empty() {
+        String::new()
+    } else {
+        drawing::schedule_to_svg(entries, title)
     }
 }
 

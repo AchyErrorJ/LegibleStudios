@@ -11,7 +11,7 @@
 use anyhow::Context;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--project <name>]";
+const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--project <name>] [--bare]";
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -19,6 +19,11 @@ fn main() -> anyhow::Result<()> {
     let mut out: Option<PathBuf> = None;
     let mut bundle_dir: Option<PathBuf> = None;
     let mut project = String::from("QBD Project");
+    // `--bare`: emit just the slicer's raw floor-plan SVG (no dimensions,
+    // no title block, no room labels). The m5_cpp_diff oracle relies on
+    // this — the C++ QBDInterface doesn't add annotations, so a fair
+    // byte-comparison must strip Rust's annotation overlay.
+    let mut bare = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -34,6 +39,10 @@ fn main() -> anyhow::Result<()> {
             "--project" if i + 1 < args.len() => {
                 project.clone_from(&args[i + 1]);
                 i += 2;
+            }
+            "--bare" => {
+                bare = true;
+                i += 1;
             }
             "-h" | "--help" => {
                 eprintln!("{USAGE}");
@@ -52,6 +61,17 @@ fn main() -> anyhow::Result<()> {
 
     let doc = archgeometry::parse_file(&path)
         .with_context(|| format!("failed to parse {}", path.display()))?;
+
+    // `--bare` short-circuits before generate_documentation runs, so we
+    // don't pay the cost of building elevations / sections / details.
+    if bare {
+        let config = drawing::Config::with_defaults();
+        let result = qbd::generate_floor_plan_with_openings(&doc, 1219.0, &config);
+        let svg = drawing::export_to_svg(&result, 10.0);
+        print!("{svg}");
+        return Ok(());
+    }
+
     let docs = qbd::generate_documentation(&doc, project);
 
     if let Some(dir) = bundle_dir {
@@ -80,6 +100,15 @@ fn main() -> anyhow::Result<()> {
             write_sheet(&name, &elev.svg)?;
         }
         write_sheet("04_section_aa.svg", &docs.section_svg)?;
+
+        // Schedules: only emit when non-empty (parity with permit
+        // convention — no blank schedule sheets).
+        if !docs.door_schedule_svg.is_empty() {
+            write_sheet("05_door_schedule.svg", &docs.door_schedule_svg)?;
+        }
+        if !docs.window_schedule_svg.is_empty() {
+            write_sheet("05_window_schedule.svg", &docs.window_schedule_svg)?;
+        }
 
         for (i, detail) in docs.wall_details.iter().enumerate() {
             let name = format!("07_wall_detail_{:02}_{}.svg", i + 1, detail.detail.wall_type_id);

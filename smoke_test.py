@@ -196,16 +196,65 @@ def validate_cost(building):
 
 @stage("4. Permit drawing set generation")
 def generate_drawings(building):
-    from permit_drawing_set import create_permit_drawing_set
+    """Drawing generation. Defaults to the Python pipeline; pass
+    `--use-rust` on the CLI (M6) to delegate to the Rust qbd_dump
+    binary, which produces the parallel `rust_bundle/` set."""
     building_file = OUTPUT_DIR / "building.json"
     drawings_dir = OUTPUT_DIR / "drawings"
     drawings_dir.mkdir(exist_ok=True)
+
+    if "--use-rust" in sys.argv:
+        return generate_drawings_via_rust(building_file, drawings_dir)
+
+    from permit_drawing_set import create_permit_drawing_set
     return create_permit_drawing_set(
         building_json_path=building_file,
         output_dir=drawings_dir,
         lot_width_ft=60.0,
         lot_depth_ft=120.0,
     )
+
+
+def generate_drawings_via_rust(building_file: Path, drawings_dir: Path):
+    """M6 Rust integration: delegate to `rust/target/release/qbd_dump.exe`
+    --bundle. Produces the same sheet set the Rust pipeline emits today
+    (floor plan + elevations + section + per-category wall details).
+    Falls back to the Python pipeline if the Rust binary isn't built."""
+    import subprocess
+    rust_bin = REPO_ROOT / "rust" / "target" / "release" / "qbd_dump.exe"
+    if not rust_bin.exists():
+        print(f"   Rust binary missing: {rust_bin}")
+        print(f"   Build with: cd rust && cargo build --release --bin qbd_dump")
+        print(f"   Falling back to Python pipeline.")
+        from permit_drawing_set import create_permit_drawing_set
+        return create_permit_drawing_set(
+            building_json_path=building_file,
+            output_dir=drawings_dir,
+            lot_width_ft=60.0,
+            lot_depth_ft=120.0,
+        )
+
+    proc = subprocess.run(
+        [
+            str(rust_bin),
+            str(building_file),
+            "--bundle", str(drawings_dir),
+            "--project", "Smoke Test (Rust)",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"qbd_dump failed (exit {proc.returncode}):\n{proc.stderr}"
+        )
+    # Echo the binary's stderr (it logs each sheet it wrote).
+    for line in proc.stderr.splitlines():
+        print(f"   {line}")
+    sheets = sorted(p.name for p in drawings_dir.iterdir() if p.is_file())
+    print(f"   Rust produced {len(sheets)} sheets in {drawings_dir}")
+    return {"sheet_count": len(sheets), "sheets": sheets}
 
 
 @stage("5. DB save (SQLite via SQLAlchemy)")
