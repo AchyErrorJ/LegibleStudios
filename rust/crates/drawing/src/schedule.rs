@@ -61,7 +61,9 @@ pub fn format_dim_mm(mm: f32) -> String {
 /// Render a schedule table to SVG. Matches the column layout and styling
 /// of `generate_schedules.py:115-211`.
 #[must_use]
+#[allow(clippy::too_many_lines)] // SVG layout is naturally linear and clearer flat.
 pub fn schedule_to_svg(entries: &[ScheduleEntry], title: &str) -> String {
+    use std::fmt::Write as _;
     let row_height: i32 = 40;
     let header_height: i32 = 50;
     let margin: i32 = 50;
@@ -83,10 +85,11 @@ pub fn schedule_to_svg(entries: &[ScheduleEntry], title: &str) -> String {
 
     let mut out = String::with_capacity(2048);
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    out.push_str(&format!(
+    let _ = writeln!(
+        out,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{svg_width}\" \
-         height=\"{svg_height}\" viewBox=\"0 0 {svg_width} {svg_height}\">\n"
-    ));
+         height=\"{svg_height}\" viewBox=\"0 0 {svg_width} {svg_height}\">"
+    );
     out.push_str("  <rect width=\"100%\" height=\"100%\" fill=\"white\"/>\n");
 
     // Stylesheet (kept verbatim from Python so the visual output matches).
@@ -102,29 +105,32 @@ pub fn schedule_to_svg(entries: &[ScheduleEntry], title: &str) -> String {
 
     // Title.
     let title_y = margin + 30;
-    out.push_str(&format!(
-        "  <text x=\"{}\" y=\"{title_y}\" text-anchor=\"middle\" \
-         class=\"title\">{title}</text>\n",
-        svg_width / 2,
-    ));
+    let title_x = svg_width / 2;
+    let _ = writeln!(
+        out,
+        "  <text x=\"{title_x}\" y=\"{title_y}\" text-anchor=\"middle\" \
+         class=\"title\">{title}</text>"
+    );
 
     // Table position.
     let table_x = margin;
     let table_y = margin + 60;
 
     // Header row.
-    out.push_str(&format!(
+    let _ = writeln!(
+        out,
         "  <rect x=\"{table_x}\" y=\"{table_y}\" width=\"{table_width}\" \
-         height=\"{header_height}\" class=\"header-bg\"/>\n"
-    ));
+         height=\"{header_height}\" class=\"header-bg\"/>"
+    );
     let mut x = table_x;
     for (header, width) in cols {
         let cx = x + width / 2;
         let cy = table_y + header_height / 2 + 5;
-        out.push_str(&format!(
+        let _ = writeln!(
+            out,
             "  <text x=\"{cx}\" y=\"{cy}\" text-anchor=\"middle\" \
-             class=\"header\">{header}</text>\n"
-        ));
+             class=\"header\">{header}</text>"
+        );
         x += width;
     }
 
@@ -132,10 +138,11 @@ pub fn schedule_to_svg(entries: &[ScheduleEntry], title: &str) -> String {
     let mut y = table_y + header_height;
     for (i, entry) in entries.iter().enumerate() {
         let bg_class = if i % 2 == 1 { "cell-bg-alt" } else { "cell-bg" };
-        out.push_str(&format!(
+        let _ = writeln!(
+            out,
             "  <rect x=\"{table_x}\" y=\"{y}\" width=\"{table_width}\" \
-             height=\"{row_height}\" class=\"{bg_class}\"/>\n"
-        ));
+             height=\"{row_height}\" class=\"{bg_class}\"/>"
+        );
         let cells: [String; 7] = [
             entry.mark.clone(),
             entry.qty.to_string(),
@@ -149,35 +156,36 @@ pub fn schedule_to_svg(entries: &[ScheduleEntry], title: &str) -> String {
         for (cell, (_, width)) in cells.iter().zip(cols.iter()) {
             let cx = x + 5;
             let cy = y + row_height / 2 + 4;
-            out.push_str(&format!(
-                "  <text x=\"{cx}\" y=\"{cy}\" class=\"cell\">{cell}</text>\n"
-            ));
+            let _ = writeln!(out, "  <text x=\"{cx}\" y=\"{cy}\" class=\"cell\">{cell}</text>");
             x += width;
         }
         y += row_height;
     }
 
     // Outer border + column separators + row separators.
-    out.push_str(&format!(
+    let _ = writeln!(
+        out,
         "  <rect x=\"{table_x}\" y=\"{table_y}\" width=\"{table_width}\" \
-         height=\"{table_height}\" class=\"border\"/>\n"
-    ));
+         height=\"{table_height}\" class=\"border\"/>"
+    );
     let mut x = table_x;
     for (_, width) in &cols[..cols.len() - 1] {
         x += width;
-        out.push_str(&format!(
+        let y2 = table_y + table_height;
+        let _ = writeln!(
+            out,
             "  <line x1=\"{x}\" y1=\"{table_y}\" x2=\"{x}\" \
-             y2=\"{}\" class=\"border\"/>\n",
-            table_y + table_height,
-        ));
+             y2=\"{y2}\" class=\"border\"/>"
+        );
     }
     let mut y = table_y + header_height;
     for _ in 0..entries.len() {
-        out.push_str(&format!(
-            "  <line x1=\"{table_x}\" y1=\"{y}\" x2=\"{}\" y2=\"{y}\" \
-             class=\"border\"/>\n",
-            table_x + table_width,
-        ));
+        let x2 = table_x + table_width;
+        let _ = writeln!(
+            out,
+            "  <line x1=\"{table_x}\" y1=\"{y}\" x2=\"{x2}\" y2=\"{y}\" \
+             class=\"border\"/>"
+        );
         y += row_height;
     }
 

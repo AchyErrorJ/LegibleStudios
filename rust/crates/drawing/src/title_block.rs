@@ -52,6 +52,7 @@ pub enum DrawingType {
 impl DrawingType {
     /// Lookup matching `title_block.py:204` (DRAWING_NUMBERS).
     /// Returns `(number, title, sheet)`.
+    #[must_use] 
     pub fn default_info(self) -> (&'static str, &'static str, &'static str) {
         match self {
             DrawingType::FloorPlan => ("A-101", "FLOOR PLAN - LEVEL 1", "1 OF 8"),
@@ -173,7 +174,7 @@ pub fn generate_title_block(
     let cx = tb_x + tb_width * 0.5;
     let _ = writeln!(
         s,
-        r##"  <text x="{cx}" y="{y}" font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">{pname}</text>"##,
+        r#"  <text x="{cx}" y="{y}" font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">{pname}</text>"#,
         y = tb_y + 200.0,
     );
     // Project address.
@@ -191,7 +192,7 @@ pub fn generate_title_block(
     // Drawing title (large).
     let _ = writeln!(
         s,
-        r##"  <text x="{x}" y="{y}" font-family="Arial" font-size="180" font-weight="bold" text-anchor="middle">{dtitle}</text>"##,
+        r#"  <text x="{x}" y="{y}" font-family="Arial" font-size="180" font-weight="bold" text-anchor="middle">{dtitle}</text>"#,
         x = tb_x + 1000.0,
         y = tb_y + 800.0,
     );
@@ -210,11 +211,11 @@ pub fn generate_title_block(
     );
     let _ = writeln!(
         s,
-        r##"  <text x="{x}" y="{y}" font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">{dnum}</text>"##,
+        r#"  <text x="{x}" y="{y}" font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">{dnum}</text>"#,
         x = tb_x + 2500.0,
         y = tb_y + 850.0,
     );
-    write_label_value(&mut s, tb_x + 2100.0, tb_y, "PROJECT", &pnum, true);
+    write_label_value(&mut s, tb_x + 2100.0, tb_y, "PROJECT", pnum, true);
 
     // Revision (big char top-right cell).
     let _ = writeln!(
@@ -225,11 +226,11 @@ pub fn generate_title_block(
     );
     let _ = writeln!(
         s,
-        r##"  <text x="{x}" y="{y}" font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">{drev}</text>"##,
+        r#"  <text x="{x}" y="{y}" font-family="Arial" font-size="200" font-weight="bold" text-anchor="middle">{drev}</text>"#,
         x = tb_x + 3500.0,
         y = tb_y + 850.0,
     );
-    write_label_value(&mut s, tb_x + 3100.0, tb_y, "SHEET", &dsheet, true);
+    write_label_value(&mut s, tb_x + 3100.0, tb_y, "SHEET", dsheet, true);
 
     // Solver info (small text, top-left corner of TB box).
     let _ = writeln!(
@@ -264,11 +265,11 @@ fn write_label_value(
     let weight = if smaller_value {
         ""
     } else {
-        r##" font-weight="bold""##
+        r#" font-weight="bold""#
     };
     let _ = writeln!(
         s,
-        r##"  <text x="{x}" y="{y}" font-family="Arial" font-size="{value_size}"{weight}>{value}</text>"##,
+        r#"  <text x="{x}" y="{y}" font-family="Arial" font-size="{value_size}"{weight}>{value}</text>"#,
         y = tb_y + 1100.0,
     );
 }
@@ -313,7 +314,7 @@ mod tests {
         let d = drawing_info_for(DrawingType::FloorPlan, "1:50", "2026-05-16");
         let svg = generate_title_block(10000.0, 8000.0, &p, &d, 500.0);
         // 3 rects: outer border, inner border, TB box.
-        assert!(svg.contains(r##"id="title-block""##));
+        assert!(svg.contains(r#"id="title-block""#));
         assert_eq!(svg.matches("<rect").count(), 3);
         // Title block has 3 horizontal + 2 vertical dividers = 5 lines.
         assert_eq!(svg.matches("<line").count(), 5);

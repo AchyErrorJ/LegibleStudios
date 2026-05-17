@@ -196,14 +196,19 @@ def validate_cost(building):
 
 @stage("4. Permit drawing set generation")
 def generate_drawings(building):
-    """Drawing generation. Defaults to the Python pipeline; pass
-    `--use-rust` on the CLI (M6) to delegate to the Rust qbd_dump
-    binary, which produces the parallel `rust_bundle/` set."""
+    """Drawing generation. Defaults to the Rust pipeline (`qbd_dump`) when
+    its release binary is built; otherwise falls back to the Python
+    pipeline. Pass `--use-python` to force the Python path even when the
+    Rust binary is available (useful for debugging the legacy path)."""
     building_file = OUTPUT_DIR / "building.json"
     drawings_dir = OUTPUT_DIR / "drawings"
     drawings_dir.mkdir(exist_ok=True)
 
-    if "--use-rust" in sys.argv:
+    rust_bin = REPO_ROOT / "rust" / "target" / "release" / "qbd_dump.exe"
+    use_python = "--use-python" in sys.argv
+    use_rust = "--use-rust" in sys.argv  # legacy flag — still honoured
+
+    if not use_python and (use_rust or rust_bin.exists()):
         return generate_drawings_via_rust(building_file, drawings_dir)
 
     from permit_drawing_set import create_permit_drawing_set

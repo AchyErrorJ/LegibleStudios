@@ -90,7 +90,7 @@ mod tests {
             bounds_y: 0.0,
             width: 1676.4,
             height: 2438.4,
-            area_mm2: 4_087_733.76,
+            area_mm2: 4_087_733.8,
         }
     }
 

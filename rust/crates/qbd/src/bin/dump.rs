@@ -13,6 +13,8 @@ use std::path::PathBuf;
 
 const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--project <name>] [--bare]";
 
+#[allow(clippy::too_many_lines)] // CLI dispatch + bundle emission read top-down.
+#[allow(clippy::format_collect)] // Manifest JSON assembly is one-shot; iterator-format is fine here.
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let mut path: Option<PathBuf> = None;

@@ -14,6 +14,13 @@ fn fixture() -> PathBuf {
         .join("test_building_qbd.json")
 }
 
+fn fixture_with_openings() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("test-data")
+        .join("test_building_with_openings.json")
+}
+
 #[test]
 fn fixture_parses_and_converts_to_building() {
     let doc = parse_file(fixture()).expect("test_building_qbd.json must parse");
@@ -85,4 +92,44 @@ fn fixture_documentation_includes_metadata() {
     assert_eq!(docs.project_name, "Permit-Set Test");
     // generated_date is YYYY-MM-DD.
     assert_eq!(docs.generated_date.len(), 10);
+}
+
+#[test]
+fn openings_fixture_produces_both_schedule_sheets() {
+    // The main qbd fixture has zero doors/windows, so the schedule code
+    // paths never run. This fixture has 3 doors + 3 windows and asserts
+    // both schedules emit non-empty SVG with one row per opening plus
+    // the canonical headers (MARK / WIDTH / TYPE / LOCATION / etc.).
+    let doc = parse_file(fixture_with_openings()).expect("fixture must parse");
+    assert_eq!(doc.doors.len(), 3, "fixture should have 3 doors");
+    assert_eq!(doc.windows.len(), 3, "fixture should have 3 windows");
+
+    let docs = generate_documentation(&doc, "Openings Test");
+
+    // Door schedule.
+    let ds = &docs.door_schedule_svg;
+    assert!(!ds.is_empty(), "door_schedule_svg must be non-empty");
+    assert!(ds.contains("DOOR SCHEDULE"));
+    assert!(ds.contains(">D1<"));
+    assert!(ds.contains(">D2<"));
+    assert!(ds.contains(">D3<"));
+    // Width 914mm → "Single Door" (per the C++ thresholds), 1800mm →
+    // "Double Door", 2400mm → "Sliding Door".
+    assert!(ds.contains(">Single Door<"));
+    assert!(ds.contains(">Double Door<"));
+    assert!(ds.contains(">Sliding Door<"));
+
+    // Window schedule.
+    let ws = &docs.window_schedule_svg;
+    assert!(!ws.is_empty(), "window_schedule_svg must be non-empty");
+    assert!(ws.contains("WINDOW SCHEDULE"));
+    assert!(ws.contains(">W1<"));
+    assert!(ws.contains(">W2<"));
+    assert!(ws.contains(">W3<"));
+    // 600mm → "Casement", 1200mm → "Double Hung", 1800mm → "Picture Window".
+    assert!(ws.contains(">Casement<"));
+    assert!(ws.contains(">Double Hung<"));
+    assert!(ws.contains(">Picture Window<"));
+    // Sill heights show up in remarks.
+    assert!(ws.contains("Sill 1100mm"));
 }

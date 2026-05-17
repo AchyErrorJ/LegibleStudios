@@ -117,6 +117,9 @@ fn project_wall(wall: &ElevationWallInput, dir: Direction, input: &ElevationInpu
     }
 }
 
+// Drawing math uses s/e for start/end and dx/dz for axis deltas; renaming
+// to satisfy clippy::pedantic would obscure the geometry vocabulary.
+#[allow(clippy::similar_names, clippy::many_single_char_names)]
 fn project_opening(
     op: &ElevationOpeningInput,
     wall: &ElevationWallInput,
@@ -269,8 +272,7 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
         let cx = (min_x + max_x) * 0.5;
         let _ = writeln!(
             s,
-            r#"    <polygon points="{min_x},{plate_y} {cx},{ridge} {max_x},{plate_y}" class="roof"/>"#,
-            ridge = gable_top_y,
+            r#"    <polygon points="{min_x},{plate_y} {cx},{gable_top_y} {max_x},{plate_y}" class="roof"/>"#,
         );
     }
 

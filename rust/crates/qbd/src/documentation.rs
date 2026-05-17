@@ -50,6 +50,7 @@ pub struct Documentation {
 /// Generate documentation from a parsed schema. `scale` follows the C++
 /// default of `10.0` (used at `qbd_interface.cpp:964`).
 #[must_use]
+#[allow(clippy::too_many_lines)] // Sequential sheet assembly; splitting hides the data flow.
 pub fn generate_documentation(
     doc: &SchemaDocument,
     project_name: impl Into<String>,
@@ -288,6 +289,10 @@ fn generate_elevations(doc: &SchemaDocument) -> Vec<Elevation> {
                 height: w.height,
             })
             .collect(),
+        // wall_index is `i32` in the schema but `usize` in the elevation
+        // input; max(0) clamps the negative-index sentinel before the
+        // truncate-when-cast.
+        #[allow(clippy::cast_sign_loss)]
         openings: doc
             .doors
             .iter()
@@ -349,6 +354,9 @@ fn generate_wall_details(doc: &SchemaDocument, config: &Config) -> Vec<WallDetai
     details
 }
 
+// WallType is small and owned (the helpers in `wall_types` return owned
+// values); taking it by value mirrors the caller pattern with no extra cost.
+#[allow(clippy::needless_pass_by_value)]
 fn build_detail(wall_type: domain::WallType, config: &Config) -> WallDetail {
     let detail = generate_wall_detail(&wall_type, 9.0, config);
     let svg = wall_detail_to_svg(&detail, 1.0);

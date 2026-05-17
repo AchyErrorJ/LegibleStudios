@@ -99,6 +99,11 @@ enum TypeField {
 }
 
 impl TypeField {
+    // The two match arms below have `_ => Beam` duplicated by design: the
+    // C++ enum cast falls back to whatever `ElementType(0)` is for *both*
+    // unknown strings and out-of-range ints, and `Beam = 0`. Suppressing
+    // match_same_arms keeps the explicit "unknown → default" case.
+    #[allow(clippy::match_same_arms)]
     fn to_element_type(&self) -> ElementType {
         match self {
             TypeField::Str(s) => match s.as_str() {
@@ -271,7 +276,7 @@ mod tests {
 
     #[test]
     fn empty_building_loads_cleanly() {
-        let json = r#"{}"#;
+        let json = r"{}";
         let b = parse_json(json).unwrap();
         assert_eq!(b.elements.len(), 0);
     }

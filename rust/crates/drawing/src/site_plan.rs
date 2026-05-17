@@ -55,6 +55,9 @@ impl SitePlan {
 /// `building_data` argument is unused in the body — we drop it.
 #[must_use]
 #[allow(clippy::too_many_lines)]
+// Drawing math uses single-letter binding conventions (x, y, w, h) that
+// match the SVG vocabulary; renaming them would obscure rather than clarify.
+#[allow(clippy::many_single_char_names)]
 pub fn generate_site_plan_svg(site: &SitePlan) -> String {
     let scale: f32 = 5.0;
     let margin: f32 = 60.0;
@@ -68,9 +71,9 @@ pub fn generate_site_plan_svg(site: &SitePlan) -> String {
 
     let _ = writeln!(
         s,
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">"##
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">"#
     );
-    let _ = writeln!(s, r##"<rect width="{w}" height="{h}" fill="white"/>"##);
+    let _ = writeln!(s, r#"<rect width="{w}" height="{h}" fill="white"/>"#);
 
     // Lot boundary.
     let _ = writeln!(
@@ -114,10 +117,10 @@ pub fn generate_site_plan_svg(site: &SitePlan) -> String {
     );
 
     // Labels.
-    let label_attrs = r##"font-family="Helvetica, Arial, sans-serif" font-size="11" fill="black""##;
+    let label_attrs = r#"font-family="Helvetica, Arial, sans-serif" font-size="11" fill="black""#;
     let _ = writeln!(
         s,
-        r##"<text x="{xl}" y="{yl}" text-anchor="middle" {label_attrs}>LOT: {lw:.0}' x {ld:.0}'</text>"##,
+        r#"<text x="{xl}" y="{yl}" text-anchor="middle" {label_attrs}>LOT: {lw:.0}' x {ld:.0}'</text>"#,
         xl = x(site.lot_width_ft * 0.5),
         yl = y(-2.0),
         lw = site.lot_width_ft,
@@ -125,13 +128,13 @@ pub fn generate_site_plan_svg(site: &SitePlan) -> String {
     );
     let _ = writeln!(
         s,
-        r##"<text x="{xb}" y="{yb}" text-anchor="middle" dominant-baseline="middle" {label_attrs}>BUILDING</text>"##,
+        r#"<text x="{xb}" y="{yb}" text-anchor="middle" dominant-baseline="middle" {label_attrs}>BUILDING</text>"#,
         xb = x(site.building_x_ft + site.building_width_ft * 0.5),
         yb = y(site.building_z_ft + site.building_depth_ft * 0.5),
     );
     let _ = writeln!(
         s,
-        r##"<text x="{xs}" y="{ys}" {label_attrs}>Setbacks: F {f:.0}' / S {sd:.0}' / R {r:.0}'</text>"##,
+        r#"<text x="{xs}" y="{ys}" {label_attrs}>Setbacks: F {f:.0}' / S {sd:.0}' / R {r:.0}'</text>"#,
         xs = x(2.0),
         ys = y(2.0),
         f = site.front_setback_ft,

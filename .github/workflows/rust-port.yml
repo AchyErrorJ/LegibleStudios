@@ -56,14 +56,11 @@ jobs:
       - name: Run all tests
         run: cargo test --workspace --no-fail-fast
 
-      # Lint info-only (not a gate): the workspace has historical
-      # warnings/fmt drift that we don't want to hold CI hostage to.
-      # Surface them in the job log but don't fail the run.
-      - name: Lint (advisory)
-        continue-on-error: true
-        run: |
-          cargo fmt --all --check || echo "(fmt drift — not blocking)"
-          cargo clippy --workspace --all-targets || echo "(clippy warnings — not blocking)"
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy (gates on -D warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build release qbd_dump
         run: cargo build --release --bin qbd_dump

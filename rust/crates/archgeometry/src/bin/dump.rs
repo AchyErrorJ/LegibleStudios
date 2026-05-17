@@ -23,6 +23,7 @@ const IMPLEMENTED_DOORS: bool = true;
 const IMPLEMENTED_WINDOWS: bool = true;
 const IMPLEMENTED_ROOMS: bool = true;
 
+#[allow(clippy::too_many_lines)] // CLI argument parsing + dispatch reads top-down.
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let mut path_arg: Option<String> = None;

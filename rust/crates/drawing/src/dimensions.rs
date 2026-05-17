@@ -34,6 +34,7 @@ pub struct LinearDim {
 impl LinearDim {
     /// Make a horizontal dimension labelled in mm to the nearest integer.
     #[must_use]
+    #[allow(clippy::cast_possible_truncation)] // building dims are bounded; rounding is intentional.
     pub fn horizontal_mm(from: f32, to: f32, y: f32) -> Self {
         let value = format!("{} mm", (to - from).abs().round() as i32);
         Self {
@@ -46,6 +47,7 @@ impl LinearDim {
 
     /// Make a vertical dimension labelled in mm.
     #[must_use]
+    #[allow(clippy::cast_possible_truncation)] // building dims are bounded; rounding is intentional.
     pub fn vertical_mm(from: f32, to: f32, x: f32) -> Self {
         let value = format!("{} mm", (to - from).abs().round() as i32);
         Self {
