@@ -10,6 +10,10 @@ description = "Legible Studio room-layout solver — program-driven top-down BSP
 [lib]
 name = "solver"
 
+[[bin]]
+name = "qbd_solve"
+path = "src/bin/qbd_solve.rs"
+
 [lints]
 workspace = true
 

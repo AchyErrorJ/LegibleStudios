@@ -14,6 +14,9 @@
 //! Not yet ported (next slice): wall/door/dimension emission to the full
 //! `qbd_output.schema.json` (`layout_to_walls/doors/dimensions`).
 
+pub mod emit;
+pub use emit::building_json;
+
 use pk_geom::Transform;
 use pk_object::{Constraint, Object, Scene, Solver};
 
@@ -373,6 +376,7 @@ impl Solver for SubdivisionRoomSolver {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_precision_loss)] // counts → f32 for test averages
 mod tests {
     use super::*;
 
