@@ -25,3 +25,4 @@ ls-qbd.workspace = true
 ls-drawing.workspace = true
 ls-archgeometry.workspace = true
 ls-catalog.workspace = true
+ls-solver.workspace = true

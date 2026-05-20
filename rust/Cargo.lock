@@ -674,6 +674,7 @@ dependencies = [
  "ls-catalog",
  "ls-drawing",
  "ls-qbd",
+ "ls-solver",
  "pk-object",
  "pk-surface",
  "pk-surface-winit",
@@ -790,6 +791,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ls-solver"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "pk-geom",
+ "pk-object",
+ "serde_json",
 ]
 
 [[package]]

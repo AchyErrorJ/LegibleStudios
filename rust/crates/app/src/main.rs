@@ -19,11 +19,12 @@
 mod render;
 mod sketch;
 
-use catalog::{room_rect, GridRoomSolver};
+use catalog::room_rect;
 use pk_object::Solver;
 use pk_surface::{Button, InputEvent, KeyCode, Surface};
 use pk_surface_winit::WinitSurface;
 use sketch::Sketch;
+use solver::{Answers, SubdivisionRoomSolver};
 use tiny_skia::Pixmap;
 
 #[allow(clippy::too_many_lines)] // the event loop reads better as one piece
@@ -55,7 +56,9 @@ fn main() -> anyhow::Result<()> {
 
     let mut sketch = Sketch::new();
     let mut rooms: Vec<[f32; 4]> = Vec::new();
-    let solver = GridRoomSolver::default();
+    // Real program-driven zoned layout (3-bed/2-bath default program). The
+    // sketched boundary is the envelope; rooms tile it proportionally.
+    let solver = SubdivisionRoomSolver::from_answers(&Answers::default());
 
     let mut panning = false;
     let mut last = (0.0f32, 0.0f32);
