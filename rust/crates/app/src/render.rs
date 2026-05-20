@@ -22,6 +22,13 @@ impl View {
         (x * self.scale + self.offset_x, self.offset_y - y * self.scale)
     }
 
+    /// Inverse of [`map`](Self::map): screen px → world mm. Used to turn
+    /// sketch-pad clicks into world-space boundary points.
+    #[must_use]
+    pub fn unmap(&self, sx: f32, sy: f32) -> (f32, f32) {
+        ((sx - self.offset_x) / self.scale, (self.offset_y - sy) / self.scale)
+    }
+
     /// Apply a zoom factor about a screen-space pivot (for scroll-to-zoom).
     pub fn zoom_about(&mut self, factor: f32, px: f32, py: f32) {
         // Keep the world point under (px,py) fixed across the zoom.
@@ -151,6 +158,78 @@ pub fn render(r: &SliceResult, pixmap: &mut Pixmap, view: View) {
     }
 }
 
+/// Clear a pixmap to white (for sketch mode with no underlying floor plan).
+pub fn fill_white(pixmap: &mut Pixmap) {
+    pixmap.fill(Color::WHITE);
+}
+
+/// Draw the sketched boundary: a red polyline through `points` (closed if
+/// `closed`), with a dot at each vertex. `points` are world mm.
+pub fn draw_boundary(points: &[(f32, f32)], closed: bool, pixmap: &mut Pixmap, view: View) {
+    if points.is_empty() {
+        return;
+    }
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(200, 30, 30, 255);
+    paint.anti_alias = true;
+    let stroke = Stroke {
+        width: 2.0,
+        ..Stroke::default()
+    };
+    if points.len() >= 2 {
+        let mut pb = PathBuilder::new();
+        let (x0, y0) = view.map(points[0].0, points[0].1);
+        pb.move_to(x0, y0);
+        for p in &points[1..] {
+            let (x, y) = view.map(p.0, p.1);
+            pb.line_to(x, y);
+        }
+        if closed {
+            pb.close();
+        }
+        if let Some(path) = pb.finish() {
+            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+        }
+    }
+    // Vertex dots.
+    for p in points {
+        let (x, y) = view.map(p.0, p.1);
+        if let Some(circle) = PathBuilder::from_circle(x, y, 4.0) {
+            pixmap.fill_path(&circle, &paint, FillRule::Winding, Transform::identity(), None);
+        }
+    }
+}
+
+/// Draw solved rooms: each `[x, y, w, h]` rect (world mm) filled light blue
+/// with a dark outline.
+pub fn draw_rooms(rooms: &[[f32; 4]], pixmap: &mut Pixmap, view: View) {
+    let mut fill = Paint::default();
+    fill.set_color_rgba8(120, 160, 220, 90);
+    fill.anti_alias = true;
+    let mut outline = Paint::default();
+    outline.set_color_rgba8(40, 60, 110, 255);
+    outline.anti_alias = true;
+    let stroke = Stroke {
+        width: 1.5,
+        ..Stroke::default()
+    };
+    for &[x, y, w, h] in rooms {
+        let corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)];
+        let mut pb = PathBuilder::new();
+        let (x0, y0) = view.map(corners[0].0, corners[0].1);
+        pb.move_to(x0, y0);
+        for c in &corners[1..] {
+            let (cx, cy) = view.map(c.0, c.1);
+            pb.line_to(cx, cy);
+        }
+        pb.close();
+        if let Some(path) = pb.finish() {
+            pixmap.fill_path(&path, &fill, FillRule::Winding, Transform::identity(), None);
+            pixmap.stroke_path(&path, &outline, &stroke, Transform::identity(), None);
+        }
+    }
+}
+
 fn polyline_path(points: &[drawing::Point2D], closed: bool, view: View) -> Option<tiny_skia::Path> {
     if points.len() < 2 {
         return None;
@@ -247,6 +326,35 @@ mod tests {
         let mut out = [0u32; 2];
         pixmap_to_argb(&pixmap, &mut out);
         assert_eq!(out[0], (10 << 16) | (20 << 8) | 30);
+    }
+
+    #[test]
+    fn unmap_is_inverse_of_map() {
+        let v = View {
+            scale: 0.05,
+            offset_x: 50.0,
+            offset_y: 750.0,
+        };
+        let (wx, wy) = (3200.0, 1800.0);
+        let (sx, sy) = v.map(wx, wy);
+        let (rx, ry) = v.unmap(sx, sy);
+        assert!((rx - wx).abs() < 1e-2);
+        assert!((ry - wy).abs() < 1e-2);
+    }
+
+    #[test]
+    fn draw_rooms_and_boundary_paint_pixels() {
+        let mut pixmap = Pixmap::new(300, 300).unwrap();
+        fill_white(&mut pixmap);
+        let view = View {
+            scale: 0.05,
+            offset_x: 30.0,
+            offset_y: 270.0,
+        };
+        draw_rooms(&[[0.0, 0.0, 3000.0, 2000.0], [3000.0, 0.0, 3000.0, 2000.0]], &mut pixmap, view);
+        draw_boundary(&[(0.0, 0.0), (6000.0, 0.0), (6000.0, 2000.0), (0.0, 2000.0)], true, &mut pixmap, view);
+        let non_white = pixmap.pixels().iter().filter(|p| p.red() < 250 || p.blue() < 250).count();
+        assert!(non_white > 0);
     }
 
     #[test]

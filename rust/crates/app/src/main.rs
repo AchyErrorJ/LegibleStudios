@@ -1,42 +1,75 @@
-//! Legible Studio desktop head.
+//! Legible Studio desktop head — sketch pad (Increment 3) + floor-plan view.
 //!
-//! Bare-metal: opens a window via `pk-surface-winit`, generates the permit
-//! floor plan with the existing Rust pipeline, and software-rasterizes it
-//! with tiny-skia. No Python, no GPU, no webview. The render layer is shared
-//! with the eventual Semantic OS kernel target; only the window/input shim
-//! (pk-surface-winit) is desktop-specific.
+//! Bare-metal: window via `pk-surface-winit`, software rasterization via
+//! tiny-skia. No Python, no GPU, no webview.
+//!
+//! Sketch a lot boundary; the room solver (a kernel `Solver`) lays out
+//! rooms inside it, re-rendered live. Optionally underlay an existing
+//! permit floor plan by passing a building.json.
 //!
 //! Usage:
-//!     legible [building.json]      (defaults to smoke_test_output/building.json)
+//!     legible [building.json]      (building.json is an optional underlay)
 //!
-//! Controls: scroll = zoom, left-drag = pan, Esc = quit.
+//! Controls:
+//!   left-click   add a boundary vertex
+//!   Enter        close the boundary + solve rooms
+//!   c            clear the sketch
+//!   right-drag   pan      scroll  zoom      Esc  quit
 
 mod render;
+mod sketch;
 
-use anyhow::Context;
+use catalog::{room_rect, GridRoomSolver};
+use pk_object::Solver;
 use pk_surface::{Button, InputEvent, KeyCode, Surface};
 use pk_surface_winit::WinitSurface;
-use std::path::PathBuf;
+use sketch::Sketch;
 use tiny_skia::Pixmap;
 
+#[allow(clippy::too_many_lines)] // the event loop reads better as one piece
 fn main() -> anyhow::Result<()> {
-    let path = std::env::args()
-        .nth(1)
-        .map_or_else(|| PathBuf::from("smoke_test_output/building.json"), PathBuf::from);
+    // Optional floor-plan underlay from a building.json.
+    let slice = std::env::args().nth(1).and_then(|p| {
+        let doc = archgeometry::parse_file(&p).ok()?;
+        Some(qbd::generate_floor_plan_with_openings(
+            &doc,
+            1219.0,
+            &drawing::Config::with_defaults(),
+        ))
+    });
 
-    let doc = archgeometry::parse_file(&path)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
-    let config = drawing::Config::with_defaults();
-    let slice = qbd::generate_floor_plan_with_openings(&doc, 1219.0, &config);
-
-    let mut surface = WinitSurface::new(1000, 800, "Legible Studio — Floor Plan")
+    let mut surface = WinitSurface::new(1000, 800, "Legible Studio — Sketch")
         .map_err(|e| anyhow::anyhow!("window init failed: {e}"))?;
 
-    // Start fit-to-window; user can zoom/pan from there.
     let (w0, h0) = surface.size();
-    let mut view = render::fit_view(&slice, w0, h0, 40.0);
-    let mut dragging = false;
-    let mut last_pointer = (0.0f32, 0.0f32);
+    // If we have a floor plan, fit to it; otherwise a sketch canvas at
+    // 1px = 20mm with the origin near the bottom-left.
+    let mut view = match &slice {
+        Some(s) => render::fit_view(s, w0, h0, 40.0),
+        None => render::View {
+            scale: 0.05,
+            offset_x: 60.0,
+            offset_y: f32::from(u16::try_from(h0).unwrap_or(u16::MAX)) - 60.0,
+        },
+    };
+
+    let mut sketch = Sketch::new();
+    let mut rooms: Vec<[f32; 4]> = Vec::new();
+    let solver = GridRoomSolver::default();
+
+    let mut panning = false;
+    let mut last = (0.0f32, 0.0f32);
+
+    let resolve = |sketch: &Sketch| -> Vec<[f32; 4]> {
+        let mut scene = sketch.to_scene();
+        solver.solve(&mut scene);
+        scene
+            .objects
+            .iter()
+            .filter(|o| o.kind == "room")
+            .filter_map(room_rect)
+            .collect()
+    };
 
     while !surface.should_close() {
         for ev in surface.poll_input() {
@@ -46,27 +79,53 @@ fn main() -> anyhow::Result<()> {
                     pressed: true,
                     ..
                 } => return Ok(()),
+                InputEvent::Key {
+                    code: KeyCode::Enter,
+                    pressed: true,
+                    ..
+                } => {
+                    if sketch.close() {
+                        rooms = resolve(&sketch);
+                    }
+                }
+                InputEvent::Key {
+                    code: KeyCode::Char('c'),
+                    pressed: true,
+                    ..
+                } => {
+                    sketch.clear();
+                    rooms.clear();
+                }
                 InputEvent::Scroll { dy, .. } => {
                     let factor = if dy > 0.0 { 1.1 } else { 0.9 };
-                    view.zoom_about(factor, last_pointer.0, last_pointer.1);
+                    view.zoom_about(factor, last.0, last.1);
                 }
                 InputEvent::PointerDown {
                     button: Button::Left,
                     x,
                     y,
                 } => {
-                    dragging = true;
-                    last_pointer = (x, y);
+                    let (wx, wy) = view.unmap(x, y);
+                    sketch.add_point(wx, wy);
+                    last = (x, y);
+                }
+                InputEvent::PointerDown {
+                    button: Button::Right,
+                    x,
+                    y,
+                } => {
+                    panning = true;
+                    last = (x, y);
                 }
                 InputEvent::PointerUp {
-                    button: Button::Left,
+                    button: Button::Right,
                     ..
-                } => dragging = false,
+                } => panning = false,
                 InputEvent::PointerMove { x, y } => {
-                    if dragging {
-                        view.pan(x - last_pointer.0, y - last_pointer.1);
+                    if panning {
+                        view.pan(x - last.0, y - last.1);
                     }
-                    last_pointer = (x, y);
+                    last = (x, y);
                 }
                 _ => {}
             }
@@ -76,8 +135,13 @@ fn main() -> anyhow::Result<()> {
         if w == 0 || h == 0 {
             continue;
         }
-        let mut pixmap = Pixmap::new(w, h).context("pixmap alloc")?;
-        render::render(&slice, &mut pixmap, view);
+        let mut pixmap = Pixmap::new(w, h).ok_or_else(|| anyhow::anyhow!("pixmap alloc"))?;
+        match &slice {
+            Some(s) => render::render(s, &mut pixmap, view),
+            None => render::fill_white(&mut pixmap),
+        }
+        render::draw_rooms(&rooms, &mut pixmap, view);
+        render::draw_boundary(&sketch.points, sketch.closed, &mut pixmap, view);
         render::pixmap_to_argb(&pixmap, surface.pixels_mut());
         surface.present();
     }

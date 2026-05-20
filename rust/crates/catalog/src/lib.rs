@@ -14,14 +14,17 @@
 
 use archgeometry::{SchemaDocument, SchemaWall};
 use glam::{Vec2, Vec3};
-use pk_geom::Mesh;
+use pk_geom::{Mesh, Transform};
 use pk_object::{
-    GenContext, GeneratedGeometry, Object, ObjectGenerator, Registry, Scene, Severity, ValidationRule,
-    Violation,
+    Constraint, GenContext, GeneratedGeometry, Object, ObjectGenerator, Registry, Scene, Severity,
+    Solver, ValidationRule, Violation,
 };
 
 /// JSON key under which a wall `Object` carries its `SchemaWall`.
 const WALL_PARAM: &str = "wall";
+
+/// JSON key under which a room `Object` carries its `[x, y, w, h]` rect (mm).
+pub const ROOM_PARAM: &str = "rect";
 
 /// Default exterior/interior wall thickness in mm (mirrors archgeometry's
 /// 150 mm default wall type).
@@ -98,6 +101,101 @@ impl ValidationRule for WallLengthRule {
             Vec::new()
         }
     }
+}
+
+// ============================================================================
+// Sketch-driven room layout (Increment 3): a Region (sketched boundary) is
+// subdivided into room Objects. This is a kernel `Solver` impl — the same
+// hook the full Python room-solver port (Increment 4) will land behind.
+// ============================================================================
+
+/// Grid-subdivide an axis-aligned box into ~`target` room rects `[x, y, w, h]`.
+/// Picks a near-square `cols × rows` grid. Non-rectangular boundaries use
+/// their bounding box for v1.
+#[must_use]
+pub fn grid_subdivide(min_x: f32, min_y: f32, max_x: f32, max_y: f32, target: usize) -> Vec<[f32; 4]> {
+    let w = max_x - min_x;
+    let h = max_y - min_y;
+    if w <= 0.0 || h <= 0.0 || target == 0 {
+        return Vec::new();
+    }
+    #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let cols = ((target as f32 * w / h).sqrt().ceil().max(1.0)) as usize;
+    #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let rows = ((target as f32 / cols as f32).ceil().max(1.0)) as usize;
+    #[allow(clippy::cast_precision_loss)]
+    let cw = w / cols as f32;
+    #[allow(clippy::cast_precision_loss)]
+    let ch = h / rows as f32;
+    let mut rects = Vec::with_capacity(cols * rows);
+    for r in 0..rows {
+        for c in 0..cols {
+            #[allow(clippy::cast_precision_loss)]
+            let x = min_x + c as f32 * cw;
+            #[allow(clippy::cast_precision_loss)]
+            let y = min_y + r as f32 * ch;
+            rects.push([x, y, cw, ch]);
+        }
+    }
+    rects
+}
+
+fn polygon_bbox(poly: &[Vec2]) -> Option<(f32, f32, f32, f32)> {
+    if poly.is_empty() {
+        return None;
+    }
+    let mut min = Vec2::splat(f32::INFINITY);
+    let mut max = Vec2::splat(f32::NEG_INFINITY);
+    for p in poly {
+        min = min.min(*p);
+        max = max.max(*p);
+    }
+    Some((min.x, min.y, max.x, max.y))
+}
+
+/// Lays out a grid of rooms inside the first sketched `Region`. Adds one
+/// `Object` of kind `"room"` per cell, carrying its `[x, y, w, h]` rect in
+/// params. A placeholder for the real room-layout solver (Increment 4),
+/// but enough to prove the sketch → constraint → solve → render loop.
+pub struct GridRoomSolver {
+    pub target_rooms: usize,
+}
+
+impl Default for GridRoomSolver {
+    fn default() -> Self {
+        Self { target_rooms: 6 }
+    }
+}
+
+impl Solver for GridRoomSolver {
+    fn solve(&self, scene: &mut Scene) {
+        // Clear any rooms from a previous solve so re-solving is idempotent.
+        scene.objects.retain(|o| o.kind != "room");
+
+        let Some(region) = scene.regions.first() else {
+            return;
+        };
+        let Some((min_x, min_y, max_x, max_y)) = polygon_bbox(&region.polygon) else {
+            return;
+        };
+        let rects = grid_subdivide(min_x, min_y, max_x, max_y, self.target_rooms);
+        let mut next_id = scene.objects.iter().map(|o| o.id.0).max().unwrap_or(0) + 1;
+        for rect in rects {
+            let obj = Object::new(next_id, "room")
+                .with_param(ROOM_PARAM, serde_json::json!(rect))
+                .with_constraint(Constraint::FixedAt(Transform::identity()));
+            scene.add(obj);
+            next_id += 1;
+        }
+    }
+}
+
+/// Read a room `Object`'s `[x, y, w, h]` rect, if present.
+#[must_use]
+pub fn room_rect(obj: &Object) -> Option<[f32; 4]> {
+    obj.params
+        .get(ROOM_PARAM)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
 fn wall_from(obj: &Object) -> Option<SchemaWall> {
@@ -233,5 +331,66 @@ mod tests {
         let scene = scene_from_schema(&doc);
         assert_eq!(scene.objects.len(), 4);
         assert!(scene.objects.iter().all(|o| o.kind == "wall"));
+    }
+
+    #[test]
+    fn grid_subdivide_tiles_the_box() {
+        let rects = grid_subdivide(0.0, 0.0, 6000.0, 4000.0, 6);
+        assert!(!rects.is_empty());
+        // Cells cover the whole box area with no gaps/overlap.
+        let total: f32 = rects.iter().map(|[_, _, w, h]| w * h).sum();
+        assert!((total - 6000.0 * 4000.0).abs() < 1.0, "total area {total}");
+        // Roughly the requested room count.
+        assert!((4..=9).contains(&rects.len()), "got {} rooms", rects.len());
+    }
+
+    #[test]
+    fn grid_subdivide_degenerate_box_is_empty() {
+        assert!(grid_subdivide(0.0, 0.0, 0.0, 0.0, 6).is_empty());
+        assert!(grid_subdivide(0.0, 0.0, 100.0, 100.0, 0).is_empty());
+    }
+
+    #[test]
+    fn grid_room_solver_populates_rooms_from_region() {
+        use pk_object::{Region, RegionId};
+        let mut scene = Scene::new();
+        scene.regions.push(Region {
+            id: RegionId(0),
+            polygon: vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(6000.0, 0.0),
+                Vec2::new(6000.0, 4000.0),
+                Vec2::new(0.0, 4000.0),
+            ],
+        });
+        GridRoomSolver { target_rooms: 6 }.solve(&mut scene);
+        let rooms: Vec<_> = scene.objects.iter().filter(|o| o.kind == "room").collect();
+        assert!(!rooms.is_empty());
+        // Every room carries a readable rect inside the boundary bbox.
+        for o in &rooms {
+            let [x, y, w, h] = room_rect(o).expect("room has a rect");
+            assert!(x >= 0.0 && y >= 0.0 && x + w <= 6000.01 && y + h <= 4000.01);
+        }
+    }
+
+    #[test]
+    fn grid_room_solver_is_idempotent() {
+        use pk_object::{Region, RegionId};
+        let mut scene = Scene::new();
+        scene.regions.push(Region {
+            id: RegionId(0),
+            polygon: vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(5000.0, 0.0),
+                Vec2::new(5000.0, 5000.0),
+                Vec2::new(0.0, 5000.0),
+            ],
+        });
+        let s = GridRoomSolver { target_rooms: 4 };
+        s.solve(&mut scene);
+        let first = scene.objects.iter().filter(|o| o.kind == "room").count();
+        s.solve(&mut scene); // re-solve must not accumulate
+        let second = scene.objects.iter().filter(|o| o.kind == "room").count();
+        assert_eq!(first, second);
     }
 }
