@@ -14,6 +14,7 @@ members = [
     "crates/api",
     "crates/project-migrate",
     "crates/app",
+    "crates/catalog",
 ]
 
 [workspace.package]
@@ -60,6 +61,7 @@ ls-obc = { path = "crates/obc" }
 ls-drawing = { path = "crates/drawing" }
 ls-qbd = { path = "crates/qbd" }
 ls-api = { path = "crates/api" }
+ls-catalog = { path = "crates/catalog" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

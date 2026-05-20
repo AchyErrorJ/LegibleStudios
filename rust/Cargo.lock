@@ -700,6 +700,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ls-catalog"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "ls-archgeometry",
+ "pk-geom",
+ "pk-object",
+ "serde_json",
+]
+
+[[package]]
 name = "ls-csg"
 version = "0.1.0"
 dependencies = [
@@ -1196,6 +1207,24 @@ name = "pk-csg"
 version = "0.1.0"
 dependencies = [
  "glam",
+]
+
+[[package]]
+name = "pk-geom"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
+]
+
+[[package]]
+name = "pk-object"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "pk-geom",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
