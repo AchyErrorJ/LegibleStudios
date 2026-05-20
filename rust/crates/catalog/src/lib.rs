@@ -198,6 +198,181 @@ pub fn room_rect(obj: &Object) -> Option<[f32; 4]> {
         .and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
+// ============================================================================
+// "Design anything" generators (Increment 5): kernel-native object types that
+// are NOT building elements. They prove the catalog is open — adding a new
+// designable thing is just registering a generator, no kernel change. The
+// generic `PrimitiveGenerator` is exactly what a non-architecture consumer
+// (e.g. a Mech Arena part catalog) would register against the same kernel.
+// ============================================================================
+
+/// JSON key holding a freeform object's `[[x, z], ...]` plan profile (mm).
+const FREEFORM_PROFILE: &str = "profile";
+/// JSON key holding a freeform object's extrusion height (mm, along +Y).
+const FREEFORM_HEIGHT: &str = "height";
+/// JSON key naming the primitive shape.
+const PRIMITIVE_SHAPE: &str = "shape";
+/// Extrusion height used when a freeform object omits one.
+const DEFAULT_FREEFORM_HEIGHT: f32 = 1000.0;
+
+/// Wrap a sketched 2D `profile` (XZ plan points, mm) as a freeform `Object`
+/// extruded `height` mm along +Y. This is the kernel object behind the sketch
+/// pad's freeform mode: draw a shape, get geometry.
+#[must_use]
+pub fn freeform_object(id: u64, profile: &[Vec2], height: f32) -> Object {
+    let pts: Vec<[f32; 2]> = profile.iter().map(|p| [p.x, p.y]).collect();
+    Object::new(id, "freeform")
+        .with_param(FREEFORM_PROFILE, serde_json::json!(pts))
+        .with_param(FREEFORM_HEIGHT, serde_json::json!(height))
+        .with_constraint(Constraint::FixedAt(Transform::identity()))
+}
+
+/// A parametric primitive `Object`, placed at `at` (world mm). `spec` is a
+/// JSON object carrying `"shape"` plus that shape's dims (see
+/// [`PrimitiveGenerator`]). The generic "design anything" building block.
+#[must_use]
+pub fn primitive_object(id: u64, spec: &serde_json::Value, at: Vec3) -> Object {
+    let mut obj = Object::new(id, "primitive");
+    if let serde_json::Value::Object(map) = spec {
+        for (k, v) in map {
+            obj = obj.with_param(k, v.clone());
+        }
+    }
+    obj.with_constraint(Constraint::FixedAt(Transform::from_translation(at)))
+}
+
+/// Registry with the building catalog plus the open "design anything"
+/// generators (freeform extrusion + parametric primitives). A mixed scene of
+/// walls, rooms, freeform shapes and primitives all build through this.
+#[must_use]
+pub fn design_registry() -> Registry {
+    let mut r = building_registry();
+    r.register_generator(Box::new(FreeformGenerator));
+    r.register_generator(Box::new(PrimitiveGenerator));
+    r
+}
+
+/// Extrudes a sketched 2D profile into a prism `Mesh` (local space; the
+/// registry bakes the object's `FixedAt` transform afterward).
+pub struct FreeformGenerator;
+
+impl ObjectGenerator for FreeformGenerator {
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn kind(&self) -> &str {
+        "freeform"
+    }
+
+    fn generate(&self, obj: &Object, _ctx: &GenContext) -> GeneratedGeometry {
+        let Some(profile) = freeform_profile(obj) else {
+            return GeneratedGeometry::default();
+        };
+        if profile.len() < 3 {
+            return GeneratedGeometry::default();
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let height = obj
+            .params
+            .get(FREEFORM_HEIGHT)
+            .and_then(serde_json::Value::as_f64)
+            .map_or(DEFAULT_FREEFORM_HEIGHT, |h| h as f32);
+        let mesh = extrude_profile(&profile, height, Vec3::new(0.72, 0.78, 0.86));
+        GeneratedGeometry { mesh: Some(mesh) }
+    }
+}
+
+/// Dispatches a `"shape"` param to a `pk_primitives` builder. The proof that
+/// "design anything" is just data + a generic generator — no per-shape kernel
+/// code, and the same generator any consumer reuses.
+pub struct PrimitiveGenerator;
+
+impl ObjectGenerator for PrimitiveGenerator {
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn kind(&self) -> &str {
+        "primitive"
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn generate(&self, obj: &Object, _ctx: &GenContext) -> GeneratedGeometry {
+        let shape = obj
+            .params
+            .get(PRIMITIVE_SHAPE)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("box");
+        let f = |k: &str, d: f32| {
+            obj.params
+                .get(k)
+                .and_then(serde_json::Value::as_f64)
+                .map_or(d, |x| x as f32)
+        };
+        let seg = |d: u32| {
+            obj.params
+                .get("segments")
+                .and_then(serde_json::Value::as_u64)
+                .map_or(d, |x| x as u32)
+        };
+        let dims = read_vec3(obj, "dims", Vec3::splat(1000.0));
+        let mesh = match shape {
+            "wedge" => pk_primitives::wedge(dims, f("angle_deg", 45.0)),
+            "cylinder" => pk_primitives::cylinder(f("radius", 500.0), f("height", 1000.0), seg(24)),
+            "cone" => {
+                pk_primitives::cone(f("radius", 500.0), f("top_radius", 0.0), f("height", 1000.0), seg(24))
+            }
+            "sphere" => pk_primitives::sphere(f("radius", 500.0), seg(24)),
+            "capsule" => pk_primitives::capsule(f("radius", 300.0), f("length", 1000.0), seg(24)),
+            _ => pk_primitives::rounded_box(dims, f("chamfer", 0.0)), // "box" + fallback
+        };
+        GeneratedGeometry { mesh: Some(mesh) }
+    }
+}
+
+/// Read a freeform object's `[[x, z], ...]` plan profile as `Vec2`s.
+fn freeform_profile(obj: &Object) -> Option<Vec<Vec2>> {
+    let raw: Vec<[f32; 2]> = obj
+        .params
+        .get(FREEFORM_PROFILE)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())?;
+    Some(raw.into_iter().map(|[x, z]| Vec2::new(x, z)).collect())
+}
+
+/// Read a `[x, y, z]` param as a `Vec3`, falling back to `default`.
+fn read_vec3(obj: &Object, key: &str, default: Vec3) -> Vec3 {
+    obj.params
+        .get(key)
+        .and_then(|v| serde_json::from_value::<[f32; 3]>(v.clone()).ok())
+        .map_or(default, Vec3::from_array)
+}
+
+/// Extrude a closed plan `profile` (XZ) into a prism: 4 side faces per edge,
+/// fan-triangulated top (+Y) and bottom (−Y). Fan triangulation assumes a
+/// roughly convex profile (fine for v1 sketch shapes).
+#[allow(clippy::many_single_char_names)]
+fn extrude_profile(profile: &[Vec2], height: f32, color: Vec3) -> Mesh {
+    let mut m = Mesh::new();
+    let n = profile.len();
+    if n < 3 {
+        return m;
+    }
+    let bot = |p: Vec2| Vec3::new(p.x, 0.0, p.y);
+    let top = |p: Vec2| Vec3::new(p.x, height, p.y);
+    for i in 0..n {
+        let a = profile[i];
+        let b = profile[(i + 1) % n];
+        let edge = b - a;
+        let len = edge.length();
+        if len < 1e-3 {
+            continue;
+        }
+        let d = edge / len;
+        let normal = Vec3::new(-d.y, 0.0, d.x); // outward for CCW winding
+        m.add_quad(bot(a), top(a), top(b), bot(b), normal, color);
+    }
+    for i in 1..n - 1 {
+        m.add_triangle(top(profile[0]), top(profile[i]), top(profile[i + 1]), Vec3::Y, color);
+        m.add_triangle(bot(profile[0]), bot(profile[i + 1]), bot(profile[i]), Vec3::NEG_Y, color);
+    }
+    m
+}
+
 fn wall_from(obj: &Object) -> Option<SchemaWall> {
     obj.params
         .get(WALL_PARAM)
@@ -326,8 +501,10 @@ mod tests {
 
     #[test]
     fn scene_from_schema_makes_one_object_per_wall() {
-        let mut doc = SchemaDocument::default();
-        doc.walls = rect_walls();
+        let doc = SchemaDocument {
+            walls: rect_walls(),
+            ..Default::default()
+        };
         let scene = scene_from_schema(&doc);
         assert_eq!(scene.objects.len(), 4);
         assert!(scene.objects.iter().all(|o| o.kind == "wall"));
@@ -370,6 +547,76 @@ mod tests {
         for o in &rooms {
             let [x, y, w, h] = room_rect(o).expect("room has a rect");
             assert!(x >= 0.0 && y >= 0.0 && x + w <= 6000.01 && y + h <= 4000.01);
+        }
+    }
+
+    #[test]
+    fn freeform_extrudes_a_square_profile_into_a_prism() {
+        // Unit square in plan (XZ), extruded 1000 mm up.
+        let profile = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(2000.0, 0.0),
+            Vec2::new(2000.0, 1500.0),
+            Vec2::new(0.0, 1500.0),
+        ];
+        let mut scene = Scene::new();
+        scene.add(freeform_object(0, &profile, 1000.0));
+        let geo = design_registry().build(&mut scene);
+        let m = geo.per_object[0].1.mesh.as_ref().unwrap();
+        // 4 side quads (8 tris) + 2 fan-triangulated caps (2 tris each) = 12 tris.
+        assert_eq!(m.triangle_count(), 12);
+        let bb = m.aabb();
+        assert!((bb.size().x - 2000.0).abs() < 1.0);
+        assert!((bb.size().z - 1500.0).abs() < 1.0);
+        assert!((bb.size().y - 1000.0).abs() < 1.0); // extrusion height
+    }
+
+    #[test]
+    fn primitive_box_is_placed_at_its_fixed_transform() {
+        let spec = serde_json::json!({ "shape": "box", "dims": [800.0, 600.0, 400.0] });
+        let mut scene = Scene::new();
+        scene.add(primitive_object(0, &spec, Vec3::new(5000.0, 0.0, 3000.0)));
+        let geo = design_registry().build(&mut scene);
+        let bb = geo.per_object[0].1.mesh.as_ref().unwrap().aabb();
+        // rounded_box is centred on origin in local space; FixedAt translates it.
+        assert!((bb.center().x - 5000.0).abs() < 1.0, "x center {}", bb.center().x);
+        assert!((bb.center().z - 3000.0).abs() < 1.0, "z center {}", bb.center().z);
+        assert!((bb.size().x - 800.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn primitive_dispatch_covers_every_shape() {
+        for shape in ["box", "cylinder", "cone", "sphere", "capsule", "wedge"] {
+            let spec = serde_json::json!({ "shape": shape });
+            let mut scene = Scene::new();
+            scene.add(primitive_object(0, &spec, Vec3::ZERO));
+            let geo = design_registry().build(&mut scene);
+            let m = geo.per_object[0].1.mesh.as_ref().unwrap();
+            assert!(m.triangle_count() > 0, "{shape} produced an empty mesh");
+        }
+    }
+
+    #[test]
+    fn design_registry_builds_a_mixed_scene() {
+        // walls + a freeform shape + a primitive, all through one registry.
+        let mut scene = Scene::new();
+        for (i, w) in rect_walls().iter().enumerate() {
+            scene.add(wall_object(i as u64, w));
+        }
+        scene.add(freeform_object(
+            100,
+            &[Vec2::new(0.0, 0.0), Vec2::new(1000.0, 0.0), Vec2::new(500.0, 1000.0)],
+            500.0,
+        ));
+        scene.add(primitive_object(
+            101,
+            &serde_json::json!({ "shape": "cylinder", "radius": 300.0, "height": 800.0 }),
+            Vec3::new(2500.0, 0.0, 2000.0),
+        ));
+        let geo = design_registry().build(&mut scene);
+        assert_eq!(geo.per_object.len(), 6); // 4 walls + 1 freeform + 1 primitive
+        for (_, g) in &geo.per_object {
+            assert!(g.mesh.as_ref().is_some_and(|m| m.triangle_count() > 0));
         }
     }
 

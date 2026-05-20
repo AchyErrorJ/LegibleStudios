@@ -230,6 +230,56 @@ pub fn draw_rooms(rooms: &[[f32; 4]], pixmap: &mut Pixmap, view: View) {
     }
 }
 
+/// Draw freeform shapes: each polygon (world mm) filled green with an
+/// outline, plus the in-progress profile as an open green polyline so the
+/// user sees the stroke as they place points.
+pub fn draw_freeforms(shapes: &[Vec<(f32, f32)>], current: &[(f32, f32)], pixmap: &mut Pixmap, view: View) {
+    let mut fill = Paint::default();
+    fill.set_color_rgba8(70, 170, 110, 110);
+    fill.anti_alias = true;
+    let mut outline = Paint::default();
+    outline.set_color_rgba8(30, 110, 70, 255);
+    outline.anti_alias = true;
+    let stroke = Stroke {
+        width: 1.8,
+        ..Stroke::default()
+    };
+    for poly in shapes {
+        if let Some(path) = poly_path(poly, true, view) {
+            pixmap.fill_path(&path, &fill, FillRule::Winding, Transform::identity(), None);
+            pixmap.stroke_path(&path, &outline, &stroke, Transform::identity(), None);
+        }
+    }
+    // The stroke being drawn: open polyline + vertex dots.
+    if let Some(path) = poly_path(current, false, view) {
+        pixmap.stroke_path(&path, &outline, &stroke, Transform::identity(), None);
+    }
+    for p in current {
+        let (x, y) = view.map(p.0, p.1);
+        if let Some(circle) = PathBuilder::from_circle(x, y, 4.0) {
+            pixmap.fill_path(&circle, &outline, FillRule::Winding, Transform::identity(), None);
+        }
+    }
+}
+
+/// Build a path through world-mm `(x, y)` points, optionally closed.
+fn poly_path(points: &[(f32, f32)], closed: bool, view: View) -> Option<tiny_skia::Path> {
+    if points.len() < 2 {
+        return None;
+    }
+    let mut pb = PathBuilder::new();
+    let (x0, y0) = view.map(points[0].0, points[0].1);
+    pb.move_to(x0, y0);
+    for p in &points[1..] {
+        let (x, y) = view.map(p.0, p.1);
+        pb.line_to(x, y);
+    }
+    if closed {
+        pb.close();
+    }
+    pb.finish()
+}
+
 fn polyline_path(points: &[drawing::Point2D], closed: bool, view: View) -> Option<tiny_skia::Path> {
     if points.len() < 2 {
         return None;
@@ -289,6 +339,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::many_single_char_names)]
     fn fit_view_keeps_geometry_in_bounds() {
         let r = rect_room_floor_plan();
         let (w, h) = (400u32, 300u32);

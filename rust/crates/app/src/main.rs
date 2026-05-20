@@ -11,9 +11,10 @@
 //!     legible [building.json]      (building.json is an optional underlay)
 //!
 //! Controls:
-//!   left-click   add a boundary vertex
-//!   Enter        close the boundary + solve rooms
-//!   c            clear the sketch
+//!   left-click   add a vertex (boundary, or freeform shape in freeform mode)
+//!   Enter        close: solve rooms (boundary) / bank the shape (freeform)
+//!   f            toggle boundary ⇄ freeform mode
+//!   c            clear the active mode's strokes
 //!   right-drag   pan      scroll  zoom      Esc  quit
 
 mod render;
@@ -92,12 +93,20 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 InputEvent::Key {
+                    code: KeyCode::Char('f'),
+                    pressed: true,
+                    ..
+                } => sketch.toggle_mode(),
+                InputEvent::Key {
                     code: KeyCode::Char('c'),
                     pressed: true,
                     ..
                 } => {
+                    let was_boundary = sketch.mode == sketch::Mode::Boundary;
                     sketch.clear();
-                    rooms.clear();
+                    if was_boundary {
+                        rooms.clear();
+                    }
                 }
                 InputEvent::Scroll { dy, .. } => {
                     let factor = if dy > 0.0 { 1.1 } else { 0.9 };
@@ -145,6 +154,7 @@ fn main() -> anyhow::Result<()> {
         }
         render::draw_rooms(&rooms, &mut pixmap, view);
         render::draw_boundary(&sketch.points, sketch.closed, &mut pixmap, view);
+        render::draw_freeforms(&sketch.freeforms, &sketch.current, &mut pixmap, view);
         render::pixmap_to_argb(&pixmap, surface.pixels_mut());
         surface.present();
     }
