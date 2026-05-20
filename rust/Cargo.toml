@@ -13,6 +13,7 @@ members = [
     "crates/qbd",
     "crates/api",
     "crates/project-migrate",
+    "crates/app",
 ]
 
 [workspace.package]
@@ -43,6 +44,9 @@ bytemuck = { version = "1", features = ["derive"] }
 pk-geom = { path = "../../parametric-kernel/crates/pk-geom" }
 pk-primitives = { path = "../../parametric-kernel/crates/pk-primitives" }
 pk-csg = { path = "../../parametric-kernel/crates/pk-csg" }
+pk-object = { path = "../../parametric-kernel/crates/pk-object" }
+pk-surface = { path = "../../parametric-kernel/crates/pk-surface" }
+pk-surface-winit = { path = "../../parametric-kernel/crates/pk-surface-winit" }
 
 # Internal crates
 ls-domain = { path = "crates/domain" }
