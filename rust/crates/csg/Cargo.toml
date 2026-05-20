@@ -13,9 +13,9 @@ name = "csg"
 [lints]
 workspace = true
 
+# CSG now lives in the shared parametric-kernel (pk-csg). This crate is a
+# thin re-export shim so existing `use csg::...` sites keep working while
+# the implementation is shared with Mech Arena + future apps. The verbatim
+# source + the M2 wall-with-opening test moved to parametric-kernel/pk-csg.
 [dependencies]
-glam.workspace = true
-ls-domain.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true
+pk-csg.workspace = true

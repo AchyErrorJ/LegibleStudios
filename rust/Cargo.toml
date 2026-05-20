@@ -38,6 +38,12 @@ anyhow = "1"
 # Bytes / GPU layouts (used later by renderer crate and BVH GPU node format)
 bytemuck = { version = "1", features = ["derive"] }
 
+# Shared parametric-kernel (sibling repo — see docs/PARAMETRIC_KERNEL_SPEC.md).
+# Path deps for co-development; pin to a git tag once the kernel stabilises.
+pk-geom = { path = "../../parametric-kernel/crates/pk-geom" }
+pk-primitives = { path = "../../parametric-kernel/crates/pk-primitives" }
+pk-csg = { path = "../../parametric-kernel/crates/pk-csg" }
+
 # Internal crates
 ls-domain = { path = "crates/domain" }
 ls-archgeometry = { path = "crates/archgeometry" }
