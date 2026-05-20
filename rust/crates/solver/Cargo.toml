@@ -22,3 +22,4 @@ glam.workspace = true
 serde_json.workspace = true
 pk-geom.workspace = true
 pk-object.workspace = true
+ls-obc.workspace = true

@@ -265,8 +265,17 @@ pub fn svg_hatch(hatch: &Hatch2D, scale: f32) -> String {
 /// Top-level SVG export. Mirrors `Slicer2D::exportToSVG`
 /// (`slicer_2d.cpp:602`).
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn export_to_svg(result: &SliceResult, scale: f32) -> String {
+    export_to_svg_padded(result, scale, 0.0)
+}
+
+/// As [`export_to_svg`], but reserves `pad_world` extra units (in pre-scale
+/// world space) around the geometry bounding box. Use this when annotations
+/// (dimension lines, labels) sit *outside* the geometry footprint and would
+/// otherwise be clipped by the tight viewBox.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn export_to_svg_padded(result: &SliceResult, scale: f32, pad_world: f32) -> String {
     // Bounding box from lines + polyline points (matches C++ scope).
     let mut min_x = 1e9_f32;
     let mut min_y = 1e9_f32;
@@ -285,6 +294,13 @@ pub fn export_to_svg(result: &SliceResult, scale: f32) -> String {
             max_x = max_x.max(p.x);
             max_y = max_y.max(p.y);
         }
+    }
+    // Reserve room for out-of-footprint annotations (only when non-degenerate).
+    if pad_world > 0.0 && max_x >= min_x && max_y >= min_y {
+        min_x -= pad_world;
+        min_y -= pad_world;
+        max_x += pad_world;
+        max_y += pad_world;
     }
 
     let margin = 10.0_f32;

@@ -143,6 +143,93 @@ fn shared_edge(a: &Rect, b: &Rect) -> Option<((f32, f32), (f32, f32))> {
     None
 }
 
+/// A window placed on one of the four exterior perimeter walls.
+struct WindowOut {
+    wall_index: usize,
+    offset: f32, // mm along the wall from its start point
+    width: f32,  // mm
+    height: f32, // mm
+    sill: f32,   // mm above floor
+    win_type: &'static str,
+    room: String,
+}
+
+/// OBC-driven window pass (Part 9). For every room with a daylight or egress
+/// duty ([`obc::windows`]), place one window on the longest exterior edge the
+/// room touches, sized to satisfy the glazing fraction (and the egress minimum
+/// for bedrooms). Rooms with no exterior wall get none — a real OBC gap for
+/// interior habitable rooms, surfaced rather than papered over.
+///
+/// This is the placement seam the window-design work plugs into: the *rules*
+/// live in `obc`, the *strategy* (which wall, how big, where along it) is here
+/// and can be replaced wholesale without touching either side.
+fn generate_windows(rooms: &[PlacedRoom], env: Rect) -> Vec<WindowOut> {
+    use obc::windows as w;
+    const WIN_H_MM: f32 = 1200.0; // ~900 sill → ~2100 head
+    const SILL_MM: f32 = 900.0;
+    const EDGE_EPS: f32 = 0.5; // feet — room edge ≈ envelope edge
+
+    let s = FEET_TO_MM;
+    let (x0, y0, x1, y1) = (env.x, env.y, env.x + env.w, env.y + env.h);
+    let mut out = Vec::new();
+    for r in rooms {
+        if !w::needs_window(&r.room_type) {
+            continue;
+        }
+        // Required glazing area (m²), floored by egress for bedrooms.
+        let area_m2 = (r.rect.w * s / 1000.0) * (r.rect.h * s / 1000.0);
+        let egress = w::requires_egress(&r.room_type);
+        let mut need_m2 = area_m2 * w::glazing_fraction(&r.room_type);
+        if egress {
+            need_m2 = need_m2.max(w::EGRESS_MIN_AREA_M2);
+        }
+        if need_m2 <= 0.0 {
+            continue;
+        }
+
+        // Exterior edges this room touches: (wall_index, span_ft, dist_from_wall_start_ft).
+        let (cx, cy) = (r.rect.x + r.rect.w * 0.5, r.rect.y + r.rect.h * 0.5);
+        let mut cands: Vec<(usize, f32, f32)> = Vec::new();
+        if (r.rect.y - y0).abs() < EDGE_EPS {
+            cands.push((0, r.rect.w, cx - x0)); // south: +x from x0
+        }
+        if ((r.rect.x + r.rect.w) - x1).abs() < EDGE_EPS {
+            cands.push((1, r.rect.h, cy - y0)); // east: +y from y0
+        }
+        if ((r.rect.y + r.rect.h) - y1).abs() < EDGE_EPS {
+            cands.push((2, r.rect.w, x1 - cx)); // north: -x from x1
+        }
+        if (r.rect.x - x0).abs() < EDGE_EPS {
+            cands.push((3, r.rect.h, y1 - cy)); // west: -y from y1
+        }
+        let Some(&(wall_index, span_ft, dist_ft)) = cands
+            .iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        else {
+            continue; // interior room, no exterior wall
+        };
+
+        // Width from area / fixed head height, bounded by egress min and the
+        // available exterior span (leave 20% for wall returns).
+        let mut width = (need_m2 / (WIN_H_MM / 1000.0)) * 1000.0;
+        width = width.max(w::EGRESS_MIN_DIMENSION_MM).min(span_ft * s * 0.8);
+        let wall_len_mm = if wall_index % 2 == 0 { env.w * s } else { env.h * s };
+        let offset = (dist_ft * s - width * 0.5).clamp(0.0, (wall_len_mm - width).max(0.0));
+        let sill = if egress { SILL_MM.min(w::EGRESS_MAX_SILL_MM) } else { SILL_MM };
+
+        out.push(WindowOut {
+            wall_index,
+            offset,
+            width,
+            height: WIN_H_MM,
+            sill,
+            win_type: if egress { "casement" } else { "double_hung" },
+            room: r.id.clone(),
+        });
+    }
+    out
+}
+
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::too_many_lines)]
 fn to_json(answers: &Answers, env: Rect, rooms: &[PlacedRoom], walls: &[Wall]) -> Value {
     let s = FEET_TO_MM;
@@ -222,6 +309,24 @@ fn to_json(answers: &Answers, env: Rect, rooms: &[PlacedRoom], walls: &[Wall]) -
         },
     ]);
 
+    // OBC window pass (natural light + bedroom egress).
+    let windows = generate_windows(rooms, env);
+    let windows_json: Vec<Value> = windows
+        .iter()
+        .map(|w| {
+            json!({
+                "wall_index": w.wall_index,
+                "offset": w.offset,
+                "width": w.width,
+                "height": w.height,
+                "sill_height": w.sill,
+                "type": w.win_type,
+                "room": w.room,
+                "level_name": "Level 1",
+            })
+        })
+        .collect();
+
     let ext = walls_batch.iter().filter(|w| w["category"] == "exterior").count();
     let int = walls_batch.len() - ext;
     let total_min: f32 = program_min_total(answers);
@@ -237,7 +342,7 @@ fn to_json(answers: &Answers, env: Rect, rooms: &[PlacedRoom], walls: &[Wall]) -
         "creative_mode": false,
         "walls_batch": walls_batch,
         "doors": doors,
-        "windows": [],
+        "windows": windows_json,
         "levels": levels,
         "dimensions": dimensions,
         "rooms": Value::Object(rooms_map),
@@ -250,7 +355,7 @@ fn to_json(answers: &Answers, env: Rect, rooms: &[PlacedRoom], walls: &[Wall]) -
             "interior_walls": int,
             "wet_walls": 0,
             "doors": doors_count(walls),
-            "windows": 0,
+            "windows": windows.len(),
             "rooms_placed": rooms.len(),
             "rooms_requested": rooms.len(),
         },
@@ -337,6 +442,33 @@ mod tests {
         assert!(!doors.is_empty(), "no doors emitted");
         // At least the entry door on the south exterior wall.
         assert!(doors.iter().any(|d| d["wall_index"] == json!(0)));
+    }
+
+    #[test]
+    fn windows_placed_for_habitable_rooms_meet_obc() {
+        let v = building_json(&Answers::default());
+        let windows = v["windows"].as_array().unwrap();
+        assert!(!windows.is_empty(), "no windows emitted");
+        let walls = v["walls_batch"].as_array().unwrap().len();
+        for win in windows {
+            // On a real (exterior) perimeter wall, with required schema fields.
+            let wi = win["wall_index"].as_u64().unwrap();
+            assert!(wi < 4, "window not on a perimeter wall: {wi}");
+            assert!(wi < walls as u64);
+            for k in ["wall_index", "offset", "width", "height", "sill_height", "type", "room"] {
+                assert!(win.get(k).is_some(), "window missing {k}");
+            }
+            // Egress-capable opening: never below the OBC minimum dimension.
+            assert!(win["width"].as_f64().unwrap() >= 380.0);
+        }
+        // Every bedroom is covered by an egress (casement) window.
+        let rooms = v["rooms"].as_object().unwrap();
+        for id in rooms.keys().filter(|k| k.contains("bedroom")) {
+            let has = windows.iter().any(|w| w["room"] == json!(id) && w["type"] == json!("casement"));
+            assert!(has, "bedroom {id} has no egress window");
+        }
+        // Summary count matches.
+        assert_eq!(v["summary"]["windows"], json!(windows.len()));
     }
 
     #[test]

@@ -710,6 +710,7 @@ dependencies = [
  "ls-archgeometry",
  "pk-geom",
  "pk-object",
+ "pk-primitives",
  "serde_json",
 ]
 
@@ -798,6 +799,7 @@ name = "ls-solver"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "ls-obc",
  "pk-geom",
  "pk-object",
  "serde_json",
@@ -1238,6 +1240,14 @@ dependencies = [
  "pk-geom",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "pk-primitives"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "pk-geom",
 ]
 
 [[package]]

@@ -11,9 +11,12 @@
 //!     legible [building.json]      (building.json is an optional underlay)
 //!
 //! Controls:
-//!   left-click   add a vertex (boundary, or freeform shape in freeform mode)
+//!   (opens in View mode — clicks just navigate)
+//!   b            enter boundary mode (sketch the lot → solve rooms)
+//!   f            enter freeform mode (draw shapes → freeform objects)
+//!   v            back to view mode
+//!   left-click   add a vertex (only in boundary/freeform mode)
 //!   Enter        close: solve rooms (boundary) / bank the shape (freeform)
-//!   f            toggle boundary ⇄ freeform mode
 //!   c            clear the active mode's strokes
 //!   right-drag   pan      scroll  zoom      Esc  quit
 
@@ -93,10 +96,20 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 InputEvent::Key {
+                    code: KeyCode::Char('b'),
+                    pressed: true,
+                    ..
+                } => sketch.set_mode(sketch::Mode::Boundary),
+                InputEvent::Key {
                     code: KeyCode::Char('f'),
                     pressed: true,
                     ..
-                } => sketch.toggle_mode(),
+                } => sketch.set_mode(sketch::Mode::Freeform),
+                InputEvent::Key {
+                    code: KeyCode::Char('v'),
+                    pressed: true,
+                    ..
+                } => sketch.set_mode(sketch::Mode::View),
                 InputEvent::Key {
                     code: KeyCode::Char('c'),
                     pressed: true,

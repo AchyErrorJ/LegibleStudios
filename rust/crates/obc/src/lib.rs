@@ -1,5 +1,6 @@
 //! Ontario Building Code: joist/stud/header/rafter span tables,
-//! thermal R-value requirements by climate zone, compliance reports.
+//! thermal R-value requirements by climate zone, compliance reports,
+//! and Part-9 window requirements (natural light + egress).
 //!
 //! Port of `ArchEngine_kernel/{include,src}/obc_engine.{hpp,cpp}`.
 //! Table files (JSON) live at `OBC_Library/tables/` — load on init.
@@ -8,6 +9,7 @@ pub mod engine;
 pub mod format;
 pub mod report;
 pub mod tables;
+pub mod windows;
 
 pub use engine::{InitError, OBCEngine};
 pub use format::{cpp_float, cpp_int};

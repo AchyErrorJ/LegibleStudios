@@ -61,8 +61,8 @@ pub use slice::{
 };
 pub use slice_plane::{SlicePlane, SlicePlaneType, intersect_line_with_plane, project_to_2d};
 pub use svg::{
-    color_to_svg, cpp_double, export_to_svg, svg_arc, svg_circle, svg_hatch, svg_line,
-    svg_polyline, svg_text,
+    color_to_svg, cpp_double, export_to_svg, export_to_svg_padded, svg_arc, svg_circle, svg_hatch,
+    svg_line, svg_polyline, svg_text,
 };
 pub use title_block::{
     DrawingInfo, DrawingType, ProjectInfo, drawing_info_for, generate_title_block,

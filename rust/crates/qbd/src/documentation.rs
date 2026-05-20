@@ -8,7 +8,7 @@ use archgeometry::SchemaDocument;
 use drawing::{
     Config, DrawingType, ElevationDirection, ElevationInput, ElevationOpeningInput,
     ElevationWallInput, ProjectInfo, SectionInput, SectionWallInput, SitePlan, WallSectionDetail,
-    drawing_info_for, export_to_svg, generate_elevation_sheet_svg, generate_section_sheet_svg,
+    drawing_info_for, export_to_svg_padded, generate_elevation_sheet_svg, generate_section_sheet_svg,
     generate_site_plan_svg, generate_title_block, generate_wall_detail, wall_detail_to_svg,
 };
 
@@ -47,6 +47,39 @@ pub struct Documentation {
     pub window_schedule_svg: String,
 }
 
+/// Geometry export scale for the floor plan: `export_to_svg` maps plan
+/// `(x, y)` to SVG `(x*scale, -y*scale)`. Annotations are authored in plan-mm
+/// and lifted into this space by [`lift`].
+const FP_SCALE: f32 = 10.0;
+/// Pre-scale padding (mm) so dimensions that sit outside the building footprint
+/// (overall + structural-grid tiers) aren't clipped by the tight viewBox.
+const FP_PAD: f32 = 2500.0;
+
+/// Lift a plan-mm annotation fragment into the floor plan's exported space.
+/// Y is pre-negated in the dim inputs (keeping glyphs upright), so all that
+/// remains is the uniform magnitude scale — a positive `scale()` group, which
+/// does not mirror text.
+fn lift(fragment: &str) -> String {
+    if fragment.is_empty() {
+        return String::new();
+    }
+    format!("<g transform=\"scale({FP_SCALE})\">\n{fragment}</g>\n")
+}
+
+/// Flip a horizontal dim's perpendicular offset (its Y) to match the geometry's
+/// negated Y. The dimensioned axis (`from`/`to`) is X and is left untouched.
+fn flip_h(mut d: drawing::LinearDim) -> drawing::LinearDim {
+    d.offset = -d.offset;
+    d
+}
+
+/// Flip a vertical dim's Y endpoints; its offset is X and is left untouched.
+fn flip_v(mut d: drawing::LinearDim) -> drawing::LinearDim {
+    d.from = -d.from;
+    d.to = -d.to;
+    d
+}
+
 /// Generate documentation from a parsed schema. `scale` follows the C++
 /// default of `10.0` (used at `qbd_interface.cpp:964`).
 #[must_use]
@@ -61,17 +94,19 @@ pub fn generate_documentation(
     // mixed-unit space). The schema is mm; we use 1219 mm (≈4 ft).
     let cut_height = 1219.0;
     let result = generate_floor_plan_with_openings(doc, cut_height, &config);
-    let mut floor_plan_raw = export_to_svg(&result, 10.0);
+    // Pad the viewBox so the out-of-footprint dimension tiers below aren't
+    // clipped. Annotations are injected in plan-mm + lifted via `lift`.
+    let mut floor_plan_raw = export_to_svg_padded(&result, FP_SCALE, FP_PAD);
     // Inject Tier-1 dimensions on the floor plan: overall width below the
     // footprint, overall depth to the left. Coordinates in plan view are
     // (X, Z), so Y in 2D space is the schema's Z.
     if doc.width > 0.0 && doc.depth > 0.0 {
-        let width_dim = drawing::LinearDim::horizontal_mm(0.0, doc.width, doc.depth + 500.0);
-        let depth_dim = drawing::LinearDim::vertical_mm(0.0, doc.depth, -500.0);
+        let width_dim = flip_h(drawing::LinearDim::horizontal_mm(0.0, doc.width, doc.depth + 500.0));
+        let depth_dim = flip_v(drawing::LinearDim::vertical_mm(0.0, doc.depth, -500.0));
         let mut dims = String::new();
         dims.push_str(&drawing::render_horizontal_dim(&width_dim, 250.0));
         dims.push_str(&drawing::render_vertical_dim(&depth_dim, 250.0));
-        floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &dims);
+        floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&dims));
     }
     // Inject room labels (name + area). Sort by id so output is
     // deterministic regardless of HashMap iteration order.
@@ -89,14 +124,16 @@ pub fn generate_documentation(
                     r.name.clone()
                 },
                 bounds_x: r.bounds.x,
-                bounds_y: r.bounds.y,
+                // Flip Y into the export's negated-Y space: a point at plan
+                // `y` renders at `-y`, so the centroid must negate too.
+                bounds_y: -(r.bounds.y + r.bounds.height),
                 width: r.bounds.width,
                 height: r.bounds.height,
                 area_mm2: r.area,
             })
             .collect();
         let labels_svg = drawing::render_room_labels(&room_labels, 250.0);
-        floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &labels_svg);
+        floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&labels_svg));
 
         // Tier-4: per-room interior dimensions (width along top inside
         // edge, height along left inside edge).
@@ -113,11 +150,11 @@ pub fn generate_documentation(
                 r.bounds.height,
                 150.0,
             );
-            tier4.push_str(&drawing::render_horizontal_dim(&w_dim, 140.0));
-            tier4.push_str(&drawing::render_vertical_dim(&h_dim, 140.0));
+            tier4.push_str(&drawing::render_horizontal_dim(&flip_h(w_dim), 140.0));
+            tier4.push_str(&drawing::render_vertical_dim(&flip_v(h_dim), 140.0));
         }
         if !tier4.is_empty() {
-            floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &tier4);
+            floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&tier4));
         }
 
         // Tier-2: structural-grid chain dimensions. Collect the unique
@@ -143,16 +180,17 @@ pub fn generate_documentation(
                 .collect(),
         );
         let mut tier2 = String::new();
-        // Horizontal chain along top (Y = -1100, above Tier-1 width).
+        // Horizontal chain along the south edge (plan Y = -1100, below the
+        // footprint), flipped into export space.
         for d in drawing::chain_dims(&xs, -1100.0, true) {
-            tier2.push_str(&drawing::render_horizontal_dim(&d, 180.0));
+            tier2.push_str(&drawing::render_horizontal_dim(&flip_h(d), 180.0));
         }
         // Vertical chain along right (X = doc.width + 1100, right of plan).
         for d in drawing::chain_dims(&zs, doc.width + 1100.0, false) {
-            tier2.push_str(&drawing::render_vertical_dim(&d, 180.0));
+            tier2.push_str(&drawing::render_vertical_dim(&flip_v(d), 180.0));
         }
         if !tier2.is_empty() {
-            floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &tier2);
+            floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&tier2));
         }
     }
     let project_name: String = project_name.into();

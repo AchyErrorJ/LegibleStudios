@@ -14,11 +14,14 @@ use pk_object::{Region, RegionId, Scene};
 /// Extrusion height (mm) given to a freeform profile when it becomes an object.
 const FREEFORM_HEIGHT_MM: f32 = 2500.0;
 
-/// Which half of the hybrid pad the next stroke feeds.
+/// What a left-click does. The pad opens in `View` so clicks navigate/inspect
+/// instead of dropping vertices; the user opts into a drawing mode explicitly.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Strokes build the solver-input boundary region.
+    /// Clicks don't draw — just view/pan/zoom the plan.
     #[default]
+    View,
+    /// Strokes build the solver-input boundary region.
     Boundary,
     /// Strokes build freeform geometry objects.
     Freeform,
@@ -44,19 +47,18 @@ impl Sketch {
         Self::default()
     }
 
-    /// Flip between boundary and freeform mode, dropping any half-drawn
-    /// freeform stroke so the modes don't bleed into each other.
-    pub fn toggle_mode(&mut self) {
-        self.mode = match self.mode {
-            Mode::Boundary => Mode::Freeform,
-            Mode::Freeform => Mode::Boundary,
-        };
+    /// Switch the active mode, dropping any half-drawn freeform stroke so the
+    /// modes don't bleed into each other.
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
         self.current.clear();
     }
 
-    /// Add a vertex to whatever the current mode is drawing.
+    /// Add a vertex to whatever the current mode is drawing. A no-op in
+    /// `View` — clicks there don't draw.
     pub fn add_point(&mut self, x: f32, y: f32) {
         match self.mode {
+            Mode::View => {}
             Mode::Boundary => {
                 if !self.closed {
                     self.points.push((x, y));
@@ -71,6 +73,7 @@ impl Sketch {
     /// Returns whether anything was finalized (needs 3+ vertices).
     pub fn close(&mut self) -> bool {
         match self.mode {
+            Mode::View => false,
             Mode::Boundary => {
                 if self.points.len() >= 3 {
                     self.closed = true;
@@ -89,9 +92,10 @@ impl Sketch {
     }
 
     /// Clear everything in the current mode (boundary or all freeforms),
-    /// leaving the other mode's work intact.
+    /// leaving the other mode's work intact. A no-op in `View`.
     pub fn clear(&mut self) {
         match self.mode {
+            Mode::View => {}
             Mode::Boundary => {
                 self.points.clear();
                 self.closed = false;
@@ -133,6 +137,7 @@ mod tests {
     #[test]
     fn add_point_respects_closed() {
         let mut s = Sketch::new();
+        s.set_mode(Mode::Boundary);
         s.add_point(0.0, 0.0);
         s.add_point(1.0, 0.0);
         s.add_point(1.0, 1.0);
@@ -144,6 +149,7 @@ mod tests {
     #[test]
     fn close_needs_three_points() {
         let mut s = Sketch::new();
+        s.set_mode(Mode::Boundary);
         s.add_point(0.0, 0.0);
         s.add_point(1.0, 0.0);
         assert!(!s.close());
@@ -153,6 +159,7 @@ mod tests {
     #[test]
     fn to_scene_emits_a_region_when_closed_enough() {
         let mut s = Sketch::new();
+        s.set_mode(Mode::Boundary);
         assert!(s.to_scene().regions.is_empty());
         for p in [(0.0, 0.0), (6000.0, 0.0), (6000.0, 4000.0), (0.0, 4000.0)] {
             s.add_point(p.0, p.1);
@@ -164,6 +171,7 @@ mod tests {
     fn sketch_to_solver_yields_rooms() {
         // The full Increment-3 loop, headless: boundary → scene → solver → rooms.
         let mut s = Sketch::new();
+        s.set_mode(Mode::Boundary);
         for p in [(0.0, 0.0), (6000.0, 0.0), (6000.0, 4000.0), (0.0, 4000.0)] {
             s.add_point(p.0, p.1);
         }
@@ -183,12 +191,13 @@ mod tests {
     fn freeform_mode_banks_profiles_separately_from_boundary() {
         let mut s = Sketch::new();
         // Draw a boundary first.
+        s.set_mode(Mode::Boundary);
         for p in [(0.0, 0.0), (6000.0, 0.0), (6000.0, 4000.0)] {
             s.add_point(p.0, p.1);
         }
         s.close();
         // Switch to freeform and draw a triangle.
-        s.toggle_mode();
+        s.set_mode(Mode::Freeform);
         assert_eq!(s.mode, Mode::Freeform);
         for p in [(1000.0, 1000.0), (2000.0, 1000.0), (1500.0, 2000.0)] {
             s.add_point(p.0, p.1);
@@ -203,7 +212,7 @@ mod tests {
     #[test]
     fn freeform_objects_build_through_the_registry() {
         let mut s = Sketch::new();
-        s.toggle_mode(); // freeform
+        s.set_mode(Mode::Freeform);
         for p in [(0.0, 0.0), (2000.0, 0.0), (2000.0, 2000.0), (0.0, 2000.0)] {
             s.add_point(p.0, p.1);
         }
@@ -218,11 +227,12 @@ mod tests {
     #[test]
     fn clear_is_scoped_to_the_active_mode() {
         let mut s = Sketch::new();
+        s.set_mode(Mode::Boundary);
         for p in [(0.0, 0.0), (6000.0, 0.0), (6000.0, 4000.0)] {
             s.add_point(p.0, p.1);
         }
         s.close();
-        s.toggle_mode();
+        s.set_mode(Mode::Freeform);
         for p in [(0.0, 0.0), (1000.0, 0.0), (500.0, 1000.0)] {
             s.add_point(p.0, p.1);
         }
