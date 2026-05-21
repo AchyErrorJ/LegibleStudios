@@ -79,33 +79,18 @@ pub fn building_json(answers: &Answers) -> Value {
 }
 
 /// Perimeter (exterior) + interior partition walls. On the ground floor, an
-/// entry door sits on the south edge centred on the `entry` room; upper floors
-/// have no exterior door (the stair is their access). Each interior wall gets
-/// a centred door.
+/// entry door sits on whichever exterior edge the `entry` room touches
+/// (preferring the south/front wall); upper floors have no exterior door (the
+/// stair is their access). Each interior wall gets a centred door.
 fn generate_walls(rooms: &[PlacedRoom], env: Rect, is_ground: bool) -> Vec<Wall> {
     let (x0, y0, x1, y1) = (env.x, env.y, env.x + env.w, env.y + env.h);
     let half = DOOR_WIDTH_FT * 0.5;
     let mut walls = Vec::new();
 
-    // Exterior perimeter, CCW from south-west.
-    let mut south = Wall {
-        start: (x0, y0),
-        end: (x1, y0),
-        category: "exterior",
-        room1: "exterior".into(),
-        room2: "exterior".into(),
-        openings: Vec::new(),
-    };
-    // Entry door (ground floor only) centred on the entry room.
-    if let Some(entry) = rooms.iter().find(|r| is_ground && r.id == "entry") {
-        let entry_cx = entry.rect.x + entry.rect.w * 0.5;
-        south.openings.push(Opening {
-            start: (entry_cx - half, y0),
-            end: (entry_cx + half, y0),
-        });
-    }
-    walls.push(south);
+    // Exterior perimeter, CCW from south-west: indices 0=south, 1=east,
+    // 2=north, 3=west.
     for (s, e) in [
+        ((x0, y0), (x1, y0)),
         ((x1, y0), (x1, y1)),
         ((x1, y1), (x0, y1)),
         ((x0, y1), (x0, y0)),
@@ -118,6 +103,28 @@ fn generate_walls(rooms: &[PlacedRoom], env: Rect, is_ground: bool) -> Vec<Wall>
             room2: "exterior".into(),
             openings: Vec::new(),
         });
+    }
+
+    // Entry door (ground floor only) on whichever exterior edge the entry room
+    // touches — preferring south (front), then east, west, north.
+    if let Some(entry) = rooms.iter().find(|r| is_ground && r.id == "entry") {
+        const EPS: f32 = 0.5;
+        let e = entry.rect;
+        let (cx, cy) = (e.x + e.w * 0.5, e.y + e.h * 0.5);
+        let door = if (e.y - y0).abs() < EPS {
+            Some((0, Opening { start: (cx - half, y0), end: (cx + half, y0) }))
+        } else if ((e.x + e.w) - x1).abs() < EPS {
+            Some((1, Opening { start: (x1, cy - half), end: (x1, cy + half) }))
+        } else if (e.x - x0).abs() < EPS {
+            Some((3, Opening { start: (x0, cy - half), end: (x0, cy + half) }))
+        } else if ((e.y + e.h) - y1).abs() < EPS {
+            Some((2, Opening { start: (cx - half, y1), end: (cx + half, y1) }))
+        } else {
+            None // entry somehow interior — no phantom door
+        };
+        if let Some((wi, op)) = door {
+            walls[wi].openings.push(op);
+        }
     }
 
     // Interior partitions: for each adjacent room pair, the shared boundary.
@@ -536,12 +543,30 @@ mod tests {
     }
 
     #[test]
-    fn entry_door_present() {
+    #[allow(clippy::many_single_char_names)]
+    fn entry_is_on_an_exterior_wall_with_its_door() {
         let v = building_json(&Answers::default());
-        let doors = v["doors"].as_array().unwrap();
-        assert!(!doors.is_empty(), "no doors emitted");
-        // At least the entry door on the south exterior wall.
-        assert!(doors.iter().any(|d| d["wall_index"] == json!(0)));
+        // The entry room touches an exterior edge of the footprint.
+        let entry = &v["rooms"]["entry"];
+        let b = &entry["bounds"];
+        let (w, d) = (v["width"].as_f64().unwrap(), v["depth"].as_f64().unwrap());
+        let (x, y, bw, bh) = (
+            b["x"].as_f64().unwrap(),
+            b["y"].as_f64().unwrap(),
+            b["width"].as_f64().unwrap(),
+            b["height"].as_f64().unwrap(),
+        );
+        let on_perimeter =
+            x <= 300.0 || y <= 300.0 || x + bw >= w - 300.0 || y + bh >= d - 300.0;
+        assert!(on_perimeter, "entry is interior, can't have a front door");
+        // Exactly one exterior (perimeter, wall_index < 4) door — the entry.
+        let perimeter_doors = v["doors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|dr| dr["wall_index"].as_u64().unwrap() < 4)
+            .count();
+        assert_eq!(perimeter_doors, 1, "expected exactly the entry door on the perimeter");
     }
 
     #[test]

@@ -443,11 +443,16 @@ fn perim_edges(r: Rect, env: Rect) -> i32 {
         + i32::from(((r.y + r.h) - (env.y + env.h)).abs() < E)
 }
 
-/// Count rooms in `items` that need a window (daylight or egress).
+/// Count rooms in `items` that want an exterior wall: window-needing rooms
+/// (daylight or egress) plus the entry, which must reach an exterior wall for
+/// its front door.
 fn window_count(items: &[(usize, f32)], program: &[RoomSpec]) -> i32 {
     items
         .iter()
-        .filter(|(i, _)| obc::windows::needs_window(&program[*i].room_type))
+        .filter(|(i, _)| {
+            let rt = &program[*i].room_type;
+            obc::windows::needs_window(rt) || rt == "entry"
+        })
         .count()
         .try_into()
         .unwrap_or(i32::MAX)
