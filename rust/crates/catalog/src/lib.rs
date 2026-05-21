@@ -366,9 +366,12 @@ fn extrude_profile(profile: &[Vec2], height: f32, color: Vec3) -> Mesh {
         let normal = Vec3::new(-d.y, 0.0, d.x); // outward for CCW winding
         m.add_quad(bot(a), top(a), top(b), bot(b), normal, color);
     }
-    for i in 1..n - 1 {
-        m.add_triangle(top(profile[0]), top(profile[i]), top(profile[i + 1]), Vec3::Y, color);
-        m.add_triangle(bot(profile[0]), bot(profile[i + 1]), bot(profile[i]), Vec3::NEG_Y, color);
+    // Caps: ear-clip the profile so concave shapes triangulate correctly
+    // (a fan from vertex 0 only works for convex polygons). Top winds CCW
+    // (+Y), bottom reverses (−Y).
+    for [i, j, k] in pk_geom::triangulate(profile) {
+        m.add_triangle(top(profile[i]), top(profile[j]), top(profile[k]), Vec3::Y, color);
+        m.add_triangle(bot(profile[i]), bot(profile[k]), bot(profile[j]), Vec3::NEG_Y, color);
     }
     m
 }
@@ -563,12 +566,37 @@ mod tests {
         scene.add(freeform_object(0, &profile, 1000.0));
         let geo = design_registry().build(&mut scene);
         let m = geo.per_object[0].1.mesh.as_ref().unwrap();
-        // 4 side quads (8 tris) + 2 fan-triangulated caps (2 tris each) = 12 tris.
+        // 4 side quads (8 tris) + 2 caps (2 tris each) = 12 tris.
         assert_eq!(m.triangle_count(), 12);
         let bb = m.aabb();
         assert!((bb.size().x - 2000.0).abs() < 1.0);
         assert!((bb.size().z - 1500.0).abs() < 1.0);
         assert!((bb.size().y - 1000.0).abs() < 1.0); // extrusion height
+    }
+
+    #[test]
+    fn freeform_extrudes_a_concave_l_shape_with_ear_clipped_caps() {
+        // An L-shaped plan (6 verts, one reflex corner) — fan triangulation
+        // would spill outside the polygon; ear clipping keeps the caps inside.
+        let l = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(2000.0, 0.0),
+            Vec2::new(2000.0, 1000.0),
+            Vec2::new(1000.0, 1000.0),
+            Vec2::new(1000.0, 2000.0),
+            Vec2::new(0.0, 2000.0),
+        ];
+        let mut scene = Scene::new();
+        scene.add(freeform_object(0, &l, 800.0));
+        let geo = design_registry().build(&mut scene);
+        let m = geo.per_object[0].1.mesh.as_ref().unwrap();
+        // 6 side quads (12 tris) + 2 caps of (n-2)=4 tris each = 20 tris.
+        assert_eq!(m.triangle_count(), 20);
+        let bb = m.aabb();
+        // Bounds match the L's extent — no triangle spills past it.
+        assert!((bb.size().x - 2000.0).abs() < 1.0);
+        assert!((bb.size().z - 2000.0).abs() < 1.0);
+        assert!((bb.size().y - 800.0).abs() < 1.0);
     }
 
     #[test]
