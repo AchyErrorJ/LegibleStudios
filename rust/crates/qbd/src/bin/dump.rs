@@ -13,6 +13,54 @@ use std::path::PathBuf;
 
 const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--project <name>] [--bare]";
 
+/// Longest displayed edge, in CSS px, for a written sheet.
+const DISPLAY_MAX_PX: f32 = 1100.0;
+
+/// Cap an SVG's displayed size. The geometry is exported in millimetres (often
+/// ×10), so the raw `width`/`height` attributes are hundreds of thousands of
+/// units — a browser renders that at that many *pixels*. We rewrite only the
+/// `width`/`height` attributes (keeping the `viewBox`, so the drawing is
+/// untouched) to fit `DISPLAY_MAX_PX` at the viewBox aspect ratio.
+fn fit_display(svg: &str) -> String {
+    let Some(start) = svg.find("<svg") else {
+        return svg.to_string();
+    };
+    let Some(rel_end) = svg[start..].find('>') else {
+        return svg.to_string();
+    };
+    let end = start + rel_end; // index of '>'
+    let tag = &svg[start..end];
+    // Parse the viewBox "minx miny w h".
+    let Some(vb) = tag.split("viewBox=\"").nth(1).and_then(|s| s.split('"').next()) else {
+        return svg.to_string();
+    };
+    let nums: Vec<f32> = vb.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+    if nums.len() != 4 {
+        return svg.to_string();
+    }
+    let (vw, vh) = (nums[2].abs(), nums[3].abs());
+    if vw <= 0.0 || vh <= 0.0 {
+        return svg.to_string();
+    }
+    let (w, h) = if vw >= vh {
+        (DISPLAY_MAX_PX, DISPLAY_MAX_PX * vh / vw)
+    } else {
+        (DISPLAY_MAX_PX * vw / vh, DISPLAY_MAX_PX)
+    };
+    let replace_attr = |tag: &str, name: &str, val: f32| -> String {
+        let pat = format!("{name}=\"");
+        if let Some(s) = tag.find(&pat) {
+            let after = s + pat.len();
+            if let Some(rel) = tag[after..].find('"') {
+                return format!("{}{:.1}{}", &tag[..after], val, &tag[after + rel..]);
+            }
+        }
+        tag.to_string()
+    };
+    let new_tag = replace_attr(&replace_attr(tag, "width", w), "height", h);
+    format!("{}{}{}", &svg[..start], new_tag, &svg[end..])
+}
+
 #[allow(clippy::too_many_lines)] // CLI dispatch + bundle emission read top-down.
 #[allow(clippy::format_collect)] // Manifest JSON assembly is one-shot; iterator-format is fine here.
 fn main() -> anyhow::Result<()> {
@@ -89,7 +137,8 @@ fn main() -> anyhow::Result<()> {
         // — see m5_diff.py for the picture).
         let write_sheet = |name: &str, body: &str| -> anyhow::Result<()> {
             let p = dir.join(name);
-            std::fs::write(&p, body).with_context(|| format!("failed to write {}", p.display()))?;
+            let body = fit_display(body);
+            std::fs::write(&p, &body).with_context(|| format!("failed to write {}", p.display()))?;
             eprintln!("  wrote {} ({} bytes)", p.display(), body.len());
             Ok(())
         };
