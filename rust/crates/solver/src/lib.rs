@@ -368,6 +368,23 @@ fn affinity(a: &str, b: &str) -> f32 {
     }
 }
 
+/// Instance-level pairing bonus: a numbered bedroom and the closet sharing its
+/// index (`bedroom_2` ↔ `closet_2`) belong together, beyond the generic
+/// bedroom↔closet type affinity. Without this, the seriation would attach a
+/// bedroom to whichever closet sorts first.
+fn pair_bonus(a: &str, b: &str) -> f32 {
+    let matched = |x: &str, y: &str| {
+        x.strip_prefix("bedroom_")
+            .zip(y.strip_prefix("closet_"))
+            .is_some_and(|(i, j)| i == j)
+    };
+    if matched(a, b) || matched(b, a) {
+        0.4
+    } else {
+        0.0
+    }
+}
+
 /// Order the program so high-affinity rooms are contiguous: a greedy
 /// nearest-neighbour walk over the affinity graph, seeded at the entry (so the
 /// order flows entry → public → service → private). Deterministic — ties keep
@@ -398,7 +415,8 @@ fn seriate(program: &[RoomSpec]) -> Vec<usize> {
             if visited[j] {
                 continue;
             }
-            let aff = affinity(&program[last].room_type, &program[j].room_type);
+            let aff = affinity(&program[last].room_type, &program[j].room_type)
+                + pair_bonus(&program[last].id, &program[j].id);
             if aff > best_aff + 1e-6 {
                 best_aff = aff;
                 best = j;
@@ -491,27 +509,112 @@ fn slice_seriated(
     }
 }
 
+/// A slicing unit: a lead room plus rooms tucked *inside* it — a bedroom and
+/// its closet, or the primary bedroom with its bath + walk-in closet. The
+/// suite is sliced as one rect, then split so the lead (window-needing) room
+/// takes the exterior side and the inboard rooms sit behind it.
+struct Suite {
+    lead: usize,
+    inboard: Vec<usize>,
+}
+
+/// Group the program into suites: `closet_N` tucks into `bedroom_N`; the
+/// primary bath + walk-in closet tuck into the primary bedroom; everything
+/// else is its own lead. This is what makes instance pairing exact —
+/// `bedroom_2` always ends up next to `closet_2`, never another closet.
+fn group_suites(program: &[RoomSpec]) -> Vec<Suite> {
+    let idx_of = |id: &str| program.iter().position(|r| r.id == id);
+    let parent = |i: usize| -> usize {
+        let r = &program[i];
+        if let Some(n) = r.id.strip_prefix("closet_") {
+            return idx_of(&format!("bedroom_{n}")).unwrap_or(i);
+        }
+        if r.room_type == "walk_in_closet" || r.room_type == "primary_bath" {
+            return idx_of("primary_bedroom").unwrap_or(i);
+        }
+        i
+    };
+    (0..program.len())
+        .filter(|&i| parent(i) == i)
+        .map(|i| Suite {
+            lead: i,
+            inboard: (0..program.len()).filter(|&j| j != i && parent(j) == i).collect(),
+        })
+        .collect()
+}
+
+/// Place a suite's lead room against an exterior edge of `rect` and tuck its
+/// inboard rooms behind it (toward the building interior). A lone room (no
+/// inboard) just fills the rect.
+#[allow(clippy::many_single_char_names)]
+fn place_suite(rect: Rect, suite: &Suite, program: &[RoomSpec], areas: &[f32], env: Rect) -> Vec<PlacedRoom> {
+    const E: f32 = 0.5;
+    let mk = |i: usize, r: Rect| PlacedRoom {
+        id: program[i].id.clone(),
+        room_type: program[i].room_type.clone(),
+        zone: program[i].zone(),
+        rect: r,
+    };
+    if suite.inboard.is_empty() {
+        return vec![mk(suite.lead, rect)];
+    }
+    let lead_area = areas[suite.lead];
+    let in_area: f32 = suite.inboard.iter().map(|&i| areas[i]).sum();
+    let f = (lead_area / (lead_area + in_area)).clamp(0.05, 0.95);
+    let (lx, ly, hx, hy) = (env.x, env.y, env.x + env.w, env.y + env.h);
+
+    // Put the lead against an exterior edge; carve inboard from the opposite
+    // (interior) side. Prefer south/north (split Y) so bedrooms face front/back.
+    let (lead_rect, in_rect) = if (rect.y - ly).abs() < E {
+        // south edge → lead at bottom
+        (Rect { h: rect.h * f, ..rect }, Rect { y: rect.y + rect.h * f, h: rect.h * (1.0 - f), ..rect })
+    } else if ((rect.y + rect.h) - hy).abs() < E {
+        // north edge → lead at top
+        (Rect { y: rect.y + rect.h * (1.0 - f), h: rect.h * f, ..rect }, Rect { h: rect.h * (1.0 - f), ..rect })
+    } else if (rect.x - lx).abs() < E {
+        // west edge → lead at left
+        (Rect { w: rect.w * f, ..rect }, Rect { x: rect.x + rect.w * f, w: rect.w * (1.0 - f), ..rect })
+    } else if ((rect.x + rect.w) - hx).abs() < E {
+        // east edge → lead at right
+        (Rect { x: rect.x + rect.w * (1.0 - f), w: rect.w * f, ..rect }, Rect { w: rect.w * (1.0 - f), ..rect })
+    } else {
+        // interior suite (rare): split the longer side, lead first.
+        rect.split(f)
+    };
+
+    let mut out = vec![mk(suite.lead, lead_rect)];
+    let in_items: Vec<(usize, f32)> = suite.inboard.iter().map(|&i| (i, areas[i])).collect();
+    for (i, r) in slice_seriated(env, in_rect, &in_items, program, false) {
+        out.push(mk(i, r));
+    }
+    out
+}
+
 /// Lay out the program inside `envelope` (feet) by adjacency. Rooms are
-/// allocated real areas, seriated along the relationship graph ([`seriate`]),
-/// then sliced so adjacency clusters stay together ([`slice_seriated`]). The
-/// entry cluster anchors to the entry edge; a north entry mirrors depth.
+/// allocated real areas and grouped into suites (bedroom + its closet/bath),
+/// the suites are seriated along the relationship graph ([`seriate`]) and
+/// sliced ([`slice_seriated`]); each suite then splits with its lead room on
+/// the exterior wall. The entry cluster anchors to the entry edge; a north
+/// entry mirrors depth.
 #[must_use]
 pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str) -> Vec<PlacedRoom> {
     if program.is_empty() || envelope.area() <= 0.0 {
         return Vec::new();
     }
     let areas = allocate_areas(program, envelope.area());
-    let order = seriate(program);
-    let items: Vec<(usize, f32)> = order.iter().map(|&i| (i, areas[i])).collect();
+    let suites = group_suites(program);
+    // Seriate + slice over suite leads, weighted by each suite's total area.
+    let lead_specs: Vec<RoomSpec> = suites.iter().map(|s| program[s.lead].clone()).collect();
+    let suite_area: Vec<f32> = suites
+        .iter()
+        .map(|s| areas[s.lead] + s.inboard.iter().map(|&i| areas[i]).sum::<f32>())
+        .collect();
+    let order = seriate(&lead_specs);
+    let items: Vec<(usize, f32)> = order.iter().map(|&i| (i, suite_area[i])).collect();
 
-    let mut placed: Vec<PlacedRoom> = slice_seriated(envelope, envelope, &items, program, true)
+    let mut placed: Vec<PlacedRoom> = slice_seriated(envelope, envelope, &items, &lead_specs, true)
         .into_iter()
-        .map(|(i, rect)| PlacedRoom {
-            id: program[i].id.clone(),
-            room_type: program[i].room_type.clone(),
-            zone: program[i].zone(),
-            rect,
-        })
+        .flat_map(|(si, rect)| place_suite(rect, &suites[si], program, &areas, envelope))
         .collect();
 
     // For a north entry, mirror depth so the entry cluster sits at high Y.
@@ -697,6 +800,40 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    #[allow(clippy::many_single_char_names)]
+    fn each_bedroom_is_adjacent_to_its_own_closet() {
+        let a = Answers {
+            bedrooms: 4,
+            bathrooms: 3,
+            sqft: 2400.0,
+            garage: "none".into(),
+            special_rooms: vec![],
+            storeys: 1,
+        };
+        let p = program_from_answers(&a);
+        let (w, d) = auto_size(&p, a.sqft);
+        let placed = subdivide(Rect { x: 0.0, y: 0.0, w, h: d }, &p, "south");
+        let rect_of = |id: &str| placed.iter().find(|r| r.id == id).map(|r| r.rect);
+        let adjacent = |x: Rect, y: Rect| {
+            let e = 0.5;
+            let vshare = (x.y.max(y.y)) < (x.y + x.h).min(y.y + y.h) - e;
+            let hshare = (x.x.max(y.x)) < (x.x + x.w).min(y.x + y.w) - e;
+            ((x.x + x.w - y.x).abs() < e || (y.x + y.w - x.x).abs() < e) && vshare
+                || ((x.y + x.h - y.y).abs() < e || (y.y + y.h - x.y).abs() < e) && hshare
+        };
+        for (bed, closet) in [
+            ("bedroom_2", "closet_2"),
+            ("bedroom_3", "closet_3"),
+            ("bedroom_4", "closet_4"),
+            ("primary_bedroom", "primary_bath"),
+            ("primary_bedroom", "primary_closet"),
+        ] {
+            let (b, c) = (rect_of(bed).unwrap(), rect_of(closet).unwrap());
+            assert!(adjacent(b, c), "{bed} not adjacent to {closet}");
         }
     }
 
