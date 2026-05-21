@@ -4,7 +4,9 @@
 //! Prints the building JSON to stdout.
 //!
 //! Usage:
-//!     qbd_solve [--bedrooms N] [--bathrooms N] [--sqft N] [--garage none|1car|2car|3car]
+//!     qbd_solve [--bedrooms N] [--bathrooms N] [--sqft N]
+//!               [--garage none|1car|2car|3car] [--storeys 0|1|2]
+//!     (--storeys 0 = auto: 2 when 3+ bedrooms, else 1)
 
 use solver::{building_json, Answers};
 
@@ -18,6 +20,7 @@ fn main() {
             "--bathrooms" => a.bathrooms = args[i + 1].parse().unwrap_or(a.bathrooms),
             "--sqft" => a.sqft = args[i + 1].parse().unwrap_or(a.sqft),
             "--garage" => a.garage.clone_from(&args[i + 1]),
+            "--storeys" => a.storeys = args[i + 1].parse().unwrap_or(a.storeys),
             _ => {}
         }
         i += 2;

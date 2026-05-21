@@ -9,7 +9,10 @@
 //! This completes the pure-Rust `answers → schema-valid bundle` path; no
 //! Python in the loop.
 
-use crate::{auto_size, program_from_answers, subdivide, Answers, PlacedRoom, Rect, Zone};
+use crate::{
+    footprint_for, program_from_answers, shape_envelope, split_floors, subdivide, Answers,
+    PlacedRoom, Rect, Zone,
+};
 use serde_json::{json, Value};
 
 const FEET_TO_MM: f32 = 304.8;
@@ -32,21 +35,56 @@ struct Wall {
     openings: Vec<Opening>,
 }
 
-/// Full pipeline: answers → program → auto-size → subdivide → bundle JSON.
+/// One laid-out storey: its rooms, walls and windows in the shared footprint.
+struct Floor {
+    level: usize, // 1-based
+    rooms: Vec<PlacedRoom>,
+    walls: Vec<Wall>,
+    windows: Vec<WindowOut>,
+}
+
+/// Full pipeline: answers → program → split across storeys → per-floor
+/// auto-size/subdivide/walls/windows → combined bundle JSON. `sqft` is the
+/// **total** across storeys, so each floor targets `sqft / storeys`; all
+/// floors share one (stacked) footprint sized to the largest floor's program.
 #[must_use]
 pub fn building_json(answers: &Answers) -> Value {
     let program = program_from_answers(answers);
-    let (w, d) = auto_size(&program, answers.sqft);
+    let floors_n = answers.floor_count();
+    let programs = split_floors(&program, floors_n);
+    #[allow(clippy::cast_precision_loss)]
+    let per_floor_target = answers.sqft / floors_n as f32;
+
+    // One footprint, big enough for every floor's program.
+    let footprint = programs
+        .iter()
+        .map(|p| footprint_for(p, per_floor_target))
+        .fold(per_floor_target, f32::max);
+    let (w, d) = shape_envelope(footprint);
     let envelope = Rect { x: 0.0, y: 0.0, w, h: d };
-    let rooms = subdivide(envelope, &program, "south");
-    let walls = generate_walls(&rooms, envelope);
-    to_json(answers, envelope, &rooms, &walls)
+
+    let floors: Vec<Floor> = programs
+        .iter()
+        .enumerate()
+        .map(|(i, pgm)| {
+            let rooms = subdivide(envelope, pgm, "south");
+            let is_ground = i == 0;
+            let walls = generate_walls(&rooms, envelope, is_ground);
+            let windows = generate_windows(&rooms, envelope);
+            Floor { level: i + 1, rooms, walls, windows }
+        })
+        .collect();
+
+    to_json(answers, envelope, &floors)
 }
 
-/// Perimeter (exterior) + interior partition walls. Entry door on the south
-/// edge centred on the `entry` room; a centred door on each interior wall.
-fn generate_walls(rooms: &[PlacedRoom], env: Rect) -> Vec<Wall> {
+/// Perimeter (exterior) + interior partition walls. On the ground floor, an
+/// entry door sits on the south edge centred on the `entry` room; upper floors
+/// have no exterior door (the stair is their access). Each interior wall gets
+/// a centred door.
+fn generate_walls(rooms: &[PlacedRoom], env: Rect, is_ground: bool) -> Vec<Wall> {
     let (x0, y0, x1, y1) = (env.x, env.y, env.x + env.w, env.y + env.h);
+    let half = DOOR_WIDTH_FT * 0.5;
     let mut walls = Vec::new();
 
     // Exterior perimeter, CCW from south-west.
@@ -58,16 +96,14 @@ fn generate_walls(rooms: &[PlacedRoom], env: Rect) -> Vec<Wall> {
         room2: "exterior".into(),
         openings: Vec::new(),
     };
-    // Entry door centred on the entry room (fallback: envelope centre).
-    let entry_cx = rooms
-        .iter()
-        .find(|r| r.id == "entry")
-        .map_or((x0 + x1) * 0.5, |r| r.rect.x + r.rect.w * 0.5);
-    let half = DOOR_WIDTH_FT * 0.5;
-    south.openings.push(Opening {
-        start: (entry_cx - half, y0),
-        end: (entry_cx + half, y0),
-    });
+    // Entry door (ground floor only) centred on the entry room.
+    if let Some(entry) = rooms.iter().find(|r| is_ground && r.id == "entry") {
+        let entry_cx = entry.rect.x + entry.rect.w * 0.5;
+        south.openings.push(Opening {
+            start: (entry_cx - half, y0),
+            end: (entry_cx + half, y0),
+        });
+    }
     walls.push(south);
     for (s, e) in [
         ((x1, y0), (x1, y1)),
@@ -230,72 +266,125 @@ fn generate_windows(rooms: &[PlacedRoom], env: Rect) -> Vec<WindowOut> {
     out
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::too_many_lines)]
-fn to_json(answers: &Answers, env: Rect, rooms: &[PlacedRoom], walls: &[Wall]) -> Value {
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::too_many_lines
+)]
+fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
     let s = FEET_TO_MM;
     let p3 = |x: f32, y: f32| json!([x * s, 0.0, y * s]); // plan (x,y) → 3D (x,0,z)
 
-    // walls_batch
-    let walls_batch: Vec<Value> = walls
-        .iter()
-        .enumerate()
-        .map(|(i, w)| {
-            json!({
+    let mut walls_batch: Vec<Value> = Vec::new();
+    let mut doors: Vec<Value> = Vec::new();
+    let mut windows_json: Vec<Value> = Vec::new();
+    let mut egress_warnings: Vec<Value> = Vec::new();
+    let mut rooms_map = serde_json::Map::new();
+    let mut wall_offset = 0usize; // walls_batch is global; per-floor indices shift by this
+
+    for floor in floors {
+        let level_name = format!("Level {}", floor.level);
+
+        // Walls (global index = wall_offset + local).
+        for (i, w) in floor.walls.iter().enumerate() {
+            walls_batch.push(json!({
                 "start": p3(w.start.0, w.start.1),
                 "end": p3(w.end.0, w.end.1),
                 "height": WALL_HEIGHT_FT * s,
                 "wall_type": if w.category == "exterior" { "ext_2x6_r21" } else { "int_2x4" },
                 "category": w.category,
-                "level_name": "Level 1",
-                "rooms": [w.room1, w.room2],
-                "wall_index": i,
+                "level_name": level_name,
+                "rooms": [w.room1.clone(), w.room2.clone()],
+                "wall_index": wall_offset + i,
+            }));
+        }
+
+        // Doors from wall openings (global wall_index).
+        for (wi, w) in floor.walls.iter().enumerate() {
+            for o in &w.openings {
+                let cx = (o.start.0 + o.end.0) * 0.5 * s;
+                let cy = (o.start.1 + o.end.1) * 0.5 * s;
+                let width = ((o.end.0 - o.start.0).powi(2) + (o.end.1 - o.start.1).powi(2)).sqrt() * s;
+                doors.push(json!({
+                    "x": cx, "y": cy, "width": width, "type": "door",
+                    "height": DOOR_HEIGHT_FT * s, "wall_index": wall_offset + wi, "offset": 0.0,
+                }));
+            }
+        }
+
+        // Windows (perimeter walls are the first of each floor's list, so the
+        // local wall_index shifts by the same offset).
+        for w in &floor.windows {
+            windows_json.push(json!({
+                "wall_index": wall_offset + w.wall_index,
+                "offset": w.offset,
+                "width": w.width,
+                "height": w.height,
+                "sill_height": w.sill,
+                "type": w.win_type,
+                "room": w.room,
+                "level_name": level_name,
+            }));
+        }
+
+        // Egress flag: bedrooms on this floor with no exterior wall (OBC 9.9.10.1).
+        for r in &floor.rooms {
+            if obc::windows::requires_egress(&r.room_type)
+                && !floor.windows.iter().any(|w| w.room == r.id)
+            {
+                egress_warnings.push(json!({
+                    "room": r.id,
+                    "level": level_name,
+                    "code": "OBC 9.9.10.1",
+                    "issue": "bedroom has no exterior wall for an egress window",
+                }));
+            }
+        }
+
+        // Rooms map (ids are unique across floors).
+        for r in &floor.rooms {
+            let zone = match r.zone {
+                Zone::Public => "public",
+                Zone::Circulation => "circulation",
+                Zone::Service => "service",
+                Zone::Private => "private",
+            };
+            rooms_map.insert(
+                r.id.clone(),
+                json!({
+                    "name": title_case(&r.id),
+                    "level": level_name,
+                    "bounds": { "x": r.rect.x * s, "y": r.rect.y * s, "width": r.rect.w * s, "height": r.rect.h * s },
+                    "area": r.rect.area() * s * s,
+                    "center": { "x": (r.rect.x + r.rect.w * 0.5) * s, "y": (r.rect.y + r.rect.h * 0.5) * s },
+                    "room_type": r.room_type,
+                    "zone": zone,
+                }),
+            );
+        }
+
+        wall_offset += floor.walls.len();
+    }
+
+    // Levels: one per storey + a roof on top, 10 ft floor-to-floor.
+    let mut levels_v: Vec<Value> = (0..floors.len())
+        .map(|i| {
+            json!({
+                "id": format!("level_{}", i + 1),
+                "name": format!("Level {}", i + 1),
+                "elevation": i as f32 * 10.0 * s,
+                "floor_to_floor_height": 10.0 * s,
             })
         })
         .collect();
+    levels_v.push(json!({
+        "id": "roof_level", "name": "Roof Level",
+        "elevation": floors.len() as f32 * 10.0 * s, "floor_to_floor_height": 0.0,
+    }));
+    let levels = Value::Array(levels_v);
 
-    // doors (from wall openings)
-    let mut doors = Vec::new();
-    for (wi, w) in walls.iter().enumerate() {
-        for o in &w.openings {
-            let cx = (o.start.0 + o.end.0) * 0.5 * s;
-            let cy = (o.start.1 + o.end.1) * 0.5 * s;
-            let width = ((o.end.0 - o.start.0).powi(2) + (o.end.1 - o.start.1).powi(2)).sqrt() * s;
-            doors.push(json!({
-                "x": cx, "y": cy, "width": width, "type": "door",
-                "height": DOOR_HEIGHT_FT * s, "wall_index": wi, "offset": 0.0,
-            }));
-        }
-    }
-
-    // rooms map
-    let mut rooms_map = serde_json::Map::new();
-    for r in rooms {
-        let zone = match r.zone {
-            Zone::Public => "public",
-            Zone::Circulation => "circulation",
-            Zone::Service => "service",
-            Zone::Private => "private",
-        };
-        rooms_map.insert(
-            r.id.clone(),
-            json!({
-                "name": title_case(&r.id),
-                "level": "Level 1",
-                "bounds": { "x": r.rect.x * s, "y": r.rect.y * s, "width": r.rect.w * s, "height": r.rect.h * s },
-                "area": r.rect.area() * s * s,
-                "center": { "x": (r.rect.x + r.rect.w * 0.5) * s, "y": (r.rect.y + r.rect.h * 0.5) * s },
-                "room_type": r.room_type,
-                "zone": zone,
-            }),
-        );
-    }
-
-    let levels = json!([
-        { "id": "level_1", "name": "Level 1", "elevation": 0.0, "floor_to_floor_height": 10.0 * s },
-        { "id": "roof_level", "name": "Roof Level", "elevation": 10.0 * s, "floor_to_floor_height": 0.0 },
-    ]);
-
-    // dimensions: overall width + depth
+    // dimensions: overall width + depth (shared footprint).
     let dimensions = json!([
         {
             "id": "dim_overall_w", "type": "linear",
@@ -309,52 +398,22 @@ fn to_json(answers: &Answers, env: Rect, rooms: &[PlacedRoom], walls: &[Wall]) -
         },
     ]);
 
-    // OBC window pass (natural light + bedroom egress).
-    let windows = generate_windows(rooms, env);
-    let windows_json: Vec<Value> = windows
-        .iter()
-        .map(|w| {
-            json!({
-                "wall_index": w.wall_index,
-                "offset": w.offset,
-                "width": w.width,
-                "height": w.height,
-                "sill_height": w.sill,
-                "type": w.win_type,
-                "room": w.room,
-                "level_name": "Level 1",
-            })
-        })
-        .collect();
-
-    // Egress compliance: any bedroom the layout left without an exterior wall
-    // can't take an egress window. Flag it honestly (OBC 9.9.10.1) rather than
-    // ship a non-compliant plan silently.
-    let egress_warnings: Vec<Value> = rooms
-        .iter()
-        .filter(|r| {
-            obc::windows::requires_egress(&r.room_type)
-                && !windows.iter().any(|w| w.room == r.id)
-        })
-        .map(|r| {
-            json!({
-                "room": r.id,
-                "code": "OBC 9.9.10.1",
-                "issue": "bedroom has no exterior wall for an egress window",
-            })
-        })
-        .collect();
-
+    let total_walls: usize = floors.iter().map(|f| f.walls.len()).sum();
+    let total_windows: usize = floors.iter().map(|f| f.windows.len()).sum();
+    let total_rooms: usize = floors.iter().map(|f| f.rooms.len()).sum();
+    let total_doors: usize = floors.iter().map(|f| doors_count(&f.walls)).sum();
     let ext = walls_batch.iter().filter(|w| w["category"] == "exterior").count();
-    let int = walls_batch.len() - ext;
+    let int = total_walls - ext;
+    let storeys = floors.len() as f32;
 
     json!({
         "success": true,
         "building_id": building_id(answers),
         "width": env.w * s,
         "depth": env.h * s,
-        // The actual built footprint (sqft) — rooms tile this exactly.
-        "sqft": env.w * env.h,
+        // Total built area across storeys (each floor tiles the footprint).
+        "sqft": env.w * env.h * storeys,
+        "storeys": floors.len(),
         "output_format": "archengine",
         "unit": "mm",
         "creative_mode": false,
@@ -369,15 +428,16 @@ fn to_json(answers: &Answers, env: Rect, rooms: &[PlacedRoom], walls: &[Wall]) -
         "unplaced_rooms": [],
         "score": 1.0,
         "summary": {
-            "total_walls": walls.len(),
+            "total_walls": total_walls,
             "exterior_walls": ext,
             "interior_walls": int,
             "wet_walls": 0,
-            "doors": doors_count(walls),
-            "windows": windows.len(),
+            "doors": total_doors,
+            "windows": total_windows,
             "egress_violations": egress_warnings.len(),
-            "rooms_placed": rooms.len(),
-            "rooms_requested": rooms.len(),
+            "rooms_placed": total_rooms,
+            "rooms_requested": total_rooms,
+            "storeys": floors.len(),
         },
         "qbd_answers": {
             "bedrooms": answers.bedrooms,
@@ -427,12 +487,12 @@ mod tests {
 
     #[test]
     fn building_json_is_schema_shaped() {
-        let v = building_json(&Answers::default());
+        let v = building_json(&Answers { storeys: 1, ..Answers::default() });
         assert_eq!(v["success"], json!(true));
         assert_eq!(v["unit"], json!("mm"));
         assert_eq!(v["output_format"], json!("archengine"));
         assert!(v["building_id"].as_str().unwrap().len() == 8);
-        // 4 exterior walls + interior partitions.
+        // 4 exterior walls + interior partitions (single storey).
         let walls = v["walls_batch"].as_array().unwrap();
         assert!(walls.len() >= 4);
         assert_eq!(walls.iter().filter(|w| w["category"] == "exterior").count(), 4);
@@ -462,7 +522,7 @@ mod tests {
 
     #[test]
     fn windows_placed_for_habitable_rooms_meet_obc() {
-        let v = building_json(&Answers::default());
+        let v = building_json(&Answers { storeys: 1, ..Answers::default() });
         let windows = v["windows"].as_array().unwrap();
         assert!(!windows.is_empty(), "no windows emitted");
         let walls = v["walls_batch"].as_array().unwrap().len();
@@ -499,6 +559,53 @@ mod tests {
         // Summary counts match.
         assert_eq!(v["summary"]["windows"], json!(windows.len()));
         assert_eq!(v["summary"]["egress_violations"], json!(warned.len()));
+    }
+
+    #[test]
+    fn multi_storey_splits_public_down_and_bedrooms_up() {
+        let a = Answers {
+            bedrooms: 4,
+            bathrooms: 3,
+            sqft: 2400.0,
+            garage: "2car".into(),
+            special_rooms: vec![],
+            storeys: 0, // auto → 2 storeys (4 bedrooms)
+        };
+        let v = building_json(&a);
+        assert_eq!(v["storeys"], json!(2));
+        // Three levels: two storeys + roof.
+        assert_eq!(v["levels"].as_array().unwrap().len(), 3);
+        let rooms = v["rooms"].as_object().unwrap();
+        let level_of = |id: &str| rooms[id]["level"].as_str().unwrap().to_string();
+        // Public/service downstairs, bedrooms upstairs.
+        assert_eq!(level_of("living"), "Level 1");
+        assert_eq!(level_of("garage"), "Level 1");
+        assert_eq!(level_of("primary_bedroom"), "Level 2");
+        assert_eq!(level_of("bedroom_2"), "Level 2");
+        // Each floor has its own stair.
+        assert!(rooms.contains_key("stairs_1") && rooms.contains_key("stairs_2"));
+        // Total sqft is split across floors: footprint ≈ total/2.
+        let footprint = v["width"].as_f64().unwrap() * v["depth"].as_f64().unwrap()
+            / (304.8 * 304.8);
+        assert!((footprint - 1200.0).abs() < 250.0, "per-floor footprint {footprint}");
+        // Walls/windows are level-tagged; bedrooms upstairs still get egress.
+        assert!(v["walls_batch"].as_array().unwrap().iter().any(|w| w["level_name"] == "Level 2"));
+        assert!(v["windows"].as_array().unwrap().iter().any(|w| w["level_name"] == "Level 2"));
+    }
+
+    #[test]
+    fn single_storey_for_two_bedrooms() {
+        let a = Answers {
+            bedrooms: 2,
+            bathrooms: 1,
+            sqft: 1100.0,
+            garage: "none".into(),
+            special_rooms: vec![],
+            storeys: 0, // auto → 1 storey (< 3 bedrooms)
+        };
+        let v = building_json(&a);
+        assert_eq!(v["storeys"], json!(1));
+        assert_eq!(v["levels"].as_array().unwrap().len(), 2); // Level 1 + roof
     }
 
     #[test]

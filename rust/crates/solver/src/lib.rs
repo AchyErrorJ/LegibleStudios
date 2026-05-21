@@ -37,7 +37,7 @@ impl Zone {
             "entry" | "living" | "great_room" | "dining" | "kitchen" | "office" | "foyer" => {
                 Zone::Public
             }
-            "hallway" | "corridor" => Zone::Circulation,
+            "hallway" | "corridor" | "stairs" => Zone::Circulation,
             "mudroom" | "pantry" | "mechanical" | "laundry" | "garage" => Zone::Service,
             _ => Zone::Private, // bedrooms, baths, closets, powder room
         }
@@ -91,6 +91,21 @@ pub struct Answers {
     pub sqft: f32,
     pub garage: String, // "none" | "1car" | "2car" | "3car"
     pub special_rooms: Vec<String>,
+    /// Storeys: `0` = auto (2 when 3+ bedrooms, else 1), or an explicit `1`/`2`.
+    pub storeys: u32,
+}
+
+impl Answers {
+    /// Resolved number of storeys: the explicit value, or the auto rule
+    /// (3+ bedrooms → 2, else 1). `sqft` is the **total** across all storeys.
+    #[must_use]
+    pub fn floor_count(&self) -> u32 {
+        match self.storeys {
+            1 | 2 => self.storeys,
+            _ if self.bedrooms >= 3 => 2,
+            _ => 1,
+        }
+    }
 }
 
 impl Default for Answers {
@@ -101,6 +116,7 @@ impl Default for Answers {
             sqft: 1800.0,
             garage: "none".into(),
             special_rooms: Vec::new(),
+            storeys: 0,
         }
     }
 }
@@ -209,7 +225,16 @@ pub fn footprint_for(program: &[RoomSpec], requested_sqft: f32) -> f32 {
     requested_sqft.max(min_total)
 }
 
-/// Auto-size the building envelope `(width, depth)` in feet from the
+/// Shape a footprint area (sqft) into envelope `(width, depth)` feet at a
+/// golden-ish 1.4 aspect ratio.
+#[must_use]
+pub fn shape_envelope(footprint: f32) -> (f32, f32) {
+    let ratio = 1.4_f32;
+    let depth = (footprint / ratio).sqrt();
+    let width = footprint / depth;
+    (width.round(), depth.round())
+}
+
 /// Envelope `(width, depth)` in feet for the program: the footprint is the
 /// requested area (grown only to fit the program minimums — see
 /// [`footprint_for`]), shaped to a golden-ish 1.4 aspect ratio. The rooms
@@ -217,11 +242,40 @@ pub fn footprint_for(program: &[RoomSpec], requested_sqft: f32) -> f32 {
 /// area the user asked for is the area they get.
 #[must_use]
 pub fn auto_size(program: &[RoomSpec], requested_sqft: f32) -> (f32, f32) {
-    let sqft = footprint_for(program, requested_sqft);
-    let ratio = 1.4_f32;
-    let depth = (sqft / ratio).sqrt();
-    let width = sqft / depth;
-    (width.round(), depth.round())
+    shape_envelope(footprint_for(program, requested_sqft))
+}
+
+/// Room types that live on the private upper floor of a multi-storey house.
+fn is_upper_floor(room_type: &str) -> bool {
+    matches!(
+        room_type,
+        "primary_bedroom" | "primary_bath" | "walk_in_closet" | "bedroom" | "closet" | "bathroom"
+    )
+}
+
+/// Split a program across `floors`. One storey → the whole program. Two →
+/// private rooms (bedrooms + their baths/closets) go upstairs; public + service
+/// stay down; each floor gets its own stair, and the upper floor its own
+/// circulation hallway.
+#[must_use]
+pub fn split_floors(program: &[RoomSpec], floors: u32) -> Vec<Vec<RoomSpec>> {
+    if floors <= 1 {
+        return vec![program.to_vec()];
+    }
+    let mut ground: Vec<RoomSpec> = program
+        .iter()
+        .filter(|r| !is_upper_floor(&r.room_type))
+        .cloned()
+        .collect();
+    let mut upper: Vec<RoomSpec> = program
+        .iter()
+        .filter(|r| is_upper_floor(&r.room_type))
+        .cloned()
+        .collect();
+    ground.push(RoomSpec::new("stairs_1", "stairs", 4.0, 70.0));
+    upper.insert(0, RoomSpec::new("hallway_2", "hallway", 5.0, 40.0));
+    upper.push(RoomSpec::new("stairs_2", "stairs", 4.0, 70.0));
+    vec![ground, upper]
 }
 
 /// An axis-aligned rectangle (feet), origin at min corner.
@@ -294,6 +348,9 @@ fn affinity(a: &str, b: &str) -> f32 {
         ("kitchen", "pantry") => 0.9,
         ("kitchen", "laundry") | ("laundry", "mudroom") => 0.5,
         ("entry", "hallway") | ("hallway", "living") => 0.7,
+        // Stairs anchor the circulation core, on every floor.
+        ("entry", "stairs") | ("hallway", "stairs") => 0.85,
+        ("living", "stairs") => 0.4,
         // Private suite.
         ("primary_bath", "primary_bedroom") => 0.95,
         ("primary_bedroom", "walk_in_closet") => 0.9,
@@ -320,9 +377,13 @@ fn seriate(program: &[RoomSpec]) -> Vec<usize> {
     if n == 0 {
         return Vec::new();
     }
+    // Seed at the stair when present (multi-storey): both floors then grow
+    // their layout from the same anchor, so the stacked stairs land in the
+    // same corner. Otherwise seed at the entry, then living.
     let seed = program
         .iter()
-        .position(|r| r.room_type == "entry")
+        .position(|r| r.room_type == "stairs")
+        .or_else(|| program.iter().position(|r| r.room_type == "entry"))
         .or_else(|| program.iter().position(|r| r.room_type == "living"))
         .unwrap_or(0);
     let mut visited = vec![false; n];
@@ -530,6 +591,7 @@ mod tests {
             sqft: 1800.0,
             garage: "none".into(),
             special_rooms: vec![],
+            storeys: 1,
         };
         let p = program_from_answers(&a);
         let ids: Vec<&str> = p.iter().map(|r| r.id.as_str()).collect();
@@ -616,6 +678,7 @@ mod tests {
                 sqft,
                 garage: "none".into(),
                 special_rooms: vec![],
+                storeys: 1, // this test exercises single-floor perimeter logic
             };
             let p = program_from_answers(&a);
             let (w, d) = auto_size(&p, sqft);
