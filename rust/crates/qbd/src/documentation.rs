@@ -386,6 +386,9 @@ fn generate_section(doc: &SchemaDocument) -> String {
 /// Build an ElevationInput from the schema document and render one
 /// elevation per cardinal direction.
 fn generate_elevations(doc: &SchemaDocument) -> Vec<Elevation> {
+    // Level name → base elevation (mm), so upper-storey walls stack.
+    let level_base: std::collections::HashMap<&str, f32> =
+        doc.levels.iter().map(|l| (l.name.as_str(), l.elevation)).collect();
     let input = ElevationInput {
         width: doc.width,
         depth: doc.depth,
@@ -396,6 +399,7 @@ fn generate_elevations(doc: &SchemaDocument) -> Vec<Elevation> {
                 start: w.start,
                 end: w.end,
                 height: w.height,
+                base: level_base.get(w.level_name.as_str()).copied().unwrap_or(0.0),
             })
             .collect(),
         // wall_index is `i32` in the schema but `usize` in the elevation
@@ -425,6 +429,8 @@ fn generate_elevations(doc: &SchemaDocument) -> Vec<Elevation> {
         // Default to a 1.2m gable ridge if a roof is present in the schema;
         // disable otherwise so the elevation is a flat-roof silhouette.
         gable_ridge_above_plate: if doc.roofs.is_empty() { 0.0 } else { 1200.0 },
+        // A floor line at each storey base above grade (Level 2+).
+        floor_lines: doc.levels.iter().map(|l| l.elevation).filter(|&e| e > 1.0).collect(),
     };
     ElevationDirection::ALL
         .iter()

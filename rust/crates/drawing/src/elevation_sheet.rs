@@ -45,12 +45,15 @@ impl Direction {
     ];
 }
 
-/// Minimal wall description for elevation projection: centreline + height.
+/// Minimal wall description for elevation projection: centreline + height,
+/// plus the floor `base` elevation (mm) the wall sits on — non-zero for upper
+/// storeys so the elevation stacks.
 #[derive(Debug, Clone)]
 pub struct ElevationWallInput {
     pub start: Vec3,
     pub end: Vec3,
     pub height: f32,
+    pub base: f32,
 }
 
 /// Door or window on a specific wall.
@@ -77,6 +80,9 @@ pub struct ElevationInput {
     /// If > 0, draw a simple gable-roof silhouette of this ridge height
     /// above the wall plate (mm). 0 disables.
     pub gable_ridge_above_plate: f32,
+    /// Elevations (mm) at which to draw a horizontal floor line — the base of
+    /// each storey above grade, so a multi-storey elevation reads as stacked.
+    pub floor_lines: Vec<f32>,
 }
 
 struct WallSegment {
@@ -113,7 +119,7 @@ fn project_wall(wall: &ElevationWallInput, dir: Direction, input: &ElevationInpu
     WallSegment {
         start_x,
         end_x,
-        top_y: s.y + wall.height,
+        top_y: wall.base + wall.height,
     }
 }
 
@@ -147,7 +153,9 @@ fn project_opening(
         center_x = input.depth - center_x;
     }
 
-    let sill = if op.is_door { 0.0 } else { op.sill_height };
+    // Openings sit on their wall's floor: doors at the floor, windows at their
+    // sill, both lifted by the wall's storey base.
+    let sill = wall.base + if op.is_door { 0.0 } else { op.sill_height };
     Some(Opening {
         center_x,
         width: op.width,
@@ -266,6 +274,18 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
         );
     }
 
+    // Floor lines between storeys, so a multi-storey elevation reads as stacked.
+    if !walls.is_empty() {
+        for &fy in &input.floor_lines {
+            if fy > 0.0 && fy < max_y {
+                let _ = writeln!(
+                    s,
+                    r#"    <line x1="{min_x}" y1="{fy}" x2="{max_x}" y2="{fy}" class="grade"/>"#,
+                );
+            }
+        }
+    }
+
     // Gable roof silhouette (simple triangle peak above wall plate).
     if input.gable_ridge_above_plate > 0.0 && !walls.is_empty() {
         let plate_y = walls.iter().map(|w| w.top_y).fold(0.0_f32, f32::max);
@@ -362,6 +382,7 @@ mod tests {
                 start: Vec3::new(sx, 0.0, sz),
                 end: Vec3::new(ex, 0.0, ez),
                 height: 2700.0,
+                base: 0.0,
             });
         }
         // Door on wall 0 (south face), centred.
@@ -383,6 +404,31 @@ mod tests {
             is_door: false,
         });
         input
+    }
+
+    #[test]
+    fn two_storeys_stack_taller_with_a_floor_line() {
+        // Ground + upper exterior wall on the south face; upper based at 3000mm.
+        let mut input = ElevationInput {
+            width: 5000.0,
+            depth: 4000.0,
+            floor_lines: vec![3000.0],
+            ..Default::default()
+        };
+        for base in [0.0, 3000.0] {
+            input.walls.push(ElevationWallInput {
+                start: Vec3::new(0.0, 0.0, 0.0),
+                end: Vec3::new(5000.0, 0.0, 0.0),
+                height: 2700.0,
+                base,
+            });
+        }
+        let svg = generate_elevation_sheet_svg(&input, Direction::South, 0.05);
+        // Silhouette reaches the upper wall's top (3000 + 2700 = 5700), well
+        // above a single 2700 storey — i.e. the floors stacked.
+        assert!(svg.contains("height=\"5700\""), "envelope should span both storeys: {svg}");
+        // A floor line is drawn between the storeys.
+        assert!(svg.contains(r#"y1="3000""#), "missing inter-storey floor line");
     }
 
     #[test]
