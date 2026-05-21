@@ -37,7 +37,10 @@ pub struct Documentation {
     pub project_name: String,
     pub generated_date: String,
     pub site_plan_svg: String,
+    /// Ground-floor (Level 1) plan — kept for back-compat / single-storey.
     pub floor_plan_svg: String,
+    /// One `(level name, SVG)` per storey; `floor_plan_svg` is the first.
+    pub floor_plans: Vec<(String, String)>,
     pub elevations: Vec<Elevation>,
     pub section_svg: String,
     pub wall_details: Vec<WallDetail>,
@@ -80,26 +83,82 @@ fn flip_v(mut d: drawing::LinearDim) -> drawing::LinearDim {
     d
 }
 
-/// Generate documentation from a parsed schema. `scale` follows the C++
-/// default of `10.0` (used at `qbd_interface.cpp:964`).
-#[must_use]
-#[allow(clippy::too_many_lines)] // Sequential sheet assembly; splitting hides the data flow.
-pub fn generate_documentation(
-    doc: &SchemaDocument,
-    project_name: impl Into<String>,
-) -> Documentation {
-    let config = Config::with_defaults();
-    // Standard floor-plan cut height: 4 ft = ~1219 mm. C++ default at
-    // `qbd_interface.cpp:963` is 4.0 (presumably feet in the kernel's
-    // mixed-unit space). The schema is mm; we use 1219 mm (≈4 ft).
+/// Non-roof level names in document order. Falls back to a single
+/// `"Level 1"` for documents that predate the `levels` array.
+fn level_names(doc: &SchemaDocument) -> Vec<String> {
+    let names: Vec<String> = doc
+        .levels
+        .iter()
+        .map(|l| l.name.clone())
+        .filter(|n| !n.to_lowercase().contains("roof"))
+        .collect();
+    if names.is_empty() {
+        vec!["Level 1".to_string()]
+    } else {
+        names
+    }
+}
+
+/// A view of `doc` restricted to one `level`: only that level's walls, rooms,
+/// and the doors/windows on those walls. Wall indices are remapped to the
+/// filtered list so door/window `wall_index` references stay valid.
+fn filter_doc_to_level(doc: &SchemaDocument, level: &str) -> SchemaDocument {
+    use std::collections::HashMap;
+    let mut remap: HashMap<usize, usize> = HashMap::new();
+    let mut walls = Vec::new();
+    for (gi, w) in doc.walls.iter().enumerate() {
+        if w.level_name == level {
+            remap.insert(gi, walls.len());
+            walls.push(w.clone());
+        }
+    }
+    let map_idx = |gi: i32| -> Option<i32> {
+        usize::try_from(gi)
+            .ok()
+            .and_then(|u| remap.get(&u))
+            .and_then(|&l| i32::try_from(l).ok())
+    };
+    let doors = doc
+        .doors
+        .iter()
+        .filter_map(|d| {
+            map_idx(d.wall_index).map(|li| {
+                let mut d2 = d.clone();
+                d2.wall_index = li;
+                d2
+            })
+        })
+        .collect();
+    let windows = doc
+        .windows
+        .iter()
+        .filter_map(|w| {
+            map_idx(w.wall_index).map(|li| {
+                let mut w2 = w.clone();
+                w2.wall_index = li;
+                w2
+            })
+        })
+        .collect();
+    let rooms = doc
+        .rooms
+        .iter()
+        .filter(|(_, r)| r.level == level)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    SchemaDocument { walls, doors, windows, rooms, ..doc.clone() }
+}
+
+/// Build one floor-plan SVG (geometry + dimension tiers + room labels, no
+/// title block) for the given document view. Pass a level-filtered doc for a
+/// single storey; the footprint dims come from `doc.width`/`doc.depth`.
+fn build_floor_plan_svg(doc: &SchemaDocument, config: &Config) -> String {
     let cut_height = 1219.0;
-    let result = generate_floor_plan_with_openings(doc, cut_height, &config);
+    let result = generate_floor_plan_with_openings(doc, cut_height, config);
     // Pad the viewBox so the out-of-footprint dimension tiers below aren't
     // clipped. Annotations are injected in plan-mm + lifted via `lift`.
     let mut floor_plan_raw = export_to_svg_padded(&result, FP_SCALE, FP_PAD);
-    // Inject Tier-1 dimensions on the floor plan: overall width below the
-    // footprint, overall depth to the left. Coordinates in plan view are
-    // (X, Z), so Y in 2D space is the schema's Z.
+    // Tier-1 overall dimensions: width below the footprint, depth to the left.
     if doc.width > 0.0 && doc.depth > 0.0 {
         let width_dim = flip_h(drawing::LinearDim::horizontal_mm(0.0, doc.width, doc.depth + 500.0));
         let depth_dim = flip_v(drawing::LinearDim::vertical_mm(0.0, doc.depth, -500.0));
@@ -108,24 +167,17 @@ pub fn generate_documentation(
         dims.push_str(&drawing::render_vertical_dim(&depth_dim, 250.0));
         floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&dims));
     }
-    // Inject room labels (name + area). Sort by id so output is
-    // deterministic regardless of HashMap iteration order.
+    // Room labels + per-room (tier-4) + structural-grid (tier-2) dimensions.
     if !doc.rooms.is_empty() {
         let mut rooms: Vec<_> = doc.rooms.iter().collect();
         rooms.sort_by(|a, b| a.0.cmp(b.0));
 
-        // Room labels.
         let room_labels: Vec<drawing::RoomLabelInput> = rooms
             .iter()
             .map(|(_id, r)| drawing::RoomLabelInput {
-                name: if r.name.is_empty() {
-                    r.id.clone()
-                } else {
-                    r.name.clone()
-                },
+                name: if r.name.is_empty() { r.id.clone() } else { r.name.clone() },
                 bounds_x: r.bounds.x,
-                // Flip Y into the export's negated-Y space: a point at plan
-                // `y` renders at `-y`, so the centroid must negate too.
+                // Flip Y into the export's negated-Y space.
                 bounds_y: -(r.bounds.y + r.bounds.height),
                 width: r.bounds.width,
                 height: r.bounds.height,
@@ -135,21 +187,13 @@ pub fn generate_documentation(
         let labels_svg = drawing::render_room_labels(&room_labels, 250.0);
         floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&labels_svg));
 
-        // Tier-4: per-room interior dimensions (width along top inside
-        // edge, height along left inside edge).
         let mut tier4 = String::new();
         for (_id, r) in &rooms {
             if r.bounds.width < 600.0 || r.bounds.height < 600.0 {
-                // Skip rooms too small to fit a labelled dim chain.
                 continue;
             }
-            let (w_dim, h_dim) = drawing::room_interior_dims(
-                r.bounds.x,
-                r.bounds.y,
-                r.bounds.width,
-                r.bounds.height,
-                150.0,
-            );
+            let (w_dim, h_dim) =
+                drawing::room_interior_dims(r.bounds.x, r.bounds.y, r.bounds.width, r.bounds.height, 150.0);
             tier4.push_str(&drawing::render_horizontal_dim(&flip_h(w_dim), 140.0));
             tier4.push_str(&drawing::render_vertical_dim(&flip_v(h_dim), 140.0));
         }
@@ -157,35 +201,21 @@ pub fn generate_documentation(
             floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&tier4));
         }
 
-        // Tier-2: structural-grid chain dimensions. Collect the unique
-        // X coordinates where any room edge falls (rounded to 1mm to
-        // suppress floating-point near-duplicates), and chain them along
-        // a horizontal line above the floor plan. Same for Z along the
-        // right side.
         let dedup = |mut vs: Vec<f32>| -> Vec<f32> {
             vs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             vs.dedup_by(|a, b| (*a - *b).abs() < 1.0);
             vs
         };
         let xs: Vec<f32> = dedup(
-            rooms
-                .iter()
-                .flat_map(|(_, r)| [r.bounds.x, r.bounds.x + r.bounds.width])
-                .collect(),
+            rooms.iter().flat_map(|(_, r)| [r.bounds.x, r.bounds.x + r.bounds.width]).collect(),
         );
         let zs: Vec<f32> = dedup(
-            rooms
-                .iter()
-                .flat_map(|(_, r)| [r.bounds.y, r.bounds.y + r.bounds.height])
-                .collect(),
+            rooms.iter().flat_map(|(_, r)| [r.bounds.y, r.bounds.y + r.bounds.height]).collect(),
         );
         let mut tier2 = String::new();
-        // Horizontal chain along the south edge (plan Y = -1100, below the
-        // footprint), flipped into export space.
         for d in drawing::chain_dims(&xs, -1100.0, true) {
             tier2.push_str(&drawing::render_horizontal_dim(&flip_h(d), 180.0));
         }
-        // Vertical chain along right (X = doc.width + 1100, right of plan).
         for d in drawing::chain_dims(&zs, doc.width + 1100.0, false) {
             tier2.push_str(&drawing::render_vertical_dim(&flip_v(d), 180.0));
         }
@@ -193,6 +223,18 @@ pub fn generate_documentation(
             floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&tier2));
         }
     }
+    floor_plan_raw
+}
+
+/// Generate documentation from a parsed schema. `scale` follows the C++
+/// default of `10.0` (used at `qbd_interface.cpp:964`).
+#[must_use]
+#[allow(clippy::too_many_lines)] // Sequential sheet assembly; splitting hides the data flow.
+pub fn generate_documentation(
+    doc: &SchemaDocument,
+    project_name: impl Into<String>,
+) -> Documentation {
+    let config = Config::with_defaults();
     let project_name: String = project_name.into();
     let date = today_iso();
 
@@ -212,11 +254,40 @@ pub fn generate_documentation(
         inject_before_svg_close(&svg, &tb)
     };
 
+    // One floor plan per storey when the walls genuinely span multiple levels
+    // (a single combined plan would overlay the floors on the shared
+    // footprint). Single-storey / untagged documents render one combined plan,
+    // preserving the legacy behaviour.
+    let distinct: std::collections::HashSet<&str> = doc
+        .walls
+        .iter()
+        .map(|w| w.level_name.as_str())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let floor_plans: Vec<(String, String)> = if distinct.len() > 1 {
+        level_names(doc)
+            .into_iter()
+            .map(|ln| {
+                let view = filter_doc_to_level(doc, &ln);
+                let svg =
+                    with_tb(build_floor_plan_svg(&view, &config), DrawingType::FloorPlan, "1:100");
+                (ln, svg)
+            })
+            .collect()
+    } else {
+        vec![(
+            "Level 1".to_string(),
+            with_tb(build_floor_plan_svg(doc, &config), DrawingType::FloorPlan, "1:100"),
+        )]
+    };
+    let floor_plan_svg = floor_plans.first().map_or_else(String::new, |(_, s)| s.clone());
+
     Documentation {
         project_name: project_name.clone(),
         generated_date: date.clone(),
         site_plan_svg: with_tb(generate_site_plan(doc), DrawingType::FloorPlan, "1:200"),
-        floor_plan_svg: with_tb(floor_plan_raw, DrawingType::FloorPlan, "1:100"),
+        floor_plan_svg,
+        floor_plans,
         elevations: generate_elevations(doc)
             .into_iter()
             .map(|e| Elevation {

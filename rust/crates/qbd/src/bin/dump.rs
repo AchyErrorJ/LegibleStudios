@@ -95,7 +95,21 @@ fn main() -> anyhow::Result<()> {
         };
 
         write_sheet("01_site_plan.svg", &docs.site_plan_svg)?;
-        write_sheet("02_floor_plan.svg", &docs.floor_plan_svg)?;
+        // Floor plans: ground floor keeps the canonical name; upper storeys
+        // get their own sheet so the storeys aren't overlaid.
+        if docs.floor_plans.len() <= 1 {
+            write_sheet("02_floor_plan.svg", &docs.floor_plan_svg)?;
+        } else {
+            for (i, (level, svg)) in docs.floor_plans.iter().enumerate() {
+                let name = if i == 0 {
+                    "02_floor_plan.svg".to_string()
+                } else {
+                    format!("02_floor_plan_l{}.svg", i + 1)
+                };
+                eprintln!("  ({level})");
+                write_sheet(&name, svg)?;
+            }
+        }
         for elev in &docs.elevations {
             let name = drawing::elevation_sheet_name(elev.direction);
             write_sheet(&name, &elev.svg)?;
