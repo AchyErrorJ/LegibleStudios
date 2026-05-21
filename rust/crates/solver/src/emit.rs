@@ -70,7 +70,7 @@ pub fn building_json(answers: &Answers) -> Value {
             let rooms = subdivide(envelope, pgm, "south");
             let is_ground = i == 0;
             let walls = generate_walls(&rooms, envelope, is_ground);
-            let windows = generate_windows(&rooms, envelope, &answers.window_intent);
+            let windows = generate_windows(&rooms, envelope, &answers.window_intent, &answers.style);
             Floor { level: i + 1, rooms, walls, windows }
         })
         .collect();
@@ -206,9 +206,8 @@ struct WindowOut {
 /// This is the placement seam the window-design work plugs into: the *rules*
 /// live in `obc`, the *strategy* (which wall, how big, where along it) is here
 /// and can be replaced wholesale without touching either side.
-fn generate_windows(rooms: &[PlacedRoom], env: Rect, intent: &str) -> Vec<WindowOut> {
+fn generate_windows(rooms: &[PlacedRoom], env: Rect, intent: &str, style: &str) -> Vec<WindowOut> {
     use obc::windows as w;
-    const WIN_H_MM: f32 = 1200.0; // ~900 sill → ~2100 head
     const SILL_MM: f32 = 900.0;
     const EDGE_EPS: f32 = 0.5; // feet — room edge ≈ envelope edge
 
@@ -219,6 +218,16 @@ fn generate_windows(rooms: &[PlacedRoom], env: Rect, intent: &str) -> Vec<Window
         "more_light" => 1.7,
         "south_bank" => 1.4,
         _ => 1.2, // "balanced" / default — a small comfort margin over the min
+    };
+
+    // Layer-2 architectural style: how many windows bank along a wall, their
+    // type, and their proportion (head height, mm). Egress overrides the type
+    // with an openable casement.
+    let (bank, style_type, win_h) = match style {
+        "ranch" => (2, "sliding", 1000.0),        // wide, low horizontal bands
+        "colonial" => (2, "double_hung", 1500.0), // tall, symmetric pairs
+        "contemporary" => (1, "fixed", 1700.0),   // a single large pane
+        _ => (1, "double_hung", 1200.0),          // "balanced" / default
     };
 
     let s = FEET_TO_MM;
@@ -277,21 +286,38 @@ fn generate_windows(rooms: &[PlacedRoom], env: Rect, intent: &str) -> Vec<Window
         // Split the glazing across the chosen walls.
         #[allow(clippy::cast_precision_loss)]
         let per_m2 = need_m2 / chosen.len() as f32;
+        let win_type = if egress { "casement" } else { style_type };
+        let sill = if egress { SILL_MM.min(w::EGRESS_MAX_SILL_MM) } else { SILL_MM };
         for &(wall_index, span_ft, dist_ft) in &chosen {
-            let mut width = (per_m2 / (WIN_H_MM / 1000.0)) * 1000.0;
-            width = width.max(w::EGRESS_MIN_DIMENSION_MM).min(span_ft * s * 0.8);
             let wall_len_mm = if wall_index % 2 == 0 { env.w * s } else { env.h * s };
-            let offset = (dist_ft * s - width * 0.5).clamp(0.0, (wall_len_mm - width).max(0.0));
-            let sill = if egress { SILL_MM.min(w::EGRESS_MAX_SILL_MM) } else { SILL_MM };
-            out.push(WindowOut {
-                wall_index,
-                offset,
-                width,
-                height: WIN_H_MM,
-                sill,
-                win_type: if egress { "casement" } else { "double_hung" },
-                room: r.id.clone(),
-            });
+            // Bank `n` windows evenly along the room's run of this wall (style),
+            // but never more than fit at ~700mm slots.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let max_fit = ((span_ft * s * 0.8) / 700.0) as usize;
+            let n = bank.min(max_fit).max(1);
+            // Total glazing width on this wall, split into n equal panes.
+            let total_w = (per_m2 / (win_h / 1000.0)) * 1000.0;
+            #[allow(clippy::cast_precision_loss)]
+            let each_w = (total_w / n as f32)
+                .max(w::EGRESS_MIN_DIMENSION_MM)
+                .min(span_ft * s * 0.8 / n as f32);
+            // The room's run along this wall starts half a span before its centre.
+            let room_left_mm = (dist_ft - span_ft * 0.5) * s;
+            let span_mm = span_ft * s;
+            for k in 0..n {
+                #[allow(clippy::cast_precision_loss)]
+                let centre = room_left_mm + span_mm * ((k as f32 + 0.5) / n as f32);
+                let offset = (centre - each_w * 0.5).clamp(0.0, (wall_len_mm - each_w).max(0.0));
+                out.push(WindowOut {
+                    wall_index,
+                    offset,
+                    width: each_w,
+                    height: win_h,
+                    sill,
+                    win_type,
+                    room: r.id.clone(),
+                });
+            }
         }
     }
     out
@@ -621,6 +647,7 @@ mod tests {
                 special_rooms: vec![],
                 storeys: 1,
                 window_intent: intent.into(),
+                style: "balanced".into(),
             };
             let v = building_json(&a);
             let ws = v["windows"].as_array().unwrap();
@@ -641,6 +668,44 @@ mod tests {
     }
 
     #[test]
+    fn window_style_sets_type_and_banks_but_keeps_egress() {
+        let build = |style: &str| {
+            building_json(&Answers {
+                bedrooms: 3,
+                bathrooms: 2,
+                sqft: 1600.0,
+                garage: "none".into(),
+                special_rooms: vec![],
+                storeys: 1,
+                window_intent: "balanced".into(),
+                style: style.into(),
+            })
+        };
+        let win_types = |v: &serde_json::Value| {
+            v["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|w| w["type"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        // Contemporary uses fixed panes on non-egress rooms…
+        let c = build("contemporary");
+        assert!(win_types(&c).iter().any(|t| t == "fixed"));
+        // …colonial uses double-hungs, ranch sliders.
+        assert!(win_types(&build("colonial")).iter().any(|t| t == "double_hung"));
+        assert!(win_types(&build("ranch")).iter().any(|t| t == "sliding"));
+        // Ranch banks more openings than a single-pane contemporary.
+        assert!(win_types(&build("ranch")).len() > win_types(&c).len());
+        // Every style still gives bedrooms an openable egress casement.
+        for style in ["ranch", "colonial", "contemporary"] {
+            let v = build(style);
+            assert_eq!(v["summary"]["egress_violations"], json!(0), "{style}");
+            assert!(win_types(&v).iter().any(|t| t == "casement"), "{style} has no casement");
+        }
+    }
+
+    #[test]
     fn south_bank_concentrates_windows_on_the_south_wall() {
         let a = Answers {
             bedrooms: 3,
@@ -650,6 +715,7 @@ mod tests {
             special_rooms: vec![],
             storeys: 1,
             window_intent: "south_bank".into(),
+            style: "balanced".into(),
         };
         let v = building_json(&a);
         let ws = v["windows"].as_array().unwrap();
@@ -668,6 +734,7 @@ mod tests {
             special_rooms: vec![],
             storeys: 0, // auto → 2 storeys (4 bedrooms)
             window_intent: "balanced".into(),
+            style: "balanced".into(),
         };
         let v = building_json(&a);
         assert_eq!(v["storeys"], json!(2));
@@ -707,6 +774,7 @@ mod tests {
             special_rooms: vec![],
             storeys: 0, // auto → 1 storey (< 3 bedrooms)
             window_intent: "balanced".into(),
+            style: "balanced".into(),
         };
         let v = building_json(&a);
         assert_eq!(v["storeys"], json!(1));

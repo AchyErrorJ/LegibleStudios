@@ -97,6 +97,9 @@ pub struct Answers {
     /// `"south_bank"`. Scales glazing above the OBC minimum and biases
     /// placement; the legal minimum + egress are always enforced.
     pub window_intent: String,
+    /// Architectural style driving window banking/type/proportion per wall:
+    /// `"balanced"` (default), `"ranch"`, `"colonial"`, `"contemporary"`.
+    pub style: String,
 }
 
 impl Answers {
@@ -122,6 +125,7 @@ impl Default for Answers {
             special_rooms: Vec::new(),
             storeys: 0,
             window_intent: "balanced".into(),
+            style: "balanced".into(),
         }
     }
 }
@@ -775,6 +779,7 @@ mod tests {
             special_rooms: vec![],
             storeys: 1,
             window_intent: "balanced".into(),
+            style: "balanced".into(),
         };
         let p = program_from_answers(&a);
         let ids: Vec<&str> = p.iter().map(|r| r.id.as_str()).collect();
@@ -863,6 +868,7 @@ mod tests {
                 special_rooms: vec![],
                 storeys: 1, // this test exercises single-floor perimeter logic
                 window_intent: "balanced".into(),
+                style: "balanced".into(),
             };
             let p = program_from_answers(&a);
             let (w, d) = auto_size(&p, sqft);
@@ -895,6 +901,7 @@ mod tests {
             special_rooms: vec![],
             storeys: 1,
             window_intent: "balanced".into(),
+            style: "balanced".into(),
         };
         let p = program_from_answers(&a);
         let (w, d) = auto_size(&p, a.sqft);
