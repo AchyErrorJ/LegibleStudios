@@ -680,8 +680,14 @@ mod tests {
         assert_eq!(level_of("garage"), "Level 1");
         assert_eq!(level_of("primary_bedroom"), "Level 2");
         assert_eq!(level_of("bedroom_2"), "Level 2");
-        // Each floor has its own stair.
+        // Each floor has its own stair, stacked at the SAME footprint position.
         assert!(rooms.contains_key("stairs_1") && rooms.contains_key("stairs_2"));
+        let s1 = &rooms["stairs_1"]["bounds"];
+        let s2 = &rooms["stairs_2"]["bounds"];
+        for k in ["x", "y", "width", "height"] {
+            let (a, b) = (s1[k].as_f64().unwrap(), s2[k].as_f64().unwrap());
+            assert!((a - b).abs() < 1.0, "stairs not aligned on {k}: {a} vs {b}");
+        }
         // Total sqft is split across floors: footprint ≈ total/2.
         let footprint = v["width"].as_f64().unwrap() * v["depth"].as_f64().unwrap()
             / (304.8 * 304.8);

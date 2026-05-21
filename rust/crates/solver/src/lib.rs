@@ -523,6 +523,7 @@ fn slice_seriated(
 /// its closet, or the primary bedroom with its bath + walk-in closet. The
 /// suite is sliced as one rect, then split so the lead (window-needing) room
 /// takes the exterior side and the inboard rooms sit behind it.
+#[derive(Clone)]
 struct Suite {
     lead: usize,
     inboard: Vec<usize>,
@@ -600,12 +601,88 @@ fn place_suite(rect: Rect, suite: &Suite, program: &[RoomSpec], areas: &[f32], e
     out
 }
 
+/// Total area of a suite (lead + inboard rooms).
+fn suite_total(s: &Suite, areas: &[f32]) -> f32 {
+    areas[s.lead] + s.inboard.iter().map(|&i| areas[i]).sum::<f32>()
+}
+
+/// Lay out a set of suites inside `rect`: seriate their leads, slice the rect
+/// among them by area, and split each suite (lead on the exterior). `env` is
+/// the full envelope, used for perimeter bias and exterior-edge tests.
+fn layout_suites_in(rect: Rect, suites: &[Suite], program: &[RoomSpec], areas: &[f32], env: Rect) -> Vec<PlacedRoom> {
+    if suites.is_empty() {
+        return Vec::new();
+    }
+    let lead_specs: Vec<RoomSpec> = suites.iter().map(|s| program[s.lead].clone()).collect();
+    let suite_area: Vec<f32> = suites.iter().map(|s| suite_total(s, areas)).collect();
+    let order = seriate(&lead_specs);
+    let items: Vec<(usize, f32)> = order.iter().map(|&i| (i, suite_area[i])).collect();
+    slice_seriated(env, rect, &items, &lead_specs, true)
+        .into_iter()
+        .flat_map(|(si, r)| place_suite(r, &suites[si], program, areas, env))
+        .collect()
+}
+
+/// Lay out a floor whose program includes a stair: pin the stair to a fixed
+/// front-left corner bay (identical on every floor that shares the footprint,
+/// so stacked stairs align), then lay the remaining suites out in the two
+/// rectangles around it — a shallow front band and the deep main band.
+fn layout_with_stair(env: Rect, suites: &[Suite], stair_pos: usize, program: &[RoomSpec], areas: &[f32]) -> Vec<PlacedRoom> {
+    // Fixed bay (~6 × 11 ft straight run). Constant + a footprint that's shared
+    // across storeys ⇒ the stair rect is identical on every floor, so the
+    // stacked stairs land exactly on top of each other.
+    const STAIR_W_FT: f32 = 6.0;
+    const STAIR_RUN_FT: f32 = 11.0;
+    let stair = &suites[stair_pos];
+    let sw = STAIR_W_FT.min(env.w * 0.4);
+    let run = STAIR_RUN_FT.min(env.h * 0.5);
+
+    let stair_rect = Rect { x: env.x, y: env.y, w: sw, h: run };
+    let mut placed = vec![PlacedRoom {
+        id: program[stair.lead].id.clone(),
+        room_type: program[stair.lead].room_type.clone(),
+        zone: program[stair.lead].zone(),
+        rect: stair_rect,
+    }];
+
+    // Two clean rectangles around the bay: front band beside the stair, and
+    // the deep main band behind both.
+    let front = Rect { x: env.x + sw, y: env.y, w: env.w - sw, h: run };
+    let back = Rect { x: env.x, y: env.y + run, w: env.w, h: env.h - run };
+
+    // Other suites, seriated; fill the front band up to its area, the rest go
+    // to the main band. (slice_seriated fills each rect proportionally, so a
+    // small area mismatch just rescales — no gaps.)
+    let others: Vec<Suite> = suites
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != stair_pos)
+        .map(|(_, s)| s.clone())
+        .collect();
+    let lead_specs: Vec<RoomSpec> = others.iter().map(|s| program[s.lead].clone()).collect();
+    let order = seriate(&lead_specs);
+    let af = front.area();
+    let (mut front_suites, mut back_suites) = (Vec::new(), Vec::new());
+    let mut acc = 0.0;
+    for &oi in &order {
+        if acc < af {
+            acc += suite_total(&others[oi], areas);
+            front_suites.push(others[oi].clone());
+        } else {
+            back_suites.push(others[oi].clone());
+        }
+    }
+    placed.extend(layout_suites_in(front, &front_suites, program, areas, env));
+    placed.extend(layout_suites_in(back, &back_suites, program, areas, env));
+    placed
+}
+
 /// Lay out the program inside `envelope` (feet) by adjacency. Rooms are
 /// allocated real areas and grouped into suites (bedroom + its closet/bath),
 /// the suites are seriated along the relationship graph ([`seriate`]) and
 /// sliced ([`slice_seriated`]); each suite then splits with its lead room on
-/// the exterior wall. The entry cluster anchors to the entry edge; a north
-/// entry mirrors depth.
+/// the exterior wall. A floor with a stair pins it to a fixed bay so stacked
+/// stairs align. The entry anchors to the front; a north entry mirrors depth.
 #[must_use]
 pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str) -> Vec<PlacedRoom> {
     if program.is_empty() || envelope.area() <= 0.0 {
@@ -613,19 +690,11 @@ pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str) -> Vec<
     }
     let areas = allocate_areas(program, envelope.area());
     let suites = group_suites(program);
-    // Seriate + slice over suite leads, weighted by each suite's total area.
-    let lead_specs: Vec<RoomSpec> = suites.iter().map(|s| program[s.lead].clone()).collect();
-    let suite_area: Vec<f32> = suites
-        .iter()
-        .map(|s| areas[s.lead] + s.inboard.iter().map(|&i| areas[i]).sum::<f32>())
-        .collect();
-    let order = seriate(&lead_specs);
-    let items: Vec<(usize, f32)> = order.iter().map(|&i| (i, suite_area[i])).collect();
 
-    let mut placed: Vec<PlacedRoom> = slice_seriated(envelope, envelope, &items, &lead_specs, true)
-        .into_iter()
-        .flat_map(|(si, rect)| place_suite(rect, &suites[si], program, &areas, envelope))
-        .collect();
+    let mut placed = match suites.iter().position(|s| program[s.lead].room_type == "stairs") {
+        Some(stair_pos) => layout_with_stair(envelope, &suites, stair_pos, program, &areas),
+        None => layout_suites_in(envelope, &suites, program, &areas, envelope),
+    };
 
     // For a north entry, mirror depth so the entry cluster sits at high Y.
     if entry_edge == "north" {
