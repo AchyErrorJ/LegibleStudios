@@ -353,6 +353,8 @@ fn generate_site_plan(doc: &SchemaDocument) -> String {
 /// Build a SectionInput from the schema document and render the default
 /// (transverse, centre, looking-east) section.
 fn generate_section(doc: &SchemaDocument) -> String {
+    let level_base: std::collections::HashMap<&str, f32> =
+        doc.levels.iter().map(|l| (l.name.as_str(), l.elevation)).collect();
     let input = SectionInput {
         width: doc.width,
         walls: doc
@@ -363,6 +365,7 @@ fn generate_section(doc: &SchemaDocument) -> String {
                 end: w.end,
                 height: w.height,
                 category: w.category.clone(),
+                base: level_base.get(w.level_name.as_str()).copied().unwrap_or(0.0),
             })
             .collect(),
         // Use the tallest ridge height across all roofs, fallback to 1000mm
@@ -378,6 +381,7 @@ fn generate_section(doc: &SchemaDocument) -> String {
                     .fold(1000.0_f32, f32::max)
             })
             .collect(),
+        floor_lines: doc.levels.iter().map(|l| l.elevation).filter(|&e| e > 1.0).collect(),
     };
     let cut = drawing::default_cut(&input);
     generate_section_sheet_svg(&input, &cut, 0.05)

@@ -21,6 +21,9 @@ pub struct SectionWallInput {
     pub height: f32,
     /// `"exterior"` => 150 mm thick, anything else => 100 mm.
     pub category: String,
+    /// Floor base elevation (mm) the wall sits on — non-zero for upper storeys
+    /// so the section stacks.
+    pub base: f32,
 }
 
 /// Minimal building input for section-sheet generation. `width` is used
@@ -32,6 +35,8 @@ pub struct SectionInput {
     /// Maximum ridge height above the wall plate (mm). Multiple roofs
     /// contribute their tallest ridge; if empty, no roof element appears.
     pub ridge_heights_above_plate: Vec<f32>,
+    /// Storey base elevations (mm) above grade — a level line is drawn at each.
+    pub floor_lines: Vec<f32>,
 }
 
 /// Direction of the section cut plane.
@@ -133,8 +138,8 @@ fn generate_section_elements(input: &SectionInput, cut: &SectionCut) -> Vec<Sect
         elements.push(SectionElement {
             element_type: ElementType::Wall,
             x: pos,
-            y_bottom: 0.0,
-            y_top: wall.height,
+            y_bottom: wall.base,
+            y_top: wall.base + wall.height,
             width: thickness,
         });
     }
@@ -148,11 +153,17 @@ fn generate_section_elements(input: &SectionInput, cut: &SectionCut) -> Vec<Sect
         width: 0.0,
     });
 
-    // Roof elements. If the caller provides ridge heights, render one
-    // gable-shaped element per ridge with base at the standard 2700 mm
-    // plate height (matches the Python's fallback at :104-105).
+    // Roof elements sit on the top plate — the tallest wall top in the cut
+    // (so a multi-storey roof rides above the upper storey), with a 2700 mm
+    // fallback when no walls were cut.
+    let plate = elements
+        .iter()
+        .filter(|e| matches!(e.element_type, ElementType::Wall))
+        .map(|e| e.y_top)
+        .fold(0.0_f32, f32::max)
+        .max(2700.0);
     for &ridge_above_base in &input.ridge_heights_above_plate {
-        let base_height = 2700.0_f32;
+        let base_height = plate;
         elements.push(SectionElement {
             element_type: ElementType::Roof,
             x: 0.0,
@@ -301,6 +312,18 @@ pub fn generate_section_sheet_svg(input: &SectionInput, cut: &SectionCut, scale:
         }
     }
 
+    // Floor lines between storeys, so a multi-storey section reads as stacked.
+    for &fy in &input.floor_lines {
+        if fy > 0.0 && fy < max_y {
+            let _ = writeln!(
+                s,
+                r#"    <line x1="{x1}" y1="{fy}" x2="{x2}" y2="{fy}" class="level-line"/>"#,
+                x1 = min_x - 500.0,
+                x2 = max_x + 500.0,
+            );
+        }
+    }
+
     // Grade + level markers.
     let _ = writeln!(
         s,
@@ -378,6 +401,7 @@ mod tests {
                 end: Vec3::new(ex, 0.0, ez),
                 height: 2700.0,
                 category: "exterior".into(),
+                base: 0.0,
             });
         }
         input
@@ -405,6 +429,31 @@ mod tests {
     }
 
     #[test]
+    fn two_storey_section_stacks_walls_and_draws_a_floor_line() {
+        // A wall in the cut on each storey (ground base 0, upper base 3000).
+        let mut input = SectionInput {
+            width: 5000.0,
+            floor_lines: vec![3000.0],
+            ..Default::default()
+        };
+        for base in [0.0, 3000.0] {
+            input.walls.push(SectionWallInput {
+                start: Vec3::new(2500.0, 0.0, 0.0),
+                end: Vec3::new(2500.0, 0.0, 4000.0),
+                height: 2700.0,
+                category: "exterior".into(),
+                base,
+            });
+        }
+        let cut = default_cut(&input);
+        let svg = generate_section_sheet_svg(&input, &cut, 0.05);
+        // Upper wall cut starts at y=3000 (stacked above the ground storey).
+        assert!(svg.contains(r#"y="3000""#), "upper storey wall not stacked: {svg}");
+        // Floor line between storeys.
+        assert!(svg.contains(r#"y1="3000""#), "missing inter-storey floor line");
+    }
+
+    #[test]
     fn transverse_cut_through_x_zero_intersects_the_wall_at_x_zero() {
         let mut input = rectangular_input();
         // Add a wall that runs in X from (1000,2000) to (4000,2000) — its
@@ -414,6 +463,7 @@ mod tests {
             end: Vec3::new(4000.0, 0.0, 2000.0),
             height: 2700.0,
             category: "interior".into(),
+            base: 0.0,
         });
         let cut = SectionCut {
             name: "B-B".into(),
