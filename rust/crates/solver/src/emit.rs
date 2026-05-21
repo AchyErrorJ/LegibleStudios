@@ -327,22 +327,41 @@ fn to_json(answers: &Answers, env: Rect, rooms: &[PlacedRoom], walls: &[Wall]) -
         })
         .collect();
 
+    // Egress compliance: any bedroom the layout left without an exterior wall
+    // can't take an egress window. Flag it honestly (OBC 9.9.10.1) rather than
+    // ship a non-compliant plan silently.
+    let egress_warnings: Vec<Value> = rooms
+        .iter()
+        .filter(|r| {
+            obc::windows::requires_egress(&r.room_type)
+                && !windows.iter().any(|w| w.room == r.id)
+        })
+        .map(|r| {
+            json!({
+                "room": r.id,
+                "code": "OBC 9.9.10.1",
+                "issue": "bedroom has no exterior wall for an egress window",
+            })
+        })
+        .collect();
+
     let ext = walls_batch.iter().filter(|w| w["category"] == "exterior").count();
     let int = walls_batch.len() - ext;
-    let total_min: f32 = program_min_total(answers);
 
     json!({
         "success": true,
         "building_id": building_id(answers),
         "width": env.w * s,
         "depth": env.h * s,
-        "sqft": answers.sqft.max(total_min * 1.35),
+        // The actual built footprint (sqft) — rooms tile this exactly.
+        "sqft": env.w * env.h,
         "output_format": "archengine",
         "unit": "mm",
         "creative_mode": false,
         "walls_batch": walls_batch,
         "doors": doors,
         "windows": windows_json,
+        "egress_warnings": egress_warnings,
         "levels": levels,
         "dimensions": dimensions,
         "rooms": Value::Object(rooms_map),
@@ -356,6 +375,7 @@ fn to_json(answers: &Answers, env: Rect, rooms: &[PlacedRoom], walls: &[Wall]) -
             "wet_walls": 0,
             "doors": doors_count(walls),
             "windows": windows.len(),
+            "egress_violations": egress_warnings.len(),
             "rooms_placed": rooms.len(),
             "rooms_requested": rooms.len(),
         },
@@ -373,10 +393,6 @@ fn to_json(answers: &Answers, env: Rect, rooms: &[PlacedRoom], walls: &[Wall]) -
 
 fn doors_count(walls: &[Wall]) -> usize {
     walls.iter().map(|w| w.openings.len()).sum()
-}
-
-fn program_min_total(answers: &Answers) -> f32 {
-    program_from_answers(answers).iter().map(|r| r.min_area).sum()
 }
 
 /// Deterministic 8-hex id from the answers (FNV-1a), so output is stable.
@@ -461,14 +477,28 @@ mod tests {
             // Egress-capable opening: never below the OBC minimum dimension.
             assert!(win["width"].as_f64().unwrap() >= 380.0);
         }
-        // Every bedroom is covered by an egress (casement) window.
+        // Every bedroom is EITHER covered by an egress (casement) window OR
+        // honestly flagged as an egress violation (interior bedroom). No
+        // bedroom is silently left non-compliant.
         let rooms = v["rooms"].as_object().unwrap();
+        let warned: Vec<&str> = v["egress_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["room"].as_str().unwrap())
+            .collect();
         for id in rooms.keys().filter(|k| k.contains("bedroom")) {
-            let has = windows.iter().any(|w| w["room"] == json!(id) && w["type"] == json!("casement"));
-            assert!(has, "bedroom {id} has no egress window");
+            let has_egress = windows
+                .iter()
+                .any(|w| w["room"] == json!(id) && w["type"] == json!("casement"));
+            assert!(
+                has_egress || warned.contains(&id.as_str()),
+                "bedroom {id} neither glazed nor flagged for egress"
+            );
         }
-        // Summary count matches.
+        // Summary counts match.
         assert_eq!(v["summary"]["windows"], json!(windows.len()));
+        assert_eq!(v["summary"]["egress_violations"], json!(warned.len()));
     }
 
     #[test]

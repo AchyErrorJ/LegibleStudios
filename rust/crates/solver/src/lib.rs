@@ -31,9 +31,6 @@ pub enum Zone {
 }
 
 impl Zone {
-    /// Near→far ordering from the entry edge.
-    const ORDER: [Zone; 4] = [Zone::Public, Zone::Circulation, Zone::Service, Zone::Private];
-
     #[must_use]
     pub fn of(room_type: &str) -> Zone {
         match room_type {
@@ -57,19 +54,25 @@ impl Zone {
     }
 }
 
-/// One room in the program: identity + minimum area (sqft).
+/// One room in the program: identity, a relative size `weight`, and an
+/// absolute `min_area` floor (sqft). Final area is a floored-proportional
+/// share of the footprint (see [`allocate_areas`]) — high-weight rooms
+/// (living, bedrooms) absorb the slack; low-weight rooms (closets, baths,
+/// garage) pin to their minimum.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoomSpec {
     pub id: String,
     pub room_type: String,
+    pub weight: f32,
     pub min_area: f32,
 }
 
 impl RoomSpec {
-    fn new(id: &str, room_type: &str, min_area: f32) -> Self {
+    fn new(id: &str, room_type: &str, weight: f32, min_area: f32) -> Self {
         Self {
             id: id.into(),
             room_type: room_type.into(),
+            weight,
             min_area,
         }
     }
@@ -102,65 +105,119 @@ impl Default for Answers {
     }
 }
 
-/// Build the room program from answers. Direct port of
-/// `create_spatial_graph_from_qbd`'s room set + min-area fractions.
+/// Build the room program from answers: each room carries a relative size
+/// `weight` and an absolute `min_area` floor. High-weight rooms (living,
+/// bedrooms, kitchen) grow with the house; low-weight service rooms (closets,
+/// baths, garage, laundry) stay near their minimum. Final areas come from
+/// [`allocate_areas`] over the chosen footprint — no fraction summing, so the
+/// program can't over- or under-subscribe the envelope.
 #[must_use]
 pub fn program_from_answers(a: &Answers) -> Vec<RoomSpec> {
-    let sqft = a.sqft;
-    let frac = |min: f32, f: f32| (sqft * f).max(min);
-    let mut p = Vec::new();
-
-    p.push(RoomSpec::new("entry", "entry", frac(40.0, 0.03)));
-    p.push(RoomSpec::new("living", "living", frac(180.0, 0.18)));
-    p.push(RoomSpec::new("kitchen", "kitchen", frac(100.0, 0.10)));
-    if sqft > 800.0 {
-        p.push(RoomSpec::new("dining", "dining", frac(100.0, 0.08)));
+    // (id, type, weight, min_area_sqft)
+    let mut p = vec![
+        RoomSpec::new("entry", "entry", 2.0, 40.0),
+        RoomSpec::new("living", "living", 18.0, 160.0),
+        RoomSpec::new("kitchen", "kitchen", 10.0, 100.0),
+    ];
+    if a.sqft > 800.0 {
+        p.push(RoomSpec::new("dining", "dining", 8.0, 90.0));
     }
     if a.bedrooms > 1 {
-        p.push(RoomSpec::new("hallway", "hallway", frac(50.0, 0.04)));
+        p.push(RoomSpec::new("hallway", "hallway", 5.0, 40.0));
     }
     if a.bedrooms > 0 {
-        p.push(RoomSpec::new("primary_bedroom", "primary_bedroom", frac(150.0, 0.14)));
-        p.push(RoomSpec::new("primary_bath", "primary_bath", frac(60.0, 0.05)));
-        p.push(RoomSpec::new("primary_closet", "walk_in_closet", frac(30.0, 0.025)));
+        p.push(RoomSpec::new("primary_bedroom", "primary_bedroom", 12.0, 140.0));
+        p.push(RoomSpec::new("primary_bath", "primary_bath", 3.0, 50.0));
+        p.push(RoomSpec::new("primary_closet", "walk_in_closet", 2.0, 25.0));
     }
     for i in 2..=a.bedrooms {
-        p.push(RoomSpec::new(&format!("bedroom_{i}"), "bedroom", frac(120.0, 0.10)));
-        p.push(RoomSpec::new(&format!("closet_{i}"), "closet", frac(15.0, 0.015)));
+        p.push(RoomSpec::new(&format!("bedroom_{i}"), "bedroom", 9.0, 100.0));
+        p.push(RoomSpec::new(&format!("closet_{i}"), "closet", 1.0, 15.0));
     }
     if a.bathrooms > 1 {
-        p.push(RoomSpec::new("bathroom_2", "bathroom", frac(45.0, 0.035)));
+        p.push(RoomSpec::new("bathroom_2", "bathroom", 2.0, 40.0));
     }
     if a.bathrooms > 2 {
-        p.push(RoomSpec::new("powder_room", "powder_room", frac(25.0, 0.02)));
+        p.push(RoomSpec::new("powder_room", "powder_room", 1.0, 20.0));
     }
-    p.push(RoomSpec::new("laundry", "laundry", frac(35.0, 0.025)));
+    p.push(RoomSpec::new("laundry", "laundry", 2.0, 35.0));
     if a.garage != "none" {
-        let area = match a.garage.as_str() {
-            "1car" => 220.0,
-            "3car" => 660.0,
-            _ => 440.0,
+        // Low weight → the garage pins to its size minimum rather than
+        // ballooning with the house.
+        let (wt, min) = match a.garage.as_str() {
+            "1car" => (8.0, 220.0),
+            "3car" => (16.0, 660.0),
+            _ => (10.0, 440.0),
         };
-        p.push(RoomSpec::new("garage", "garage", area));
-        p.push(RoomSpec::new("mudroom", "mudroom", frac(40.0, 0.03)));
+        p.push(RoomSpec::new("garage", "garage", wt, min));
+        p.push(RoomSpec::new("mudroom", "mudroom", 2.0, 40.0));
     }
     if a.special_rooms.iter().any(|s| s == "office") {
-        p.push(RoomSpec::new("office", "office", frac(100.0, 0.06)));
+        p.push(RoomSpec::new("office", "office", 6.0, 90.0));
     }
     if a.special_rooms.iter().any(|s| s == "pantry") {
-        p.push(RoomSpec::new("pantry", "pantry", frac(25.0, 0.02)));
+        p.push(RoomSpec::new("pantry", "pantry", 1.0, 25.0));
     }
     p
 }
 
+/// Floored-proportional area allocation (sqft), aligned with `program`. Each
+/// room gets at least its `min_area`; the remaining footprint is split among
+/// the rest by `weight`. Rooms whose proportional share falls below their
+/// minimum are pinned to it and removed from the pool, then the remainder is
+/// redistributed — iterated to a fixed point.
+#[must_use]
+pub fn allocate_areas(program: &[RoomSpec], footprint: f32) -> Vec<f32> {
+    let n = program.len();
+    let mut areas = vec![0.0_f32; n];
+    let mut pinned = vec![false; n];
+    loop {
+        let pinned_area: f32 = (0..n).filter(|&i| pinned[i]).map(|i| program[i].min_area).sum();
+        let free_weight: f32 = (0..n).filter(|&i| !pinned[i]).map(|i| program[i].weight).sum();
+        let free_area = (footprint - pinned_area).max(0.0);
+        let mut changed = false;
+        for i in 0..n {
+            if pinned[i] {
+                areas[i] = program[i].min_area;
+                continue;
+            }
+            let share = if free_weight > 0.0 {
+                program[i].weight / free_weight * free_area
+            } else {
+                program[i].min_area
+            };
+            if share < program[i].min_area {
+                pinned[i] = true;
+                areas[i] = program[i].min_area;
+                changed = true;
+            } else {
+                areas[i] = share;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    areas
+}
+
+/// The building footprint (sqft): the requested area, grown only if the
+/// program's minimum areas don't fit inside it.
+#[must_use]
+pub fn footprint_for(program: &[RoomSpec], requested_sqft: f32) -> f32 {
+    let min_total: f32 = program.iter().map(|r| r.min_area).sum();
+    requested_sqft.max(min_total)
+}
+
 /// Auto-size the building envelope `(width, depth)` in feet from the
-/// program: 35% overhead over the summed min areas, golden-ish 1.4 ratio.
-/// Port of the auto-size block in `generate_floor_plan_from_qbd`.
+/// Envelope `(width, depth)` in feet for the program: the footprint is the
+/// requested area (grown only to fit the program minimums — see
+/// [`footprint_for`]), shaped to a golden-ish 1.4 aspect ratio. The rooms
+/// then tile this footprint, so there is no separate overhead factor — the
+/// area the user asked for is the area they get.
 #[must_use]
 pub fn auto_size(program: &[RoomSpec], requested_sqft: f32) -> (f32, f32) {
-    let total_min: f32 = program.iter().map(|r| r.min_area).sum();
-    let required = total_min * 1.35;
-    let sqft = requested_sqft.max(required);
+    let sqft = footprint_for(program, requested_sqft);
     let ratio = 1.4_f32;
     let depth = (sqft / ratio).sqrt();
     let width = sqft / depth;
@@ -216,13 +273,120 @@ pub struct PlacedRoom {
     pub rect: Rect,
 }
 
-/// Balanced binary partition of `rect` among weighted items: recursively
-/// bisect the item list by cumulative weight and split the rect's longer
-/// side proportionally. Produces a clean BSP with area ≈ weight.
-fn slice_proportional<T: Clone>(rect: Rect, items: &[(T, f32)]) -> Vec<(T, Rect)> {
+/// Adjacency affinity between two room *types* (0 = unrelated, 1 = strongly
+/// want to share a wall). Symmetric. This is the relationship graph that
+/// drives the layout: high-affinity rooms get seriated next to each other and
+/// therefore land adjacent. Pairs not listed fall back to a small same-zone
+/// bonus so a zone still reads as a cluster.
+#[allow(clippy::unnested_or_patterns, clippy::match_same_arms)] // table reads clearer as explicit pairs
+fn affinity(a: &str, b: &str) -> f32 {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    match (lo, hi) {
+        // Public core.
+        ("entry", "living") | ("entry", "foyer") | ("foyer", "living") => 0.9,
+        ("dining", "living") => 0.85,
+        ("dining", "kitchen") => 0.95,
+        ("kitchen", "living") => 0.5,
+        ("living", "powder_room") | ("entry", "powder_room") => 0.5,
+        // Service links.
+        ("garage", "mudroom") => 0.95,
+        ("kitchen", "mudroom") => 0.7,
+        ("kitchen", "pantry") => 0.9,
+        ("kitchen", "laundry") | ("laundry", "mudroom") => 0.5,
+        ("entry", "hallway") | ("hallway", "living") => 0.7,
+        // Private suite.
+        ("primary_bath", "primary_bedroom") => 0.95,
+        ("primary_bedroom", "walk_in_closet") => 0.9,
+        ("bedroom", "closet") => 0.9,
+        ("bathroom", "bedroom") => 0.6,
+        ("bathroom", "hallway") | ("hallway", "primary_bedroom") => 0.7,
+        ("bedroom", "hallway") => 0.75,
+        _ => {
+            if Zone::of(a) == Zone::of(b) {
+                0.3 // same zone, no specific pairing
+            } else {
+                0.05
+            }
+        }
+    }
+}
+
+/// Order the program so high-affinity rooms are contiguous: a greedy
+/// nearest-neighbour walk over the affinity graph, seeded at the entry (so the
+/// order flows entry → public → service → private). Deterministic — ties keep
+/// the lower program index. Returns indices into `program`.
+fn seriate(program: &[RoomSpec]) -> Vec<usize> {
+    let n = program.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let seed = program
+        .iter()
+        .position(|r| r.room_type == "entry")
+        .or_else(|| program.iter().position(|r| r.room_type == "living"))
+        .unwrap_or(0);
+    let mut visited = vec![false; n];
+    let mut order = Vec::with_capacity(n);
+    order.push(seed);
+    visited[seed] = true;
+    for _ in 1..n {
+        let last = *order.last().unwrap();
+        let mut best = usize::MAX;
+        let mut best_aff = f32::NEG_INFINITY;
+        for j in 0..n {
+            if visited[j] {
+                continue;
+            }
+            let aff = affinity(&program[last].room_type, &program[j].room_type);
+            if aff > best_aff + 1e-6 {
+                best_aff = aff;
+                best = j;
+            }
+        }
+        order.push(best);
+        visited[best] = true;
+    }
+    order
+}
+
+/// How many of `r`'s four edges lie on the `env` boundary (0–4). A room needs
+/// only one such edge to reach an exterior wall (for a window).
+fn perim_edges(r: Rect, env: Rect) -> i32 {
+    const E: f32 = 0.5;
+    i32::from((r.x - env.x).abs() < E)
+        + i32::from((r.y - env.y).abs() < E)
+        + i32::from(((r.x + r.w) - (env.x + env.w)).abs() < E)
+        + i32::from(((r.y + r.h) - (env.y + env.h)).abs() < E)
+}
+
+/// Count rooms in `items` that need a window (daylight or egress).
+fn window_count(items: &[(usize, f32)], program: &[RoomSpec]) -> i32 {
+    items
+        .iter()
+        .filter(|(i, _)| obc::windows::needs_window(&program[*i].room_type))
+        .count()
+        .try_into()
+        .unwrap_or(i32::MAX)
+}
+
+/// Recursively slice `rect` among the seriated `items` (index, area), keeping
+/// adjacency clusters together AND pushing window-needing rooms to the
+/// envelope perimeter. The list is split at its cumulative-area midpoint (a
+/// weak link in the seriation); the two groups are then assigned to the low/
+/// high sub-rect by whichever assignment gives window-needing rooms more
+/// perimeter exposure. The top split runs along depth (`y_first`) and is left
+/// un-flipped so the entry cluster anchors to the front; deeper splits take
+/// the longer side for sane aspect ratios.
+fn slice_seriated(
+    env: Rect,
+    rect: Rect,
+    items: &[(usize, f32)],
+    program: &[RoomSpec],
+    y_first: bool,
+) -> Vec<(usize, Rect)> {
     match items {
         [] => Vec::new(),
-        [(only, _)] => vec![(only.clone(), rect)],
+        [(only, _)] => vec![(*only, rect)],
         _ => {
             let total: f32 = items.iter().map(|(_, w)| *w).sum();
             let half = total * 0.5;
@@ -237,87 +401,65 @@ fn slice_proportional<T: Clone>(rect: Rect, items: &[(T, f32)]) -> Vec<(T, Rect)
             }
             let (a, b) = items.split_at(split);
             let wa: f32 = a.iter().map(|(_, w)| *w).sum();
-            let frac = if total > 0.0 { wa / total } else { 0.5 };
-            let (ra, rb) = rect.split(frac);
-            let mut out = slice_proportional(ra, a);
-            out.extend(slice_proportional(rb, b));
+            let wb = total - wa;
+            let frac_a = if total > 0.0 { wa / total } else { 0.5 };
+            let frac_b = if total > 0.0 { wb / total } else { 0.5 };
+            let cut = |f: f32| if y_first { rect.split_y(f) } else { rect.split(f) };
+
+            // Default: group `a` (front of the order) takes the low sub-rect.
+            // Deeper than the top, consider swapping so the more
+            // window-hungry group lands on the more-exposed rect.
+            let (la, lb) = cut(frac_a); // a → la (low), b → lb (high)
+            let mut a_rect = la;
+            let mut b_rect = lb;
+            if !y_first {
+                let (sb, sa) = cut(frac_b); // b → sb (low), a → sa (high)
+                let aw = window_count(a, program);
+                let bw = window_count(b, program);
+                let keep = aw * perim_edges(la, env) + bw * perim_edges(lb, env);
+                let swap = bw * perim_edges(sb, env) + aw * perim_edges(sa, env);
+                if swap > keep {
+                    a_rect = sa;
+                    b_rect = sb;
+                }
+            }
+            let mut out = slice_seriated(env, a_rect, a, program, false);
+            out.extend(slice_seriated(env, b_rect, b, program, false));
             out
         }
     }
 }
 
-/// Lay out the program inside `envelope` (feet). Two-level BSP: split the
-/// envelope into zone bands (public near the entry edge → private at the
-/// back) along depth, then BSP each band into its rooms by min area.
+/// Lay out the program inside `envelope` (feet) by adjacency. Rooms are
+/// allocated real areas, seriated along the relationship graph ([`seriate`]),
+/// then sliced so adjacency clusters stay together ([`slice_seriated`]). The
+/// entry cluster anchors to the entry edge; a north entry mirrors depth.
 #[must_use]
 pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str) -> Vec<PlacedRoom> {
     if program.is_empty() || envelope.area() <= 0.0 {
         return Vec::new();
     }
-    // Group rooms by zone, preserving program order within a zone.
-    let mut placed = Vec::with_capacity(program.len());
-    let zone_weight = |z: Zone| -> f32 {
-        program
-            .iter()
-            .filter(|r| r.zone() == z)
-            .map(|r| r.min_area)
-            .sum()
-    };
-    let active: Vec<(Zone, f32)> = Zone::ORDER
+    let areas = allocate_areas(program, envelope.area());
+    let order = seriate(program);
+    let items: Vec<(usize, f32)> = order.iter().map(|&i| (i, areas[i])).collect();
+
+    let mut placed: Vec<PlacedRoom> = slice_seriated(envelope, envelope, &items, program, true)
         .into_iter()
-        .map(|z| (z, zone_weight(z)))
-        .filter(|(_, w)| *w > 0.0)
+        .map(|(i, rect)| PlacedRoom {
+            id: program[i].id.clone(),
+            room_type: program[i].room_type.clone(),
+            zone: program[i].zone(),
+            rect,
+        })
         .collect();
 
-    // Public should sit at the entry edge. We band along depth (Y); for a
-    // north entry, flip so public lands at high Y.
-    let bands = slice_zone_bands(envelope, &active, entry_edge);
-
-    for (zone, band) in bands {
-        let rooms: Vec<(&RoomSpec, f32)> = program
-            .iter()
-            .filter(|r| r.zone() == zone)
-            .map(|r| (r, r.min_area))
-            .collect();
-        for (spec, rect) in slice_proportional(band, &rooms) {
-            placed.push(PlacedRoom {
-                id: spec.id.clone(),
-                room_type: spec.room_type.clone(),
-                zone,
-                rect,
-            });
+    // For a north entry, mirror depth so the entry cluster sits at high Y.
+    if entry_edge == "north" {
+        for r in &mut placed {
+            r.rect.y = envelope.y + (envelope.y + envelope.h - (r.rect.y + r.rect.h));
         }
     }
     placed
-}
-
-/// Split the envelope into depth bands, one per active zone, area ∝ weight,
-/// ordered so the public zone meets the entry edge.
-fn slice_zone_bands(envelope: Rect, zones: &[(Zone, f32)], entry_edge: &str) -> Vec<(Zone, Rect)> {
-    // Bands run front (entry) → back. For south entry, front = low Y.
-    let total: f32 = zones.iter().map(|(_, w)| *w).sum();
-    let mut bands = Vec::with_capacity(zones.len());
-    let mut remaining = envelope;
-    let mut acc_total = total;
-    for (i, (zone, w)) in zones.iter().enumerate() {
-        if i == zones.len() - 1 {
-            bands.push((*zone, remaining));
-        } else {
-            let frac = w / acc_total;
-            let (front, back) = remaining.split_y(frac);
-            bands.push((*zone, front));
-            remaining = back;
-            acc_total -= *w;
-        }
-    }
-    // For a north entry, the public zone should be at high Y → reverse the
-    // depth ordering by mirroring each band's y about the envelope.
-    if entry_edge == "north" {
-        for (_, r) in &mut bands {
-            r.y = envelope.y + (envelope.y + envelope.h - (r.y + r.h));
-        }
-    }
-    bands
 }
 
 /// `pk_object::Solver` wrapping the layout. Uses the first sketched
@@ -414,18 +556,34 @@ mod tests {
     }
 
     #[test]
-    fn auto_size_covers_program_with_overhead() {
-        let a = Answers::default();
-        let p = program_from_answers(&a);
-        let (w, d) = auto_size(&p, 0.0);
-        let total_min: f32 = p.iter().map(|r| r.min_area).sum();
-        // Envelope comfortably holds the program (with overhead), and isn't
-        // wildly oversized. Exact area drifts ±a few % after rounding both
-        // dims, so assert the band rather than a post-round figure.
-        assert!(w * d >= total_min, "{} < program min {}", w * d, total_min);
-        assert!(w * d <= total_min * 1.5, "{} > 1.5× program min", w * d);
-        // Roughly the 1.4 aspect ratio.
+    fn auto_size_uses_requested_footprint_without_overhead() {
+        let p = program_from_answers(&Answers::default());
+        let min_total: f32 = p.iter().map(|r| r.min_area).sum();
+        // A request above the program minimum IS the footprint — no overhead.
+        let (w, d) = auto_size(&p, 1800.0);
+        assert!((w * d - 1800.0).abs() <= 1800.0 * 0.03, "got {} for 1800", w * d);
+        // With no request it falls back to just fitting the minimums (not ×1.35).
+        let (w0, d0) = auto_size(&p, 0.0);
+        assert!((w0 * d0 - min_total).abs() <= min_total * 0.03, "got {} vs min {}", w0 * d0, min_total);
+        assert!(w0 * d0 < min_total * 1.1, "no 35% overhead: {} vs {}", w0 * d0, min_total);
+        // Golden-ish aspect.
         assert!((w / d - 1.4).abs() < 0.1);
+    }
+
+    #[test]
+    fn allocate_areas_floors_small_rooms_and_sums_to_footprint() {
+        let p = program_from_answers(&Answers::default());
+        let areas = allocate_areas(&p, 1800.0);
+        assert_eq!(areas.len(), p.len());
+        // Tiles the whole footprint.
+        let total: f32 = areas.iter().sum();
+        assert!((total - 1800.0).abs() < 1.0, "areas sum {total} != 1800");
+        // Every room meets its minimum; high-weight rooms exceed it.
+        for (spec, &a) in p.iter().zip(&areas) {
+            assert!(a >= spec.min_area - 0.01, "{} below min: {a} < {}", spec.id, spec.min_area);
+        }
+        let living = areas[p.iter().position(|r| r.id == "living").unwrap()];
+        assert!(living > 200.0, "living should absorb slack, got {living}");
     }
 
     #[test]
@@ -445,6 +603,38 @@ mod tests {
         // Placed area tiles the whole envelope (BSP leaves no gaps).
         let total: f32 = placed.iter().map(|r| r.rect.area()).sum();
         assert!((total - w * d).abs() < 1.0, "tiled {total} vs {}", w * d);
+    }
+
+    #[test]
+    fn window_rooms_reach_the_perimeter_for_typical_programs() {
+        // The egress-guarantee bias should put every daylight/egress room on
+        // an exterior wall for ordinary 3- and 4-bed houses.
+        for (bd, ba, sqft) in [(3, 2, 1800.0), (4, 3, 2400.0), (2, 2, 1400.0)] {
+            let a = Answers {
+                bedrooms: bd,
+                bathrooms: ba,
+                sqft,
+                garage: "none".into(),
+                special_rooms: vec![],
+            };
+            let p = program_from_answers(&a);
+            let (w, d) = auto_size(&p, sqft);
+            let env = Rect { x: 0.0, y: 0.0, w, h: d };
+            let placed = subdivide(env, &p, "south");
+            let touches = |r: &Rect| {
+                r.x <= 0.5 || r.y <= 0.5 || r.x + r.w >= w - 0.5 || r.y + r.h >= d - 0.5
+            };
+            for room in &placed {
+                if obc::windows::needs_window(&room.room_type) {
+                    assert!(
+                        touches(&room.rect),
+                        "{}-bed: {} needs a window but is interior",
+                        bd,
+                        room.id
+                    );
+                }
+            }
+        }
     }
 
     #[test]
