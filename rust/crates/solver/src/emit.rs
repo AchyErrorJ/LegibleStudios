@@ -70,7 +70,7 @@ pub fn building_json(answers: &Answers) -> Value {
             let rooms = subdivide(envelope, pgm, "south");
             let is_ground = i == 0;
             let walls = generate_walls(&rooms, envelope, is_ground);
-            let windows = generate_windows(&rooms, envelope);
+            let windows = generate_windows(&rooms, envelope, &answers.window_intent);
             Floor { level: i + 1, rooms, walls, windows }
         })
         .collect();
@@ -199,11 +199,20 @@ struct WindowOut {
 /// This is the placement seam the window-design work plugs into: the *rules*
 /// live in `obc`, the *strategy* (which wall, how big, where along it) is here
 /// and can be replaced wholesale without touching either side.
-fn generate_windows(rooms: &[PlacedRoom], env: Rect) -> Vec<WindowOut> {
+fn generate_windows(rooms: &[PlacedRoom], env: Rect, intent: &str) -> Vec<WindowOut> {
     use obc::windows as w;
     const WIN_H_MM: f32 = 1200.0; // ~900 sill → ~2100 head
     const SILL_MM: f32 = 900.0;
     const EDGE_EPS: f32 = 0.5; // feet — room edge ≈ envelope edge
+
+    // Layer-3 user intent: scale glazing above the OBC minimum and bias which
+    // exterior walls get windows. The legal minimum + egress always hold.
+    let mult = match intent {
+        "privacy" => 1.0,
+        "more_light" => 1.7,
+        "south_bank" => 1.4,
+        _ => 1.2, // "balanced" / default — a small comfort margin over the min
+    };
 
     let s = FEET_TO_MM;
     let (x0, y0, x1, y1) = (env.x, env.y, env.x + env.w, env.y + env.h);
@@ -212,10 +221,11 @@ fn generate_windows(rooms: &[PlacedRoom], env: Rect) -> Vec<WindowOut> {
         if !w::needs_window(&r.room_type) {
             continue;
         }
-        // Required glazing area (m²), floored by egress for bedrooms.
+        // Required glazing area (m²): the OBC fraction × intent, floored by
+        // egress for bedrooms.
         let area_m2 = (r.rect.w * s / 1000.0) * (r.rect.h * s / 1000.0);
         let egress = w::requires_egress(&r.room_type);
-        let mut need_m2 = area_m2 * w::glazing_fraction(&r.room_type);
+        let mut need_m2 = area_m2 * w::glazing_fraction(&r.room_type) * mult;
         if egress {
             need_m2 = need_m2.max(w::EGRESS_MIN_AREA_M2);
         }
@@ -238,30 +248,44 @@ fn generate_windows(rooms: &[PlacedRoom], env: Rect) -> Vec<WindowOut> {
         if (r.rect.x - x0).abs() < EDGE_EPS {
             cands.push((3, r.rect.h, y1 - cy)); // west: -y from y1
         }
-        let Some(&(wall_index, span_ft, dist_ft)) = cands
-            .iter()
-            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-        else {
+        if cands.is_empty() {
             continue; // interior room, no exterior wall
+        }
+        let longest = |c: &[(usize, f32, f32)]| {
+            *c.iter()
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .unwrap()
         };
 
-        // Width from area / fixed head height, bounded by egress min and the
-        // available exterior span (leave 20% for wall returns).
-        let mut width = (need_m2 / (WIN_H_MM / 1000.0)) * 1000.0;
-        width = width.max(w::EGRESS_MIN_DIMENSION_MM).min(span_ft * s * 0.8);
-        let wall_len_mm = if wall_index % 2 == 0 { env.w * s } else { env.h * s };
-        let offset = (dist_ft * s - width * 0.5).clamp(0.0, (wall_len_mm - width).max(0.0));
-        let sill = if egress { SILL_MM.min(w::EGRESS_MAX_SILL_MM) } else { SILL_MM };
+        // Which exterior wall(s) get windows, per intent.
+        let chosen: Vec<(usize, f32, f32)> = match intent {
+            // Spread across every exterior wall the room touches.
+            "more_light" => cands.clone(),
+            // Concentrate on the south wall (wall_index 0) when available.
+            "south_bank" => vec![cands.iter().find(|c| c.0 == 0).copied().unwrap_or_else(|| longest(&cands))],
+            // Default / privacy: one window on the longest exterior wall.
+            _ => vec![longest(&cands)],
+        };
 
-        out.push(WindowOut {
-            wall_index,
-            offset,
-            width,
-            height: WIN_H_MM,
-            sill,
-            win_type: if egress { "casement" } else { "double_hung" },
-            room: r.id.clone(),
-        });
+        // Split the glazing across the chosen walls.
+        #[allow(clippy::cast_precision_loss)]
+        let per_m2 = need_m2 / chosen.len() as f32;
+        for &(wall_index, span_ft, dist_ft) in &chosen {
+            let mut width = (per_m2 / (WIN_H_MM / 1000.0)) * 1000.0;
+            width = width.max(w::EGRESS_MIN_DIMENSION_MM).min(span_ft * s * 0.8);
+            let wall_len_mm = if wall_index % 2 == 0 { env.w * s } else { env.h * s };
+            let offset = (dist_ft * s - width * 0.5).clamp(0.0, (wall_len_mm - width).max(0.0));
+            let sill = if egress { SILL_MM.min(w::EGRESS_MAX_SILL_MM) } else { SILL_MM };
+            out.push(WindowOut {
+                wall_index,
+                offset,
+                width,
+                height: WIN_H_MM,
+                sill,
+                win_type: if egress { "casement" } else { "double_hung" },
+                room: r.id.clone(),
+            });
+        }
     }
     out
 }
@@ -562,6 +586,54 @@ mod tests {
     }
 
     #[test]
+    fn window_intent_scales_glazing_and_keeps_egress() {
+        let glazing = |intent: &str| -> (usize, f64, i64) {
+            let a = Answers {
+                bedrooms: 3,
+                bathrooms: 2,
+                sqft: 1600.0,
+                garage: "none".into(),
+                special_rooms: vec![],
+                storeys: 1,
+                window_intent: intent.into(),
+            };
+            let v = building_json(&a);
+            let ws = v["windows"].as_array().unwrap();
+            let area: f64 = ws.iter().map(|w| w["width"].as_f64().unwrap() * w["height"].as_f64().unwrap()).sum();
+            (ws.len(), area, v["summary"]["egress_violations"].as_i64().unwrap())
+        };
+        let (_, priv_a, priv_e) = glazing("privacy");
+        let (_, bal_a, _) = glazing("balanced");
+        let (light_n, light_a, light_e) = glazing("more_light");
+        // more_light glazes more than balanced, which beats bare-minimum privacy.
+        assert!(light_a > bal_a && bal_a > priv_a, "privacy {priv_a} < balanced {bal_a} < more_light {light_a}");
+        // more_light spreads onto extra walls → more window openings.
+        let (priv_n, _, _) = glazing("privacy");
+        assert!(light_n > priv_n, "more_light {light_n} windows vs privacy {priv_n}");
+        // Egress is never sacrificed for intent.
+        assert_eq!(priv_e, 0);
+        assert_eq!(light_e, 0);
+    }
+
+    #[test]
+    fn south_bank_concentrates_windows_on_the_south_wall() {
+        let a = Answers {
+            bedrooms: 3,
+            bathrooms: 2,
+            sqft: 1600.0,
+            garage: "none".into(),
+            special_rooms: vec![],
+            storeys: 1,
+            window_intent: "south_bank".into(),
+        };
+        let v = building_json(&a);
+        let ws = v["windows"].as_array().unwrap();
+        // South-facing rooms put their window on wall_index 0 (the south perimeter).
+        let on_south = ws.iter().filter(|w| w["wall_index"] == json!(0)).count();
+        assert!(on_south >= 1, "south_bank should place windows on the south wall");
+    }
+
+    #[test]
     fn multi_storey_splits_public_down_and_bedrooms_up() {
         let a = Answers {
             bedrooms: 4,
@@ -570,6 +642,7 @@ mod tests {
             garage: "2car".into(),
             special_rooms: vec![],
             storeys: 0, // auto → 2 storeys (4 bedrooms)
+            window_intent: "balanced".into(),
         };
         let v = building_json(&a);
         assert_eq!(v["storeys"], json!(2));
@@ -602,6 +675,7 @@ mod tests {
             garage: "none".into(),
             special_rooms: vec![],
             storeys: 0, // auto → 1 storey (< 3 bedrooms)
+            window_intent: "balanced".into(),
         };
         let v = building_json(&a);
         assert_eq!(v["storeys"], json!(1));

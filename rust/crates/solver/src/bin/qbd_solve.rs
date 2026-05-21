@@ -6,6 +6,7 @@
 //! Usage:
 //!     qbd_solve [--bedrooms N] [--bathrooms N] [--sqft N]
 //!               [--garage none|1car|2car|3car] [--storeys 0|1|2]
+//!               [--windows balanced|more_light|privacy|south_bank]
 //!     (--storeys 0 = auto: 2 when 3+ bedrooms, else 1)
 
 use solver::{building_json, Answers};
@@ -21,6 +22,7 @@ fn main() {
             "--sqft" => a.sqft = args[i + 1].parse().unwrap_or(a.sqft),
             "--garage" => a.garage.clone_from(&args[i + 1]),
             "--storeys" => a.storeys = args[i + 1].parse().unwrap_or(a.storeys),
+            "--windows" => a.window_intent.clone_from(&args[i + 1]),
             _ => {}
         }
         i += 2;

@@ -93,6 +93,10 @@ pub struct Answers {
     pub special_rooms: Vec<String>,
     /// Storeys: `0` = auto (2 when 3+ bedrooms, else 1), or an explicit `1`/`2`.
     pub storeys: u32,
+    /// Window intent: `"balanced"` (default), `"more_light"`, `"privacy"`,
+    /// `"south_bank"`. Scales glazing above the OBC minimum and biases
+    /// placement; the legal minimum + egress are always enforced.
+    pub window_intent: String,
 }
 
 impl Answers {
@@ -117,6 +121,7 @@ impl Default for Answers {
             garage: "none".into(),
             special_rooms: Vec::new(),
             storeys: 0,
+            window_intent: "balanced".into(),
         }
     }
 }
@@ -695,6 +700,7 @@ mod tests {
             garage: "none".into(),
             special_rooms: vec![],
             storeys: 1,
+            window_intent: "balanced".into(),
         };
         let p = program_from_answers(&a);
         let ids: Vec<&str> = p.iter().map(|r| r.id.as_str()).collect();
@@ -782,6 +788,7 @@ mod tests {
                 garage: "none".into(),
                 special_rooms: vec![],
                 storeys: 1, // this test exercises single-floor perimeter logic
+                window_intent: "balanced".into(),
             };
             let p = program_from_answers(&a);
             let (w, d) = auto_size(&p, sqft);
@@ -813,6 +820,7 @@ mod tests {
             garage: "none".into(),
             special_rooms: vec![],
             storeys: 1,
+            window_intent: "balanced".into(),
         };
         let p = program_from_answers(&a);
         let (w, d) = auto_size(&p, a.sqft);
