@@ -23,6 +23,6 @@ pub use geometry_types::{
 pub use schema_parser::{ParseError, parse_file, parse_json};
 pub use schema_types::{
     QBDAnswers, RoofRidge, RoofSurface, RoomBounds, SchemaDetector, SchemaDocument, SchemaDoor,
-    SchemaElectrical, SchemaFloor, SchemaLevel, SchemaRoof, SchemaRoom, SchemaWall, SchemaWindow,
-    WallLayer, WallType,
+    SchemaElectrical, SchemaFloor, SchemaHeader, SchemaLevel, SchemaRoof, SchemaRoom, SchemaWall,
+    SchemaWindow, WallLayer, WallType,
 };

@@ -8,6 +8,7 @@
 pub mod detectors;
 pub mod electrical;
 pub mod engine;
+pub mod headers;
 pub mod format;
 pub mod report;
 pub mod tables;

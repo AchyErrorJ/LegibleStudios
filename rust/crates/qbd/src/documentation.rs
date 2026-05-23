@@ -149,7 +149,8 @@ fn filter_doc_to_level(doc: &SchemaDocument, level: &str) -> SchemaDocument {
         .collect();
     let detectors = doc.detectors.iter().filter(|d| d.level_name == level).cloned().collect();
     let electrical = doc.electrical.iter().filter(|e| e.level_name == level).cloned().collect();
-    SchemaDocument { walls, doors, windows, rooms, detectors, electrical, ..doc.clone() }
+    let headers = doc.headers.iter().filter(|h| h.level_name == level).cloned().collect();
+    SchemaDocument { walls, doors, windows, rooms, detectors, electrical, headers, ..doc.clone() }
 }
 
 /// Build one floor-plan SVG (geometry + dimension tiers + room labels, no
@@ -295,6 +296,26 @@ fn build_floor_plan_svg(doc: &SchemaDocument, config: &Config) -> String {
             }
         }
         floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&elec));
+    }
+
+    // Header callouts (rules-engine annotation): the OBC member size over each
+    // opening, labelled at the opening centre (red if flagged for engineer
+    // review). Y pre-negated for the export's flipped space.
+    if !doc.headers.is_empty() {
+        let mut hdr = String::new();
+        for h in &doc.headers {
+            let fill = if h.needs_review { "#c00" } else { "#333" };
+            let _ = write!(
+                hdr,
+                r#"    <text x="{cx}" y="{cy}" font-family="Arial, sans-serif" font-size="170" text-anchor="middle" fill="{fill}">{size}</text>"#,
+                cx = h.x,
+                cy = -h.y,
+                fill = fill,
+                size = h.size,
+            );
+            hdr.push('\n');
+        }
+        floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&hdr));
     }
     floor_plan_raw
 }

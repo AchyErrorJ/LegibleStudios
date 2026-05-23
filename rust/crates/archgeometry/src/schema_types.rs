@@ -525,6 +525,29 @@ pub struct SchemaDocument {
     /// Electrical devices (receptacles / lights) — rules-engine annotation.
     #[serde(default)]
     pub electrical: Vec<SchemaElectrical>,
+    /// Header (lintel) callouts over openings — rules-engine annotation.
+    #[serde(default)]
+    pub headers: Vec<SchemaHeader>,
+}
+
+/// A header/lintel callout over a door or window opening. `size` is the OBC
+/// member (e.g. `"2-2x10"`); position in mm at the opening centre.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SchemaHeader {
+    #[serde(default)]
+    pub size: String,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub level_name: String,
+    #[serde(default)]
+    pub opening: String,
+    #[serde(default)]
+    pub width: f32,
+    #[serde(default)]
+    pub needs_review: bool,
 }
 
 /// A placed electrical device. `kind` is `"receptacle"`, `"gfci"` or

@@ -452,11 +452,22 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
     let mut doors: Vec<Value> = Vec::new();
     let mut windows_json: Vec<Value> = Vec::new();
     let mut egress_warnings: Vec<Value> = Vec::new();
+    let mut headers: Vec<Value> = Vec::new();
     let mut rooms_map = serde_json::Map::new();
     let mut wall_offset = 0usize; // walls_batch is global; per-floor indices shift by this
 
     for floor in floors {
         let level_name = format!("Level {}", floor.level);
+        // Storeys bearing on this floor's headers: roof + every floor above.
+        let stories_above = i32::try_from(floors.len() - floor.level + 1).unwrap_or(1);
+        // Header (OBC 9.23.12) sized from an opening's width + storeys above.
+        let mut header = |width_mm: f32, x: f32, y: f32, opening: &str| {
+            let (size, review) = obc::headers::header_size_for(width_mm / s, stories_above);
+            headers.push(json!({
+                "size": size, "x": x, "y": y, "level_name": level_name,
+                "opening": opening, "width": width_mm, "needs_review": review,
+            }));
+        };
 
         // Walls (global index = wall_offset + local).
         for (i, w) in floor.walls.iter().enumerate() {
@@ -482,6 +493,7 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
                     "x": cx, "y": cy, "width": width, "type": "door",
                     "height": DOOR_HEIGHT_FT * s, "wall_index": wall_offset + wi, "offset": 0.0,
                 }));
+                header(width, cx, cy, "door");
             }
         }
 
@@ -498,6 +510,14 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
                 "room": w.room,
                 "level_name": level_name,
             }));
+            // Header over the window: project its centre along the wall.
+            if let Some(wall) = floor.walls.get(w.wall_index) {
+                let (sx, sy) = (wall.start.0 * s, wall.start.1 * s);
+                let (dx, dy) = ((wall.end.0 - wall.start.0) * s, (wall.end.1 - wall.start.1) * s);
+                let len = (dx * dx + dy * dy).sqrt().max(1.0);
+                let along = w.offset + w.width * 0.5;
+                header(w.width, sx + dx / len * along, sy + dy / len * along, "window");
+            }
         }
 
         // Egress flag: bedrooms on this floor with no exterior wall (OBC 9.9.10.1).
@@ -607,6 +627,8 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
     let ext = walls_batch.iter().filter(|w| w["category"] == "exterior").count();
     let int = total_walls - ext;
     let storeys = floors.len() as f32;
+    let headers_len = headers.len();
+    let headers_review = headers.iter().filter(|h| h["needs_review"] == json!(true)).count();
 
     json!({
         "success": true,
@@ -625,6 +647,7 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         "egress_warnings": egress_warnings,
         "detectors": detectors_json,
         "electrical": electrical_json,
+        "headers": headers,
         "levels": levels,
         "dimensions": dimensions,
         "rooms": Value::Object(rooms_map),
@@ -644,6 +667,8 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
             "storeys": floors.len(),
             "detectors": detectors.len(),
             "electrical": electrical.len(),
+            "headers": headers_len,
+            "headers_need_review": headers_review,
         },
         "qbd_answers": {
             "bedrooms": answers.bedrooms,
@@ -998,6 +1023,38 @@ mod tests {
         assert!(gfci_rooms.iter().any(|r| r.contains("bath") || *r == "kitchen" || *r == "garage"));
         assert!(!gfci_rooms.iter().any(|r| r.contains("bedroom")));
         assert_eq!(v["summary"]["electrical"], json!(el.len()));
+    }
+
+    #[test]
+    fn headers_sized_per_opening_and_deeper_on_lower_storeys() {
+        let v = building_json(&Answers {
+            bedrooms: 4,
+            bathrooms: 3,
+            sqft: 2400.0,
+            garage: "2car".into(),
+            special_rooms: vec![],
+            storeys: 0, // 2-storey
+            window_intent: "balanced".into(),
+            style: "balanced".into(),
+        });
+        let hdr = v["headers"].as_array().unwrap();
+        // One header per opening (doors + windows).
+        let openings = v["doors"].as_array().unwrap().len() + v["windows"].as_array().unwrap().len();
+        assert_eq!(hdr.len(), openings, "a header per opening");
+        // Every header has a member size; count matches summary.
+        assert!(hdr.iter().all(|h| h["size"].as_str().is_some_and(|s| s.starts_with("2-2x"))));
+        assert_eq!(v["summary"]["headers"], json!(hdr.len()));
+        // A given door width gets a deeper header on the ground floor (carries
+        // the floor above) than on the top floor (roof only).
+        let door_size = |lvl: &str| {
+            hdr.iter()
+                .find(|h| h["opening"] == json!("door") && h["level_name"] == json!(lvl)
+                    && (h["width"].as_f64().unwrap() / 304.8 - 3.0).abs() < 0.2)
+                .map(|h| h["size"].as_str().unwrap().to_string())
+        };
+        if let (Some(g), Some(u)) = (door_size("Level 1"), door_size("Level 2")) {
+            assert_ne!(g, u, "ground-floor 3ft door header should differ from upper");
+        }
     }
 
     #[test]
