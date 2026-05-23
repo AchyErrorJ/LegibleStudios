@@ -519,6 +519,25 @@ pub struct SchemaDocument {
     pub qbd_answers: QBDAnswers,
     #[serde(default)]
     pub summary: SchemaSummary,
+    /// Life-safety alarms (smoke / CO) — rules-engine annotation pass.
+    #[serde(default)]
+    pub detectors: Vec<SchemaDetector>,
+}
+
+/// A placed life-safety alarm (smoke or CO). Position is the room/ceiling
+/// point in mm; `kind` is `"smoke"` or `"co"`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SchemaDetector {
+    #[serde(default, rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub level_name: String,
+    #[serde(default)]
+    pub room: String,
 }
 
 fn default_version() -> String {

@@ -5,6 +5,7 @@
 //! (`qbd_interface.cpp:948`) + `generateWallDetails` (`:1131-1156`).
 
 use archgeometry::SchemaDocument;
+use std::fmt::Write as _;
 use drawing::{
     Config, DrawingType, ElevationDirection, ElevationInput, ElevationOpeningInput,
     ElevationWallInput, ProjectInfo, SectionInput, SectionWallInput, SitePlan, WallSectionDetail,
@@ -146,7 +147,8 @@ fn filter_doc_to_level(doc: &SchemaDocument, level: &str) -> SchemaDocument {
         .filter(|(_, r)| r.level == level)
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    SchemaDocument { walls, doors, windows, rooms, ..doc.clone() }
+    let detectors = doc.detectors.iter().filter(|d| d.level_name == level).cloned().collect();
+    SchemaDocument { walls, doors, windows, rooms, detectors, ..doc.clone() }
 }
 
 /// Build one floor-plan SVG (geometry + dimension tiers + room labels, no
@@ -222,6 +224,31 @@ fn build_floor_plan_svg(doc: &SchemaDocument, config: &Config) -> String {
         if !tier2.is_empty() {
             floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&tier2));
         }
+    }
+
+    // Life-safety alarms (rules-engine annotation): smoke = S, CO = CO, drawn
+    // as a labelled disc at the device's plan position (Y pre-negated for the
+    // export's flipped space).
+    if !doc.detectors.is_empty() {
+        let mut det = String::new();
+        for d in &doc.detectors {
+            let (cx, cy) = (d.x, -d.y);
+            let label = if d.kind == "co" { "CO" } else { "S" };
+            let _ = write!(
+                det,
+                concat!(
+                    r##"    <circle cx="{cx}" cy="{cy}" r="200" fill="#fff" stroke="#c00" stroke-width="25"/>"##,
+                    "\n",
+                    r##"    <text x="{cx}" y="{ty}" font-family="Arial, sans-serif" font-size="220" font-weight="bold" text-anchor="middle" fill="#c00">{label}</text>"##,
+                    "\n",
+                ),
+                cx = cx,
+                cy = cy,
+                ty = cy + 80.0,
+                label = label,
+            );
+        }
+        floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&det));
     }
     floor_plan_raw
 }

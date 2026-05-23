@@ -323,6 +323,53 @@ fn generate_windows(rooms: &[PlacedRoom], env: Rect, intent: &str, style: &str) 
     out
 }
 
+/// A placed life-safety alarm (smoke / CO), centred in its room (ceiling
+/// fixture); position in mm.
+struct DetectorOut {
+    kind: &'static str, // "smoke" | "co"
+    x: f32,
+    y: f32,
+    level: usize,
+    room: String,
+}
+
+/// Deterministic smoke/CO alarm placement (OBC 9.10.19 + 9.33.4) — the first
+/// rules-engine annotation category. A smoke alarm in every bedroom and one
+/// per storey (in the hall serving the bedrooms, else the largest room); a CO
+/// alarm by the sleeping area on bedroom storeys when there's an attached
+/// garage. Rules live in `obc::detectors`; placement (room centre) is here.
+fn generate_detectors(floors: &[Floor], answers: &Answers) -> Vec<DetectorOut> {
+    let s = FEET_TO_MM;
+    let co_required = obc::detectors::requires_co_alarm(answers.garage != "none", false);
+    let is_bed = |rt: &str| rt == "bedroom" || rt == "primary_bedroom";
+    let centre = |r: &PlacedRoom| ((r.rect.x + r.rect.w * 0.5) * s, (r.rect.y + r.rect.h * 0.5) * s);
+
+    let mut out = Vec::new();
+    for floor in floors {
+        // One smoke alarm in each bedroom.
+        for r in floor.rooms.iter().filter(|r| is_bed(&r.room_type)) {
+            let (x, y) = centre(r);
+            out.push(DetectorOut { kind: "smoke", x, y, level: floor.level, room: r.id.clone() });
+        }
+        // One serving the storey: the hall if present, else the largest room.
+        let storey_room = floor.rooms.iter().find(|r| r.room_type == "hallway").or_else(|| {
+            floor
+                .rooms
+                .iter()
+                .max_by(|a, b| a.rect.area().partial_cmp(&b.rect.area()).unwrap_or(std::cmp::Ordering::Equal))
+        });
+        if let Some(r) = storey_room {
+            let (x, y) = centre(r);
+            out.push(DetectorOut { kind: "smoke", x, y, level: floor.level, room: r.id.clone() });
+            // CO by the sleeping area on bedroom storeys (attached garage).
+            if co_required && floor.rooms.iter().any(|r| is_bed(&r.room_type)) {
+                out.push(DetectorOut { kind: "co", x: x + 450.0, y, level: floor.level, room: r.id.clone() });
+            }
+        }
+    }
+    out
+}
+
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -455,6 +502,21 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         },
     ]);
 
+    // Rules-engine annotations: life-safety alarms (OBC 9.10.19 / 9.33.4).
+    let detectors = generate_detectors(floors, answers);
+    let detectors_json: Vec<Value> = detectors
+        .iter()
+        .map(|d| {
+            json!({
+                "type": d.kind,
+                "x": d.x,
+                "y": d.y,
+                "level_name": format!("Level {}", d.level),
+                "room": d.room,
+            })
+        })
+        .collect();
+
     let total_walls: usize = floors.iter().map(|f| f.walls.len()).sum();
     let total_windows: usize = floors.iter().map(|f| f.windows.len()).sum();
     let total_rooms: usize = floors.iter().map(|f| f.rooms.len()).sum();
@@ -478,6 +540,7 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         "doors": doors,
         "windows": windows_json,
         "egress_warnings": egress_warnings,
+        "detectors": detectors_json,
         "levels": levels,
         "dimensions": dimensions,
         "rooms": Value::Object(rooms_map),
@@ -495,6 +558,7 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
             "rooms_placed": total_rooms,
             "rooms_requested": total_rooms,
             "storeys": floors.len(),
+            "detectors": detectors.len(),
         },
         "qbd_answers": {
             "bedrooms": answers.bedrooms,
@@ -779,6 +843,57 @@ mod tests {
         let v = building_json(&a);
         assert_eq!(v["storeys"], json!(1));
         assert_eq!(v["levels"].as_array().unwrap().len(), 2); // Level 1 + roof
+    }
+
+    #[test]
+    fn smoke_and_co_detectors_placed_per_obc() {
+        // 4-bed, 2-storey, attached garage → CO required near sleeping.
+        let v = building_json(&Answers {
+            bedrooms: 4,
+            bathrooms: 3,
+            sqft: 2400.0,
+            garage: "2car".into(),
+            special_rooms: vec![],
+            storeys: 0,
+            window_intent: "balanced".into(),
+            style: "balanced".into(),
+        });
+        let det = v["detectors"].as_array().unwrap();
+        // A smoke alarm in every bedroom.
+        let rooms = v["rooms"].as_object().unwrap();
+        for bed in rooms.keys().filter(|k| k.contains("bedroom")) {
+            assert!(
+                det.iter().any(|d| d["type"] == json!("smoke") && d["room"] == json!(bed)),
+                "no smoke alarm in {bed}"
+            );
+        }
+        // A smoke alarm on each storey.
+        for lvl in ["Level 1", "Level 2"] {
+            assert!(
+                det.iter().any(|d| d["type"] == json!("smoke") && d["level_name"] == json!(lvl)),
+                "no smoke alarm on {lvl}"
+            );
+        }
+        // A CO alarm exists (attached garage) near the sleeping storey.
+        assert!(det.iter().any(|d| d["type"] == json!("co")), "no CO alarm with attached garage");
+        assert_eq!(v["summary"]["detectors"], json!(det.len()));
+    }
+
+    #[test]
+    fn no_co_alarm_without_garage_or_fuel() {
+        let v = building_json(&Answers {
+            bedrooms: 2,
+            bathrooms: 1,
+            sqft: 1100.0,
+            garage: "none".into(),
+            special_rooms: vec![],
+            storeys: 1,
+            window_intent: "balanced".into(),
+            style: "balanced".into(),
+        });
+        let det = v["detectors"].as_array().unwrap();
+        assert!(det.iter().all(|d| d["type"] != json!("co")), "CO alarm without garage/fuel");
+        assert!(det.iter().any(|d| d["type"] == json!("smoke")), "expected smoke alarms");
     }
 
     #[test]

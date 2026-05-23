@@ -5,6 +5,7 @@
 //! Port of `ArchEngine_kernel/{include,src}/obc_engine.{hpp,cpp}`.
 //! Table files (JSON) live at `OBC_Library/tables/` — load on init.
 
+pub mod detectors;
 pub mod engine;
 pub mod format;
 pub mod report;

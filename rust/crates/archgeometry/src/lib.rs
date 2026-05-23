@@ -22,6 +22,6 @@ pub use geometry_types::{
 };
 pub use schema_parser::{ParseError, parse_file, parse_json};
 pub use schema_types::{
-    QBDAnswers, RoofRidge, RoofSurface, RoomBounds, SchemaDocument, SchemaDoor, SchemaFloor,
-    SchemaLevel, SchemaRoof, SchemaRoom, SchemaWall, SchemaWindow, WallLayer, WallType,
+    QBDAnswers, RoofRidge, RoofSurface, RoomBounds, SchemaDetector, SchemaDocument, SchemaDoor,
+    SchemaFloor, SchemaLevel, SchemaRoof, SchemaRoom, SchemaWall, SchemaWindow, WallLayer, WallType,
 };
