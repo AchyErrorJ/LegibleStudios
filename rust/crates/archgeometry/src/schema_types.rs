@@ -522,6 +522,25 @@ pub struct SchemaDocument {
     /// Life-safety alarms (smoke / CO) — rules-engine annotation pass.
     #[serde(default)]
     pub detectors: Vec<SchemaDetector>,
+    /// Electrical devices (receptacles / lights) — rules-engine annotation.
+    #[serde(default)]
+    pub electrical: Vec<SchemaElectrical>,
+}
+
+/// A placed electrical device. `kind` is `"receptacle"`, `"gfci"` or
+/// `"light"`; position in mm.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SchemaElectrical {
+    #[serde(default, rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub level_name: String,
+    #[serde(default)]
+    pub room: String,
 }
 
 /// A placed life-safety alarm (smoke or CO). Position is the room/ceiling

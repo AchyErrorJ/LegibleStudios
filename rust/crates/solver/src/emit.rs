@@ -370,6 +370,74 @@ fn generate_detectors(floors: &[Floor], answers: &Answers) -> Vec<DetectorOut> {
     out
 }
 
+/// A placed electrical device (receptacle / gfci / light); position in mm.
+struct ElectricalOut {
+    kind: &'static str,
+    x: f32,
+    y: f32,
+    level: usize,
+    room: String,
+}
+
+/// Deterministic electrical layout (OESC 26-712 spacing + GFCI) — second
+/// rules-engine category. Per room: a ceiling light at the centre, and
+/// receptacles along each wall so no point is >1.8 m from one (spacing ≤3.6 m;
+/// walls under 0.9 m skipped). Wet/garage rooms get GFCI receptacles. Rules
+/// live in `obc::electrical`; placement is here.
+#[allow(clippy::many_single_char_names)]
+fn generate_electrical(floors: &[Floor]) -> Vec<ElectricalOut> {
+    use obc::electrical as el;
+    const FT_TO_M: f32 = 0.3048;
+    let s = FEET_TO_MM;
+    let mut out = Vec::new();
+    for floor in floors {
+        for r in &floor.rooms {
+            let recep_kind = if el::requires_gfci(&r.room_type) { "gfci" } else { "receptacle" };
+            // Ceiling light at the room centre.
+            out.push(ElectricalOut {
+                kind: "light",
+                x: (r.rect.x + r.rect.w * 0.5) * s,
+                y: (r.rect.y + r.rect.h * 0.5) * s,
+                level: floor.level,
+                room: r.id.clone(),
+            });
+            // Receptacles along each of the four walls (skip stubs <0.9 m).
+            let (x0, y0, x1, y1) = (r.rect.x, r.rect.y, r.rect.x + r.rect.w, r.rect.y + r.rect.h);
+            // (along-length ft, fixed coord, horizontal?) per edge.
+            let edges = [
+                (r.rect.w, y0, true),  // south
+                (r.rect.w, y1, true),  // north
+                (r.rect.h, x0, false), // west
+                (r.rect.h, x1, false), // east
+            ];
+            for (len_ft, fixed, horizontal) in edges {
+                if len_ft * FT_TO_M < el::MIN_WALL_FOR_RECEPTACLE_M {
+                    continue;
+                }
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let n = ((len_ft * FT_TO_M) / el::MAX_RECEPTACLE_SPACING_M).ceil().max(1.0) as usize;
+                for k in 0..n {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = (k as f32 + 0.5) / n as f32;
+                    let (x, y) = if horizontal {
+                        (x0 + (x1 - x0) * t, fixed)
+                    } else {
+                        (fixed, y0 + (y1 - y0) * t)
+                    };
+                    out.push(ElectricalOut {
+                        kind: recep_kind,
+                        x: x * s,
+                        y: y * s,
+                        level: floor.level,
+                        room: r.id.clone(),
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -517,6 +585,21 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         })
         .collect();
 
+    // Rules-engine annotations: electrical (OESC receptacle spacing + GFCI).
+    let electrical = generate_electrical(floors);
+    let electrical_json: Vec<Value> = electrical
+        .iter()
+        .map(|e| {
+            json!({
+                "type": e.kind,
+                "x": e.x,
+                "y": e.y,
+                "level_name": format!("Level {}", e.level),
+                "room": e.room,
+            })
+        })
+        .collect();
+
     let total_walls: usize = floors.iter().map(|f| f.walls.len()).sum();
     let total_windows: usize = floors.iter().map(|f| f.windows.len()).sum();
     let total_rooms: usize = floors.iter().map(|f| f.rooms.len()).sum();
@@ -541,6 +624,7 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         "windows": windows_json,
         "egress_warnings": egress_warnings,
         "detectors": detectors_json,
+        "electrical": electrical_json,
         "levels": levels,
         "dimensions": dimensions,
         "rooms": Value::Object(rooms_map),
@@ -559,6 +643,7 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
             "rooms_requested": total_rooms,
             "storeys": floors.len(),
             "detectors": detectors.len(),
+            "electrical": electrical.len(),
         },
         "qbd_answers": {
             "bedrooms": answers.bedrooms,
@@ -877,6 +962,42 @@ mod tests {
         // A CO alarm exists (attached garage) near the sleeping storey.
         assert!(det.iter().any(|d| d["type"] == json!("co")), "no CO alarm with attached garage");
         assert_eq!(v["summary"]["detectors"], json!(det.len()));
+    }
+
+    #[test]
+    fn electrical_places_light_and_receptacles_with_gfci_in_wet_rooms() {
+        let v = building_json(&Answers {
+            bedrooms: 3,
+            bathrooms: 2,
+            sqft: 1600.0,
+            garage: "1car".into(),
+            special_rooms: vec![],
+            storeys: 1,
+            window_intent: "balanced".into(),
+            style: "balanced".into(),
+        });
+        let el = v["electrical"].as_array().unwrap();
+        let rooms = v["rooms"].as_object().unwrap();
+        // Exactly one ceiling light per room.
+        let lights = el.iter().filter(|e| e["type"] == json!("light")).count();
+        assert_eq!(lights, rooms.len(), "expected one light per room");
+        // Every room has at least one receptacle (standard or gfci).
+        for id in rooms.keys() {
+            let n = el
+                .iter()
+                .filter(|e| e["room"] == json!(id) && e["type"] != json!("light"))
+                .count();
+            assert!(n >= 1, "{id} has no receptacle");
+        }
+        // Wet/garage rooms get GFCI receptacles; bedrooms don't.
+        let gfci_rooms: std::collections::HashSet<&str> = el
+            .iter()
+            .filter(|e| e["type"] == json!("gfci"))
+            .map(|e| e["room"].as_str().unwrap())
+            .collect();
+        assert!(gfci_rooms.iter().any(|r| r.contains("bath") || *r == "kitchen" || *r == "garage"));
+        assert!(!gfci_rooms.iter().any(|r| r.contains("bedroom")));
+        assert_eq!(v["summary"]["electrical"], json!(el.len()));
     }
 
     #[test]

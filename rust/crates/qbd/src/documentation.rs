@@ -148,12 +148,14 @@ fn filter_doc_to_level(doc: &SchemaDocument, level: &str) -> SchemaDocument {
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let detectors = doc.detectors.iter().filter(|d| d.level_name == level).cloned().collect();
-    SchemaDocument { walls, doors, windows, rooms, detectors, ..doc.clone() }
+    let electrical = doc.electrical.iter().filter(|e| e.level_name == level).cloned().collect();
+    SchemaDocument { walls, doors, windows, rooms, detectors, electrical, ..doc.clone() }
 }
 
 /// Build one floor-plan SVG (geometry + dimension tiers + room labels, no
 /// title block) for the given document view. Pass a level-filtered doc for a
 /// single storey; the footprint dims come from `doc.width`/`doc.depth`.
+#[allow(clippy::too_many_lines, clippy::uninlined_format_args)] // sequential annotation injection
 fn build_floor_plan_svg(doc: &SchemaDocument, config: &Config) -> String {
     let cut_height = 1219.0;
     let result = generate_floor_plan_with_openings(doc, cut_height, config);
@@ -249,6 +251,50 @@ fn build_floor_plan_svg(doc: &SchemaDocument, config: &Config) -> String {
             );
         }
         floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&det));
+    }
+
+    // Electrical (rules-engine annotation): receptacle = small open circle on
+    // the wall (GFCI labelled "G"), light = a circle-with-cross at the centre.
+    if !doc.electrical.is_empty() {
+        let mut elec = String::new();
+        for e in &doc.electrical {
+            let (cx, cy) = (e.x, -e.y);
+            match e.kind.as_str() {
+                "light" => {
+                    let _ = write!(
+                        elec,
+                        concat!(
+                            r##"    <circle cx="{cx}" cy="{cy}" r="160" fill="none" stroke="#d80" stroke-width="22"/>"##,
+                            "\n",
+                            r##"    <line x1="{l}" y1="{cy}" x2="{r}" y2="{cy}" stroke="#d80" stroke-width="22"/>"##,
+                            "\n",
+                            r##"    <line x1="{cx}" y1="{t}" x2="{cx}" y2="{b}" stroke="#d80" stroke-width="22"/>"##,
+                            "\n",
+                        ),
+                        cx = cx, cy = cy,
+                        l = cx - 160.0, r = cx + 160.0, t = cy - 160.0, b = cy + 160.0,
+                    );
+                }
+                kind => {
+                    // receptacle / gfci
+                    let _ = write!(
+                        elec,
+                        r##"    <circle cx="{cx}" cy="{cy}" r="110" fill="#fff" stroke="#06c" stroke-width="22"/>"##,
+                        cx = cx, cy = cy,
+                    );
+                    elec.push('\n');
+                    if kind == "gfci" {
+                        let _ = write!(
+                            elec,
+                            r##"    <text x="{cx}" y="{ty}" font-family="Arial, sans-serif" font-size="150" font-weight="bold" text-anchor="middle" fill="#06c">G</text>"##,
+                            cx = cx, ty = cy + 55.0,
+                        );
+                        elec.push('\n');
+                    }
+                }
+            }
+        }
+        floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&elec));
     }
     floor_plan_raw
 }

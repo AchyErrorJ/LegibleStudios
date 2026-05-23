@@ -6,6 +6,7 @@
 //! Table files (JSON) live at `OBC_Library/tables/` — load on init.
 
 pub mod detectors;
+pub mod electrical;
 pub mod engine;
 pub mod format;
 pub mod report;
