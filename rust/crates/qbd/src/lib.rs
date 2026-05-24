@@ -11,6 +11,7 @@
 pub mod convert;
 pub mod documentation;
 pub mod floor_plan;
+pub mod ifc;
 pub mod schedule;
 pub mod validation;
 pub mod wall_types;

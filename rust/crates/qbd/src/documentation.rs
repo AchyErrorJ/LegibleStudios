@@ -650,8 +650,9 @@ fn build_detail(wall_type: domain::WallType, config: &Config) -> WallDetail {
 /// Current date in `YYYY-MM-DD`. Uses `SystemTime` and a small
 /// hand-rolled Gregorian-calendar conversion so we don't pull in the
 /// `chrono` crate for this single use.
+#[must_use]
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-fn today_iso() -> String {
+pub fn today_iso() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let now = SystemTime::now()

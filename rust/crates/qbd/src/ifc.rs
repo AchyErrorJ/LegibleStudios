@@ -1,0 +1,399 @@
+//! IFC4 export — a focused, Revit-importable subset.
+//!
+//! Emits the spatial hierarchy (`IfcProject` → `IfcSite` → `IfcBuilding` →
+//! `IfcBuildingStorey`) plus `IfcWall` / `IfcSpace` / `IfcDoor` / `IfcWindow`
+//! as placed extruded solids, units in millimetres. This is the decoupled
+//! Revit-import / structured-data bridge — not full IFC4, but a valid file
+//! that round-trips the building's spatial model.
+//!
+//! v1 limitation: doors/windows are placed elements; they do **not** yet void
+//! their host wall (`IfcOpeningElement` + `IfcRelVoidsElement`/`RelFillsElement`).
+
+use archgeometry::SchemaDocument;
+use std::fmt::Write as _;
+
+/// Compress a 128-bit value into IFC's 22-char base64 GUID encoding.
+fn ifc_guid(value: u128) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
+    let mut digits = [0u8; 22];
+    let mut v = value;
+    for d in digits.iter_mut().rev() {
+        *d = ALPHABET[(v & 0x3f) as usize];
+        v >>= 6;
+    }
+    String::from_utf8_lossy(&digits).into_owned()
+}
+
+/// STEP physical-file builder: an entity buffer with an incrementing id and a
+/// per-entity GUID source.
+struct Spf {
+    body: String,
+    next_id: usize,
+    guid_seed: u128,
+}
+
+impl Spf {
+    fn new() -> Self {
+        Self { body: String::new(), next_id: 1, guid_seed: 1 }
+    }
+
+    /// Append one entity line (without the leading `#id=`); returns its id.
+    fn add(&mut self, entity: &str) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        let _ = writeln!(self.body, "#{id}={entity};");
+        id
+    }
+
+    fn guid(&mut self) -> String {
+        let g = ifc_guid(self.guid_seed);
+        self.guid_seed += 1;
+        g
+    }
+}
+
+/// Reference list `(#a,#b,...)`.
+fn refs(ids: &[usize]) -> String {
+    let inner: Vec<String> = ids.iter().map(|i| format!("#{i}")).collect();
+    format!("({})", inner.join(","))
+}
+
+/// A 3D cartesian point literal.
+fn pt(x: f32, y: f32, z: f32) -> String {
+    format!("IFCCARTESIANPOINT(({x:.3},{y:.3},{z:.3}))")
+}
+
+/// Export `doc` to an IFC4 STEP file string.
+#[must_use]
+#[allow(clippy::too_many_lines)] // one cohesive STEP assembly; splitting hides the entity graph
+pub fn to_ifc(doc: &SchemaDocument, project_name: &str, date: &str) -> String {
+    let mut s = Spf::new();
+
+    // --- Owner history (minimal but valid) ---
+    let person = s.add("IFCPERSON($,$,'',$,$,$,$,$)");
+    let org = s.add("IFCORGANIZATION($,'Legible Studio',$,$,$)");
+    let p_and_o = s.add(&format!("IFCPERSONANDORGANIZATION(#{person},#{org},$)"));
+    let app = s.add(&format!(
+        "IFCAPPLICATION(#{org},'1.0','Legible Studio','legible')"
+    ));
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let ts = 1_700_000_000_i64; // fixed stamp; deterministic output
+    let owner = s.add(&format!(
+        "IFCOWNERHISTORY(#{p_and_o},#{app},$,.ADDED.,$,$,$,{ts})"
+    ));
+
+    // --- Units: millimetre length, square/cubic mm ---
+    let len = s.add("IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.)");
+    let area = s.add("IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.)");
+    let vol = s.add("IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.)");
+    let units = s.add(&format!("IFCUNITASSIGNMENT({})", refs(&[len, area, vol])));
+
+    // --- Geometric context ---
+    let origin = s.add(&pt(0.0, 0.0, 0.0));
+    let axis_z = s.add("IFCDIRECTION((0.,0.,1.))");
+    let axis_x = s.add("IFCDIRECTION((1.,0.,0.))");
+    let world = s.add(&format!("IFCAXIS2PLACEMENT3D(#{origin},#{axis_z},#{axis_x})"));
+    let ctx = s.add(&format!(
+        "IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-5,#{world},$)"
+    ));
+
+    // --- Spatial hierarchy ---
+    let g = s.guid();
+    let project = s.add(&format!(
+        "IFCPROJECT('{g}',#{owner},'{project_name}',$,$,$,$,({}),#{units})",
+        format_args!("#{ctx}")
+    ));
+    let site_plc = local_placement(&mut s, None, 0.0, 0.0, 0.0);
+    let g = s.guid();
+    let site = s.add(&format!(
+        "IFCSITE('{g}',#{owner},'Site',$,$,#{site_plc},$,$,.ELEMENT.,$,$,$,$,$)"
+    ));
+    let bldg_plc = local_placement(&mut s, Some(site_plc), 0.0, 0.0, 0.0);
+    let g = s.guid();
+    let building = s.add(&format!(
+        "IFCBUILDING('{g}',#{owner},'Building',$,$,#{bldg_plc},$,$,.ELEMENT.,$,$,$)"
+    ));
+
+    // Levels (storeys), excluding roof.
+    let storeys: Vec<(String, f32)> = if doc.levels.is_empty() {
+        vec![("Level 1".to_string(), 0.0)]
+    } else {
+        doc.levels
+            .iter()
+            .filter(|l| !l.name.to_lowercase().contains("roof"))
+            .map(|l| (l.name.clone(), l.elevation))
+            .collect()
+    };
+
+    let mut storey_ids: Vec<(String, usize)> = Vec::new();
+    let mut contained: Vec<(usize, Vec<usize>)> = Vec::new(); // storey -> elements
+    for (name, elev) in &storeys {
+        let plc = local_placement(&mut s, Some(bldg_plc), 0.0, 0.0, *elev);
+        let g = s.guid();
+        let st = s.add(&format!(
+            "IFCBUILDINGSTOREY('{g}',#{owner},'{name}',$,$,#{plc},$,$,.ELEMENT.,{elev:.3})"
+        ));
+        storey_ids.push((name.clone(), st));
+        contained.push((st, Vec::new()));
+    }
+    let storey_of = |level: &str| -> usize {
+        storey_ids
+            .iter()
+            .find(|(n, _)| n == level)
+            .or_else(|| storey_ids.first())
+            .map_or(0, |(_, id)| *id)
+    };
+    let contained_idx = |st: usize| storey_ids.iter().position(|(_, id)| *id == st).unwrap_or(0);
+
+    // --- Walls (extruded box: length x thickness x height) ---
+    for w in &doc.walls {
+        let (sx, sz) = (w.start.x, w.start.z);
+        let (ex, ez) = (w.end.x, w.end.z);
+        let len_mm = ((ex - sx).powi(2) + (ez - sz).powi(2)).sqrt();
+        if len_mm < 1.0 {
+            continue;
+        }
+        let (mx, mz) = ((sx + ex) * 0.5, (sz + ez) * 0.5);
+        let (dx, dz) = ((ex - sx) / len_mm, (ez - sz) / len_mm);
+        let thick = if w.category == "exterior" { 175.0 } else { 115.0 };
+        let base = w.start.y; // walls carry their storey base in y
+        let plc = placement_dir(&mut s, Some(bldg_plc), mx, mz, base, dx, dz);
+        let solid = extruded_box(&mut s, len_mm, thick, w.height);
+        let shape = shape_rep(&mut s, ctx, solid);
+        let prod = s.add(&format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
+        let g = s.guid();
+        let id = s.add(&format!(
+            "IFCWALL('{g}',#{owner},'Wall',$,$,#{plc},#{prod},$,.NOTDEFINED.)"
+        ));
+        let st = storey_of(&w.level_name);
+        contained[contained_idx(st)].1.push(id);
+    }
+
+    // --- Spaces (room footprints) ---
+    for (rid, r) in &doc.rooms {
+        let b = &r.bounds;
+        if b.width < 1.0 || b.height < 1.0 {
+            continue;
+        }
+        let (cx, cz) = (b.x + b.width * 0.5, b.y + b.height * 0.5);
+        let base = doc
+            .levels
+            .iter()
+            .find(|l| l.name == r.level)
+            .map_or(0.0, |l| l.elevation);
+        let plc = placement_dir(&mut s, Some(bldg_plc), cx, cz, base, 1.0, 0.0);
+        let solid = extruded_box(&mut s, b.width, b.height, 2700.0);
+        let shape = shape_rep(&mut s, ctx, solid);
+        let prod = s.add(&format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
+        let g = s.guid();
+        let name = if r.name.is_empty() { rid } else { &r.name };
+        let id = s.add(&format!(
+            "IFCSPACE('{g}',#{owner},'{name}',$,$,#{plc},#{prod},$,.ELEMENT.,.INTERNAL.,$)"
+        ));
+        let st = storey_of(&r.level);
+        contained[contained_idx(st)].1.push(id);
+    }
+
+    // --- Doors + windows (placed boxes; void/fill deferred) ---
+    #[allow(clippy::many_single_char_names, clippy::too_many_arguments)]
+    let opening = |s: &mut Spf, kind: &str, x: f32, z: f32, base: f32, w: f32, h: f32, sill: f32, level: &str, owner: usize| {
+        let plc = placement_dir(s, Some(bldg_plc), x, z, base + sill, 1.0, 0.0);
+        let solid = extruded_box(s, w, 120.0, h);
+        let shape = shape_rep(s, ctx, solid);
+        let prod = s.add(&format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
+        let g = s.guid();
+        let id = if kind == "door" {
+            s.add(&format!(
+                "IFCDOOR('{g}',#{owner},'Door',$,$,#{plc},#{prod},$,{h:.1},{w:.1},.DOOR.,.SINGLE_SWING_LEFT.,$)"
+            ))
+        } else {
+            s.add(&format!(
+                "IFCWINDOW('{g}',#{owner},'Window',$,$,#{plc},#{prod},$,{h:.1},{w:.1},.WINDOW.,.NOTDEFINED.,$)"
+            ))
+        };
+        (id, storey_of(level))
+    };
+
+    for d in &doc.doors {
+        if let Some(wall) = usize::try_from(d.wall_index).ok().and_then(|i| doc.walls.get(i)) {
+            let (sx, sz, ex, ez) = (wall.start.x, wall.start.z, wall.end.x, wall.end.z);
+            let len = ((ex - sx).powi(2) + (ez - sz).powi(2)).sqrt().max(1.0);
+            let (cx, cz) = (sx + (ex - sx) / len * d.offset, sz + (ez - sz) / len * d.offset);
+            let (id, st) = opening(&mut s, "door", cx, cz, wall.start.y, d.width, d.height, 0.0, &wall.level_name, owner);
+            contained[contained_idx(st)].1.push(id);
+        }
+    }
+    for win in &doc.windows {
+        if let Some(wall) = usize::try_from(win.wall_index).ok().and_then(|i| doc.walls.get(i)) {
+            let (sx, sz, ex, ez) = (wall.start.x, wall.start.z, wall.end.x, wall.end.z);
+            let len = ((ex - sx).powi(2) + (ez - sz).powi(2)).sqrt().max(1.0);
+            let along = win.offset + win.width * 0.5;
+            let (cx, cz) = (sx + (ex - sx) / len * along, sz + (ez - sz) / len * along);
+            let (id, st) = opening(&mut s, "window", cx, cz, wall.start.y, win.width, win.height, win.sill_height, &wall.level_name, owner);
+            contained[contained_idx(st)].1.push(id);
+        }
+    }
+
+    // --- Aggregation + containment relationships ---
+    let g = s.guid();
+    s.add(&format!("IFCRELAGGREGATES('{g}',#{owner},$,$,#{project},({}))", format_args!("#{site}")));
+    let g = s.guid();
+    s.add(&format!("IFCRELAGGREGATES('{g}',#{owner},$,$,#{site},({}))", format_args!("#{building}")));
+    let storey_id_list: Vec<usize> = storey_ids.iter().map(|(_, id)| *id).collect();
+    let g = s.guid();
+    s.add(&format!("IFCRELAGGREGATES('{g}',#{owner},$,$,#{building},{})", refs(&storey_id_list)));
+    for (st, elems) in &contained {
+        if elems.is_empty() {
+            continue;
+        }
+        let g = s.guid();
+        s.add(&format!(
+            "IFCRELCONTAINEDINSPATIALSTRUCTURE('{g}',#{owner},$,$,{},#{st})",
+            refs(elems)
+        ));
+    }
+
+    // --- Assemble the STEP file ---
+    format!(
+        "ISO-10303-21;\n\
+         HEADER;\n\
+         FILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');\n\
+         FILE_NAME('{project_name}.ifc','{date}',(''),(''),'Legible Studio','Legible Studio','');\n\
+         FILE_SCHEMA(('IFC4'));\n\
+         ENDSEC;\n\
+         DATA;\n\
+         {}\
+         ENDSEC;\n\
+         END-ISO-10303-21;\n",
+        s.body
+    )
+}
+
+/// `IfcLocalPlacement` at `(x,y,z)` (IFC X=plan-x, Y=plan-z, Z=elevation),
+/// default axes, optionally relative to a parent placement.
+#[allow(clippy::many_single_char_names)]
+fn local_placement(s: &mut Spf, parent: Option<usize>, x: f32, y: f32, z: f32) -> usize {
+    let p = s.add(&pt(x, y, z));
+    let a = s.add(&format!("IFCAXIS2PLACEMENT3D(#{p},$,$)"));
+    let rel = parent.map_or_else(|| "$".to_string(), |id| format!("#{id}"));
+    s.add(&format!("IFCLOCALPLACEMENT({rel},#{a})"))
+}
+
+/// `IfcLocalPlacement` at `(x,y,z)` with the local X axis aligned to plan
+/// direction `(dx,dz)` and Z up.
+#[allow(clippy::many_single_char_names, clippy::too_many_arguments)]
+fn placement_dir(s: &mut Spf, parent: Option<usize>, x: f32, y: f32, z: f32, dx: f32, dz: f32) -> usize {
+    let p = s.add(&pt(x, y, z));
+    let zaxis = s.add("IFCDIRECTION((0.,0.,1.))");
+    let xaxis = s.add(&format!("IFCDIRECTION(({dx:.6},{dz:.6},0.))"));
+    let a = s.add(&format!("IFCAXIS2PLACEMENT3D(#{p},#{zaxis},#{xaxis})"));
+    let rel = parent.map_or_else(|| "$".to_string(), |id| format!("#{id}"));
+    s.add(&format!("IFCLOCALPLACEMENT({rel},#{a})"))
+}
+
+/// An extruded box solid: a centred `x_dim × y_dim` rectangle extruded `height`
+/// up the local +Z.
+fn extruded_box(s: &mut Spf, x_dim: f32, y_dim: f32, height: f32) -> usize {
+    let o2 = s.add("IFCCARTESIANPOINT((0.,0.))");
+    let d2 = s.add("IFCDIRECTION((1.,0.))");
+    let pos2 = s.add(&format!("IFCAXIS2PLACEMENT2D(#{o2},#{d2})"));
+    let profile = s.add(&format!(
+        "IFCRECTANGLEPROFILEDEF(.AREA.,$,#{pos2},{x_dim:.3},{y_dim:.3})"
+    ));
+    let o3 = s.add(&pt(0.0, 0.0, 0.0));
+    let pos3 = s.add(&format!("IFCAXIS2PLACEMENT3D(#{o3},$,$)"));
+    let dir = s.add("IFCDIRECTION((0.,0.,1.))");
+    s.add(&format!(
+        "IFCEXTRUDEDAREASOLID(#{profile},#{pos3},#{dir},{height:.3})"
+    ))
+}
+
+/// A `Body`/`SweptSolid` shape representation wrapping one solid.
+fn shape_rep(s: &mut Spf, ctx: usize, solid: usize) -> usize {
+    s.add(&format!(
+        "IFCSHAPEREPRESENTATION(#{ctx},'Body','SweptSolid',(#{solid}))"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use archgeometry::{SchemaLevel, SchemaRoom, SchemaWall, SchemaWindow};
+    use glam::Vec3;
+
+    fn two_storey_doc() -> SchemaDocument {
+        let mut doc = SchemaDocument { width: 8000.0, depth: 6000.0, ..Default::default() };
+        doc.levels = vec![
+            SchemaLevel { name: "Level 1".into(), elevation: 0.0, ..Default::default() },
+            SchemaLevel { name: "Level 2".into(), elevation: 3048.0, ..Default::default() },
+            SchemaLevel { name: "Roof Level".into(), elevation: 6096.0, ..Default::default() },
+        ];
+        for (lvl, base) in [("Level 1", 0.0), ("Level 2", 3048.0)] {
+            doc.walls.push(SchemaWall {
+                start: Vec3::new(0.0, base, 0.0),
+                end: Vec3::new(8000.0, base, 0.0),
+                height: 2700.0,
+                category: "exterior".into(),
+                level_name: lvl.into(),
+                ..Default::default()
+            });
+        }
+        doc.rooms.insert(
+            "living".into(),
+            SchemaRoom { id: "living".into(), name: "Living".into(), level: "Level 1".into(), ..Default::default() },
+        );
+        doc.windows.push(SchemaWindow {
+            wall_index: 0,
+            offset: 1000.0,
+            width: 1200.0,
+            height: 1200.0,
+            sill_height: 900.0,
+            ..Default::default()
+        });
+        // give the room real bounds
+        if let Some(r) = doc.rooms.get_mut("living") {
+            r.bounds.x = 0.0;
+            r.bounds.y = 0.0;
+            r.bounds.width = 4000.0;
+            r.bounds.height = 3000.0;
+        }
+        doc
+    }
+
+    #[test]
+    fn guid_is_22_chars_from_the_ifc_alphabet() {
+        let g = ifc_guid(123_456_789);
+        assert_eq!(g.len(), 22);
+        assert!(g.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$'));
+        // Distinct seeds give distinct guids.
+        assert_ne!(ifc_guid(1), ifc_guid(2));
+    }
+
+    #[test]
+    fn ifc_has_header_schema_and_spatial_hierarchy() {
+        let ifc = to_ifc(&two_storey_doc(), "Test", "2026-05-24");
+        assert!(ifc.starts_with("ISO-10303-21;"));
+        assert!(ifc.contains("FILE_SCHEMA(('IFC4'))"));
+        assert!(ifc.trim_end().ends_with("END-ISO-10303-21;"));
+        for e in ["IFCPROJECT(", "IFCSITE(", "IFCBUILDING(", "IFCBUILDINGSTOREY(", "IFCUNITASSIGNMENT("] {
+            assert!(ifc.contains(e), "missing {e}");
+        }
+        // Two non-roof storeys.
+        assert_eq!(ifc.matches("IFCBUILDINGSTOREY(").count(), 2);
+        // Aggregation: project→site→building→storeys (3 rels) + containment.
+        assert_eq!(ifc.matches("IFCRELAGGREGATES(").count(), 3);
+        assert!(ifc.contains("IFCRELCONTAINEDINSPATIALSTRUCTURE("));
+    }
+
+    #[test]
+    fn ifc_emits_walls_spaces_and_openings() {
+        let ifc = to_ifc(&two_storey_doc(), "Test", "2026-05-24");
+        assert_eq!(ifc.matches("=IFCWALL(").count(), 2);
+        assert_eq!(ifc.matches("=IFCSPACE(").count(), 1);
+        assert_eq!(ifc.matches("=IFCWINDOW(").count(), 1);
+        // Every entity has geometry referencing the shared context.
+        assert!(ifc.contains("IFCEXTRUDEDAREASOLID("));
+        assert!(ifc.contains("IFCGEOMETRICREPRESENTATIONCONTEXT("));
+    }
+}

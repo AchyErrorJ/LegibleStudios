@@ -11,7 +11,7 @@
 use anyhow::Context;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--project <name>] [--bare]";
+const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--ifc <out.ifc>] [--project <name>] [--bare]";
 
 /// Longest displayed edge, in CSS px, for a written sheet.
 const DISPLAY_MAX_PX: f32 = 1100.0;
@@ -68,6 +68,7 @@ fn main() -> anyhow::Result<()> {
     let mut path: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut bundle_dir: Option<PathBuf> = None;
+    let mut ifc_out: Option<PathBuf> = None;
     let mut project = String::from("QBD Project");
     // `--bare`: emit just the slicer's raw floor-plan SVG (no dimensions,
     // no title block, no room labels). The m5_cpp_diff oracle relies on
@@ -88,6 +89,10 @@ fn main() -> anyhow::Result<()> {
             }
             "--project" if i + 1 < args.len() => {
                 project.clone_from(&args[i + 1]);
+                i += 2;
+            }
+            "--ifc" if i + 1 < args.len() => {
+                ifc_out = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
             "--bare" => {
@@ -111,6 +116,17 @@ fn main() -> anyhow::Result<()> {
 
     let doc = archgeometry::parse_file(&path)
         .with_context(|| format!("failed to parse {}", path.display()))?;
+
+    // IFC4 export (decoupled Revit-import bridge).
+    if let Some(ifc_path) = &ifc_out {
+        let ifc = qbd::ifc::to_ifc(&doc, &project, &qbd::documentation::today_iso());
+        std::fs::write(ifc_path, &ifc)
+            .with_context(|| format!("failed to write {}", ifc_path.display()))?;
+        eprintln!("  wrote {} ({} bytes)", ifc_path.display(), ifc.len());
+        if bundle_dir.is_none() && out.is_none() && !bare {
+            return Ok(());
+        }
+    }
 
     // `--bare` short-circuits before generate_documentation runs, so we
     // don't pay the cost of building elevations / sections / details.
