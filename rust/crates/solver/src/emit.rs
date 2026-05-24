@@ -508,12 +508,15 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         // Doors from wall openings (global wall_index).
         for (wi, w) in floor.walls.iter().enumerate() {
             for o in &w.openings {
-                let cx = (o.start.0 + o.end.0) * 0.5 * s;
-                let cy = (o.start.1 + o.end.1) * 0.5 * s;
+                let (mx, my) = ((o.start.0 + o.end.0) * 0.5, (o.start.1 + o.end.1) * 0.5);
+                let (cx, cy) = (mx * s, my * s);
                 let width = ((o.end.0 - o.start.0).powi(2) + (o.end.1 - o.start.1).powi(2)).sqrt() * s;
+                // Offset = distance from the wall start to the door centre (mm),
+                // which is what add_door_primitives projects along the wall.
+                let offset = ((mx - w.start.0).powi(2) + (my - w.start.1).powi(2)).sqrt() * s;
                 doors.push(json!({
                     "x": cx, "y": cy, "width": width, "type": "door",
-                    "height": DOOR_HEIGHT_FT * s, "wall_index": wall_offset + wi, "offset": 0.0,
+                    "height": DOOR_HEIGHT_FT * s, "wall_index": wall_offset + wi, "offset": offset,
                 }));
                 header(width, cx, cy, "door");
             }

@@ -229,6 +229,67 @@ fn build_floor_plan_svg(doc: &SchemaDocument, config: &Config) -> String {
         }
     }
 
+    // Tier-3: opening-location dimensions — locate each door/window along its
+    // exterior wall, chained from the corners, on a line outside that wall.
+    {
+        const EPS: f32 = 1.0;
+        const OFF: f32 = 2000.0; // mm outside the wall (within FP_PAD)
+        let mut t3 = String::new();
+        for (wi, w) in doc.walls.iter().enumerate() {
+            if w.category != "exterior" {
+                continue;
+            }
+            let (sx, sz, ex, ez) = (w.start.x, w.start.z, w.end.x, w.end.z);
+            let horizontal = (sz - ez).abs() < EPS;
+            if !horizontal && (sx - ex).abs() >= EPS {
+                continue; // not axis-aligned
+            }
+            // Opening centres along this wall (doors carry absolute x/y;
+            // windows are offset along the wall).
+            let on_wall = |idx: i32| usize::try_from(idx).ok() == Some(wi);
+            let len = ((ex - sx).powi(2) + (ez - sz).powi(2)).sqrt().max(1.0);
+            // Centre of an opening, projected to the dimensioned axis. Doors
+            // carry offset-to-centre; windows offset-to-start (+half width).
+            let project = |along: f32| {
+                if horizontal {
+                    sx + (ex - sx) / len * along
+                } else {
+                    sz + (ez - sz) / len * along
+                }
+            };
+            let mut stops: Vec<f32> = Vec::new();
+            for d in doc.doors.iter().filter(|d| on_wall(d.wall_index)) {
+                stops.push(project(d.offset));
+            }
+            for win in doc.windows.iter().filter(|w| on_wall(w.wall_index)) {
+                stops.push(project(win.offset + win.width * 0.5));
+            }
+            if stops.is_empty() {
+                continue;
+            }
+            // Chain from corner to corner through the openings.
+            let (lo, hi) = if horizontal { (sx.min(ex), sx.max(ex)) } else { (sz.min(ez), sz.max(ez)) };
+            stops.push(lo);
+            stops.push(hi);
+            stops.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            stops.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+            if horizontal {
+                let line = if sz < doc.depth * 0.5 { sz - OFF } else { sz + OFF };
+                for d in drawing::chain_dims(&stops, line, true) {
+                    t3.push_str(&drawing::render_horizontal_dim(&flip_h(d), 150.0));
+                }
+            } else {
+                let line = if sx < doc.width * 0.5 { sx - OFF } else { sx + OFF };
+                for d in drawing::chain_dims(&stops, line, false) {
+                    t3.push_str(&drawing::render_vertical_dim(&flip_v(d), 150.0));
+                }
+            }
+        }
+        if !t3.is_empty() {
+            floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&t3));
+        }
+    }
+
     // Life-safety alarms (rules-engine annotation): smoke = S, CO = CO, drawn
     // as a labelled disc at the device's plan position (Y pre-negated for the
     // export's flipped space).
