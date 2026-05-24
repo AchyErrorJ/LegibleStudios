@@ -401,6 +401,28 @@ fn generate_electrical(floors: &[Floor]) -> Vec<ElectricalOut> {
                 level: floor.level,
                 room: r.id.clone(),
             });
+            // Wall switch beside the room's entry (the first interior door that
+            // borders it), controlling the light — OBC 9.34.2.2.
+            if obc::electrical::SWITCH_AT_ROOM_ENTRANCE {
+                for w in &floor.walls {
+                    if w.room1 != r.id && w.room2 != r.id {
+                        continue;
+                    }
+                    if let Some(op) = w.openings.first() {
+                        let (dx, dy) = (op.end.0 - op.start.0, op.end.1 - op.start.1);
+                        let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+                        // ~0.5 ft beyond the door's far edge, on the wall line.
+                        out.push(ElectricalOut {
+                            kind: "switch",
+                            x: (op.end.0 + dx / len * 0.5) * s,
+                            y: (op.end.1 + dy / len * 0.5) * s,
+                            level: floor.level,
+                            room: r.id.clone(),
+                        });
+                        break;
+                    }
+                }
+            }
             // Receptacles along each of the four walls (skip stubs <0.9 m).
             let (x0, y0, x1, y1) = (r.rect.x, r.rect.y, r.rect.x + r.rect.w, r.rect.y + r.rect.h);
             // (along-length ft, fixed coord, horizontal?) per edge.
@@ -1003,9 +1025,15 @@ mod tests {
         });
         let el = v["electrical"].as_array().unwrap();
         let rooms = v["rooms"].as_object().unwrap();
-        // Exactly one ceiling light per room.
+        // Exactly one ceiling light per room, and a switch in each room.
         let lights = el.iter().filter(|e| e["type"] == json!("light")).count();
         assert_eq!(lights, rooms.len(), "expected one light per room");
+        for id in rooms.keys() {
+            assert!(
+                el.iter().any(|e| e["type"] == json!("switch") && e["room"] == json!(id)),
+                "{id} has no light switch"
+            );
+        }
         // Every room has at least one receptacle (standard or gfci).
         for id in rooms.keys() {
             let n = el

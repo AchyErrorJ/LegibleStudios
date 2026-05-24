@@ -16,6 +16,11 @@ pub const MAX_RECEPTACLE_SPACING_M: f32 = 2.0 * MAX_DIST_TO_RECEPTACLE_M;
 /// Wall sections shorter than this (m) don't require a receptacle.
 pub const MIN_WALL_FOR_RECEPTACLE_M: f32 = 0.9;
 
+/// Each room with a lighting outlet needs a wall switch controlling it,
+/// located at the entrance to the room (OBC 9.34.2.2 / OESC). Placement (which
+/// door, which side) is the consumer's job.
+pub const SWITCH_AT_ROOM_ENTRANCE: bool = true;
+
 /// Whether receptacles in this room type must be GFCI-protected (wet areas,
 /// garage, exterior — OESC 26-700/26-710).
 #[must_use]

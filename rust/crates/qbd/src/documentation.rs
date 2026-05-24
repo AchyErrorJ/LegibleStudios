@@ -276,6 +276,16 @@ fn build_floor_plan_svg(doc: &SchemaDocument, config: &Config) -> String {
                         l = cx - 160.0, r = cx + 160.0, t = cy - 160.0, b = cy + 160.0,
                     );
                 }
+                "switch" => {
+                    // Wall switch: blue "S" (no disc — the smoke alarm's S is a
+                    // red disc, so these don't collide).
+                    let _ = write!(
+                        elec,
+                        r##"    <text x="{cx}" y="{ty}" font-family="Arial, sans-serif" font-size="200" font-weight="bold" text-anchor="middle" fill="#06c">S</text>"##,
+                        cx = cx, ty = cy + 70.0,
+                    );
+                    elec.push('\n');
+                }
                 kind => {
                     // receptacle / gfci
                     let _ = write!(
