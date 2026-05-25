@@ -147,11 +147,14 @@ pub fn to_ifc(doc: &SchemaDocument, project_name: &str, date: &str) -> String {
     let contained_idx = |st: usize| storey_ids.iter().position(|(_, id)| *id == st).unwrap_or(0);
 
     // --- Walls (extruded box: length x thickness x height) ---
+    // Track each schema wall's IFC id so openings can void their host wall.
+    let mut wall_ifc: Vec<Option<usize>> = Vec::with_capacity(doc.walls.len());
     for w in &doc.walls {
         let (sx, sz) = (w.start.x, w.start.z);
         let (ex, ez) = (w.end.x, w.end.z);
         let len_mm = ((ex - sx).powi(2) + (ez - sz).powi(2)).sqrt();
         if len_mm < 1.0 {
+            wall_ifc.push(None);
             continue;
         }
         let (mx, mz) = ((sx + ex) * 0.5, (sz + ez) * 0.5);
@@ -166,6 +169,7 @@ pub fn to_ifc(doc: &SchemaDocument, project_name: &str, date: &str) -> String {
         let id = s.add(&format!(
             "IFCWALL('{g}',#{owner},'Wall',$,$,#{plc},#{prod},$,.NOTDEFINED.)"
         ));
+        wall_ifc.push(Some(id));
         let st = storey_of(&w.level_name);
         contained[contained_idx(st)].1.push(id);
     }
@@ -195,44 +199,61 @@ pub fn to_ifc(doc: &SchemaDocument, project_name: &str, date: &str) -> String {
         contained[contained_idx(st)].1.push(id);
     }
 
-    // --- Doors + windows (placed boxes; void/fill deferred) ---
+    // --- Doors + windows: each cuts an IfcOpeningElement that voids its host
+    // wall (IfcRelVoidsElement) and is then filled by the door/window
+    // (IfcRelFillsElement). Wall-aligned boxes; not spatially contained — the
+    // host-wall relationship carries them.
     #[allow(clippy::many_single_char_names, clippy::too_many_arguments)]
-    let opening = |s: &mut Spf, kind: &str, x: f32, z: f32, base: f32, w: f32, h: f32, sill: f32, level: &str, owner: usize| {
-        let plc = placement_dir(s, Some(bldg_plc), x, z, base + sill, 1.0, 0.0);
-        let solid = extruded_box(s, w, 120.0, h);
-        let shape = shape_rep(s, ctx, solid);
-        let prod = s.add(&format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
-        let g = s.guid();
-        let id = if kind == "door" {
-            s.add(&format!(
-                "IFCDOOR('{g}',#{owner},'Door',$,$,#{plc},#{prod},$,{h:.1},{w:.1},.DOOR.,.SINGLE_SWING_LEFT.,$)"
-            ))
-        } else {
-            s.add(&format!(
-                "IFCWINDOW('{g}',#{owner},'Window',$,$,#{plc},#{prod},$,{h:.1},{w:.1},.WINDOW.,.NOTDEFINED.,$)"
-            ))
-        };
-        (id, storey_of(level))
-    };
+    let place_opening =
+        |s: &mut Spf, kind: &str, wall_id: usize, cx: f32, cz: f32, z: f32, dx: f32, dz: f32, thick: f32, w: f32, h: f32| {
+            // The opening: a box voiding the full wall thickness (+slop).
+            let o_plc = placement_dir(s, Some(bldg_plc), cx, cz, z, dx, dz);
+            let o_solid = extruded_box(s, w, thick + 100.0, h);
+            let o_shape = shape_rep(s, ctx, o_solid);
+            let o_prod = s.add(&format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{o_shape}))"));
+            let g = s.guid();
+            let opening = s.add(&format!(
+                "IFCOPENINGELEMENT('{g}',#{owner},'Opening',$,$,#{o_plc},#{o_prod},$,.OPENING.)"
+            ));
+            let g = s.guid();
+            s.add(&format!("IFCRELVOIDSELEMENT('{g}',#{owner},$,$,#{wall_id},#{opening})"));
 
+            // The filling element, sized to the opening (thinner than the void).
+            let e_plc = placement_dir(s, Some(bldg_plc), cx, cz, z, dx, dz);
+            let e_solid = extruded_box(s, w, thick, h);
+            let e_shape = shape_rep(s, ctx, e_solid);
+            let e_prod = s.add(&format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{e_shape}))"));
+            let g = s.guid();
+            let elem = if kind == "door" {
+                s.add(&format!(
+                    "IFCDOOR('{g}',#{owner},'Door',$,$,#{e_plc},#{e_prod},$,{h:.1},{w:.1},.DOOR.,.SINGLE_SWING_LEFT.,$)"
+                ))
+            } else {
+                s.add(&format!(
+                    "IFCWINDOW('{g}',#{owner},'Window',$,$,#{e_plc},#{e_prod},$,{h:.1},{w:.1},.WINDOW.,.NOTDEFINED.,$)"
+                ))
+            };
+            let g = s.guid();
+            s.add(&format!("IFCRELFILLSELEMENT('{g}',#{owner},$,$,#{opening},#{elem})"));
+        };
+
+    let wall_thick = |cat: &str| if cat == "exterior" { 175.0 } else { 115.0 };
     for d in &doc.doors {
-        if let Some(wall) = usize::try_from(d.wall_index).ok().and_then(|i| doc.walls.get(i)) {
-            let (sx, sz, ex, ez) = (wall.start.x, wall.start.z, wall.end.x, wall.end.z);
-            let len = ((ex - sx).powi(2) + (ez - sz).powi(2)).sqrt().max(1.0);
-            let (cx, cz) = (sx + (ex - sx) / len * d.offset, sz + (ez - sz) / len * d.offset);
-            let (id, st) = opening(&mut s, "door", cx, cz, wall.start.y, d.width, d.height, 0.0, &wall.level_name, owner);
-            contained[contained_idx(st)].1.push(id);
-        }
+        let Some(idx) = usize::try_from(d.wall_index).ok() else { continue };
+        let (Some(wall), Some(Some(wid))) = (doc.walls.get(idx), wall_ifc.get(idx)) else { continue };
+        let (sx, sz, ex, ez) = (wall.start.x, wall.start.z, wall.end.x, wall.end.z);
+        let len = ((ex - sx).powi(2) + (ez - sz).powi(2)).sqrt().max(1.0);
+        let (cx, cz) = (sx + (ex - sx) / len * d.offset, sz + (ez - sz) / len * d.offset);
+        place_opening(&mut s, "door", *wid, cx, cz, wall.start.y, (ex - sx) / len, (ez - sz) / len, wall_thick(&wall.category), d.width, d.height);
     }
     for win in &doc.windows {
-        if let Some(wall) = usize::try_from(win.wall_index).ok().and_then(|i| doc.walls.get(i)) {
-            let (sx, sz, ex, ez) = (wall.start.x, wall.start.z, wall.end.x, wall.end.z);
-            let len = ((ex - sx).powi(2) + (ez - sz).powi(2)).sqrt().max(1.0);
-            let along = win.offset + win.width * 0.5;
-            let (cx, cz) = (sx + (ex - sx) / len * along, sz + (ez - sz) / len * along);
-            let (id, st) = opening(&mut s, "window", cx, cz, wall.start.y, win.width, win.height, win.sill_height, &wall.level_name, owner);
-            contained[contained_idx(st)].1.push(id);
-        }
+        let Some(idx) = usize::try_from(win.wall_index).ok() else { continue };
+        let (Some(wall), Some(Some(wid))) = (doc.walls.get(idx), wall_ifc.get(idx)) else { continue };
+        let (sx, sz, ex, ez) = (wall.start.x, wall.start.z, wall.end.x, wall.end.z);
+        let len = ((ex - sx).powi(2) + (ez - sz).powi(2)).sqrt().max(1.0);
+        let along = win.offset + win.width * 0.5;
+        let (cx, cz) = (sx + (ex - sx) / len * along, sz + (ez - sz) / len * along);
+        place_opening(&mut s, "window", *wid, cx, cz, wall.start.y + win.sill_height, (ex - sx) / len, (ez - sz) / len, wall_thick(&wall.category), win.width, win.height);
     }
 
     // --- Aggregation + containment relationships ---
@@ -395,5 +416,15 @@ mod tests {
         // Every entity has geometry referencing the shared context.
         assert!(ifc.contains("IFCEXTRUDEDAREASOLID("));
         assert!(ifc.contains("IFCGEOMETRICREPRESENTATIONCONTEXT("));
+    }
+
+    #[test]
+    fn openings_void_their_host_wall_and_are_filled() {
+        let ifc = to_ifc(&two_storey_doc(), "Test", "2026-05-24");
+        // One window → one opening that voids the wall and is filled.
+        let openings = ifc.matches("=IFCOPENINGELEMENT(").count();
+        assert_eq!(openings, 1);
+        assert_eq!(ifc.matches("=IFCRELVOIDSELEMENT(").count(), openings);
+        assert_eq!(ifc.matches("=IFCRELFILLSELEMENT(").count(), openings);
     }
 }
