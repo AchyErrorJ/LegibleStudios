@@ -39,6 +39,7 @@ pub struct DrawingInfo {
 /// + title + sheet count for each permit-set drawing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawingType {
+    SitePlan,
     FloorPlan,
     RoofPlan,
     ElevationSouth,
@@ -55,6 +56,7 @@ impl DrawingType {
     #[must_use] 
     pub fn default_info(self) -> (&'static str, &'static str, &'static str) {
         match self {
+            DrawingType::SitePlan => ("A-001", "SITE PLAN", "1 OF 8"),
             DrawingType::FloorPlan => ("A-101", "FLOOR PLAN - LEVEL 1", "1 OF 8"),
             DrawingType::RoofPlan => ("A-102", "ROOF PLAN", "2 OF 8"),
             DrawingType::ElevationSouth => ("A-201", "SOUTH ELEVATION", "3 OF 8"),

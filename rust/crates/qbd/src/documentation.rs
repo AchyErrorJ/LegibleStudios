@@ -7,7 +7,7 @@
 use archgeometry::SchemaDocument;
 use std::fmt::Write as _;
 use drawing::{
-    Config, DrawingType, ElevationDirection, ElevationInput, ElevationOpeningInput,
+    Config, DrawingInfo, DrawingType, ElevationDirection, ElevationInput, ElevationOpeningInput,
     ElevationWallInput, ProjectInfo, SectionInput, SectionWallInput, SitePlan, WallSectionDetail,
     drawing_info_for, export_to_svg_padded, generate_elevation_sheet_svg, generate_section_sheet_svg,
     generate_site_plan_svg, generate_title_block, generate_wall_detail, wall_detail_to_svg,
@@ -420,6 +420,12 @@ pub fn generate_documentation(
         let tb = generate_title_block(doc.width, doc.depth, &project, &info, 500.0);
         inject_before_svg_close(&svg, &tb)
     };
+    // Site and roof plans live in a small coordinate space of their own, so
+    // the floor-plan-sized title block must be scaled to fit their viewBox.
+    let with_fitted_tb = |svg: String, dt: DrawingType, scale: &str| -> String {
+        let info = drawing_info_for(dt, scale, &date);
+        inject_fitted_title_block(&svg, &project, &info)
+    };
 
     // One floor plan per storey when the walls genuinely span multiple levels
     // (a single combined plan would overlay the floors on the shared
@@ -452,8 +458,8 @@ pub fn generate_documentation(
     Documentation {
         project_name: project_name.clone(),
         generated_date: date.clone(),
-        site_plan_svg: with_tb(generate_site_plan(doc), DrawingType::FloorPlan, "1:200"),
-        roof_plan_svg: with_tb(generate_roof_plan(doc), DrawingType::FloorPlan, "1:100"),
+        site_plan_svg: with_fitted_tb(generate_site_plan(doc), DrawingType::SitePlan, "1:200"),
+        roof_plan_svg: with_fitted_tb(generate_roof_plan(doc), DrawingType::RoofPlan, "1:100"),
         floor_plan_svg,
         floor_plans,
         elevations: generate_elevations(doc)
@@ -484,6 +490,47 @@ fn render_schedule_svg(entries: &[drawing::ScheduleEntry], title: &str) -> Strin
     } else {
         drawing::schedule_to_svg(entries, title)
     }
+}
+
+/// Parse an SVG's `viewBox="minx miny w h"` into `(minx, miny, w, h)`.
+fn parse_viewbox(svg: &str) -> Option<(f32, f32, f32, f32)> {
+    let vb = svg.split("viewBox=\"").nth(1)?.split('"').next()?;
+    let n: Vec<f32> = vb.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+    if n.len() == 4 { Some((n[0], n[1], n[2], n[3])) } else { None }
+}
+
+/// Inject a title block sized to the sheet's *own* coordinate space.
+///
+/// `generate_title_block` lays out in mm "model space" with absolute sizes
+/// (4000-wide box, 200px text) tuned for floor-plan-sized drawings (~10000
+/// units). The site and roof plans use a much smaller coordinate space, so
+/// the raw fragment would land far off-screen. We render the title block at
+/// its natural size for a drawing matching this sheet's aspect ratio, then
+/// wrap it in a `transform` that maps that natural extent onto the sheet's
+/// viewBox — giving a correctly framed border + title block on any sheet.
+fn inject_fitted_title_block(svg: &str, project: &ProjectInfo, info: &DrawingInfo) -> String {
+    const NATURAL_MAX: f32 = 10_000.0; // matches the title block's design scale
+    const MARGIN: f32 = 500.0;
+    let Some((vx, vy, vw, vh)) = parse_viewbox(svg) else {
+        return svg.to_string();
+    };
+    if vw <= 0.0 || vh <= 0.0 {
+        return svg.to_string();
+    }
+    // Natural drawing dimensions preserving the sheet's aspect ratio.
+    let max_dim = vw.max(vh);
+    let (nw, nh) = (NATURAL_MAX * vw / max_dim, NATURAL_MAX * vh / max_dim);
+    let tb = generate_title_block(nw, nh, project, info, MARGIN);
+    // The fragment's border spans model x ∈ [-MARGIN+300, nw+MARGIN-300] =
+    // [-200, nw+200] (and likewise y). Map that onto [vx, vx+vw].
+    let span_w = nw + 400.0;
+    let span_h = nh + 400.0;
+    let sx = vw / span_w;
+    let sy = vh / span_h;
+    let tx = vx + 200.0 * sx;
+    let ty = vy + 200.0 * sy;
+    let wrapped = format!("<g transform=\"translate({tx} {ty}) scale({sx} {sy})\">\n{tb}</g>\n");
+    inject_before_svg_close(svg, &wrapped)
 }
 
 /// Inject SVG content before the closing `</svg>` tag. If the input has
@@ -734,6 +781,45 @@ mod tests {
             });
         }
         doc
+    }
+
+    #[test]
+    fn parse_viewbox_reads_four_numbers() {
+        let svg = r#"<svg viewBox="0 0 540 730">"#;
+        assert_eq!(parse_viewbox(svg), Some((0.0, 0.0, 540.0, 730.0)));
+        assert_eq!(parse_viewbox("<svg>"), None);
+    }
+
+    #[test]
+    fn fitted_title_block_scales_into_the_sheet_viewbox() {
+        // A small-coordinate sheet (like the site plan): the title block must
+        // be scaled to fit, with its border framing the viewBox exactly.
+        let svg = "<svg viewBox=\"0 0 540 730\">\n<rect/>\n</svg>\n";
+        let project = ProjectInfo { name: "Acme".into(), ..Default::default() };
+        let info = drawing_info_for(DrawingType::SitePlan, "1:200", "2026-05-26");
+        let out = inject_fitted_title_block(svg, &project, &info);
+        // Wrapped in a scaling transform, not injected raw.
+        assert!(out.contains("<g transform=\"translate("));
+        assert!(out.contains("scale("));
+        assert!(out.contains("id=\"title-block\""));
+        assert!(out.contains("SITE PLAN"));
+        assert!(out.ends_with("</svg>\n"));
+        // Scale must shrink the ~10000-unit title block to the 540-wide sheet.
+        let sx: f32 = out
+            .split("scale(")
+            .nth(1)
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.parse().ok())
+            .expect("scale x");
+        assert!(sx < 0.1 && sx > 0.0, "sx={sx}");
+    }
+
+    #[test]
+    fn site_plan_title_block_is_labelled_site_plan() {
+        let docs = generate_documentation(&rect_room_doc(), "Test Project");
+        assert!(docs.site_plan_svg.contains("SITE PLAN"));
+        assert!(docs.site_plan_svg.contains("<g transform=\"translate("));
+        assert!(docs.roof_plan_svg.contains("ROOF PLAN"));
     }
 
     #[test]
