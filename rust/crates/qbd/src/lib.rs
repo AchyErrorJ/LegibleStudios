@@ -13,6 +13,7 @@ pub mod documentation;
 pub mod floor_plan;
 pub mod ifc;
 pub mod schedule;
+pub mod terrain;
 pub mod validation;
 pub mod wall_types;
 

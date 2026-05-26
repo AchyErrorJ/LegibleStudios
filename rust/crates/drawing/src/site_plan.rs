@@ -27,6 +27,9 @@ pub struct SitePlan {
     pub zone: String,
     /// Whether the footprint fits inside the buildable envelope.
     pub fits: bool,
+    /// LiDAR grade spot elevations (m) at the corners, SW/SE/NE/NW. Empty if
+    /// no terrain is wired; then no grade is drawn.
+    pub grade_corners_m: Vec<f32>,
 }
 
 impl SitePlan {
@@ -71,6 +74,7 @@ impl SitePlan {
             street: street.to_string(),
             zone: zone.to_string(),
             fits,
+            grade_corners_m: Vec::new(),
         }
     }
 }
@@ -213,6 +217,42 @@ pub fn generate_site_plan_svg(site: &SitePlan) -> String {
             cx = w * 0.5,
             ty = y(site.lot_depth_ft * 0.5),
         );
+    }
+
+    // LiDAR grade: spot elevations at the corners + a drainage arrow downhill.
+    if site.grade_corners_m.len() == 4 {
+        // Corner plan positions (ft): SW, SE, NE, NW.
+        let corners = [
+            (0.0, 0.0),
+            (site.lot_width_ft, 0.0),
+            (site.lot_width_ft, site.lot_depth_ft),
+            (0.0, site.lot_depth_ft),
+        ];
+        let glbl = r##"font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#070""##;
+        for (i, &(cxft, czft)) in corners.iter().enumerate() {
+            let _ = writeln!(
+                s,
+                r#"<text x="{tx}" y="{ty}" text-anchor="middle" {glbl}>▲{e:.1}</text>"#,
+                tx = x(cxft),
+                ty = y(czft) - 4.0,
+                e = site.grade_corners_m[i],
+            );
+        }
+        // Drainage arrow: from the highest corner toward the lowest.
+        let hi = (0..4).max_by(|&a, &b| site.grade_corners_m[a].total_cmp(&site.grade_corners_m[b])).unwrap_or(0);
+        let lo = (0..4).min_by(|&a, &b| site.grade_corners_m[a].total_cmp(&site.grade_corners_m[b])).unwrap_or(0);
+        if (site.grade_corners_m[hi] - site.grade_corners_m[lo]).abs() > 0.05 {
+            let (hx, hz) = corners[hi];
+            let (lx, lz) = corners[lo];
+            let (x1, y1, x2, y2) = (x(hx), y(hz), x(lx), y(lz));
+            // Pull the arrow toward the lot centre so it reads inside.
+            let cx = x(site.lot_width_ft * 0.5);
+            let cy = y(site.lot_depth_ft * 0.5);
+            let (ax1, ay1) = ((x1 + cx) * 0.5, (y1 + cy) * 0.5);
+            let (ax2, ay2) = ((x2 + cx) * 0.5, (y2 + cy) * 0.5);
+            let _ = writeln!(s, r##"<line x1="{ax1}" y1="{ay1}" x2="{ax2}" y2="{ay2}" stroke="#070" stroke-width="1.5"/>"##);
+            let _ = writeln!(s, r#"<text x="{tx}" y="{ty}" {glbl}>drainage</text>"#, tx = (ax1 + ax2) * 0.5 + 4.0, ty = (ay1 + ay2) * 0.5);
+        }
     }
 
     s.push_str("</svg>\n");

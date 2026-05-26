@@ -547,6 +547,10 @@ pub struct SchemaSite {
     pub zone: String,
     #[serde(default)]
     pub street: String,
+    /// Grade spot elevations (m) at the four lot corners, SW/SE/NE/NW order,
+    /// sampled from LiDAR terrain. Empty if no terrain wired.
+    #[serde(default)]
+    pub grade_corners_m: Vec<f32>,
 }
 
 /// A header/lintel callout over a door or window opening. `size` is the OBC

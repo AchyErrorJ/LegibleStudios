@@ -525,7 +525,9 @@ fn generate_site_plan(doc: &SchemaDocument) -> String {
     let street = if doc.site.street.is_empty() { "Street" } else { &doc.site.street };
     let sb = obc::zoning::setbacks_for(zone);
     let setbacks_ft = (sb.front * M_TO_FT, sb.interior_side * M_TO_FT, sb.rear * M_TO_FT);
-    let site = SitePlan::from_lot(lot_w, lot_d, building_width_ft, building_depth_ft, setbacks_ft, street, zone);
+    let mut site = SitePlan::from_lot(lot_w, lot_d, building_width_ft, building_depth_ft, setbacks_ft, street, zone);
+    // LiDAR grade, if wired (qbd_dump --terrain fills site.grade_corners_m).
+    site.grade_corners_m.clone_from(&doc.site.grade_corners_m);
     generate_site_plan_svg(&site)
 }
 

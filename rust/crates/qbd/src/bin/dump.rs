@@ -11,7 +11,7 @@
 use anyhow::Context;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--ifc <out.ifc>] [--project <name>] [--bare]";
+const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--project <name>] [--bare]";
 
 /// Longest displayed edge, in CSS px, for a written sheet.
 const DISPLAY_MAX_PX: f32 = 1100.0;
@@ -69,6 +69,7 @@ fn main() -> anyhow::Result<()> {
     let mut out: Option<PathBuf> = None;
     let mut bundle_dir: Option<PathBuf> = None;
     let mut ifc_out: Option<PathBuf> = None;
+    let mut terrain_path: Option<PathBuf> = None;
     let mut project = String::from("QBD Project");
     // `--bare`: emit just the slicer's raw floor-plan SVG (no dimensions,
     // no title block, no room labels). The m5_cpp_diff oracle relies on
@@ -95,6 +96,10 @@ fn main() -> anyhow::Result<()> {
                 ifc_out = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
+            "--terrain" if i + 1 < args.len() => {
+                terrain_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
             "--bare" => {
                 bare = true;
                 i += 1;
@@ -114,8 +119,28 @@ fn main() -> anyhow::Result<()> {
 
     let path = path.ok_or_else(|| anyhow::anyhow!("{USAGE}"))?;
 
-    let doc = archgeometry::parse_file(&path)
+    let mut doc = archgeometry::parse_file(&path)
         .with_context(|| format!("failed to parse {}", path.display()))?;
+
+    // LiDAR terrain: lot size + corner grade from the extracted property.
+    if let Some(tpath) = &terrain_path {
+        let json = std::fs::read_to_string(tpath)
+            .with_context(|| format!("failed to read {}", tpath.display()))?;
+        if let Some(t) = qbd::terrain::from_json(&json) {
+            doc.site.lot_width_ft = t.lot_width_ft;
+            doc.site.lot_depth_ft = t.lot_depth_ft;
+            doc.site.grade_corners_m = t.corners_m.to_vec();
+            eprintln!(
+                "  terrain: lot {:.0}x{:.0} ft, grade {:.1}-{:.1} m",
+                t.lot_width_ft,
+                t.lot_depth_ft,
+                t.corners_m.iter().copied().fold(f32::INFINITY, f32::min),
+                t.corners_m.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+            );
+        } else {
+            eprintln!("  terrain: no usable mesh in {}", tpath.display());
+        }
+    }
 
     // IFC4 export (decoupled Revit-import bridge).
     if let Some(ifc_path) = &ifc_out {
