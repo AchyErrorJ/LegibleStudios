@@ -30,6 +30,9 @@ pub struct SitePlan {
     /// LiDAR grade spot elevations (m) at the corners, SW/SE/NE/NW. Empty if
     /// no terrain is wired; then no grade is drawn.
     pub grade_corners_m: Vec<f32>,
+    /// Parcel outline as local `(x, y)` ft vertices. When present (≥3), the
+    /// site plan draws this real lot shape instead of a rectangle.
+    pub lot_polygon_ft: Vec<(f32, f32)>,
 }
 
 impl SitePlan {
@@ -75,8 +78,62 @@ impl SitePlan {
             zone: zone.to_string(),
             fits,
             grade_corners_m: Vec::new(),
+            lot_polygon_ft: Vec::new(),
         }
     }
+}
+
+/// Inset a convex polygon inward by `d` (uniform), assuming/forcing CCW
+/// winding: offset each edge inward and intersect neighbours. Returns `None`
+/// if the polygon is too small for the inset or an offset pair is parallel.
+/// Concave polygons aren't handled (the caller skips the buildable line then).
+#[must_use]
+#[allow(clippy::many_single_char_names)]
+pub fn inset_convex(poly: &[(f32, f32)], d: f32) -> Option<Vec<(f32, f32)>> {
+    let n = poly.len();
+    if n < 3 {
+        return None;
+    }
+    // Signed area; reverse to CCW if needed (interior is left of each edge).
+    let area2: f32 = (0..n).map(|i| {
+        let a = poly[i];
+        let b = poly[(i + 1) % n];
+        a.0 * b.1 - b.0 * a.1
+    }).sum();
+    let ccw: Vec<(f32, f32)> = if area2 < 0.0 { poly.iter().rev().copied().collect() } else { poly.to_vec() };
+
+    // Offset line per edge: a point shifted inward by d + the edge direction.
+    let mut lines = Vec::with_capacity(n);
+    for i in 0..n {
+        let a = ccw[i];
+        let b = ccw[(i + 1) % n];
+        let (ex, ey) = (b.0 - a.0, b.1 - a.1);
+        let len = (ex * ex + ey * ey).sqrt();
+        if len < 1e-3 {
+            return None;
+        }
+        let (nx, ny) = (-ey / len, ex / len); // inward (left) normal for CCW
+        lines.push(((a.0 + nx * d, a.1 + ny * d), (ex, ey)));
+    }
+    // New vertex i = intersection of offset edge (i-1) and edge i.
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let (p0, d0) = lines[(i + n - 1) % n];
+        let (p1, d1) = lines[i];
+        let denom = d0.0 * d1.1 - d0.1 * d1.0;
+        if denom.abs() < 1e-6 {
+            return None; // parallel
+        }
+        let t = ((p1.0 - p0.0) * d1.1 - (p1.1 - p0.1) * d1.0) / denom;
+        out.push((p0.0 + d0.0 * t, p0.1 + d0.1 * t));
+    }
+    // Reject if the inset collapsed (non-positive area).
+    let a2: f32 = (0..n).map(|i| {
+        let a = out[i];
+        let b = out[(i + 1) % n];
+        a.0 * b.1 - b.0 * a.1
+    }).sum();
+    if a2.abs() < 1.0 { None } else { Some(out) }
 }
 
 /// Render the site plan to an SVG string. Port of
@@ -88,6 +145,10 @@ impl SitePlan {
 // match the SVG vocabulary; renaming them would obscure rather than clarify.
 #[allow(clippy::many_single_char_names)]
 pub fn generate_site_plan_svg(site: &SitePlan) -> String {
+    // Irregular parcel: draw the real lot outline instead of a rectangle.
+    if site.lot_polygon_ft.len() >= 3 {
+        return polygon_site_plan_svg(site);
+    }
     let scale: f32 = 5.0;
     let margin: f32 = 60.0;
     let w = site.lot_width_ft * scale + 2.0 * margin;
@@ -259,6 +320,82 @@ pub fn generate_site_plan_svg(site: &SitePlan) -> String {
     s
 }
 
+/// Site plan for an irregular parcel: draws the real lot polygon, edge-length
+/// dimensions, a uniform setback buildable line (convex lots), the building
+/// footprint centred on the lot, plus grade / north / zone.
+#[must_use]
+#[allow(clippy::too_many_lines, clippy::many_single_char_names, clippy::cast_precision_loss)]
+fn polygon_site_plan_svg(site: &SitePlan) -> String {
+    let poly = &site.lot_polygon_ft;
+    let (min_x, max_x) = poly.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+    let (min_z, max_z) = poly.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+    let scale = 5.0;
+    let margin = 70.0;
+    let w = (max_x - min_x) * scale + 2.0 * margin;
+    let h = (max_z - min_z) * scale + 2.0 * margin;
+    let x = |ft: f32| margin + (ft - min_x) * scale;
+    let y = |ft: f32| h - margin - (ft - min_z) * scale;
+    let pts = |p: &[(f32, f32)]| p.iter().map(|v| format!("{},{}", x(v.0), y(v.1))).collect::<Vec<_>>().join(" ");
+
+    let mut s = String::with_capacity(2048);
+    let _ = writeln!(s, r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">"#);
+    let _ = writeln!(s, r#"<rect width="{w}" height="{h}" fill="white"/>"#);
+
+    // Lot polygon.
+    let _ = writeln!(s, r##"<polygon points="{}" fill="#f4f4f0" stroke="black" stroke-width="2"/>"##, pts(poly));
+    // Buildable line: uniform inset by the front setback (convex lots only).
+    if let Some(inset) = inset_convex(poly, site.front_setback_ft) {
+        let _ = writeln!(s, r##"<polygon points="{}" fill="none" stroke="#888" stroke-width="1" stroke-dasharray="6,4"/>"##, pts(&inset));
+    }
+
+    // Building footprint, centred on the lot centroid.
+    let n = poly.len() as f32;
+    let cx = poly.iter().map(|p| p.0).sum::<f32>() / n;
+    let cz = poly.iter().map(|p| p.1).sum::<f32>() / n;
+    let _ = writeln!(
+        s,
+        r##"<rect x="{bx}" y="{by}" width="{bw}" height="{bh}" fill="#d8d4c8" stroke="black" stroke-width="1.5"/>"##,
+        bx = x(cx - site.building_width_ft * 0.5),
+        by = y(cz + site.building_depth_ft * 0.5),
+        bw = site.building_width_ft * scale,
+        bh = site.building_depth_ft * scale,
+    );
+
+    // Edge-length dimensions (m) at each edge midpoint.
+    let dimlbl = r##"font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#06c""##;
+    let np = poly.len();
+    for i in 0..np {
+        let a = poly[i];
+        let b = poly[(i + 1) % np];
+        let len_m = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt() / 3.280_84;
+        let _ = writeln!(
+            s,
+            r#"<text x="{tx}" y="{ty}" text-anchor="middle" {dimlbl}>{len_m:.1} m</text>"#,
+            tx = (x(a.0) + x(b.0)) * 0.5,
+            ty = (y(a.1) + y(b.1)) * 0.5,
+        );
+    }
+
+    // Grade spot elevations at the lot vertices (when available).
+    if site.grade_corners_m.len() == np {
+        let glbl = r##"font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#070""##;
+        for (i, v) in poly.iter().enumerate() {
+            let _ = writeln!(s, r#"<text x="{tx}" y="{ty}" text-anchor="middle" {glbl}>▲{e:.1}</text>"#, tx = x(v.0), ty = y(v.1) - 3.0, e = site.grade_corners_m[i]);
+        }
+    }
+
+    // North arrow + labels.
+    let lbl = r#"font-family="Helvetica, Arial, sans-serif" font-size="11" fill="black""#;
+    let (nx, ny) = (w - 30.0, 40.0);
+    let _ = writeln!(s, r#"<line x1="{nx}" y1="{a}" x2="{nx}" y2="{b}" stroke="black" stroke-width="1.5"/>"#, a = ny + 18.0, b = ny - 10.0);
+    let _ = writeln!(s, r#"<polygon points="{nx},{t} {l},{m} {r},{m}" fill="black"/>"#, t = ny - 16.0, l = nx - 5.0, r = nx + 5.0, m = ny - 6.0);
+    let _ = writeln!(s, r#"<text x="{nx}" y="{ty}" text-anchor="middle" {lbl}>N</text>"#, ty = ny + 30.0);
+    let _ = writeln!(s, r#"<text x="{tx}" y="22" {lbl} font-weight="bold">SITE PLAN — {zone} · {street}</text>"#, tx = margin, zone = site.zone, street = site.street);
+
+    s.push_str("</svg>\n");
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,6 +451,33 @@ mod tests {
         let bad = SitePlan::from_lot(30.0, 60.0, 40.0, 50.0, (20.0, 5.0, 25.0), "Elm St", "R1");
         let svg = generate_site_plan_svg(&bad);
         assert!(svg.contains("EXCEEDS BUILDABLE ENVELOPE"));
+    }
+
+    #[test]
+    fn inset_convex_shrinks_a_square_uniformly() {
+        // A 10x10 square inset by 2 → a centred 6x6 square (corners at 2 and 8).
+        let sq = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let inset = inset_convex(&sq, 2.0).expect("convex inset");
+        assert_eq!(inset.len(), 4);
+        let (min_x, max_x) = inset.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+        assert!((min_x - 2.0).abs() < 0.01, "min_x={min_x}");
+        assert!((max_x - 8.0).abs() < 0.01, "max_x={max_x}");
+    }
+
+    #[test]
+    fn polygon_site_plan_renders_real_lot_outline() {
+        // An irregular (5-sided) parcel triggers the polygon renderer.
+        let mut site = SitePlan::from_lot(60.0, 100.0, 30.0, 40.0, (20.0, 5.0, 25.0), "Birch Ave", "R2");
+        site.lot_polygon_ft = vec![(0.0, 0.0), (60.0, 0.0), (60.0, 70.0), (30.0, 100.0), (0.0, 70.0)];
+        let svg = generate_site_plan_svg(&site);
+        assert!(svg.starts_with("<svg xmlns="));
+        assert!(svg.ends_with("</svg>\n"));
+        // The lot is drawn as a polygon, not a rect.
+        assert!(svg.contains("<polygon"));
+        assert!(svg.contains("SITE PLAN — R2 · Birch Ave"));
+        // Edge lengths are labelled in metres; the 60 ft bottom edge ≈ 18.3 m.
+        assert!(svg.contains("18.3 m"));
+        assert!(svg.contains(">N</text>"));
     }
 
     #[test]

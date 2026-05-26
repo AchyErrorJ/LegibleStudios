@@ -11,7 +11,7 @@
 use anyhow::Context;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--project <name>] [--bare]";
+const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--project <name>] [--bare]";
 
 /// Longest displayed edge, in CSS px, for a written sheet.
 const DISPLAY_MAX_PX: f32 = 1100.0;
@@ -63,6 +63,7 @@ fn fit_display(svg: &str) -> String {
 
 #[allow(clippy::too_many_lines)] // CLI dispatch + bundle emission read top-down.
 #[allow(clippy::format_collect)] // Manifest JSON assembly is one-shot; iterator-format is fine here.
+#[allow(clippy::cast_possible_truncation)] // parcel coords are bounded lot dimensions
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let mut path: Option<PathBuf> = None;
@@ -70,6 +71,7 @@ fn main() -> anyhow::Result<()> {
     let mut bundle_dir: Option<PathBuf> = None;
     let mut ifc_out: Option<PathBuf> = None;
     let mut terrain_path: Option<PathBuf> = None;
+    let mut parcel_path: Option<PathBuf> = None;
     let mut project = String::from("QBD Project");
     // `--bare`: emit just the slicer's raw floor-plan SVG (no dimensions,
     // no title block, no room labels). The m5_cpp_diff oracle relies on
@@ -98,6 +100,10 @@ fn main() -> anyhow::Result<()> {
             }
             "--terrain" if i + 1 < args.len() => {
                 terrain_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--parcel" if i + 1 < args.len() => {
+                parcel_path = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
             "--bare" => {
@@ -139,6 +145,36 @@ fn main() -> anyhow::Result<()> {
             );
         } else {
             eprintln!("  terrain: no usable mesh in {}", tpath.display());
+        }
+    }
+
+    // Parcel polygon: the real lot outline the user drew on the map widget
+    // (CAD's `vertices_ft`). Accepts a top-level `vertices_ft`/`lot_polygon_ft`
+    // array of `[x, y]` ft pairs, or a bare array of pairs.
+    if let Some(ppath) = &parcel_path {
+        let json = std::fs::read_to_string(ppath)
+            .with_context(|| format!("failed to read {}", ppath.display()))?;
+        let v: serde_json::Value = serde_json::from_str(&json)
+            .with_context(|| format!("failed to parse {}", ppath.display()))?;
+        let arr = v
+            .get("vertices_ft")
+            .or_else(|| v.get("lot_polygon_ft"))
+            .or(Some(&v))
+            .and_then(serde_json::Value::as_array);
+        if let Some(arr) = arr {
+            let poly: Vec<[f32; 2]> = arr
+                .iter()
+                .filter_map(|p| {
+                    let a = p.as_array()?;
+                    Some([a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32])
+                })
+                .collect();
+            if poly.len() >= 3 {
+                eprintln!("  parcel: {} vertices", poly.len());
+                doc.site.lot_polygon_ft = poly;
+            } else {
+                eprintln!("  parcel: no usable polygon in {}", ppath.display());
+            }
         }
     }
 

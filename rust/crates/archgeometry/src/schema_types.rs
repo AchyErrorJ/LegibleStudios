@@ -551,6 +551,10 @@ pub struct SchemaSite {
     /// sampled from LiDAR terrain. Empty if no terrain wired.
     #[serde(default)]
     pub grade_corners_m: Vec<f32>,
+    /// Parcel outline as local `[x, y]` (ft) vertices, from the map boundary
+    /// the user draws (CAD's `vertices_ft`). Empty → fall back to a rectangle.
+    #[serde(default)]
+    pub lot_polygon_ft: Vec<[f32; 2]>,
 }
 
 /// A header/lintel callout over a door or window opening. `size` is the OBC

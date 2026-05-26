@@ -528,6 +528,10 @@ fn generate_site_plan(doc: &SchemaDocument) -> String {
     let mut site = SitePlan::from_lot(lot_w, lot_d, building_width_ft, building_depth_ft, setbacks_ft, street, zone);
     // LiDAR grade, if wired (qbd_dump --terrain fills site.grade_corners_m).
     site.grade_corners_m.clone_from(&doc.site.grade_corners_m);
+    // Real parcel outline, if the map boundary was captured (qbd_dump --parcel
+    // or CAD's vertices_ft). When present (≥3), the renderer draws the true lot
+    // shape instead of the rectangular envelope.
+    site.lot_polygon_ft = doc.site.lot_polygon_ft.iter().map(|p| (p[0], p[1])).collect();
     generate_site_plan_svg(&site)
 }
 
