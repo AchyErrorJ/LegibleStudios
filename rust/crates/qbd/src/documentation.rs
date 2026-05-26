@@ -544,19 +544,10 @@ fn generate_section(doc: &SchemaDocument) -> String {
                 base: level_base.get(w.level_name.as_str()).copied().unwrap_or(0.0),
             })
             .collect(),
-        // Use the tallest ridge height across all roofs, fallback to 1000mm
-        // if no roof structure (matches the section module's documented
-        // fallback). Empty vec -> no roof element rendered.
-        ridge_heights_above_plate: doc
-            .roofs
-            .iter()
-            .map(|r| {
-                r.ridges
-                    .iter()
-                    .map(|ridge| ridge.height)
-                    .fold(1000.0_f32, f32::max)
-            })
-            .collect(),
+        // Basic gable over the transverse cut: 6:12 rise over the shorter span
+        // (matches the elevations). The default cut is transverse, so it shows
+        // the gable cross-section.
+        ridge_heights_above_plate: vec![doc.width.min(doc.depth) * 0.5 * 0.5],
         floor_lines: doc.levels.iter().map(|l| l.elevation).filter(|&e| e > 1.0).collect(),
     };
     let cut = drawing::default_cut(&input);
@@ -606,9 +597,10 @@ fn generate_elevations(doc: &SchemaDocument) -> Vec<Elevation> {
                 is_door: false,
             }))
             .collect(),
-        // Default to a 1.2m gable ridge if a roof is present in the schema;
-        // disable otherwise so the elevation is a flat-roof silhouette.
-        gable_ridge_above_plate: if doc.roofs.is_empty() { 0.0 } else { 1200.0 },
+        // Basic gable: ridge along the longer footprint axis, rise from a
+        // 6:12 pitch over the perpendicular (shorter) span.
+        gable_ridge_above_plate: doc.width.min(doc.depth) * 0.5 * 0.5,
+        ridge_along_width: doc.width >= doc.depth,
         // A floor line at each storey base above grade (Level 2+).
         floor_lines: doc.levels.iter().map(|l| l.elevation).filter(|&e| e > 1.0).collect(),
     };

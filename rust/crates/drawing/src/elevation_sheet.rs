@@ -77,9 +77,13 @@ pub struct ElevationInput {
     pub depth: f32,
     pub walls: Vec<ElevationWallInput>,
     pub openings: Vec<ElevationOpeningInput>,
-    /// If > 0, draw a simple gable-roof silhouette of this ridge height
-    /// above the wall plate (mm). 0 disables.
+    /// If > 0, draw a gable roof of this ridge height above the wall plate
+    /// (mm). 0 disables.
     pub gable_ridge_above_plate: f32,
+    /// True if the ridge runs along the building **width** (X) — then the
+    /// East/West faces are gable ends (triangle) and North/South are eave
+    /// sides (sloped band). False = ridge along depth, ends face N/S.
+    pub ridge_along_width: bool,
     /// Elevations (mm) at which to draw a horizontal floor line — the base of
     /// each storey above grade, so a multi-storey elevation reads as stacked.
     pub floor_lines: Vec<f32>,
@@ -263,14 +267,17 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
     let flip_y = max_y + min_y;
     let _ = writeln!(s, r#"<g transform="translate(0, {flip_y}) scale(1, -1)">"#);
 
-    // Walls — single envelope rect spanning the elevation width.
+    // Wall plate height — the wall stops here; the roof sits above it (so the
+    // gable's flanks read as roof/sky, not wall).
+    let plate_y = walls.iter().map(|w| w.top_y).fold(0.0_f32, f32::max);
+
+    // Walls — single envelope rect from grade up to the plate.
     if !walls.is_empty() {
         let _ = writeln!(
             s,
-            r#"    <rect x="{x}" y="0" width="{w}" height="{h}" class="wall-face"/>"#,
+            r#"    <rect x="{x}" y="0" width="{w}" height="{plate_y}" class="wall-face"/>"#,
             x = min_x,
             w = max_x - min_x,
-            h = max_y,
         );
     }
 
@@ -286,14 +293,35 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
         }
     }
 
-    // Gable roof silhouette (simple triangle peak above wall plate).
+    // Gable roof above the plate. A gable END (the ridge points at this face)
+    // shows the triangle; an EAVE side (parallel to the ridge) shows the
+    // sloped roof as a band with the ridge line along its top.
     if input.gable_ridge_above_plate > 0.0 && !walls.is_empty() {
-        let plate_y = walls.iter().map(|w| w.top_y).fold(0.0_f32, f32::max);
-        let cx = (min_x + max_x) * 0.5;
-        let _ = writeln!(
-            s,
-            r#"    <polygon points="{min_x},{plate_y} {cx},{gable_top_y} {max_x},{plate_y}" class="roof"/>"#,
-        );
+        let ridge_y = plate_y + input.gable_ridge_above_plate;
+        let is_gable_end = match dir {
+            Direction::East | Direction::West => input.ridge_along_width,
+            Direction::North | Direction::South => !input.ridge_along_width,
+        };
+        if is_gable_end {
+            let cx = (min_x + max_x) * 0.5;
+            let _ = writeln!(
+                s,
+                r#"    <polygon points="{min_x},{plate_y} {cx},{ridge_y} {max_x},{plate_y}" class="roof"/>"#,
+            );
+        } else {
+            // Eave side: the roof slope foreshortens to a band plate→ridge,
+            // with the ridge line along the top.
+            let _ = writeln!(
+                s,
+                r#"    <rect x="{min_x}" y="{plate_y}" width="{w}" height="{rise}" class="roof"/>"#,
+                w = max_x - min_x,
+                rise = input.gable_ridge_above_plate,
+            );
+            let _ = writeln!(
+                s,
+                r##"    <line x1="{min_x}" y1="{ridge_y}" x2="{max_x}" y2="{ridge_y}" stroke="#000" stroke-width="4"/>"##,
+            );
+        }
     }
 
     // Openings — door (filled tinted) or window (white, no sill bar).
