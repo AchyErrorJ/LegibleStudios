@@ -100,6 +100,14 @@ pub struct Answers {
     /// Architectural style driving window banking/type/proportion per wall:
     /// `"balanced"` (default), `"ranch"`, `"colonial"`, `"contemporary"`.
     pub style: String,
+    /// Lot frontage (ft) along the street — the site plan's width.
+    pub lot_width_ft: f32,
+    /// Lot depth (ft).
+    pub lot_depth_ft: f32,
+    /// Municipal zone (Sudbury): `"R1"`, `"R2"`, … — drives setbacks.
+    pub zone: String,
+    /// Name of the street the lot fronts (drawn on the site plan).
+    pub street: String,
 }
 
 impl Answers {
@@ -126,6 +134,10 @@ impl Default for Answers {
             storeys: 0,
             window_intent: "balanced".into(),
             style: "balanced".into(),
+            lot_width_ft: 50.0,
+            lot_depth_ft: 100.0,
+            zone: "R1".into(),
+            street: "Street".into(),
         }
     }
 }
@@ -780,6 +792,7 @@ mod tests {
             storeys: 1,
             window_intent: "balanced".into(),
             style: "balanced".into(),
+            ..Answers::default()
         };
         let p = program_from_answers(&a);
         let ids: Vec<&str> = p.iter().map(|r| r.id.as_str()).collect();
@@ -869,6 +882,7 @@ mod tests {
                 storeys: 1, // this test exercises single-floor perimeter logic
                 window_intent: "balanced".into(),
                 style: "balanced".into(),
+                ..Answers::default()
             };
             let p = program_from_answers(&a);
             let (w, d) = auto_size(&p, sqft);
@@ -902,6 +916,7 @@ mod tests {
             storeys: 1,
             window_intent: "balanced".into(),
             style: "balanced".into(),
+            ..Answers::default()
         };
         let p = program_from_answers(&a);
         let (w, d) = auto_size(&p, a.sqft);

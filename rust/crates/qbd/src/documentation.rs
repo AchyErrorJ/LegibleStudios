@@ -509,9 +509,20 @@ fn drawing_type_for_direction(d: ElevationDirection) -> DrawingType {
 /// Compute SitePlan from the schema document's overall building footprint
 /// (in mm) and render the site-plan SVG.
 fn generate_site_plan(doc: &SchemaDocument) -> String {
-    let building_width_m = doc.width / 1000.0;
-    let building_depth_m = doc.depth / 1000.0;
-    let site = SitePlan::from_building_metres(building_width_m, building_depth_m);
+    const M_TO_FT: f32 = 3.280_84;
+    let building_width_ft = doc.width / 1000.0 * M_TO_FT;
+    let building_depth_ft = doc.depth / 1000.0 * M_TO_FT;
+    // Lot + zone from the document; setbacks from the municipal zoning table.
+    let (lot_w, lot_d) = if doc.site.lot_width_ft > 0.0 && doc.site.lot_depth_ft > 0.0 {
+        (doc.site.lot_width_ft, doc.site.lot_depth_ft)
+    } else {
+        (60.0, 120.0) // fallback when the lot isn't specified
+    };
+    let zone = if doc.site.zone.is_empty() { "R1" } else { &doc.site.zone };
+    let street = if doc.site.street.is_empty() { "Street" } else { &doc.site.street };
+    let sb = obc::zoning::setbacks_for(zone);
+    let setbacks_ft = (sb.front * M_TO_FT, sb.interior_side * M_TO_FT, sb.rear * M_TO_FT);
+    let site = SitePlan::from_lot(lot_w, lot_d, building_width_ft, building_depth_ft, setbacks_ft, street, zone);
     generate_site_plan_svg(&site)
 }
 

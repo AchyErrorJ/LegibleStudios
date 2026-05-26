@@ -528,6 +528,22 @@ pub struct SchemaDocument {
     /// Header (lintel) callouts over openings — rules-engine annotation.
     #[serde(default)]
     pub headers: Vec<SchemaHeader>,
+    /// Lot + zoning for the site plan.
+    #[serde(default)]
+    pub site: SchemaSite,
+}
+
+/// Lot, zone, and street for the site-plan drawing.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SchemaSite {
+    #[serde(default)]
+    pub lot_width_ft: f32,
+    #[serde(default)]
+    pub lot_depth_ft: f32,
+    #[serde(default)]
+    pub zone: String,
+    #[serde(default)]
+    pub street: String,
 }
 
 /// A header/lintel callout over a door or window opening. `size` is the OBC

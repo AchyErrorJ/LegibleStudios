@@ -21,6 +21,12 @@ pub struct SitePlan {
     pub side_setback_ft: f32,
     pub rear_setback_ft: f32,
     pub driveway_width_ft: f32,
+    /// Street the lot fronts (drawn along the front lot line).
+    pub street: String,
+    /// Municipal zone label (e.g. "R1").
+    pub zone: String,
+    /// Whether the footprint fits inside the buildable envelope.
+    pub fits: bool,
 }
 
 impl SitePlan {
@@ -31,21 +37,40 @@ impl SitePlan {
     #[must_use]
     pub fn from_building_metres(building_width_m: f32, building_depth_m: f32) -> Self {
         let m_to_ft = 3.280_84;
-        let lot_width_ft = 60.0;
-        let lot_depth_ft = 120.0;
-        let building_width_ft = building_width_m * m_to_ft;
-        let building_depth_ft = building_depth_m * m_to_ft;
+        Self::from_lot(60.0, 120.0, building_width_m * m_to_ft, building_depth_m * m_to_ft, (25.0, 6.0, 25.0), "Street", "R1")
+    }
+
+    /// Place a building footprint (ft) on a lot (ft) per `(front, side, rear)`
+    /// setbacks (ft): centred across the lot, sitting at the front setback.
+    /// `fits` records whether it stays inside the buildable envelope.
+    #[must_use]
+    pub fn from_lot(
+        lot_width_ft: f32,
+        lot_depth_ft: f32,
+        building_width_ft: f32,
+        building_depth_ft: f32,
+        setbacks_ft: (f32, f32, f32),
+        street: &str,
+        zone: &str,
+    ) -> Self {
+        let (front, side, rear) = setbacks_ft;
+        let buildable_w = lot_width_ft - 2.0 * side;
+        let buildable_d = lot_depth_ft - front - rear;
+        let fits = building_width_ft <= buildable_w + 0.01 && building_depth_ft <= buildable_d + 0.01;
         Self {
             lot_width_ft,
             lot_depth_ft,
             building_x_ft: (lot_width_ft - building_width_ft) * 0.5,
-            building_z_ft: 30.0,
+            building_z_ft: front,
             building_width_ft,
             building_depth_ft,
-            front_setback_ft: 25.0,
-            side_setback_ft: 6.0,
-            rear_setback_ft: 25.0,
+            front_setback_ft: front,
+            side_setback_ft: side,
+            rear_setback_ft: rear,
             driveway_width_ft: 12.0,
+            street: street.to_string(),
+            zone: zone.to_string(),
+            fits,
         }
     }
 }
@@ -142,6 +167,54 @@ pub fn generate_site_plan_svg(site: &SitePlan) -> String {
         r = site.rear_setback_ft,
     );
 
+    // Street along the front lot line (the front setback is measured from it).
+    let street_top = y(0.0) + 8.0;
+    let _ = writeln!(
+        s,
+        r##"<rect x="0" y="{street_top}" width="{w}" height="30" fill="#cfcfcf" stroke="#999" stroke-width="1"/>"##,
+    );
+    let _ = writeln!(
+        s,
+        r#"<text x="{cx}" y="{ty}" text-anchor="middle" {label_attrs}>{street} (STREET)</text>"#,
+        cx = w * 0.5,
+        ty = street_top + 20.0,
+        street = site.street,
+    );
+
+    // Setback dimensions: front + rear down the left margin, side across the top.
+    let dim = r##"stroke="#06c" stroke-width="1""##;
+    let dimlbl = r##"font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#06c""##;
+    let lx = x(0.0) - 22.0; // left of the lot, in the margin
+    // front (lot front line → building front)
+    let _ = writeln!(s, r#"<line x1="{lx}" y1="{a}" x2="{lx}" y2="{b}" {dim}/>"#, a = y(0.0), b = y(site.front_setback_ft));
+    let _ = writeln!(s, r#"<text x="{tx}" y="{ty}" text-anchor="middle" transform="rotate(-90 {tx} {ty})" {dimlbl}>F {f:.1} m</text>"#, tx = lx - 6.0, ty = (y(0.0) + y(site.front_setback_ft)) * 0.5, f = site.front_setback_ft / 3.280_84);
+    // rear (building rear → rear lot line)
+    let rear_z = site.building_z_ft + site.building_depth_ft;
+    let _ = writeln!(s, r#"<line x1="{lx}" y1="{a}" x2="{lx}" y2="{b}" {dim}/>"#, a = y(rear_z), b = y(site.lot_depth_ft));
+    let _ = writeln!(s, r#"<text x="{tx}" y="{ty}" text-anchor="middle" transform="rotate(-90 {tx} {ty})" {dimlbl}>R {r:.1} m</text>"#, tx = lx - 6.0, ty = (y(rear_z) + y(site.lot_depth_ft)) * 0.5, r = site.rear_setback_ft / 3.280_84);
+    // side (lot side → building side), across the top
+    let ty_line = y(site.lot_depth_ft) - 12.0;
+    let _ = writeln!(s, r#"<line x1="{a}" y1="{ty_line}" x2="{b}" y2="{ty_line}" {dim}/>"#, a = x(0.0), b = x(site.building_x_ft));
+    let _ = writeln!(s, r#"<text x="{tx}" y="{tt}" text-anchor="middle" {dimlbl}>S {sd:.1} m</text>"#, tx = (x(0.0) + x(site.building_x_ft)) * 0.5, tt = ty_line - 4.0, sd = site.side_setback_ft / 3.280_84);
+
+    // North arrow (top-right).
+    let nx = w - 30.0;
+    let ny = 40.0;
+    let _ = writeln!(s, r#"<line x1="{nx}" y1="{a}" x2="{nx}" y2="{b}" stroke="black" stroke-width="1.5"/>"#, a = ny + 18.0, b = ny - 10.0);
+    let _ = writeln!(s, r#"<polygon points="{nx},{t} {l},{m} {r},{m}" fill="black"/>"#, t = ny - 16.0, l = nx - 5.0, r = nx + 5.0, m = ny - 6.0);
+    let _ = writeln!(s, r#"<text x="{nx}" y="{ty}" text-anchor="middle" {label_attrs}>N</text>"#, ty = ny + 30.0);
+
+    // Zone label + fit flag.
+    let _ = writeln!(s, r#"<text x="{xs}" y="{ys}" {label_attrs}>ZONE: {zone}</text>"#, xs = x(2.0), ys = y(6.0), zone = site.zone);
+    if !site.fits {
+        let _ = writeln!(
+            s,
+            r##"<text x="{cx}" y="{ty}" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#c00">FOOTPRINT EXCEEDS BUILDABLE ENVELOPE</text>"##,
+            cx = w * 0.5,
+            ty = y(site.lot_depth_ft * 0.5),
+        );
+    }
+
     s.push_str("</svg>\n");
     s
 }
@@ -171,14 +244,36 @@ mod tests {
         let svg = generate_site_plan_svg(&site);
         assert!(svg.starts_with("<svg xmlns="));
         assert!(svg.ends_with("</svg>\n"));
-        // Lot + setback envelope + building + driveway = 4 rects, plus the
-        // white background = 5 total.
-        assert_eq!(svg.matches("<rect").count(), 5);
-        // 3 text labels: LOT, BUILDING, Setbacks.
-        assert_eq!(svg.matches("<text").count(), 3);
+        // bg + lot + setback envelope + building + driveway + street = 6 rects.
+        assert_eq!(svg.matches("<rect").count(), 6);
         assert!(svg.contains("LOT: 60' x 120'"));
         assert!(svg.contains("BUILDING"));
         assert!(svg.contains("Setbacks: F 25' / S 6' / R 25'"));
+        // Street + north arrow + zone label are present.
+        assert!(svg.contains("(STREET)"));
+        assert!(svg.contains(">N</text>"));
+        assert!(svg.contains("ZONE:"));
+    }
+
+    #[test]
+    fn from_lot_centres_building_and_flags_fit() {
+        // 40x50 ft building on a 50x100 lot with 20/5/25 setbacks:
+        // buildable = 40 x 55 → fits (40<=40 wide, 50<=55 deep).
+        let s = SitePlan::from_lot(50.0, 100.0, 40.0, 50.0, (20.0, 5.0, 25.0), "Elm St", "R1");
+        assert!(s.fits);
+        assert!((s.building_x_ft - 5.0).abs() < 0.01); // (50-40)/2
+        assert!((s.building_z_ft - 20.0).abs() < 0.01); // at the front setback
+        assert_eq!(s.zone, "R1");
+        // Too-wide building overflows the buildable envelope.
+        let bad = SitePlan::from_lot(40.0, 100.0, 45.0, 30.0, (20.0, 5.0, 25.0), "Elm St", "R1");
+        assert!(!bad.fits);
+    }
+
+    #[test]
+    fn unfit_footprint_renders_a_warning() {
+        let bad = SitePlan::from_lot(30.0, 60.0, 40.0, 50.0, (20.0, 5.0, 25.0), "Elm St", "R1");
+        let svg = generate_site_plan_svg(&bad);
+        assert!(svg.contains("EXCEEDS BUILDABLE ENVELOPE"));
     }
 
     #[test]

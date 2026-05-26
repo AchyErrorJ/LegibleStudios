@@ -695,6 +695,12 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
             "headers": headers_len,
             "headers_need_review": headers_review,
         },
+        "site": {
+            "lot_width_ft": answers.lot_width_ft,
+            "lot_depth_ft": answers.lot_depth_ft,
+            "zone": answers.zone,
+            "street": answers.street,
+        },
         "qbd_answers": {
             "bedrooms": answers.bedrooms,
             "bathrooms": answers.bathrooms,
@@ -847,6 +853,7 @@ mod tests {
                 storeys: 1,
                 window_intent: intent.into(),
                 style: "balanced".into(),
+                ..Answers::default()
             };
             let v = building_json(&a);
             let ws = v["windows"].as_array().unwrap();
@@ -878,6 +885,7 @@ mod tests {
                 storeys: 1,
                 window_intent: "balanced".into(),
                 style: style.into(),
+                ..Answers::default()
             })
         };
         let win_types = |v: &serde_json::Value| {
@@ -915,6 +923,7 @@ mod tests {
             storeys: 1,
             window_intent: "south_bank".into(),
             style: "balanced".into(),
+            ..Answers::default()
         };
         let v = building_json(&a);
         let ws = v["windows"].as_array().unwrap();
@@ -934,6 +943,7 @@ mod tests {
             storeys: 0, // auto → 2 storeys (4 bedrooms)
             window_intent: "balanced".into(),
             style: "balanced".into(),
+            ..Answers::default()
         };
         let v = building_json(&a);
         assert_eq!(v["storeys"], json!(2));
@@ -974,6 +984,7 @@ mod tests {
             storeys: 0, // auto → 1 storey (< 3 bedrooms)
             window_intent: "balanced".into(),
             style: "balanced".into(),
+            ..Answers::default()
         };
         let v = building_json(&a);
         assert_eq!(v["storeys"], json!(1));
@@ -992,6 +1003,7 @@ mod tests {
             storeys: 0,
             window_intent: "balanced".into(),
             style: "balanced".into(),
+            ..Answers::default()
         });
         let det = v["detectors"].as_array().unwrap();
         // A smoke alarm in every bedroom.
@@ -1025,6 +1037,7 @@ mod tests {
             storeys: 1,
             window_intent: "balanced".into(),
             style: "balanced".into(),
+            ..Answers::default()
         });
         let el = v["electrical"].as_array().unwrap();
         let rooms = v["rooms"].as_object().unwrap();
@@ -1067,6 +1080,7 @@ mod tests {
             storeys: 0, // 2-storey
             window_intent: "balanced".into(),
             style: "balanced".into(),
+            ..Answers::default()
         });
         let hdr = v["headers"].as_array().unwrap();
         // One header per opening (doors + windows).
@@ -1099,6 +1113,7 @@ mod tests {
             storeys: 1,
             window_intent: "balanced".into(),
             style: "balanced".into(),
+            ..Answers::default()
         });
         let det = v["detectors"].as_array().unwrap();
         assert!(det.iter().all(|d| d["type"] != json!("co")), "CO alarm without garage/fuel");

@@ -13,6 +13,7 @@ pub mod format;
 pub mod report;
 pub mod tables;
 pub mod windows;
+pub mod zoning;
 
 pub use engine::{InitError, OBCEngine};
 pub use format::{cpp_float, cpp_int};
