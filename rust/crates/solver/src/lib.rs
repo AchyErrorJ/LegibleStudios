@@ -108,6 +108,8 @@ pub struct Answers {
     pub zone: String,
     /// Name of the street the lot fronts (drawn on the site plan).
     pub street: String,
+    /// Roof type: `"gable"` (default) or `"hip"`.
+    pub roof_type: String,
 }
 
 impl Answers {
@@ -138,6 +140,7 @@ impl Default for Answers {
             lot_depth_ft: 100.0,
             zone: "R1".into(),
             street: "Street".into(),
+            roof_type: "gable".into(),
         }
     }
 }

@@ -701,6 +701,7 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
             "zone": answers.zone,
             "street": answers.street,
         },
+        "roof_type": answers.roof_type,
         "qbd_answers": {
             "bedrooms": answers.bedrooms,
             "bathrooms": answers.bathrooms,

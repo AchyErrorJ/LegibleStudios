@@ -17,6 +17,7 @@ pub mod detail;
 pub mod dimensions;
 pub mod elevation_sheet;
 pub mod primitives;
+pub mod roof;
 pub mod room_labels;
 pub mod schedule;
 pub mod section_sheet;
@@ -54,6 +55,7 @@ pub use section_sheet::{
     CutDirection, SectionCut, SectionInput, SectionWallInput, ViewDirection, default_cut,
     generate_section_sheet_svg,
 };
+pub use roof::{RoofPlan, RoofType, generate_roof_plan_svg};
 pub use site_plan::{SitePlan, generate_site_plan_svg};
 pub use slice::{
     create_material_hatch, generate_floor_plan, generate_section, slice_box, slice_building,

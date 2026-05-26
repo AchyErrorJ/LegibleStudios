@@ -160,6 +160,7 @@ fn main() -> anyhow::Result<()> {
         };
 
         write_sheet("01_site_plan.svg", &docs.site_plan_svg)?;
+        write_sheet("06_roof_plan.svg", &docs.roof_plan_svg)?;
         // Floor plans: ground floor keeps the canonical name; upper storeys
         // get their own sheet so the storeys aren't overlaid.
         if docs.floor_plans.len() <= 1 {

@@ -84,6 +84,9 @@ pub struct ElevationInput {
     /// East/West faces are gable ends (triangle) and North/South are eave
     /// sides (sloped band). False = ridge along depth, ends face N/S.
     pub ridge_along_width: bool,
+    /// Hip roof: eave sides render as a trapezoid (the slope narrows to the
+    /// inset ridge) rather than a gable's rectangle band. Ends stay triangles.
+    pub hip: bool,
     /// Elevations (mm) at which to draw a horizontal floor line — the base of
     /// each storey above grade, so a multi-storey elevation reads as stacked.
     pub floor_lines: Vec<f32>,
@@ -308,8 +311,17 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
                 s,
                 r#"    <polygon points="{min_x},{plate_y} {cx},{ridge_y} {max_x},{plate_y}" class="roof"/>"#,
             );
+        } else if input.hip {
+            // Hip eave side: the slope foreshortens to a trapezoid — the ridge
+            // is inset by half the short span at each end.
+            let inset = input.width.min(input.depth) * 0.5;
+            let (rl, rr) = (min_x + inset, max_x - inset);
+            let _ = writeln!(
+                s,
+                r#"    <polygon points="{min_x},{plate_y} {max_x},{plate_y} {rr},{ridge_y} {rl},{ridge_y}" class="roof"/>"#,
+            );
         } else {
-            // Eave side: the roof slope foreshortens to a band plate→ridge,
+            // Gable eave side: the slope foreshortens to a band plate→ridge,
             // with the ridge line along the top.
             let _ = writeln!(
                 s,

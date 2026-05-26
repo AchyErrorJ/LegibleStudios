@@ -531,6 +531,9 @@ pub struct SchemaDocument {
     /// Lot + zoning for the site plan.
     #[serde(default)]
     pub site: SchemaSite,
+    /// Roof type for generated roof geometry: `"gable"` (default) or `"hip"`.
+    #[serde(default)]
+    pub roof_type: String,
 }
 
 /// Lot, zone, and street for the site-plan drawing.

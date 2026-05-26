@@ -38,6 +38,8 @@ pub struct Documentation {
     pub project_name: String,
     pub generated_date: String,
     pub site_plan_svg: String,
+    /// Roof plan (gable/hip): ridge, hips, pitch.
+    pub roof_plan_svg: String,
     /// Ground-floor (Level 1) plan — kept for back-compat / single-storey.
     pub floor_plan_svg: String,
     /// One `(level name, SVG)` per storey; `floor_plan_svg` is the first.
@@ -451,6 +453,7 @@ pub fn generate_documentation(
         project_name: project_name.clone(),
         generated_date: date.clone(),
         site_plan_svg: with_tb(generate_site_plan(doc), DrawingType::FloorPlan, "1:200"),
+        roof_plan_svg: with_tb(generate_roof_plan(doc), DrawingType::FloorPlan, "1:100"),
         floor_plan_svg,
         floor_plans,
         elevations: generate_elevations(doc)
@@ -524,6 +527,23 @@ fn generate_site_plan(doc: &SchemaDocument) -> String {
     let setbacks_ft = (sb.front * M_TO_FT, sb.interior_side * M_TO_FT, sb.rear * M_TO_FT);
     let site = SitePlan::from_lot(lot_w, lot_d, building_width_ft, building_depth_ft, setbacks_ft, street, zone);
     generate_site_plan_svg(&site)
+}
+
+/// Generate the roof-plan SVG (gable or hip) from the footprint + roof type.
+fn generate_roof_plan(doc: &SchemaDocument) -> String {
+    let roof_type = if doc.roof_type == "hip" {
+        drawing::RoofType::Hip
+    } else {
+        drawing::RoofType::Gable
+    };
+    let roof = drawing::RoofPlan {
+        width: doc.width,
+        depth: doc.depth,
+        roof_type,
+        pitch: 0.5,      // 6:12, matches the elevations
+        overhang: 400.0, // ~16" eave
+    };
+    drawing::generate_roof_plan_svg(&roof)
 }
 
 /// Build a SectionInput from the schema document and render the default
@@ -601,6 +621,7 @@ fn generate_elevations(doc: &SchemaDocument) -> Vec<Elevation> {
         // 6:12 pitch over the perpendicular (shorter) span.
         gable_ridge_above_plate: doc.width.min(doc.depth) * 0.5 * 0.5,
         ridge_along_width: doc.width >= doc.depth,
+        hip: doc.roof_type == "hip",
         // A floor line at each storey base above grade (Level 2+).
         floor_lines: doc.levels.iter().map(|l| l.elevation).filter(|&e| e > 1.0).collect(),
     };
