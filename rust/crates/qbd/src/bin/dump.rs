@@ -11,7 +11,7 @@
 use anyhow::Context;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--project <name>] [--bare]";
+const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--footprint <poly.json>] [--project <name>] [--bare]";
 
 /// Longest displayed edge, in CSS px, for a written sheet.
 const DISPLAY_MAX_PX: f32 = 1100.0;
@@ -75,6 +75,7 @@ fn main() -> anyhow::Result<()> {
     let mut ifc_out: Option<PathBuf> = None;
     let mut terrain_path: Option<PathBuf> = None;
     let mut parcel_path: Option<PathBuf> = None;
+    let mut footprint_path: Option<PathBuf> = None;
     let mut project = String::from("QBD Project");
     // `--bare`: emit just the slicer's raw floor-plan SVG (no dimensions,
     // no title block, no room labels). The m5_cpp_diff oracle relies on
@@ -107,6 +108,10 @@ fn main() -> anyhow::Result<()> {
             }
             "--parcel" if i + 1 < args.len() => {
                 parcel_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--footprint" if i + 1 < args.len() => {
+                footprint_path = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
             "--bare" => {
@@ -184,6 +189,35 @@ fn main() -> anyhow::Result<()> {
                 doc.site.lot_polygon_ft = poly;
             } else {
                 eprintln!("  parcel: no usable polygon in {}", ppath.display());
+            }
+        }
+    }
+
+    // Irregular building footprint (mm, CCW) for the rectilinear straight-
+    // skeleton roof. Accepts a top-level `footprint_polygon_mm` array or a
+    // bare `[[x, z], ...]` array.
+    if let Some(fpath) = &footprint_path {
+        let json = std::fs::read_to_string(fpath)
+            .with_context(|| format!("failed to read {}", fpath.display()))?;
+        let v: serde_json::Value = serde_json::from_str(&json)
+            .with_context(|| format!("failed to parse {}", fpath.display()))?;
+        let arr = v
+            .get("footprint_polygon_mm")
+            .or(Some(&v))
+            .and_then(serde_json::Value::as_array);
+        if let Some(arr) = arr {
+            let poly: Vec<[f32; 2]> = arr
+                .iter()
+                .filter_map(|p| {
+                    let a = p.as_array()?;
+                    Some([a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32])
+                })
+                .collect();
+            if poly.len() >= 4 {
+                eprintln!("  footprint: {} vertices (mm)", poly.len());
+                doc.footprint_polygon_mm = poly;
+            } else {
+                eprintln!("  footprint: need ≥4 vertices in {}", fpath.display());
             }
         }
     }

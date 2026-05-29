@@ -57,6 +57,7 @@ pub use section_sheet::{
 };
 pub use roof::{RoofPlan, RoofType, generate_roof_plan_svg};
 pub use site_plan::{Contour, SitePlan, generate_site_plan_svg};
+pub mod skeleton;
 pub use slice::{
     create_material_hatch, generate_floor_plan, generate_section, slice_box, slice_building,
     slice_element, slice_wall,

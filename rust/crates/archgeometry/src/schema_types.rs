@@ -534,6 +534,12 @@ pub struct SchemaDocument {
     /// Roof type for generated roof geometry: `"gable"` (default) or `"hip"`.
     #[serde(default)]
     pub roof_type: String,
+    /// Irregular building footprint as CCW `[x, z]` mm vertices. Empty → the
+    /// rectangular `width × depth` is used and the roof generator produces a
+    /// gable/hip over that rectangle; non-empty triggers the straight-skeleton
+    /// roof for rectilinear (L/T/U/cross) footprints.
+    #[serde(default)]
+    pub footprint_polygon_mm: Vec<[f32; 2]>,
 }
 
 /// Lot, zone, and street for the site-plan drawing.

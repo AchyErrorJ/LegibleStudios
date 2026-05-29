@@ -612,6 +612,11 @@ fn generate_roof_plan(doc: &SchemaDocument) -> String {
         roof_type,
         pitch: 0.5,      // 6:12, matches the elevations
         overhang: 400.0, // ~16" eave
+        footprint_polygon_mm: doc
+            .footprint_polygon_mm
+            .iter()
+            .map(|p| (p[0], p[1]))
+            .collect(),
     };
     drawing::generate_roof_plan_svg(&roof)
 }
