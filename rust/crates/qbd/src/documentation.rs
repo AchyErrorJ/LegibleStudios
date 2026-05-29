@@ -699,6 +699,14 @@ fn generate_elevations(doc: &SchemaDocument) -> Vec<Elevation> {
         hip: doc.roof_type == "hip",
         // A floor line at each storey base above grade (Level 2+).
         floor_lines: doc.levels.iter().map(|l| l.elevation).filter(|&e| e > 1.0).collect(),
+        // Pass the irregular footprint (if any) so the elevation renders a
+        // stepped silhouette per wing instead of one rectangle.
+        footprint_polygon_mm: doc
+            .footprint_polygon_mm
+            .iter()
+            .map(|p| (p[0], p[1]))
+            .collect(),
+        roof_pitch: 0.5,
     };
     ElevationDirection::ALL
         .iter()

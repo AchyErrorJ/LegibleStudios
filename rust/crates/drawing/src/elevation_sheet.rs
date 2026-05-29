@@ -90,12 +90,166 @@ pub struct ElevationInput {
     /// Elevations (mm) at which to draw a horizontal floor line — the base of
     /// each storey above grade, so a multi-storey elevation reads as stacked.
     pub floor_lines: Vec<f32>,
+    /// Irregular building footprint as CCW `(x, z)` mm vertices. When
+    /// non-empty, the renderer decomposes it into axis-aligned wings and
+    /// overlays a per-wing hip roof silhouette so the elevation reads as a
+    /// stepped L/T/U/cross instead of a single rectangle.
+    pub footprint_polygon_mm: Vec<(f32, f32)>,
+    /// Roof pitch (rise/run); only used by the polygon path to size each
+    /// wing's ridge height. Defaults to 6:12 if 0.
+    pub roof_pitch: f32,
 }
 
 struct WallSegment {
     start_x: f32,
     end_x: f32,
     top_y: f32,
+}
+
+/// Decompose an axis-aligned CCW rectilinear polygon into axis-aligned
+/// rectangular wings by sweeping along one axis. `by_x = true` sweeps in x
+/// (yields rects spanning consecutive unique x values); `by_x = false` sweeps
+/// in z. Returns `((x0, z0), (x1, z1))` pairs.
+#[allow(clippy::many_single_char_names)]
+fn decompose_rectilinear(poly: &[(f32, f32)], by_x: bool) -> Vec<((f32, f32), (f32, f32))> {
+    if poly.len() < 4 {
+        return Vec::new();
+    }
+    let key = |p: &(f32, f32)| if by_x { p.0 } else { p.1 };
+    let mut keys: Vec<f32> = poly.iter().map(key).collect();
+    keys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    keys.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+    let mut rects = Vec::new();
+    for w in keys.windows(2) {
+        let (k0, k1) = (w[0], w[1]);
+        let km = (k0 + k1) * 0.5;
+        let crossings = perpendicular_crossings(poly, km, by_x);
+        // Each `(in, out)` pair marks one interior strip.
+        for chunk in crossings.chunks(2) {
+            if chunk.len() == 2 {
+                let (a, b) = (chunk[0], chunk[1]);
+                if by_x {
+                    rects.push(((k0, a), (k1, b)));
+                } else {
+                    rects.push(((a, k0), (b, k1)));
+                }
+            }
+        }
+    }
+    rects
+}
+
+/// For an axis-aligned rectilinear polygon, find the perpendicular-axis
+/// coordinates where a sweep line at `coord` along the chosen axis enters
+/// or leaves the polygon interior. `by_x = true` means the sweep line is at
+/// `x = coord` and we look at z-crossings on horizontal edges.
+fn perpendicular_crossings(poly: &[(f32, f32)], coord: f32, by_x: bool) -> Vec<f32> {
+    let mut out = Vec::new();
+    let n = poly.len();
+    for i in 0..n {
+        let a = poly[i];
+        let b = poly[(i + 1) % n];
+        let (parallel_a, parallel_b, span_a, span_b, perp_a) = if by_x {
+            // sweep along x → look at horizontal edges (constant z), use x-span.
+            (a.1, b.1, a.0, b.0, a.1)
+        } else {
+            // sweep along z → look at vertical edges (constant x), use z-span.
+            (a.0, b.0, a.1, b.1, a.0)
+        };
+        if (parallel_a - parallel_b).abs() > 0.01 {
+            continue; // not a candidate edge for this sweep direction
+        }
+        let (lo, hi) = if span_a < span_b { (span_a, span_b) } else { (span_b, span_a) };
+        if coord > lo - 0.01 && coord < hi + 0.01 {
+            out.push(perp_a);
+        }
+    }
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    out.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+    out
+}
+
+/// Compute the roof silhouette for an irregular footprint as seen from
+/// `dir`. Returns a closed polygon of `(x, y)` vertices in elevation
+/// coordinates, walking the wings in order and stepping the roof between
+/// them. The first and last vertices sit on the wall plate so the polygon
+/// closes into the wall envelope.
+#[allow(clippy::many_single_char_names)]
+fn polygon_roof_silhouette(
+    input: &ElevationInput,
+    dir: Direction,
+    plate_y: f32,
+) -> Vec<(f32, f32)> {
+    let pitch = if input.roof_pitch > 0.0 { input.roof_pitch } else { 0.5 };
+    // For N/S we sweep along x; for E/W along z. The sweep axis becomes the
+    // elevation's x-axis.
+    let by_x = matches!(dir, Direction::North | Direction::South);
+    let rects = decompose_rectilinear(&input.footprint_polygon_mm, by_x);
+    if rects.is_empty() {
+        return Vec::new();
+    }
+    // Building extent on the sweep axis — for North/East we mirror.
+    let extent = if by_x { input.width } else { input.depth };
+    let mirror = matches!(dir, Direction::North | Direction::East);
+    let map_x = |v: f32| if mirror { extent - v } else { v };
+
+    // Per-wing silhouette contribution: each wing contributes a trapezoid (if
+    // the ridge runs along the view) or a triangle (ridge perpendicular).
+    let mut pts: Vec<(f32, f32)> = Vec::with_capacity(rects.len() * 4 + 2);
+    // Walk wings in sweep-axis order so the silhouette goes left → right.
+    let mut sorted: Vec<_> = rects.iter().collect();
+    sorted.sort_by(|a, b| {
+        let ka = if by_x { a.0.0 } else { a.0.1 };
+        let kb = if by_x { b.0.0 } else { b.0.1 };
+        ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let first = sorted.first().expect("non-empty sorted wings");
+    let last = sorted.last().expect("non-empty sorted wings");
+    let (first_lo, _) = wing_view_extent(first, by_x);
+    let (_, last_hi) = wing_view_extent(last, by_x);
+    pts.push((map_x(first_lo), plate_y));
+    let mut prev_hi: Option<f32> = None;
+    for &r in &sorted {
+        let (lo, hi) = wing_view_extent(r, by_x);
+        // Dip to the plate between adjacent wings whose roofs don't share
+        // a continuous ridge (every step transitions through plate level).
+        if let Some(p_hi) = prev_hi {
+            pts.push((map_x(p_hi), plate_y));
+            pts.push((map_x(lo), plate_y));
+        }
+        let (wing_view_w, wing_depth) = wing_dims(r, by_x);
+        let short = wing_view_w.min(wing_depth);
+        let ridge = short * 0.5 * pitch;
+        // If the view width is the longer axis, the ridge runs ALONG the
+        // view → trapezoid (eave side, two ridge vertices). Otherwise the
+        // ridge runs INTO the view → triangle (hip end, one peak vertex).
+        if wing_view_w > wing_depth + 1.0 {
+            let inset = wing_depth * 0.5;
+            pts.push((map_x(lo + inset), plate_y + ridge));
+            pts.push((map_x(hi - inset), plate_y + ridge));
+        } else {
+            let mid = (lo + hi) * 0.5;
+            pts.push((map_x(mid), plate_y + ridge));
+        }
+        prev_hi = Some(hi);
+    }
+    pts.push((map_x(last_hi), plate_y));
+    // For mirrored views (North/East) the points come out right-to-left;
+    // reverse so the polygon winds CCW in screen space.
+    if mirror {
+        pts.reverse();
+    }
+    pts
+}
+
+fn wing_view_extent(r: &((f32, f32), (f32, f32)), by_x: bool) -> (f32, f32) {
+    if by_x { (r.0.0, r.1.0) } else { (r.0.1, r.1.1) }
+}
+
+fn wing_dims(r: &((f32, f32), (f32, f32)), by_x: bool) -> (f32, f32) {
+    let dx = r.1.0 - r.0.0;
+    let dz = r.1.1 - r.0.1;
+    if by_x { (dx, dz) } else { (dz, dx) }
 }
 
 struct Opening {
@@ -213,8 +367,21 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
     for op in &openings {
         max_y = max_y.max(op.top_y);
     }
-    let gable_top_y = if input.gable_ridge_above_plate > 0.0 {
-        let max_wall_top = walls.iter().map(|w| w.top_y).fold(0.0_f32, f32::max);
+    let max_wall_top = walls.iter().map(|w| w.top_y).fold(0.0_f32, f32::max);
+    let gable_top_y = if !input.footprint_polygon_mm.is_empty() {
+        // Polygon path: tallest wing's ridge sets the top.
+        let by_x = matches!(dir, Direction::North | Direction::South);
+        let rects = decompose_rectilinear(&input.footprint_polygon_mm, by_x);
+        let pitch = if input.roof_pitch > 0.0 { input.roof_pitch } else { 0.5 };
+        let max_ridge = rects
+            .iter()
+            .map(|r| {
+                let (w, d) = wing_dims(r, by_x);
+                w.min(d) * 0.5 * pitch
+            })
+            .fold(0.0_f32, f32::max);
+        max_wall_top + max_ridge
+    } else if input.gable_ridge_above_plate > 0.0 {
         max_wall_top + input.gable_ridge_above_plate
     } else {
         0.0
@@ -296,10 +463,20 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
         }
     }
 
-    // Gable roof above the plate. A gable END (the ridge points at this face)
-    // shows the triangle; an EAVE side (parallel to the ridge) shows the
-    // sloped roof as a band with the ridge line along its top.
-    if input.gable_ridge_above_plate > 0.0 && !walls.is_empty() {
+    // Polygon footprint path: decompose into wings and overlay each wing's
+    // own hip silhouette. The wall envelope is still a single rect (uniform
+    // wall height) so the only stepped element is the roof.
+    if !input.footprint_polygon_mm.is_empty() && !walls.is_empty() {
+        let silhouette = polygon_roof_silhouette(input, dir, plate_y);
+        if !silhouette.is_empty() {
+            let pts = silhouette
+                .iter()
+                .map(|(x, y)| format!("{x},{y}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let _ = writeln!(s, r#"    <polygon points="{pts}" class="roof"/>"#);
+        }
+    } else if input.gable_ridge_above_plate > 0.0 && !walls.is_empty() {
         let ridge_y = plate_y + input.gable_ridge_above_plate;
         let is_gable_end = match dir {
             Direction::East | Direction::West => input.ridge_along_width,
@@ -404,6 +581,69 @@ pub fn sheet_name(dir: Direction) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decompose_rectilinear_l_yields_two_wings() {
+        // L-shape: main wing 6×8, side wing 4×4.
+        let l = vec![
+            (0.0, 0.0), (10.0, 0.0), (10.0, 4.0),
+            (6.0, 4.0), (6.0, 8.0), (0.0, 8.0),
+        ];
+        let rects = decompose_rectilinear(&l, true);
+        assert_eq!(rects.len(), 2, "L should decompose into 2 wings, got {}", rects.len());
+        // Sweep along x → strips at x∈[0,6] and x∈[6,10].
+        let mut sorted = rects.clone();
+        sorted.sort_by(|a, b| a.0.0.partial_cmp(&b.0.0).unwrap());
+        assert!((sorted[0].1.0 - 6.0).abs() < 0.01); // first strip x: 0..6
+        assert!((sorted[0].1.1 - 8.0).abs() < 0.01); // first strip z: 0..8
+        assert!((sorted[1].0.0 - 6.0).abs() < 0.01); // second strip x: 6..10
+        assert!((sorted[1].1.1 - 4.0).abs() < 0.01); // second strip z: 0..4
+    }
+
+    #[test]
+    fn decompose_rectilinear_t_yields_three_wings() {
+        let t = vec![
+            (0.0, 0.0), (12.0, 0.0), (12.0, 4.0),
+            (8.0, 4.0), (8.0, 10.0), (4.0, 10.0),
+            (4.0, 4.0), (0.0, 4.0),
+        ];
+        let rects = decompose_rectilinear(&t, true);
+        assert_eq!(rects.len(), 3, "T should decompose into 3 wings, got {}", rects.len());
+    }
+
+    #[test]
+    fn polygon_silhouette_has_one_peak_per_wing() {
+        // L-shape, viewed from south (looking towards +z). Sweep by x.
+        let mut input = ElevationInput {
+            width: 10_000.0,
+            depth: 8_000.0,
+            roof_pitch: 0.5,
+            footprint_polygon_mm: vec![
+                (0.0, 0.0), (10_000.0, 0.0), (10_000.0, 4_000.0),
+                (6_000.0, 4_000.0), (6_000.0, 8_000.0), (0.0, 8_000.0),
+            ],
+            ..Default::default()
+        };
+        input.walls.push(ElevationWallInput {
+            start: Vec3::new(0.0, 0.0, 0.0),
+            end: Vec3::new(10_000.0, 0.0, 0.0),
+            height: 2_700.0,
+            base: 0.0,
+        });
+        let sil = polygon_roof_silhouette(&input, Direction::South, 2_700.0);
+        // Expected: plate start, main-wing peak(s), step, side-wing peak(s),
+        // plate end. Both wings here are square-ish on the view axis so each
+        // contributes a single triangle peak → 2 ridge vertices between the
+        // two plate vertices.
+        assert!(sil.len() >= 4, "silhouette has {} pts", sil.len());
+        // First and last vertices sit on the plate.
+        assert!((sil[0].1 - 2_700.0).abs() < 1.0);
+        assert!((sil.last().unwrap().1 - 2_700.0).abs() < 1.0);
+        // Main wing's short span = 6000 → ridge 1500; side wing 4000 → 1000.
+        // The tallest peak in the silhouette should be ≈ plate + 1500.
+        let peak = sil.iter().map(|(_, y)| *y).fold(0.0_f32, f32::max);
+        assert!((peak - (2_700.0 + 1_500.0)).abs() < 50.0, "peak {peak}");
+    }
 
     fn rectangular_input() -> ElevationInput {
         let mut input = ElevationInput {
