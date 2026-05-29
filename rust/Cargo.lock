@@ -795,6 +795,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ls-site"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ls-solver"
 version = "0.1.0"
 dependencies = [

@@ -16,6 +16,7 @@ members = [
     "crates/app",
     "crates/catalog",
     "crates/solver",
+    "crates/site",
 ]
 
 [workspace.package]
@@ -64,6 +65,7 @@ ls-qbd = { path = "crates/qbd" }
 ls-api = { path = "crates/api" }
 ls-catalog = { path = "crates/catalog" }
 ls-solver = { path = "crates/solver" }
+ls-site = { path = "crates/site" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
