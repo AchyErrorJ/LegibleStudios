@@ -564,15 +564,18 @@ pub struct SchemaSite {
     pub contour_interval_m: f32,
 }
 
-/// One contour line at a given elevation, as a bag of straight `[a, b]`
-/// segments in lot-local feet (marching-squares emits per-cell).
+/// One contour line at a given elevation, expressed as a list of stitched
+/// polylines in lot-local feet. Each polyline is a `Vec<[x, y]>`; closed
+/// loops repeat the first point at the end. A single contour level can have
+/// multiple disjoint polylines (e.g. when the iso-contour crosses the
+/// parcel boundary in several places).
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SchemaContour {
     #[serde(default)]
     pub elevation_m: f32,
-    /// Each segment is `[[x1, y1], [x2, y2]]` in lot-local ft.
+    /// One entry per disjoint chain; each is an ordered list of `[x, y]` ft.
     #[serde(default)]
-    pub segments_ft: Vec<[[f32; 2]; 2]>,
+    pub polylines_ft: Vec<Vec<[f32; 2]>>,
 }
 
 /// A header/lintel callout over a door or window opening. `size` is the OBC

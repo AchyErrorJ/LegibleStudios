@@ -40,11 +40,12 @@ pub struct SitePlan {
     pub contour_interval_m: f32,
 }
 
-/// One LiDAR contour: a flat set of straight segments at a single elevation.
+/// One LiDAR contour at a single elevation: a list of disjoint polylines
+/// (stitched chains) in lot-local feet. Closed loops repeat their start.
 #[derive(Debug, Clone, Default)]
 pub struct Contour {
     pub elevation_m: f32,
-    pub segments_ft: Vec<((f32, f32), (f32, f32))>,
+    pub polylines_ft: Vec<Vec<(f32, f32)>>,
 }
 
 impl SitePlan {
@@ -150,9 +151,14 @@ pub fn inset_convex(poly: &[(f32, f32)], d: f32) -> Option<Vec<(f32, f32)>> {
     if a2.abs() < 1.0 { None } else { Some(out) }
 }
 
-/// Emit LiDAR contour segments as a single `<g>` of thin warm-gray lines.
-/// `x_of` and `y_of` map lot-local ft into the SVG's own coordinate space, so
-/// the same helper serves both the rectangular and polygon site plans.
+/// Below this chain length no elevation label is placed (would crowd the
+/// parcel and risk overprinting other annotations).
+const MIN_VERTICES_FOR_LABEL: usize = 4;
+
+/// Emit LiDAR contours as one `<polyline>` per stitched chain, plus a small
+/// elevation label at each chain's midpoint vertex. `x_of`/`y_of` map
+/// lot-local ft into the SVG's own coordinate space, so the same helper
+/// serves both the rectangular and polygon site plans.
 fn write_contour_lines(
     s: &mut String,
     x_of: &dyn Fn(f32) -> f32,
@@ -162,17 +168,40 @@ fn write_contour_lines(
     if contours.is_empty() {
         return;
     }
+    // Lines first (warm-gray group), then labels (separate so labels aren't
+    // dimmed by the group's opacity).
     let _ = writeln!(s, r##"<g stroke="#a89e7c" stroke-width="0.6" fill="none" opacity="0.7">"##);
     for c in contours {
-        for &((x1, y1), (x2, y2)) in &c.segments_ft {
-            let _ = writeln!(
-                s,
-                r#"<line x1="{}" y1="{}" x2="{}" y2="{}"/>"#,
-                x_of(x1), y_of(y1), x_of(x2), y_of(y2),
-            );
+        for chain in &c.polylines_ft {
+            if chain.len() < 2 {
+                continue;
+            }
+            let pts = chain
+                .iter()
+                .map(|(x, y)| format!("{},{}", x_of(*x), y_of(*y)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let _ = writeln!(s, r#"<polyline points="{pts}"/>"#);
         }
     }
     s.push_str("</g>\n");
+    // Per-polyline elevation labels at the middle vertex (chains ≥4 verts).
+    let lbl = r##"font-family="Helvetica, Arial, sans-serif" font-size="9" fill="#665""##;
+    for c in contours {
+        for chain in &c.polylines_ft {
+            if chain.len() < MIN_VERTICES_FOR_LABEL {
+                continue;
+            }
+            let mid = chain[chain.len() / 2];
+            let _ = writeln!(
+                s,
+                r#"<text x="{tx}" y="{ty}" text-anchor="middle" {lbl}>{e:.1}</text>"#,
+                tx = x_of(mid.0),
+                ty = y_of(mid.1) - 1.0,
+                e = c.elevation_m,
+            );
+        }
+    }
 }
 
 /// Render the site plan to an SVG string. Port of
@@ -525,23 +554,30 @@ mod tests {
     }
 
     #[test]
-    fn site_plan_renders_contour_lines_and_legend() {
+    fn site_plan_renders_contour_polylines_and_legend() {
         let mut site = SitePlan::from_building_metres(12.0, 10.0);
         site.contours_ft = vec![
-            Contour {
-                elevation_m: 100.0,
-                segments_ft: vec![((10.0, 10.0), (50.0, 10.0))],
-            },
+            // A long chain (≥4 verts) — gets a label.
             Contour {
                 elevation_m: 100.5,
-                segments_ft: vec![((10.0, 30.0), (50.0, 30.0))],
+                polylines_ft: vec![vec![
+                    (10.0, 10.0), (20.0, 12.0), (30.0, 14.0), (40.0, 12.0), (50.0, 10.0),
+                ]],
+            },
+            // Short chain — drawn but no label.
+            Contour {
+                elevation_m: 101.0,
+                polylines_ft: vec![vec![(10.0, 30.0), (50.0, 30.0)]],
             },
         ];
         let svg = generate_site_plan_svg(&site);
-        // Contours are emitted as one <line> per segment under the lot fill.
-        assert_eq!(svg.matches("<line").count() >= 2, true, "expected ≥2 contour lines");
+        // One <polyline> per chain.
+        assert!(svg.matches("<polyline").count() >= 2);
         assert!(svg.contains("Contours @ 0.5 m"));
         assert!(svg.contains(r##"stroke="#a89e7c""##));
+        // Long chain's elevation label appears; short chain's does not.
+        assert!(svg.contains(">100.5</text>"));
+        assert!(!svg.contains(">101.0</text>"));
         // Without contours, neither the group nor the legend should appear.
         let plain = SitePlan::from_building_metres(12.0, 10.0);
         let svg2 = generate_site_plan_svg(&plain);

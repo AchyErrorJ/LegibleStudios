@@ -586,7 +586,11 @@ fn generate_site_plan(doc: &SchemaDocument) -> String {
         .iter()
         .map(|c| drawing::Contour {
             elevation_m: c.elevation_m,
-            segments_ft: c.segments_ft.iter().map(|[a, b]| ((a[0], a[1]), (b[0], b[1]))).collect(),
+            polylines_ft: c
+                .polylines_ft
+                .iter()
+                .map(|chain| chain.iter().map(|p| (p[0], p[1])).collect())
+                .collect(),
         })
         .collect();
     if doc.site.contour_interval_m > 0.0 {

@@ -131,6 +131,9 @@ fn main() -> anyhow::Result<()> {
     let mut doc = archgeometry::parse_file(&path)
         .with_context(|| format!("failed to parse {}", path.display()))?;
 
+    // Raw contour segments (per cell) — kept out of the schema until they've
+    // been clipped to the parcel and stitched into polylines below.
+    let mut raw_contours: Vec<qbd::terrain::Contour> = Vec::new();
     // LiDAR terrain: lot size + corner grade from the extracted property.
     if let Some(tpath) = &terrain_path {
         let json = std::fs::read_to_string(tpath)
@@ -139,19 +142,7 @@ fn main() -> anyhow::Result<()> {
             doc.site.lot_width_ft = t.lot_width_ft;
             doc.site.lot_depth_ft = t.lot_depth_ft;
             doc.site.grade_corners_m = t.corners_m.to_vec();
-            // Contour lines from the same LiDAR mesh.
-            let contours = qbd::terrain::contours(&t, CONTOUR_INTERVAL_M);
-            doc.site.contours_ft = contours
-                .iter()
-                .map(|c| archgeometry::SchemaContour {
-                    elevation_m: c.elevation_m,
-                    segments_ft: c
-                        .segments_ft
-                        .iter()
-                        .map(|((x1, y1), (x2, y2))| [[*x1, *y1], [*x2, *y2]])
-                        .collect(),
-                })
-                .collect();
+            raw_contours = qbd::terrain::contours(&t, CONTOUR_INTERVAL_M);
             doc.site.contour_interval_m = CONTOUR_INTERVAL_M;
             eprintln!(
                 "  terrain: lot {:.0}x{:.0} ft, grade {:.1}-{:.1} m, {} contour level(s) @ {:.1} m",
@@ -159,7 +150,7 @@ fn main() -> anyhow::Result<()> {
                 t.lot_depth_ft,
                 t.corners_m.iter().copied().fold(f32::INFINITY, f32::min),
                 t.corners_m.iter().copied().fold(f32::NEG_INFINITY, f32::max),
-                contours.len(),
+                raw_contours.len(),
                 CONTOUR_INTERVAL_M,
             );
         } else {
@@ -197,30 +188,46 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Clip contour segments to the parcel polygon when both are present.
-    // Without clipping the lines fill the terrain's rectangular extent and
-    // spill past the lot edges on irregular parcels.
-    if !doc.site.lot_polygon_ft.is_empty() && !doc.site.contours_ft.is_empty() {
-        let poly: Vec<(f32, f32)> = doc.site.lot_polygon_ft.iter().map(|p| (p[0], p[1])).collect();
+    // Finalise contours: (optionally) clip to the parcel polygon, then stitch
+    // unstitched marching-squares segments into polylines so each chain can
+    // carry one elevation label on the site plan.
+    if !raw_contours.is_empty() {
+        let poly: Option<Vec<(f32, f32)>> = if doc.site.lot_polygon_ft.is_empty() {
+            None
+        } else {
+            Some(doc.site.lot_polygon_ft.iter().map(|p| (p[0], p[1])).collect())
+        };
         let mut before = 0usize;
         let mut after = 0usize;
-        for c in &mut doc.site.contours_ft {
-            let segs: Vec<qbd::terrain::ContourSegment> = c
-                .segments_ft
-                .iter()
-                .map(|[a, b]| ((a[0], a[1]), (b[0], b[1])))
-                .collect();
-            before += segs.len();
-            let clipped = qbd::terrain::clip_segments_to_polygon(&segs, &poly);
-            after += clipped.len();
-            c.segments_ft = clipped
-                .into_iter()
-                .map(|((x1, y1), (x2, y2))| [[x1, y1], [x2, y2]])
-                .collect();
+        let mut chains = 0usize;
+        let mut out_levels = Vec::with_capacity(raw_contours.len());
+        for c in &raw_contours {
+            before += c.segments_ft.len();
+            let segs = if let Some(p) = &poly {
+                qbd::terrain::clip_segments_to_polygon(&c.segments_ft, p)
+            } else {
+                c.segments_ft.clone()
+            };
+            after += segs.len();
+            let polylines = qbd::terrain::stitch_to_polylines(&segs);
+            if polylines.is_empty() {
+                continue;
+            }
+            chains += polylines.len();
+            out_levels.push(archgeometry::SchemaContour {
+                elevation_m: c.elevation_m,
+                polylines_ft: polylines
+                    .into_iter()
+                    .map(|chain| chain.into_iter().map(|(x, y)| [x, y]).collect())
+                    .collect(),
+            });
         }
-        // Drop empty contour levels after clipping.
-        doc.site.contours_ft.retain(|c| !c.segments_ft.is_empty());
-        eprintln!("  contours: clipped {before} → {after} segment(s) to parcel polygon");
+        if poly.is_some() {
+            eprintln!("  contours: clipped {before} → {after} seg, stitched into {chains} chain(s)");
+        } else {
+            eprintln!("  contours: stitched {after} seg into {chains} chain(s)");
+        }
+        doc.site.contours_ft = out_levels;
     }
 
     // IFC4 export (decoupled Revit-import bridge).

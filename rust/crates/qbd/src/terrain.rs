@@ -8,6 +8,7 @@
 //! the lot corners to drive the site plan.
 
 use serde_json::Value;
+use std::collections::{HashMap, VecDeque};
 
 /// Terrain sampled for a site plan: lot size (ft) + corner grade (m) + the
 /// raw vertex mesh in local mm so contours can be derived.
@@ -137,6 +138,72 @@ pub fn contours(terrain: &Terrain, interval_m: f32) -> Vec<Contour> {
             out.push(Contour { elevation_m: level, segments_ft: segs });
         }
         level += interval_m;
+    }
+    out
+}
+
+/// Stitch a soup of unstitched marching-squares segments into ordered
+/// polylines (chains). Endpoints are quantised to 0.001 ft for adjacency
+/// lookup — that's looser than marching-squares' deterministic shared-edge
+/// interpolation needs, but tight enough to ignore f32 rounding noise.
+///
+/// Open chains come back as a sequence with distinct endpoints; closed
+/// loops come back with the first vertex repeated at the end. Each segment
+/// is visited exactly once.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)] // quantised key is bounded by lot size
+pub fn stitch_to_polylines(segments: &[ContourSegment]) -> Vec<Vec<(f32, f32)>> {
+    type Key = (i32, i32);
+    fn key(p: (f32, f32)) -> Key {
+        ((p.0 * 1000.0).round() as i32, (p.1 * 1000.0).round() as i32)
+    }
+    let mut adj: HashMap<Key, Vec<usize>> = HashMap::new();
+    for (i, s) in segments.iter().enumerate() {
+        adj.entry(key(s.0)).or_default().push(i);
+        adj.entry(key(s.1)).or_default().push(i);
+    }
+    let n = segments.len();
+    let mut used = vec![false; n];
+    let mut out: Vec<Vec<(f32, f32)>> = Vec::new();
+    for start in 0..n {
+        if used[start] {
+            continue;
+        }
+        used[start] = true;
+        let s = segments[start];
+        let mut chain: VecDeque<(f32, f32)> = VecDeque::from([s.0, s.1]);
+        // Extend the tail until no unused neighbour remains or the chain
+        // closes back on itself.
+        loop {
+            let last = *chain.back().expect("non-empty");
+            let Some(ni) = adj.get(&key(last)).and_then(|cs| cs.iter().copied().find(|&i| !used[i]))
+            else {
+                break;
+            };
+            used[ni] = true;
+            let sg = segments[ni];
+            let other = if key(sg.0) == key(last) { sg.1 } else { sg.0 };
+            chain.push_back(other);
+            if key(other) == key(*chain.front().expect("non-empty")) {
+                break;
+            }
+        }
+        // Then extend the head (covers chains where `start` wasn't an endpoint).
+        loop {
+            let first = *chain.front().expect("non-empty");
+            let Some(ni) = adj.get(&key(first)).and_then(|cs| cs.iter().copied().find(|&i| !used[i]))
+            else {
+                break;
+            };
+            used[ni] = true;
+            let sg = segments[ni];
+            let other = if key(sg.0) == key(first) { sg.1 } else { sg.0 };
+            chain.push_front(other);
+            if key(other) == key(*chain.back().expect("non-empty")) {
+                break;
+            }
+        }
+        out.push(chain.into_iter().collect());
     }
     out
 }
@@ -353,6 +420,40 @@ mod tests {
         }"#;
         let tf = from_json(flat_json).expect("flat");
         assert!(contours(&tf, 0.5).is_empty());
+    }
+
+    #[test]
+    fn stitch_joins_adjacent_segments_into_chains() {
+        // Three segments forming an open chain (0,0)→(1,0)→(2,0)→(3,0).
+        let segs = vec![
+            ((0.0, 0.0), (1.0, 0.0)),
+            ((1.0, 0.0), (2.0, 0.0)),
+            ((2.0, 0.0), (3.0, 0.0)),
+        ];
+        let chains = stitch_to_polylines(&segs);
+        assert_eq!(chains.len(), 1);
+        assert_eq!(chains[0].len(), 4);
+
+        // Two disjoint chains.
+        let segs = vec![
+            ((0.0, 0.0), (1.0, 0.0)),
+            ((5.0, 5.0), (6.0, 5.0)),
+        ];
+        let chains = stitch_to_polylines(&segs);
+        assert_eq!(chains.len(), 2);
+
+        // Closed triangle: chain returns to its start.
+        let segs = vec![
+            ((0.0, 0.0), (1.0, 0.0)),
+            ((1.0, 0.0), (0.5, 1.0)),
+            ((0.5, 1.0), (0.0, 0.0)),
+        ];
+        let chains = stitch_to_polylines(&segs);
+        assert_eq!(chains.len(), 1);
+        // First point repeated at the end → closed loop.
+        let first = chains[0][0];
+        let last = *chains[0].last().expect("non-empty");
+        assert!((first.0 - last.0).abs() < 1e-3 && (first.1 - last.1).abs() < 1e-3);
     }
 
     #[test]
