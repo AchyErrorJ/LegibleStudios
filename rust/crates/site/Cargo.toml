@@ -12,3 +12,11 @@ workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+# Blocking HTTP via rustls (no system OpenSSL dep). gzip handles compressed
+# tile responses from CDNs that fronts OSM.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip"] }
+# PNG decode — enable only the formats OSM actually serves.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Standard per-OS cache directory (~/.cache on Linux, %LOCALAPPDATA% on Windows).
+dirs = "5"
