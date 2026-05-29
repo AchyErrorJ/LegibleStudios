@@ -141,6 +141,108 @@ pub fn contours(terrain: &Terrain, interval_m: f32) -> Vec<Contour> {
     out
 }
 
+/// Clip a list of contour segments against an irregular parcel polygon: each
+/// segment is split at every polygon-edge crossing and only the sub-segments
+/// whose midpoint lies inside the polygon are kept. Polygons with fewer than
+/// three vertices act as identity (no clipping).
+#[must_use]
+pub fn clip_segments_to_polygon(
+    segments: &[ContourSegment],
+    polygon: &[(f32, f32)],
+) -> Vec<ContourSegment> {
+    if polygon.len() < 3 {
+        return segments.to_vec();
+    }
+    let mut out = Vec::with_capacity(segments.len());
+    for &(a, b) in segments {
+        out.extend(clip_segment_to_polygon(a, b, polygon));
+    }
+    out
+}
+
+/// Split one segment `a→b` at every polygon-edge crossing, keep the
+/// sub-segments that lie inside the polygon.
+#[allow(clippy::many_single_char_names)] // a,b endpoints + p,q edge match the math vocabulary
+fn clip_segment_to_polygon(
+    a: (f32, f32),
+    b: (f32, f32),
+    poly: &[(f32, f32)],
+) -> Vec<ContourSegment> {
+    // Parametrise segment as P(t) = a + t*(b-a), t∈[0,1]. Collect every
+    // crossing t with a polygon edge, sort, then keep intervals whose
+    // midpoint is inside the polygon.
+    let mut ts: Vec<f32> = vec![0.0, 1.0];
+    let n = poly.len();
+    for i in 0..n {
+        let p = poly[i];
+        let q = poly[(i + 1) % n];
+        if let Some(t) = segment_edge_intersection_t(a, b, p, q) {
+            ts.push(t);
+        }
+    }
+    ts.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out = Vec::new();
+    let dx = b.0 - a.0;
+    let dy = b.1 - a.1;
+    for w in ts.windows(2) {
+        let (t0, t1) = (w[0], w[1]);
+        if t1 - t0 < 1e-6 {
+            continue;
+        }
+        let tm = (t0 + t1) * 0.5;
+        if point_in_polygon(a.0 + tm * dx, a.1 + tm * dy, poly) {
+            let p0 = (a.0 + t0 * dx, a.1 + t0 * dy);
+            let p1 = (a.0 + t1 * dx, a.1 + t1 * dy);
+            out.push((p0, p1));
+        }
+    }
+    out
+}
+
+/// `t∈(0,1)` along segment `a→b` where it crosses edge `p→q`, or `None` if
+/// the edges are parallel or the crossing lies outside either segment.
+#[allow(clippy::many_single_char_names)] // a,b,p,q,r,s,t,u are the standard 2-segment intersection symbols
+fn segment_edge_intersection_t(
+    a: (f32, f32), b: (f32, f32),
+    p: (f32, f32), q: (f32, f32),
+) -> Option<f32> {
+    let r = (b.0 - a.0, b.1 - a.1);
+    let s = (q.0 - p.0, q.1 - p.1);
+    let denom = r.0 * s.1 - r.1 * s.0;
+    if denom.abs() < 1e-9 {
+        return None;
+    }
+    let dx = p.0 - a.0;
+    let dy = p.1 - a.1;
+    let t = (dx * s.1 - dy * s.0) / denom;
+    let u = (dx * r.1 - dy * r.0) / denom;
+    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+        Some(t)
+    } else {
+        None
+    }
+}
+
+/// Ray-casting point-in-polygon (odd-even rule). False for degenerate
+/// polygons (<3 vertices).
+fn point_in_polygon(x: f32, y: f32, poly: &[(f32, f32)]) -> bool {
+    let n = poly.len();
+    if n < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = poly[i];
+        let (xj, yj) = poly[j];
+        if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
 /// One cell of marching squares. Corners (`a` SW, `b` SE, `c` NE, `d` NW)
 /// classified above/below the iso-level → 16 cases. Linear interpolation on
 /// each crossed edge gives the segment endpoints in lot-local feet.
@@ -251,6 +353,31 @@ mod tests {
         }"#;
         let tf = from_json(flat_json).expect("flat");
         assert!(contours(&tf, 0.5).is_empty());
+    }
+
+    #[test]
+    fn clip_segments_keeps_inside_drops_outside_splits_crossings() {
+        // 10x10 ft square parcel centred at (5,5). A segment fully inside is
+        // kept; fully outside is dropped; a crossing segment is split.
+        let sq = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        let inside = clip_segments_to_polygon(&[((2.0, 5.0), (8.0, 5.0))], &sq);
+        assert_eq!(inside.len(), 1);
+        assert!((inside[0].0.0 - 2.0).abs() < 1e-3);
+
+        let outside = clip_segments_to_polygon(&[((-5.0, 5.0), (-1.0, 5.0))], &sq);
+        assert!(outside.is_empty(), "fully-outside segment should be dropped");
+
+        // Crosses the right edge at x=10; keep the inside half [3,10].
+        let crossing = clip_segments_to_polygon(&[((3.0, 5.0), (15.0, 5.0))], &sq);
+        assert_eq!(crossing.len(), 1);
+        let (a, b) = crossing[0];
+        assert!((a.0 - 3.0).abs() < 1e-3, "kept start = {}", a.0);
+        assert!((b.0 - 10.0).abs() < 1e-3, "kept end = {}", b.0);
+        let _ = a.1 + b.1; // silence unused warnings on tuple fields
+
+        // Degenerate polygon: identity.
+        let id = clip_segments_to_polygon(&[((0.0, 0.0), (1.0, 1.0))], &[]);
+        assert_eq!(id.len(), 1);
     }
 
     #[test]

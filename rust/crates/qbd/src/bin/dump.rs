@@ -197,6 +197,32 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Clip contour segments to the parcel polygon when both are present.
+    // Without clipping the lines fill the terrain's rectangular extent and
+    // spill past the lot edges on irregular parcels.
+    if !doc.site.lot_polygon_ft.is_empty() && !doc.site.contours_ft.is_empty() {
+        let poly: Vec<(f32, f32)> = doc.site.lot_polygon_ft.iter().map(|p| (p[0], p[1])).collect();
+        let mut before = 0usize;
+        let mut after = 0usize;
+        for c in &mut doc.site.contours_ft {
+            let segs: Vec<qbd::terrain::ContourSegment> = c
+                .segments_ft
+                .iter()
+                .map(|[a, b]| ((a[0], a[1]), (b[0], b[1])))
+                .collect();
+            before += segs.len();
+            let clipped = qbd::terrain::clip_segments_to_polygon(&segs, &poly);
+            after += clipped.len();
+            c.segments_ft = clipped
+                .into_iter()
+                .map(|((x1, y1), (x2, y2))| [[x1, y1], [x2, y2]])
+                .collect();
+        }
+        // Drop empty contour levels after clipping.
+        doc.site.contours_ft.retain(|c| !c.segments_ft.is_empty());
+        eprintln!("  contours: clipped {before} → {after} segment(s) to parcel polygon");
+    }
+
     // IFC4 export (decoupled Revit-import bridge).
     if let Some(ifc_path) = &ifc_out {
         let ifc = qbd::ifc::to_ifc(&doc, &project, &qbd::documentation::today_iso());
