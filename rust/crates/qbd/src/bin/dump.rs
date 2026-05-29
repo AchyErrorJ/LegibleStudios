@@ -16,6 +16,9 @@ const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [-
 /// Longest displayed edge, in CSS px, for a written sheet.
 const DISPLAY_MAX_PX: f32 = 1100.0;
 
+/// Default elevation step between LiDAR contour lines on the site plan.
+const CONTOUR_INTERVAL_M: f32 = 0.5;
+
 /// Cap an SVG's displayed size. The geometry is exported in millimetres (often
 /// ×10), so the raw `width`/`height` attributes are hundreds of thousands of
 /// units — a browser renders that at that many *pixels*. We rewrite only the
@@ -136,12 +139,28 @@ fn main() -> anyhow::Result<()> {
             doc.site.lot_width_ft = t.lot_width_ft;
             doc.site.lot_depth_ft = t.lot_depth_ft;
             doc.site.grade_corners_m = t.corners_m.to_vec();
+            // Contour lines from the same LiDAR mesh.
+            let contours = qbd::terrain::contours(&t, CONTOUR_INTERVAL_M);
+            doc.site.contours_ft = contours
+                .iter()
+                .map(|c| archgeometry::SchemaContour {
+                    elevation_m: c.elevation_m,
+                    segments_ft: c
+                        .segments_ft
+                        .iter()
+                        .map(|((x1, y1), (x2, y2))| [[*x1, *y1], [*x2, *y2]])
+                        .collect(),
+                })
+                .collect();
+            doc.site.contour_interval_m = CONTOUR_INTERVAL_M;
             eprintln!(
-                "  terrain: lot {:.0}x{:.0} ft, grade {:.1}-{:.1} m",
+                "  terrain: lot {:.0}x{:.0} ft, grade {:.1}-{:.1} m, {} contour level(s) @ {:.1} m",
                 t.lot_width_ft,
                 t.lot_depth_ft,
                 t.corners_m.iter().copied().fold(f32::INFINITY, f32::min),
                 t.corners_m.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+                contours.len(),
+                CONTOUR_INTERVAL_M,
             );
         } else {
             eprintln!("  terrain: no usable mesh in {}", tpath.display());

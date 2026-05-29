@@ -33,6 +33,18 @@ pub struct SitePlan {
     /// Parcel outline as local `(x, y)` ft vertices. When present (≥3), the
     /// site plan draws this real lot shape instead of a rectangle.
     pub lot_polygon_ft: Vec<(f32, f32)>,
+    /// LiDAR-derived contour lines in lot-local feet. Drawn as thin gray
+    /// segments behind the lot/footprint.
+    pub contours_ft: Vec<Contour>,
+    /// Elevation step (m) between successive contours; reported in the legend.
+    pub contour_interval_m: f32,
+}
+
+/// One LiDAR contour: a flat set of straight segments at a single elevation.
+#[derive(Debug, Clone, Default)]
+pub struct Contour {
+    pub elevation_m: f32,
+    pub segments_ft: Vec<((f32, f32), (f32, f32))>,
 }
 
 impl SitePlan {
@@ -79,6 +91,8 @@ impl SitePlan {
             fits,
             grade_corners_m: Vec::new(),
             lot_polygon_ft: Vec::new(),
+            contours_ft: Vec::new(),
+            contour_interval_m: 0.5,
         }
     }
 }
@@ -136,6 +150,31 @@ pub fn inset_convex(poly: &[(f32, f32)], d: f32) -> Option<Vec<(f32, f32)>> {
     if a2.abs() < 1.0 { None } else { Some(out) }
 }
 
+/// Emit LiDAR contour segments as a single `<g>` of thin warm-gray lines.
+/// `x_of` and `y_of` map lot-local ft into the SVG's own coordinate space, so
+/// the same helper serves both the rectangular and polygon site plans.
+fn write_contour_lines(
+    s: &mut String,
+    x_of: &dyn Fn(f32) -> f32,
+    y_of: &dyn Fn(f32) -> f32,
+    contours: &[Contour],
+) {
+    if contours.is_empty() {
+        return;
+    }
+    let _ = writeln!(s, r##"<g stroke="#a89e7c" stroke-width="0.6" fill="none" opacity="0.7">"##);
+    for c in contours {
+        for &((x1, y1), (x2, y2)) in &c.segments_ft {
+            let _ = writeln!(
+                s,
+                r#"<line x1="{}" y1="{}" x2="{}" y2="{}"/>"#,
+                x_of(x1), y_of(y1), x_of(x2), y_of(y2),
+            );
+        }
+    }
+    s.push_str("</g>\n");
+}
+
 /// Render the site plan to an SVG string. Port of
 /// `generate_site_plan_svg` (`generate_site_plan.py:26`). The Python's
 /// `building_data` argument is unused in the body — we drop it.
@@ -174,6 +213,9 @@ pub fn generate_site_plan_svg(site: &SitePlan) -> String {
         w_lot = site.lot_width_ft * scale,
         h_lot = site.lot_depth_ft * scale,
     );
+
+    // LiDAR contours (under the setback envelope + footprint).
+    write_contour_lines(&mut s, &x, &y, &site.contours_ft);
 
     // Setback envelope (dashed grey).
     let _ = writeln!(
@@ -271,6 +313,14 @@ pub fn generate_site_plan_svg(site: &SitePlan) -> String {
 
     // Zone label + fit flag.
     let _ = writeln!(s, r#"<text x="{xs}" y="{ys}" {label_attrs}>ZONE: {zone}</text>"#, xs = x(2.0), ys = y(6.0), zone = site.zone);
+    // Contour legend (only when contours are present).
+    if !site.contours_ft.is_empty() {
+        let _ = writeln!(
+            s,
+            r##"<text x="{xs}" y="{ys}" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#665">Contours @ {i:.1} m</text>"##,
+            xs = x(2.0), ys = y(10.0), i = site.contour_interval_m,
+        );
+    }
     if !site.fits {
         let _ = writeln!(
             s,
@@ -343,6 +393,8 @@ fn polygon_site_plan_svg(site: &SitePlan) -> String {
 
     // Lot polygon.
     let _ = writeln!(s, r##"<polygon points="{}" fill="#f4f4f0" stroke="black" stroke-width="2"/>"##, pts(poly));
+    // LiDAR contours (under the setback inset + footprint).
+    write_contour_lines(&mut s, &x, &y, &site.contours_ft);
     // Buildable line: uniform inset by the front setback (convex lots only).
     if let Some(inset) = inset_convex(poly, site.front_setback_ft) {
         let _ = writeln!(s, r##"<polygon points="{}" fill="none" stroke="#888" stroke-width="1" stroke-dasharray="6,4"/>"##, pts(&inset));
@@ -391,6 +443,14 @@ fn polygon_site_plan_svg(site: &SitePlan) -> String {
     let _ = writeln!(s, r#"<polygon points="{nx},{t} {l},{m} {r},{m}" fill="black"/>"#, t = ny - 16.0, l = nx - 5.0, r = nx + 5.0, m = ny - 6.0);
     let _ = writeln!(s, r#"<text x="{nx}" y="{ty}" text-anchor="middle" {lbl}>N</text>"#, ty = ny + 30.0);
     let _ = writeln!(s, r#"<text x="{tx}" y="22" {lbl} font-weight="bold">SITE PLAN — {zone} · {street}</text>"#, tx = margin, zone = site.zone, street = site.street);
+    // Contour legend.
+    if !site.contours_ft.is_empty() {
+        let _ = writeln!(
+            s,
+            r##"<text x="{tx}" y="{ty}" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#665">Contours @ {i:.1} m</text>"##,
+            tx = margin, ty = h - margin * 0.5, i = site.contour_interval_m,
+        );
+    }
 
     s.push_str("</svg>\n");
     s
@@ -462,6 +522,30 @@ mod tests {
         let (min_x, max_x) = inset.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
         assert!((min_x - 2.0).abs() < 0.01, "min_x={min_x}");
         assert!((max_x - 8.0).abs() < 0.01, "max_x={max_x}");
+    }
+
+    #[test]
+    fn site_plan_renders_contour_lines_and_legend() {
+        let mut site = SitePlan::from_building_metres(12.0, 10.0);
+        site.contours_ft = vec![
+            Contour {
+                elevation_m: 100.0,
+                segments_ft: vec![((10.0, 10.0), (50.0, 10.0))],
+            },
+            Contour {
+                elevation_m: 100.5,
+                segments_ft: vec![((10.0, 30.0), (50.0, 30.0))],
+            },
+        ];
+        let svg = generate_site_plan_svg(&site);
+        // Contours are emitted as one <line> per segment under the lot fill.
+        assert_eq!(svg.matches("<line").count() >= 2, true, "expected ≥2 contour lines");
+        assert!(svg.contains("Contours @ 0.5 m"));
+        assert!(svg.contains(r##"stroke="#a89e7c""##));
+        // Without contours, neither the group nor the legend should appear.
+        let plain = SitePlan::from_building_metres(12.0, 10.0);
+        let svg2 = generate_site_plan_svg(&plain);
+        assert!(!svg2.contains("Contours @"));
     }
 
     #[test]

@@ -579,6 +579,19 @@ fn generate_site_plan(doc: &SchemaDocument) -> String {
     // or CAD's vertices_ft). When present (≥3), the renderer draws the true lot
     // shape instead of the rectangular envelope.
     site.lot_polygon_ft = doc.site.lot_polygon_ft.iter().map(|p| (p[0], p[1])).collect();
+    // LiDAR contour lines (qbd_dump --terrain fills doc.site.contours_ft).
+    site.contours_ft = doc
+        .site
+        .contours_ft
+        .iter()
+        .map(|c| drawing::Contour {
+            elevation_m: c.elevation_m,
+            segments_ft: c.segments_ft.iter().map(|[a, b]| ((a[0], a[1]), (b[0], b[1]))).collect(),
+        })
+        .collect();
+    if doc.site.contour_interval_m > 0.0 {
+        site.contour_interval_m = doc.site.contour_interval_m;
+    }
     generate_site_plan_svg(&site)
 }
 

@@ -555,6 +555,24 @@ pub struct SchemaSite {
     /// the user draws (CAD's `vertices_ft`). Empty → fall back to a rectangle.
     #[serde(default)]
     pub lot_polygon_ft: Vec<[f32; 2]>,
+    /// LiDAR-derived contour lines in lot-local feet, at a fixed interval (see
+    /// `contour_interval_m`). Empty → no contours drawn.
+    #[serde(default)]
+    pub contours_ft: Vec<SchemaContour>,
+    /// Elevation step between contour lines, in metres. Default 0.5.
+    #[serde(default)]
+    pub contour_interval_m: f32,
+}
+
+/// One contour line at a given elevation, as a bag of straight `[a, b]`
+/// segments in lot-local feet (marching-squares emits per-cell).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SchemaContour {
+    #[serde(default)]
+    pub elevation_m: f32,
+    /// Each segment is `[[x1, y1], [x2, y2]]` in lot-local ft.
+    #[serde(default)]
+    pub segments_ft: Vec<[[f32; 2]; 2]>,
 }
 
 /// A header/lintel callout over a door or window opening. `size` is the OBC
