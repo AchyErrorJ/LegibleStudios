@@ -33,3 +33,7 @@ path = "src/bin/stitch.rs"
 [[bin]]
 name = "legible-fetch"
 path = "src/bin/fetch.rs"
+
+[[example]]
+name = "gen_synthetic_dem"
+path = "examples/gen_synthetic_dem.rs"
