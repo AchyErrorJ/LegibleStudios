@@ -20,3 +20,5 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Standard per-OS cache directory (~/.cache on Linux, %LOCALAPPDATA% on Windows).
 dirs = "5"
+# TIFF decoder for the GeoTIFF reader (single-band float32 Ontario DEMs).
+tiff = "0.10"
