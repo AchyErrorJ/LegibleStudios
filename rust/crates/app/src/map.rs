@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use ls_site::{
-    LatLon, TILE_SIZE_PX, TileCoord, TileFetcher, TileImage,
+    LatLon, LidarDownloader, PackageDataType, TILE_SIZE_PX, TileCoord, TileFetcher, TileImage,
     lat_lon_to_world_pixel, utm17_from_wgs84, world_pixel_to_lat_lon,
 };
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
@@ -47,6 +47,27 @@ pub struct Map {
     req_tx: Sender<TileCoord>,
     /// Channel: worker → main, "here's the decoded tile (or an error)".
     resp_rx: Receiver<(TileCoord, Result<TileImage, String>)>,
+    /// One-shot fetch+stitch pipeline triggered by `g`; spawned on demand.
+    pipeline: Option<Pipeline>,
+    /// Latest pipeline status line; rendered into the status band so the
+    /// user sees what the background work is doing without watching stderr.
+    pub status: String,
+    /// Where the downloader writes extracted DEM packages.
+    pub dems_dir: PathBuf,
+    /// Where the stitcher writes `terrain.json`.
+    pub terrain_out: PathBuf,
+    /// Building.json fed to qbd_dump after stitch; `None` skips the
+    /// sheet-generation step (the pipeline still writes terrain.json).
+    pub building_path: Option<PathBuf>,
+    /// Bundle directory qbd_dump writes the SVG sheets into.
+    pub bundle_dir: PathBuf,
+}
+
+/// Background fetch+stitch pipeline started by [`Map::run_pipeline`].
+#[allow(dead_code)] // we keep handles alive so dropping Map shuts the worker
+struct Pipeline {
+    handle: thread::JoinHandle<()>,
+    status_rx: Receiver<String>,
 }
 
 impl Map {
@@ -65,15 +86,28 @@ impl Map {
                 tile_worker(fetcher, &req_rx, &resp_tx, &pending_w);
             })
             .expect("spawn tile worker");
+        let out_path = out_path.into();
+        // Default pipeline output paths: DEMs under <cwd>/dems, terrain.json
+        // beside the site.json so they stay grouped.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let dems_dir = cwd.join("dems");
+        let terrain_out = out_path.with_file_name("terrain.json");
+        let bundle_dir = cwd.join("sheets");
         Ok(Self {
             centre: LatLon { lat_deg: 46.4917, lon_deg: -80.9930 },
             zoom: 17,
             polygon: Vec::new(),
-            out_path: out_path.into(),
+            out_path,
             cache: HashMap::new(),
             pending,
             req_tx,
             resp_rx,
+            pipeline: None,
+            status: String::new(),
+            dems_dir,
+            terrain_out,
+            building_path: None,
+            bundle_dir,
         })
     }
 
@@ -208,6 +242,76 @@ impl Map {
         &self.out_path
     }
 
+    /// True when the fetch+stitch pipeline has a live worker thread.
+    #[must_use]
+    pub fn pipeline_running(&self) -> bool {
+        self.pipeline.as_ref().is_some_and(|p| !p.handle.is_finished())
+    }
+
+    /// Spawn the fetch+stitch pipeline for the current parcel. Saves
+    /// `site.json` first (so the worker re-reads the bbox the user just
+    /// sketched), then runs `LidarDownloader::download_for_bbox` and
+    /// `stitch` on a background thread. Progress + result lines arrive on
+    /// `Map::status` via `drain_pipeline_status()` (called each frame).
+    ///
+    /// No-op if the pipeline is already running or if the parcel has fewer
+    /// than three vertices.
+    pub fn run_pipeline(&mut self) {
+        if self.pipeline_running() {
+            self.status = "pipeline already running".into();
+            return;
+        }
+        if self.polygon.len() < 3 {
+            self.status = "draw ≥3 parcel vertices first".into();
+            return;
+        }
+        if let Err(e) = self.save_site_json() {
+            self.status = format!("save site.json failed: {e}");
+            return;
+        }
+        let (status_tx, status_rx) = channel::<String>();
+        let _ = status_tx.send(format!("saved {}", self.out_path.display()));
+
+        let nw = self.bbox().map_or(LatLon { lat_deg: 0.0, lon_deg: 0.0 }, |(nw, _)| nw);
+        let se = self.bbox().map_or(LatLon { lat_deg: 0.0, lon_deg: 0.0 }, |(_, se)| se);
+        let dems_dir = self.dems_dir.clone();
+        let terrain_out = self.terrain_out.clone();
+        let site_path = self.out_path.clone();
+        let building_path = self.building_path.clone();
+        let bundle_dir = self.bundle_dir.clone();
+
+        let handle = thread::Builder::new()
+            .name("ls-app/site-pipeline".into())
+            .spawn(move || {
+                pipeline_worker(
+                    nw, se,
+                    &dems_dir, &terrain_out, &site_path,
+                    building_path.as_deref(), &bundle_dir,
+                    &status_tx,
+                );
+            })
+            .expect("spawn site pipeline");
+        self.pipeline = Some(Pipeline { handle, status_rx });
+        self.status = "pipeline started…".into();
+    }
+
+    /// Drain progress lines from the pipeline worker. EVERY line is
+    /// echoed to stderr (so the user has a complete trace even when the
+    /// pipeline finishes between frames); the latest line becomes
+    /// `Map::status` for the in-window status band.
+    pub fn drain_pipeline_status(&mut self) {
+        if let Some(p) = &self.pipeline {
+            while let Ok(line) = p.status_rx.try_recv() {
+                eprintln!("pipeline: {line}");
+                self.status = line;
+            }
+        }
+        // Clear the handle once the worker is done so the user can retry.
+        if self.pipeline.as_ref().is_some_and(|p| p.handle.is_finished()) {
+            self.pipeline = None;
+        }
+    }
+
     /// Drain any tiles the worker has finished and add them to the cache.
     /// Logs decode/HTTP errors to stderr (without crashing the UI).
     fn drain_worker_results(&mut self) {
@@ -229,8 +333,10 @@ impl Map {
     /// worker thread and drawn next frame. The UI never freezes.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn render(&mut self, pix: &mut Pixmap) {
-        // 1. Pick up any tiles the worker finished since last frame.
+        // 1. Pick up any tiles the worker finished since last frame, plus
+        //    any progress from the fetch+stitch pipeline.
         self.drain_worker_results();
+        self.drain_pipeline_status();
 
         let (vp_w, vp_h) = (pix.width(), pix.height());
         // Background — grey behind any missing tiles.
@@ -277,17 +383,19 @@ impl Map {
         // 4. Parcel overlay + chrome.
         self.draw_polygon(pix, vp_w, vp_h);
         draw_crosshair(pix, vp_w as f32 / 2.0, vp_h as f32 / 2.0);
-        draw_status_band(
-            pix,
-            vp_w,
-            &format!(
-                "MAP  z={}  centre {:.5}, {:.5}  parcel: {} pts  enter→save  v→exit",
-                self.zoom,
-                self.centre.lat_deg,
-                self.centre.lon_deg,
-                self.polygon.len(),
-            ),
+        let base = format!(
+            "MAP  z={}  centre {:.5}, {:.5}  parcel: {} pts  enter→save  g→fetch+stitch  v→exit",
+            self.zoom,
+            self.centre.lat_deg,
+            self.centre.lon_deg,
+            self.polygon.len(),
         );
+        let line = if self.status.is_empty() {
+            base
+        } else {
+            format!("{base}  |  {}", self.status)
+        };
+        draw_status_band(pix, vp_w, &line);
     }
 
     fn draw_polygon(&self, pix: &mut Pixmap, vp_w: u32, vp_h: u32) {
@@ -325,6 +433,161 @@ impl Map {
             }
         }
     }
+}
+
+/// Background pipeline worker: download every DEM package covering
+/// `(nw, se)` into `dems_dir`, then stitch a `terrain.json` to
+/// `terrain_out`. Progress lines are sent on `status_tx`; channel-closed
+/// is treated as "main thread is gone" and breaks the loop.
+#[allow(
+    clippy::too_many_arguments,           // pipeline reads top-down; threading a struct adds noise
+    clippy::too_many_lines,               // each stage stays here so the flow is one read
+)]
+fn pipeline_worker(
+    nw: LatLon, se: LatLon,
+    dems_dir: &std::path::Path, terrain_out: &std::path::Path,
+    site_path: &std::path::Path,
+    building_path: Option<&std::path::Path>, bundle_dir: &std::path::Path,
+    status_tx: &Sender<String>,
+) {
+    let send = |s: String| {
+        let _ = status_tx.send(s);
+    };
+    // Step 1 — coverage check. If every needed tile is already on disk
+    // (e.g. the user pre-populated dems/ from a previous download, or with
+    // a synthetic tile from the gen_synthetic_dem example), skip the
+    // multi-GB download entirely.
+    let wanted = ls_site::tiles_for_wgs84_bbox(nw, se);
+    let pre_index = ls_site::LocalTileIndex::scan(dems_dir).unwrap_or_default();
+    let (have, missing) = pre_index.classify(&wanted);
+    send(format!(
+        "coverage: {} wanted, {} have, {} missing in {}",
+        wanted.len(), have.len(), missing.len(), dems_dir.display(),
+    ));
+    if !missing.is_empty() {
+        send(format!("downloading {} package(s) for missing tiles…", missing.len()));
+        let dl = match LidarDownloader::new(dems_dir) {
+            Ok(d) => d,
+            Err(e) => {
+                send(format!("downloader init failed: {e}"));
+                return;
+            }
+        };
+        let regions = LidarDownloader::find_regions(LatLon {
+            lat_deg: (nw.lat_deg + se.lat_deg) * 0.5,
+            lon_deg: (nw.lon_deg + se.lon_deg) * 0.5,
+        });
+        if regions.is_empty() {
+            send("no known Ontario region covers parcel centre — place \
+                a tile manually and re-press g".into());
+        } else {
+            send(format!("regions: {regions:?}"));
+        }
+        let on_progress = |pkg: &ls_site::PackageInfo, done: u64, total: u64| {
+            if total > 0 {
+                #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let pct = (done * 100 / total) as u32;
+                if pct.is_multiple_of(10) {
+                    let _ = status_tx.send(format!(
+                        "{}: {pct}%  ({:.1}/{:.1} MB)",
+                        pkg.full_name(),
+                        done as f64 / 1_048_576.0,
+                        total as f64 / 1_048_576.0,
+                    ));
+                }
+            }
+        };
+        match dl.download_for_bbox(nw, se, &[PackageDataType::Dtm], on_progress) {
+            Ok(dirs) => send(format!("downloaded {} package(s)", dirs.len())),
+            Err(e) => {
+                send(format!("download failed: {e}"));
+                return;
+            }
+        }
+    }
+    // Step 2 — stitch. Re-scan in case the download added tiles.
+    send(format!("stitching → {}", terrain_out.display()));
+    let index = match ls_site::LocalTileIndex::scan(dems_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            send(format!("scan {} failed: {e}", dems_dir.display()));
+            return;
+        }
+    };
+    let res = match ls_site::stitch(nw, se, &index, ls_site::DEFAULT_GRID_N) {
+        Ok(r) => r,
+        Err(e) => {
+            send(format!("stitch failed: {e}"));
+            return;
+        }
+    };
+    let json = ls_site::to_terrain_json(&res.mesh);
+    if let Some(parent) = terrain_out.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(terrain_out, &json) {
+        send(format!("write {} failed: {e}", terrain_out.display()));
+        return;
+    }
+    send(format!(
+        "wrote {} ({} verts, elev {:.1}..{:.1} m, {} missed, {} tiles missing)",
+        terrain_out.display(),
+        res.mesh.vertices.len(),
+        res.mesh.min_elevation,
+        res.mesh.max_elevation,
+        res.samples_missed,
+        res.missing.len(),
+    ));
+    // Step 3 — generate the permit-set bundle if a building.json was
+    // supplied. Subprocess out to qbd_dump.exe (lives next to legible.exe);
+    // it already knows how to apply --parcel + --terrain and write SVGs.
+    let Some(bp) = building_path else {
+        send("done (no building.json — skip qbd_dump; site.json + terrain.json on disk)".into());
+        return;
+    };
+    let Some(qbd) = find_sibling_binary("qbd_dump") else {
+        send("qbd_dump not found alongside legible — skipping sheet bundle".into());
+        return;
+    };
+    send(format!("running {} → {}", qbd.display(), bundle_dir.display()));
+    let mut cmd = std::process::Command::new(&qbd);
+    cmd.arg(bp)
+        .arg("--bundle").arg(bundle_dir)
+        .arg("--parcel").arg(site_path)
+        .arg("--terrain").arg(terrain_out);
+    match cmd.output() {
+        Ok(out) if out.status.success() => {
+            let site_svg = bundle_dir.join("01_site_plan.svg");
+            send(format!("✓ wrote {} (site plan: {})", bundle_dir.display(), site_svg.display()));
+            // Best-effort: open the site plan in the OS default viewer.
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("cmd")
+                    .args(["/C", "start", "", site_svg.to_string_lossy().as_ref()])
+                    .spawn();
+            }
+        }
+        Ok(out) => {
+            send(format!(
+                "qbd_dump exited {} — stderr: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or(""),
+            ));
+        }
+        Err(e) => send(format!("spawn qbd_dump failed: {e}")),
+    }
+}
+
+/// Locate a sibling executable next to the current `legible.exe`. Returns
+/// `None` if `std::env::current_exe` fails or the sibling doesn't exist.
+fn find_sibling_binary(stem: &str) -> Option<PathBuf> {
+    let me = std::env::current_exe().ok()?;
+    let dir = me.parent()?;
+    let candidates: [PathBuf; 2] = [
+        dir.join(format!("{stem}.exe")),
+        dir.join(stem),
+    ];
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 /// Worker thread: pull TileCoord requests off `req_rx`, fetch + decode each

@@ -9,3 +9,6 @@
 # Map-widget output and panic log, written next to the binary's CWD.
 site.json
 legible-crash.log
+# Pipeline run artefacts (terrain mesh, downloaded DEMs).
+terrain.json
+/dems

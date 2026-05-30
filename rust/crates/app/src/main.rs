@@ -19,6 +19,9 @@
 //!   left-click   sketch a vertex (boundary/freeform/map modes)
 //!   Enter        close & solve (boundary), bank shape (freeform),
 //!                save site.json (map)
+//!   g            (map) fire fetch+stitch pipeline for the parcel — runs
+//!                LidarDownloader + stitcher on a background thread,
+//!                writes ./dems/ + ./terrain.json. Status bar shows progress.
 //!   Backspace    undo last map vertex
 //!   c            clear active mode's strokes
 //!   right-drag   pan      scroll  zoom      Esc  quit
@@ -47,9 +50,26 @@ fn main() -> anyhow::Result<()> {
         let _ = std::fs::write("legible-crash.log", &line);
         eprintln!("{line}");
     }));
-    // Optional floor-plan underlay from a building.json.
-    let slice = std::env::args().nth(1).and_then(|p| {
-        let doc = archgeometry::parse_file(&p).ok()?;
+    // Parse CLI: <building.json> [--dems <dir>] [--out <bundle_dir>].
+    // Positional first arg is the optional floor-plan underlay; --dems
+    // and --out control where the fetch+stitch pipeline puts tiles and
+    // the final permit-set bundle.
+    let mut building: Option<std::path::PathBuf> = None;
+    let mut dems_override: Option<std::path::PathBuf> = None;
+    let mut bundle_override: Option<std::path::PathBuf> = None;
+    {
+        let mut it = std::env::args().skip(1);
+        while let Some(a) = it.next() {
+            match a.as_str() {
+                "--dems" => dems_override = it.next().map(std::path::PathBuf::from),
+                "--out" => bundle_override = it.next().map(std::path::PathBuf::from),
+                _ if building.is_none() => building = Some(std::path::PathBuf::from(a)),
+                other => eprintln!("warning: ignoring unknown arg {other}"),
+            }
+        }
+    }
+    let slice = building.as_ref().and_then(|p| {
+        let doc = archgeometry::parse_file(p).ok()?;
         Some(qbd::generate_floor_plan_with_openings(
             &doc,
             1219.0,
@@ -151,14 +171,35 @@ fn main() -> anyhow::Result<()> {
                     map = None;
                 }
                 InputEvent::Key {
+                    code: KeyCode::Char('g'),
+                    pressed: true,
+                    ..
+                } => {
+                    if let Some(m) = &mut map {
+                        m.run_pipeline();
+                    }
+                }
+                InputEvent::Key {
                     code: KeyCode::Char('m'),
                     pressed: true,
                     ..
                 } => {
                     if map.is_none() {
                         match Map::new(std::path::PathBuf::from("site.json")) {
-                            Ok(m) => {
-                                eprintln!("map: opened (writes ./site.json on Enter)");
+                            Ok(mut m) => {
+                                if let Some(d) = &dems_override {
+                                    d.clone_into(&mut m.dems_dir);
+                                }
+                                if let Some(o) = &bundle_override {
+                                    o.clone_into(&mut m.bundle_dir);
+                                }
+                                m.building_path.clone_from(&building);
+                                eprintln!(
+                                    "map: opened (site.json on Enter, dems → {}, bundle → {}, building → {})",
+                                    m.dems_dir.display(),
+                                    m.bundle_dir.display(),
+                                    m.building_path.as_ref().map_or("(none)", |p| p.to_str().unwrap_or("?")),
+                                );
                                 map = Some(m);
                             }
                             Err(e) => eprintln!("map: failed to init tile fetcher — {e}"),

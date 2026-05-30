@@ -7,6 +7,13 @@
 
 use std::fmt::Write as _;
 
+/// Target px the longer lot axis occupies in the rendered viewBox.
+/// qbd_dump's `fit_display` caps the displayed sheet at 1100 px, so a
+/// lot of ~700 px leaves headroom for margins, title block, and street
+/// while keeping 10-11 px in-plan fonts at 1-1.5 % of the sheet —
+/// readable across parcel sizes from 50 ft to 2000 ft.
+const LOT_TARGET_PX: f32 = 700.0;
+
 /// Geometry of the site plan: lot box, building footprint, setbacks, driveway.
 /// All distances in feet (the Python uses imperial throughout).
 #[derive(Debug, Clone)]
@@ -217,7 +224,11 @@ pub fn generate_site_plan_svg(site: &SitePlan) -> String {
     if site.lot_polygon_ft.len() >= 3 {
         return polygon_site_plan_svg(site);
     }
-    let scale: f32 = 5.0;
+    // Scale so the lot occupies ~700 px on the longer axis regardless of
+    // size — the 10/11 px in-plan font sizes were tuned for a small viewBox
+    // and turn unreadable when the scale is fixed against multi-hundred-ft
+    // lots (display size is capped at 1100 px in qbd_dump).
+    let scale: f32 = LOT_TARGET_PX / site.lot_width_ft.max(site.lot_depth_ft).max(1.0);
     let margin: f32 = 60.0;
     let w = site.lot_width_ft * scale + 2.0 * margin;
     let h = site.lot_depth_ft * scale + 2.0 * margin;
@@ -408,7 +419,13 @@ fn polygon_site_plan_svg(site: &SitePlan) -> String {
     let poly = &site.lot_polygon_ft;
     let (min_x, max_x) = poly.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
     let (min_z, max_z) = poly.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
-    let scale = 5.0;
+    // Scale so the lot occupies ~700 px on the longer axis. Fixed scale
+    // (5 px/ft) produced 6000+ px viewBoxes for large parcels (e.g. a 1300
+    // ft lot), and qbd_dump caps display at 1100 px — so the 10/11 px
+    // in-plan font sizes shrank to 2-3 px on screen. Adaptive scale keeps
+    // the type at the size it was designed for.
+    let lot_extent = (max_x - min_x).max(max_z - min_z).max(1.0);
+    let scale = LOT_TARGET_PX / lot_extent;
     let margin = 70.0;
     let w = (max_x - min_x) * scale + 2.0 * margin;
     let h = (max_z - min_z) * scale + 2.0 * margin;
