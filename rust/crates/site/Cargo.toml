@@ -22,8 +22,14 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 dirs = "5"
 # TIFF decoder for the GeoTIFF reader (single-band float32 Ontario DEMs).
 tiff = "0.10"
+# ZIP extraction for Ontario LiDAR package archives.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 anyhow.workspace = true
 
 [[bin]]
 name = "legible-stitch"
 path = "src/bin/stitch.rs"
+
+[[bin]]
+name = "legible-fetch"
+path = "src/bin/fetch.rs"

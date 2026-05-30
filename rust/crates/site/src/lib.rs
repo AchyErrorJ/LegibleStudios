@@ -7,6 +7,7 @@
 //! the LiDAR backend (increments 4–6) build on.
 
 pub mod coord;
+pub mod downloader;
 pub mod geotiff;
 pub mod mesh;
 pub mod ontario;
@@ -16,6 +17,10 @@ pub mod tilefetch;
 pub use coord::{LatLon, UtmCoord, utm17_from_wgs84, wgs84_from_utm17};
 pub use geotiff::{
     ElevationRaster, GeoAffine, GeoTiffError, GeoTiffInfo, read_elevation, read_info,
+};
+pub use downloader::{
+    DownloadError, KNOWN_PACKAGES, LidarDownloader, PackageDataType, PackageInfo,
+    package_numbers_for,
 };
 pub use mesh::{
     DEFAULT_GRID_N, MeshVertex, StitchError, StitchResult, TerrainMesh, TerrainMeshEnvelope,
