@@ -22,3 +22,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 dirs = "5"
 # TIFF decoder for the GeoTIFF reader (single-band float32 Ontario DEMs).
 tiff = "0.10"
+anyhow.workspace = true
+
+[[bin]]
+name = "legible-stitch"
+path = "src/bin/stitch.rs"

@@ -8,6 +8,7 @@
 
 pub mod coord;
 pub mod geotiff;
+pub mod mesh;
 pub mod ontario;
 pub mod tile;
 pub mod tilefetch;
@@ -15,6 +16,10 @@ pub mod tilefetch;
 pub use coord::{LatLon, UtmCoord, utm17_from_wgs84, wgs84_from_utm17};
 pub use geotiff::{
     ElevationRaster, GeoAffine, GeoTiffError, GeoTiffInfo, read_elevation, read_info,
+};
+pub use mesh::{
+    DEFAULT_GRID_N, MeshVertex, StitchError, StitchResult, TerrainMesh, TerrainMeshEnvelope,
+    stitch, to_terrain_json,
 };
 pub use ontario::{
     ClassifiedTiles, KNOWN_REGIONS, LocalTileIndex, OntarioTile, PACKAGE_BASE_URL,
