@@ -11,5 +11,8 @@ pub mod tile;
 pub mod tilefetch;
 
 pub use coord::{LatLon, UtmCoord, utm17_from_wgs84, wgs84_from_utm17};
-pub use tile::{TileCoord, lat_lon_to_tile, tile_to_lat_lon, tile_to_pixel};
+pub use tile::{
+    TILE_SIZE_PX, TileCoord, lat_lon_to_tile, lat_lon_to_tile_f64,
+    lat_lon_to_world_pixel, tile_to_lat_lon, tile_to_pixel, world_pixel_to_lat_lon,
+};
 pub use tilefetch::{FetchError, TileFetcher, TileImage, decode_png_to_rgba};

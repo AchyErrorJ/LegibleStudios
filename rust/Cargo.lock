@@ -1034,10 +1034,12 @@ dependencies = [
  "ls-catalog",
  "ls-drawing",
  "ls-qbd",
+ "ls-site",
  "ls-solver",
  "pk-object",
  "pk-surface",
  "pk-surface-winit",
+ "serde_json",
  "tiny-skia",
 ]
 

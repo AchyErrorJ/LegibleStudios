@@ -17,7 +17,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::tile::{TILE_SIZE_PX, TileCoord};
+use crate::tile::TileCoord;
 
 /// Errors the fetcher can produce.
 #[derive(Debug, thiserror::Error)]
@@ -155,11 +155,15 @@ impl TileFetcher {
     }
 }
 
-/// Decode an in-memory PNG byte buffer to a 256×256 RGBA image. Used by
-/// [`TileFetcher::fetch`]; exposed for tests and alternate ingest paths.
+/// Decode an in-memory PNG byte buffer to an RGBA image. Most OSM tiles are
+/// 256×256 (matching [`TILE_SIZE_PX`]) but some servers — e.g. HiDPI / @2x
+/// endpoints — serve 512×512 instead. The returned `size` reflects the
+/// actual decoded dimensions; callers must use it (not assume 256) when
+/// indexing `rgba` or building blit pixmaps.
 pub fn decode_png_to_rgba(png: &[u8]) -> Result<TileImage, FetchError> {
     let img = image::load(Cursor::new(png), image::ImageFormat::Png)?.to_rgba8();
-    Ok(TileImage { rgba: img.into_raw(), size: TILE_SIZE_PX })
+    let size = img.width().min(img.height());
+    Ok(TileImage { rgba: img.into_raw(), size })
 }
 
 /// Test-only helper: whether a tile is already cached on disk.

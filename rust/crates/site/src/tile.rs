@@ -59,6 +59,28 @@ pub fn tile_to_lat_lon(t: TileCoord) -> LatLon {
 /// to lay tiles into a viewport pixmap.
 pub const TILE_SIZE_PX: u32 = 256;
 
+/// World-pixel coordinate of `p` at zoom `z`: tile coord × `TILE_SIZE_PX`.
+/// This is the global pixel grid the slippy schema implicitly defines —
+/// `(0, 0)` is the NW corner of tile `(0, 0)`, `(2^z * 256 - 1, ...)` is
+/// the SE corner of the world.
+#[must_use]
+pub fn lat_lon_to_world_pixel(p: LatLon, z: u8) -> (f64, f64) {
+    let (tx, ty) = lat_lon_to_tile_f64(p, z);
+    let s = f64::from(TILE_SIZE_PX);
+    (tx * s, ty * s)
+}
+
+/// Inverse of [`lat_lon_to_world_pixel`].
+#[must_use]
+#[allow(clippy::many_single_char_names)] // x/y/n/s/lon/lat are the standard Mercator symbols
+pub fn world_pixel_to_lat_lon(x: f64, y: f64, z: u8) -> LatLon {
+    let s = f64::from(TILE_SIZE_PX);
+    let n = f64::from(1u32 << u32::from(z));
+    let lon = x / s / n * 360.0 - 180.0;
+    let lat_rad = (std::f64::consts::PI * (1.0 - 2.0 * (y / s) / n)).sinh().atan();
+    LatLon { lat_deg: lat_rad.to_degrees(), lon_deg: lon }
+}
+
 /// Convert a fractional tile coordinate to a pixel offset inside a
 /// `TILE_SIZE_PX`-square tile. Used when projecting a lat/lon onto the
 /// tile's bitmap (e.g. drawing the parcel polygon).
@@ -100,6 +122,18 @@ mod tests {
         // The NW corner of the containing tile is just to the NW of Sudbury.
         assert!(nw.lat_deg >= sudbury.lat_deg && nw.lat_deg - sudbury.lat_deg < 0.01);
         assert!(nw.lon_deg <= sudbury.lon_deg && sudbury.lon_deg - nw.lon_deg < 0.01);
+    }
+
+    /// World-pixel coords round-trip back to the same lat/lon.
+    #[test]
+    fn world_pixel_round_trips() {
+        let p = LatLon { lat_deg: 46.4917, lon_deg: -80.9930 };
+        for z in [8_u8, 12, 16, 18] {
+            let (x, y) = lat_lon_to_world_pixel(p, z);
+            let back = world_pixel_to_lat_lon(x, y, z);
+            assert!((back.lat_deg - p.lat_deg).abs() < 1e-8, "lat at z={z}");
+            assert!((back.lon_deg - p.lon_deg).abs() < 1e-8, "lon at z={z}");
+        }
     }
 
     /// At zoom 0 there is exactly one tile covering the whole world.

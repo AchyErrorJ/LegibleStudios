@@ -5,3 +5,7 @@
 
 # We want Cargo.lock in version control for the binary crates,
 # but allow it for the workspace root since we ship binaries.
+
+# Map-widget output and panic log, written next to the binary's CWD.
+site.json
+legible-crash.log

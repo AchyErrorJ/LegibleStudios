@@ -14,16 +14,21 @@
 //!   (opens in View mode — clicks just navigate)
 //!   b            enter boundary mode (sketch the lot → solve rooms)
 //!   f            enter freeform mode (draw shapes → freeform objects)
-//!   v            back to view mode
-//!   left-click   add a vertex (only in boundary/freeform mode)
-//!   Enter        close: solve rooms (boundary) / bank the shape (freeform)
-//!   c            clear the active mode's strokes
+//!   m            enter map mode (OSM tiles → sketch parcel polygon)
+//!   v            back to view mode (also closes map)
+//!   left-click   sketch a vertex (boundary/freeform/map modes)
+//!   Enter        close & solve (boundary), bank shape (freeform),
+//!                save site.json (map)
+//!   Backspace    undo last map vertex
+//!   c            clear active mode's strokes
 //!   right-drag   pan      scroll  zoom      Esc  quit
 
+mod map;
 mod render;
 mod sketch;
 
 use catalog::room_rect;
+use map::Map;
 use pk_object::Solver;
 use pk_surface::{Button, InputEvent, KeyCode, Surface};
 use pk_surface_winit::WinitSurface;
@@ -33,6 +38,15 @@ use tiny_skia::Pixmap;
 
 #[allow(clippy::too_many_lines)] // the event loop reads better as one piece
 fn main() -> anyhow::Result<()> {
+    // Panic hook: if anything in the UI thread or a worker panics, write the
+    // panic info + a backtrace to legible-crash.log next to the binary so we
+    // see the cause even when stderr gets eaten by the windowing layer.
+    std::panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        let line = format!("=== legible panic ===\n{info}\n--- backtrace ---\n{bt}\n");
+        let _ = std::fs::write("legible-crash.log", &line);
+        eprintln!("{line}");
+    }));
     // Optional floor-plan underlay from a building.json.
     let slice = std::env::args().nth(1).and_then(|p| {
         let doc = archgeometry::parse_file(&p).ok()?;
@@ -60,6 +74,11 @@ fn main() -> anyhow::Result<()> {
 
     let mut sketch = Sketch::new();
     let mut rooms: Vec<[f32; 4]> = Vec::new();
+    // Map mode: a separate top-level stage with its own renderer + coord
+    // system. Lazily instantiated on first `m` press (the tile fetcher
+    // touches the filesystem to create the cache dir, so don't pay that
+    // unless the user opens the map).
+    let mut map: Option<Map> = None;
     // Real program-driven zoned layout (3-bed/2-bath default program). The
     // sketched boundary is the envelope; rooms tile it proportionally.
     let solver = SubdivisionRoomSolver::from_answers(&Answers::default());
@@ -91,8 +110,26 @@ fn main() -> anyhow::Result<()> {
                     pressed: true,
                     ..
                 } => {
-                    if sketch.close() {
+                    if let Some(m) = &map {
+                        match m.save_site_json() {
+                            Ok(()) => eprintln!(
+                                "map: wrote {} ({} vertices)",
+                                m.out_path().display(),
+                                m.polygon.len(),
+                            ),
+                            Err(e) => eprintln!("map: write failed — {e}"),
+                        }
+                    } else if sketch.close() {
                         rooms = resolve(&sketch);
+                    }
+                }
+                InputEvent::Key {
+                    code: KeyCode::Backspace,
+                    pressed: true,
+                    ..
+                } => {
+                    if let Some(m) = &mut map {
+                        m.undo_vertex();
                     }
                 }
                 InputEvent::Key {
@@ -109,29 +146,62 @@ fn main() -> anyhow::Result<()> {
                     code: KeyCode::Char('v'),
                     pressed: true,
                     ..
-                } => sketch.set_mode(sketch::Mode::View),
+                } => {
+                    sketch.set_mode(sketch::Mode::View);
+                    map = None;
+                }
+                InputEvent::Key {
+                    code: KeyCode::Char('m'),
+                    pressed: true,
+                    ..
+                } => {
+                    if map.is_none() {
+                        match Map::new(std::path::PathBuf::from("site.json")) {
+                            Ok(m) => {
+                                eprintln!("map: opened (writes ./site.json on Enter)");
+                                map = Some(m);
+                            }
+                            Err(e) => eprintln!("map: failed to init tile fetcher — {e}"),
+                        }
+                    }
+                }
                 InputEvent::Key {
                     code: KeyCode::Char('c'),
                     pressed: true,
                     ..
                 } => {
-                    let was_boundary = sketch.mode == sketch::Mode::Boundary;
-                    sketch.clear();
-                    if was_boundary {
-                        rooms.clear();
+                    if let Some(m) = &mut map {
+                        m.clear_polygon();
+                    } else {
+                        let was_boundary = sketch.mode == sketch::Mode::Boundary;
+                        sketch.clear();
+                        if was_boundary {
+                            rooms.clear();
+                        }
                     }
                 }
                 InputEvent::Scroll { dy, .. } => {
-                    let factor = if dy > 0.0 { 1.1 } else { 0.9 };
-                    view.zoom_about(factor, last.0, last.1);
+                    if let Some(m) = &mut map {
+                        let (w, h) = surface.size();
+                        let steps = if dy > 0.0 { 1 } else { -1 };
+                        m.zoom_about(steps, last.0, last.1, w, h);
+                    } else {
+                        let factor = if dy > 0.0 { 1.1 } else { 0.9 };
+                        view.zoom_about(factor, last.0, last.1);
+                    }
                 }
                 InputEvent::PointerDown {
                     button: Button::Left,
                     x,
                     y,
                 } => {
-                    let (wx, wy) = view.unmap(x, y);
-                    sketch.add_point(wx, wy);
+                    if let Some(m) = &mut map {
+                        let (w, h) = surface.size();
+                        m.add_vertex(x, y, w, h);
+                    } else {
+                        let (wx, wy) = view.unmap(x, y);
+                        sketch.add_point(wx, wy);
+                    }
                     last = (x, y);
                 }
                 InputEvent::PointerDown {
@@ -148,7 +218,11 @@ fn main() -> anyhow::Result<()> {
                 } => panning = false,
                 InputEvent::PointerMove { x, y } => {
                     if panning {
-                        view.pan(x - last.0, y - last.1);
+                        if let Some(m) = &mut map {
+                            m.pan(x - last.0, y - last.1);
+                        } else {
+                            view.pan(x - last.0, y - last.1);
+                        }
                     }
                     last = (x, y);
                 }
@@ -161,13 +235,17 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
         let mut pixmap = Pixmap::new(w, h).ok_or_else(|| anyhow::anyhow!("pixmap alloc"))?;
-        match &slice {
-            Some(s) => render::render(s, &mut pixmap, view),
-            None => render::fill_white(&mut pixmap),
+        if let Some(m) = &mut map {
+            m.render(&mut pixmap);
+        } else {
+            match &slice {
+                Some(s) => render::render(s, &mut pixmap, view),
+                None => render::fill_white(&mut pixmap),
+            }
+            render::draw_rooms(&rooms, &mut pixmap, view);
+            render::draw_boundary(&sketch.points, sketch.closed, &mut pixmap, view);
+            render::draw_freeforms(&sketch.freeforms, &sketch.current, &mut pixmap, view);
         }
-        render::draw_rooms(&rooms, &mut pixmap, view);
-        render::draw_boundary(&sketch.points, sketch.closed, &mut pixmap, view);
-        render::draw_freeforms(&sketch.freeforms, &sketch.current, &mut pixmap, view);
         render::pixmap_to_argb(&pixmap, surface.pixels_mut());
         surface.present();
     }
