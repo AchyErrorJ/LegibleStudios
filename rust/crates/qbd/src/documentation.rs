@@ -596,6 +596,22 @@ fn generate_site_plan(doc: &SchemaDocument) -> String {
     if doc.site.contour_interval_m > 0.0 {
         site.contour_interval_m = doc.site.contour_interval_m;
     }
+    // OSM street network (qbd_dump --streets fills doc.site.streets_ft).
+    site.streets_ft = doc
+        .site
+        .streets_ft
+        .iter()
+        .map(|s| drawing::StreetWay {
+            points_ft: s.points_ft.iter().map(|p| (p[0], p[1])).collect(),
+            name: if s.name.is_empty() { None } else { Some(s.name.clone()) },
+            kind: match s.kind.as_str() {
+                "arterial" => drawing::StreetClass::Arterial,
+                "connector" => drawing::StreetClass::Connector,
+                "path" => drawing::StreetClass::Path,
+                _ => drawing::StreetClass::Local,
+            },
+        })
+        .collect();
     generate_site_plan_svg(&site)
 }
 

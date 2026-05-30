@@ -34,6 +34,10 @@ path = "src/bin/stitch.rs"
 name = "legible-fetch"
 path = "src/bin/fetch.rs"
 
+[[bin]]
+name = "legible-streets"
+path = "src/bin/streets.rs"
+
 [[example]]
 name = "gen_synthetic_dem"
 path = "examples/gen_synthetic_dem.rs"

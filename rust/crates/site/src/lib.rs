@@ -11,6 +11,7 @@ pub mod downloader;
 pub mod geotiff;
 pub mod mesh;
 pub mod ontario;
+pub mod overpass;
 pub mod tile;
 pub mod tilefetch;
 
@@ -26,6 +27,7 @@ pub use mesh::{
     DEFAULT_GRID_N, MeshVertex, StitchError, StitchResult, TerrainMesh, TerrainMeshEnvelope,
     stitch, to_terrain_json,
 };
+pub use overpass::{OverpassClient, OverpassError, RoadClass, RoadWay, parse_overpass_json};
 pub use ontario::{
     ClassifiedTiles, KNOWN_REGIONS, LocalTileIndex, OntarioTile, PACKAGE_BASE_URL,
     PackageResolver, StaticPackageResolver, TILE_SIDE_M, parse_tile_prefix, region_for,

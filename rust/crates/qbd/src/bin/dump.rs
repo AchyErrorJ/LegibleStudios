@@ -11,7 +11,7 @@
 use anyhow::Context;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--footprint <poly.json>] [--project <name>] [--bare]";
+const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--streets <streets.json>] [--footprint <poly.json>] [--project <name>] [--bare]";
 
 /// Longest displayed edge, in CSS px, for a written sheet.
 const DISPLAY_MAX_PX: f32 = 1100.0;
@@ -75,6 +75,7 @@ fn main() -> anyhow::Result<()> {
     let mut ifc_out: Option<PathBuf> = None;
     let mut terrain_path: Option<PathBuf> = None;
     let mut parcel_path: Option<PathBuf> = None;
+    let mut streets_path: Option<PathBuf> = None;
     let mut footprint_path: Option<PathBuf> = None;
     let mut project = String::from("QBD Project");
     // `--bare`: emit just the slicer's raw floor-plan SVG (no dimensions,
@@ -108,6 +109,10 @@ fn main() -> anyhow::Result<()> {
             }
             "--parcel" if i + 1 < args.len() => {
                 parcel_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--streets" if i + 1 < args.len() => {
+                streets_path = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
             "--footprint" if i + 1 < args.len() => {
@@ -190,6 +195,40 @@ fn main() -> anyhow::Result<()> {
             } else {
                 eprintln!("  parcel: no usable polygon in {}", ppath.display());
             }
+        }
+    }
+
+    // OSM street network around the parcel (legible-streets --out).
+    if let Some(spath) = &streets_path {
+        let json = std::fs::read_to_string(spath)
+            .with_context(|| format!("failed to read {}", spath.display()))?;
+        let v: serde_json::Value = serde_json::from_str(&json)
+            .with_context(|| format!("failed to parse {}", spath.display()))?;
+        let arr = v.get("streets_ft").or(Some(&v)).and_then(serde_json::Value::as_array);
+        if let Some(arr) = arr {
+            let streets: Vec<archgeometry::SchemaStreet> = arr
+                .iter()
+                .filter_map(|s| {
+                    let pts = s.get("points_ft")?.as_array()?;
+                    let points_ft: Vec<[f32; 2]> = pts
+                        .iter()
+                        .filter_map(|p| {
+                            let a = p.as_array()?;
+                            Some([a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32])
+                        })
+                        .collect();
+                    if points_ft.len() < 2 {
+                        return None;
+                    }
+                    Some(archgeometry::SchemaStreet {
+                        name: s.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
+                        kind: s.get("kind").and_then(|n| n.as_str()).unwrap_or("local").to_string(),
+                        points_ft,
+                    })
+                })
+                .collect();
+            eprintln!("  streets: {} way(s)", streets.len());
+            doc.site.streets_ft = streets;
         }
     }
 

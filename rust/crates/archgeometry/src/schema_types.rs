@@ -568,6 +568,23 @@ pub struct SchemaSite {
     /// Elevation step between contour lines, in metres. Default 0.5.
     #[serde(default)]
     pub contour_interval_m: f32,
+    /// OSM-sourced street network around the parcel, projected into
+    /// lot-local feet. Empty → no streets drawn.
+    #[serde(default)]
+    pub streets_ft: Vec<SchemaStreet>,
+}
+
+/// One OSM way in lot-local feet, plus its display tags.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SchemaStreet {
+    #[serde(default)]
+    pub name: String,
+    /// `arterial` / `connector` / `local` / `path`. Empty defaults to local.
+    #[serde(default)]
+    pub kind: String,
+    /// Polyline `[[x_ft, y_ft], …]` in the same frame as `lot_polygon_ft`.
+    #[serde(default)]
+    pub points_ft: Vec<[f32; 2]>,
 }
 
 /// One contour line at a given elevation, expressed as a list of stitched

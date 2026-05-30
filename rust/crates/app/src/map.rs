@@ -229,6 +229,22 @@ impl Map {
                 }),
             );
         }
+        // UTM origin = SW corner of the polygon's UTM 17 N bbox. Carrying
+        // it explicitly lets downstream consumers (e.g. legible-streets)
+        // project arbitrary WGS84 points into the same lot-local frame
+        // as `vertices_ft` without re-deriving from the polygon.
+        if !self.polygon.is_empty() {
+            let utms: Vec<_> = self.polygon.iter().map(|p| utm17_from_wgs84(*p)).collect();
+            let min_e = utms.iter().map(|u| u.easting_m).fold(f64::INFINITY, f64::min);
+            let min_n = utms.iter().map(|u| u.northing_m).fold(f64::INFINITY, f64::min);
+            out.insert(
+                "utm_origin_m".into(),
+                serde_json::json!({
+                    "zone": 17, "northern_hemisphere": true,
+                    "easting_m": min_e, "northing_m": min_n,
+                }),
+            );
+        }
         let json = serde_json::to_string_pretty(&serde_json::Value::Object(out))?;
         if let Some(parent) = self.out_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -538,9 +554,27 @@ fn pipeline_worker(
         res.samples_missed,
         res.missing.len(),
     ));
-    // Step 3 — generate the permit-set bundle if a building.json was
+    // Step 3 — fetch surrounding street network (best effort; failure
+    // just skips the streets layer). Sibling binary legible-streets does
+    // the Overpass call + WGS84→lot-local-ft projection.
+    let streets_out = terrain_out.with_file_name("streets.json");
+    if let Some(streets_bin) = find_sibling_binary("legible-streets") {
+        send(format!("fetching streets → {}", streets_out.display()));
+        let mut cmd = std::process::Command::new(&streets_bin);
+        cmd.arg("--site").arg(site_path)
+            .arg("--out").arg(&streets_out);
+        match cmd.output() {
+            Ok(o) if o.status.success() => {
+                send(format!("streets ready ({} bytes)", std::fs::metadata(&streets_out).map(|m| m.len()).unwrap_or(0)));
+            }
+            Ok(o) => send(format!("legible-streets failed (exit {}): {}", o.status, String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or(""))),
+            Err(e) => send(format!("spawn legible-streets failed: {e}")),
+        }
+    }
+    // Step 4 — generate the permit-set bundle if a building.json was
     // supplied. Subprocess out to qbd_dump.exe (lives next to legible.exe);
-    // it already knows how to apply --parcel + --terrain and write SVGs.
+    // it already knows how to apply --parcel + --terrain + --streets and
+    // write SVGs.
     let Some(bp) = building_path else {
         send("done (no building.json — skip qbd_dump; site.json + terrain.json on disk)".into());
         return;
@@ -555,6 +589,9 @@ fn pipeline_worker(
         .arg("--bundle").arg(bundle_dir)
         .arg("--parcel").arg(site_path)
         .arg("--terrain").arg(terrain_out);
+    if streets_out.is_file() {
+        cmd.arg("--streets").arg(&streets_out);
+    }
     match cmd.output() {
         Ok(out) if out.status.success() => {
             let site_svg = bundle_dir.join("01_site_plan.svg");

@@ -24,5 +24,5 @@ pub use schema_parser::{ParseError, parse_file, parse_json};
 pub use schema_types::{
     QBDAnswers, RoofRidge, RoofSurface, RoomBounds, SchemaContour, SchemaDetector, SchemaDocument,
     SchemaDoor, SchemaElectrical, SchemaFloor, SchemaHeader, SchemaLevel, SchemaRoof, SchemaRoom,
-    SchemaSite, SchemaWall, SchemaWindow, WallLayer, WallType,
+    SchemaSite, SchemaStreet, SchemaWall, SchemaWindow, WallLayer, WallType,
 };

@@ -45,6 +45,9 @@ pub struct SitePlan {
     pub contours_ft: Vec<Contour>,
     /// Elevation step (m) between successive contours; reported in the legend.
     pub contour_interval_m: f32,
+    /// OSM-sourced street network in lot-local feet. Drawn as a layer
+    /// behind the lot polygon so the parcel sits "on top" of its block.
+    pub streets_ft: Vec<StreetWay>,
 }
 
 /// One LiDAR contour at a single elevation: a list of disjoint polylines
@@ -53,6 +56,28 @@ pub struct SitePlan {
 pub struct Contour {
     pub elevation_m: f32,
     pub polylines_ft: Vec<Vec<(f32, f32)>>,
+}
+
+/// One street segment from Overpass, projected into lot-local feet. The
+/// renderer draws lines + the optional name label.
+#[derive(Debug, Clone, Default)]
+pub struct StreetWay {
+    /// Polyline points in lot-local feet (same frame as `lot_polygon_ft`).
+    pub points_ft: Vec<(f32, f32)>,
+    /// `name=*` tag, if any.
+    pub name: Option<String>,
+    /// Display class: arterial / connector / local / path — drives weight.
+    pub kind: StreetClass,
+}
+
+/// Visual tier for a [`StreetWay`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StreetClass {
+    Arterial,
+    Connector,
+    #[default]
+    Local,
+    Path,
 }
 
 impl SitePlan {
@@ -101,6 +126,7 @@ impl SitePlan {
             lot_polygon_ft: Vec::new(),
             contours_ft: Vec::new(),
             contour_interval_m: 0.5,
+            streets_ft: Vec::new(),
         }
     }
 }
@@ -161,6 +187,94 @@ pub fn inset_convex(poly: &[(f32, f32)], d: f32) -> Option<Vec<(f32, f32)>> {
 /// Below this chain length no elevation label is placed (would crowd the
 /// parcel and risk overprinting other annotations).
 const MIN_VERTICES_FOR_LABEL: usize = 4;
+
+/// Emit the OSM street network as one `<polyline>` per `StreetWay`,
+/// styled by class, with name labels at the midpoint of named ways that
+/// have enough on-screen length. `x_of`/`y_of` map lot-local ft into the
+/// SVG coordinate space, so the helper feeds both the rectangular and
+/// polygon paths.
+fn write_streets(
+    s: &mut String,
+    x_of: &dyn Fn(f32) -> f32,
+    y_of: &dyn Fn(f32) -> f32,
+    streets: &[StreetWay],
+) {
+    if streets.is_empty() {
+        return;
+    }
+    // Layer the lines beneath the lot/contour/footprint stack so the
+    // parcel reads as "this lot inside that block." Subtle warm-grey for
+    // road surface; line weight scales with class.
+    for w in streets {
+        if w.points_ft.len() < 2 {
+            continue;
+        }
+        let stroke_w = match w.kind {
+            StreetClass::Arterial => 4.5,
+            StreetClass::Connector => 3.0,
+            StreetClass::Local => 1.8,
+            StreetClass::Path => 0.8,
+        };
+        let pts = w
+            .points_ft
+            .iter()
+            .map(|(x, y)| format!("{},{}", x_of(*x), y_of(*y)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let dasharray = if matches!(w.kind, StreetClass::Path) {
+            r#" stroke-dasharray="4,3""#
+        } else {
+            ""
+        };
+        let _ = writeln!(
+            s,
+            r##"<polyline points="{pts}" fill="none" stroke="#9d9d8e" stroke-width="{stroke_w}"{dasharray}/>"##,
+        );
+    }
+    // Name labels (one per named way, mid-segment). Light grey so they
+    // don't compete with parcel dimensions; rotated to follow the
+    // longest segment.
+    let lbl = r##"font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#666""##;
+    for w in streets {
+        let Some(name) = &w.name else { continue; };
+        if w.points_ft.len() < 2 {
+            continue;
+        }
+        // Pick the longest segment in the way to anchor the label — gives
+        // it enough horizontal run to read.
+        let (mid, angle_deg) = longest_segment_anchor(&w.points_ft);
+        let (tx, ty) = (x_of(mid.0), y_of(mid.1) - 3.0);
+        let _ = writeln!(
+            s,
+            r#"<text x="{tx}" y="{ty}" text-anchor="middle" transform="rotate({angle_deg:.1} {tx} {ty})" {lbl}>{name}</text>"#,
+        );
+    }
+}
+
+/// Find the longest segment in a polyline; return its midpoint (in the
+/// same coordinate space as the input) and its screen-space rotation in
+/// degrees (clamped so labels never read upside-down).
+fn longest_segment_anchor(pts: &[(f32, f32)]) -> ((f32, f32), f32) {
+    let mut best_len2 = 0.0;
+    let mut best = (pts[0], pts.get(1).copied().unwrap_or(pts[0]));
+    for w in pts.windows(2) {
+        let dx = w[1].0 - w[0].0;
+        let dy = w[1].1 - w[0].1;
+        let len2 = dx * dx + dy * dy;
+        if len2 > best_len2 {
+            best_len2 = len2;
+            best = (w[0], w[1]);
+        }
+    }
+    let mid = ((best.0.0 + best.1.0) * 0.5, (best.0.1 + best.1.1) * 0.5);
+    // y_of flips the y-axis, so rotation needs the sign of dy inverted to
+    // match screen space. Atan2(-dy, dx) gives the right tilt.
+    let mut angle = (-(best.1.1 - best.0.1)).atan2(best.1.0 - best.0.0).to_degrees();
+    if !(-90.0..=90.0).contains(&angle) {
+        angle += 180.0;
+    }
+    (mid, angle)
+}
 
 /// Emit LiDAR contours as one `<polyline>` per stitched chain, plus a small
 /// elevation label at each chain's midpoint vertex. `x_of`/`y_of` map
@@ -255,6 +369,9 @@ pub fn generate_site_plan_svg(site: &SitePlan) -> String {
     );
 
     // LiDAR contours (under the setback envelope + footprint).
+    // Streets behind the lot/contour stack so the parcel reads as a lot
+    // inside its block.
+    write_streets(&mut s, &x, &y, &site.streets_ft);
     write_contour_lines(&mut s, &x, &y, &site.contours_ft);
 
     // Setback envelope (dashed grey).
@@ -440,6 +557,9 @@ fn polygon_site_plan_svg(site: &SitePlan) -> String {
     // Lot polygon.
     let _ = writeln!(s, r##"<polygon points="{}" fill="#f4f4f0" stroke="black" stroke-width="2"/>"##, pts(poly));
     // LiDAR contours (under the setback inset + footprint).
+    // Streets behind the lot/contour stack so the parcel reads as a lot
+    // inside its block.
+    write_streets(&mut s, &x, &y, &site.streets_ft);
     write_contour_lines(&mut s, &x, &y, &site.contours_ft);
     // Buildable line: uniform inset by the front setback (convex lots only).
     if let Some(inset) = inset_convex(poly, site.front_setback_ft) {
