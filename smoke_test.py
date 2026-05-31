@@ -87,8 +87,57 @@ def synthesize_answers():
     }
 
 
-@stage("2. QBD answers -> building JSON (qbd_layout_generator)")
+@stage("2. QBD answers -> building JSON")
 def generate_layout(answers):
+    out_file = OUTPUT_DIR / "building.json"
+    use_rust = "--use-rust" in sys.argv
+    rust_bin = REPO_ROOT / "rust" / "target" / "release" / "qbd_solve.exe"
+
+    if use_rust and rust_bin.exists():
+        import subprocess
+
+        # Map Python answers dict to qbd_solve CLI args.
+        # Python uses "stories" (British/Canadian spelling); Rust uses "storeys".
+        garage = answers.get("garage", "none")
+        garage_map = {"double": "2car", "single": "1car", "triple": "3car"}
+        if garage in garage_map:
+            garage = garage_map[garage]
+
+        args = [
+            str(rust_bin),
+            "--bedrooms", str(answers.get("bedrooms", 3)),
+            "--bathrooms", str(answers.get("bathrooms", 2)),
+            "--sqft", str(answers.get("sqft", 1800)),
+            "--garage", garage,
+            "--storeys", str(answers.get("stories", 1)),
+        ]
+        if answers.get("style"):
+            args.extend(["--style", str(answers["style"])])
+
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"qbd_solve failed (exit {proc.returncode}):\n{proc.stderr}"
+            )
+        result = json.loads(proc.stdout)
+        out_file.write_text(json.dumps(result, indent=2, default=str))
+        print(f"   [Rust solver] {rust_bin.name}")
+        print(f"   Building keys: {list(result.keys())}")
+        for key in ["walls_batch", "doors", "windows", "rooms", "detectors", "electrical"]:
+            v = result.get(key)
+            if v is not None:
+                print(f"   {key}: {len(v) if hasattr(v, '__len__') else v}")
+        print(f"   Wrote: {out_file}")
+        return result
+    elif use_rust:
+        print(f"   WARNING: --use-rust passed but {rust_bin} not found; falling back to Python solver")
+
+    # Legacy Python path.
     from qbd_layout_generator import generate_floor_plan_from_qbd, OutputFormat
 
     def _do_solve():
@@ -125,14 +174,12 @@ def generate_layout(answers):
     else:
         result = _do_solve()
 
-    print(f"   Building keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
+    print(f"   [Python solver] Building keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
     if isinstance(result, dict):
         for key in ["walls_batch", "doors", "windows", "rooms", "floors_batch"]:
             v = result.get(key)
             if v is not None:
                 print(f"   {key}: {len(v) if hasattr(v, '__len__') else v}")
-    # Persist
-    out_file = OUTPUT_DIR / "building.json"
     out_file.write_text(json.dumps(result, indent=2, default=str))
     print(f"   Wrote: {out_file}")
     return result
