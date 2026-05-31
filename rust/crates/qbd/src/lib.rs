@@ -18,7 +18,7 @@ pub mod validation;
 pub mod wall_types;
 
 pub use convert::{layout_to_building, wall_type_for_wall, walls_to_parametric};
-pub use documentation::{Documentation, generate_documentation};
+pub use documentation::{Documentation, PdfError, generate_documentation, svg_to_pdf};
 pub use floor_plan::generate_floor_plan_with_openings;
 pub use schedule::{door_entries, window_entries};
 pub use validation::{ValidationResult, validate_layout, validate_wall};

@@ -11,7 +11,7 @@
 use anyhow::Context;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--streets <streets.json>] [--footprint <poly.json>] [--project <name>] [--bare]";
+const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--pdf <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--streets <streets.json>] [--footprint <poly.json>] [--project <name>] [--bare]";
 
 /// Longest displayed edge, in CSS px, for a written sheet.
 const DISPLAY_MAX_PX: f32 = 1100.0;
@@ -72,6 +72,7 @@ fn main() -> anyhow::Result<()> {
     let mut path: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut bundle_dir: Option<PathBuf> = None;
+    let mut pdf_dir: Option<PathBuf> = None;
     let mut ifc_out: Option<PathBuf> = None;
     let mut terrain_path: Option<PathBuf> = None;
     let mut parcel_path: Option<PathBuf> = None;
@@ -93,6 +94,10 @@ fn main() -> anyhow::Result<()> {
             }
             "--bundle" if i + 1 < args.len() => {
                 bundle_dir = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--pdf" if i + 1 < args.len() => {
+                pdf_dir = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
             "--project" if i + 1 < args.len() => {
@@ -408,6 +413,58 @@ fn main() -> anyhow::Result<()> {
         std::fs::write(dir.join("manifest.json"), manifest)?;
         eprintln!("  wrote {}/manifest.json", dir.display());
 
+        return Ok(());
+    }
+
+    // PDF bundle: one PDF per sheet, same naming as SVG bundle.
+    if let Some(dir) = pdf_dir {
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("failed to create pdf dir {}", dir.display()))?;
+
+        let write_pdf = |name: &str, svg: &str| -> anyhow::Result<()> {
+            let pdf = qbd::svg_to_pdf(svg)
+                .with_context(|| format!("failed to convert {name} to PDF"))?;
+            let p = dir.join(name);
+            std::fs::write(&p, &pdf)
+                .with_context(|| format!("failed to write {}", p.display()))?;
+            eprintln!("  wrote {} ({} bytes)", p.display(), pdf.len());
+            Ok(())
+        };
+
+        write_pdf("01_site_plan.pdf", &docs.site_plan_svg)?;
+        write_pdf("06_roof_plan.pdf", &docs.roof_plan_svg)?;
+        if docs.floor_plans.len() <= 1 {
+            write_pdf("02_floor_plan.pdf", &docs.floor_plan_svg)?;
+        } else {
+            for (i, (level, svg)) in docs.floor_plans.iter().enumerate() {
+                let name = if i == 0 {
+                    "02_floor_plan.pdf".to_string()
+                } else {
+                    format!("02_floor_plan_l{}.pdf", i + 1)
+                };
+                eprintln!("  ({level})");
+                write_pdf(&name, svg)?;
+            }
+        }
+        for elev in &docs.elevations {
+            let name = format!("{}.pdf", drawing::elevation_sheet_name(elev.direction).replace(".svg", ""));
+            write_pdf(&name, &elev.svg)?;
+        }
+        write_pdf("04_section_aa.pdf", &docs.section_svg)?;
+        if !docs.door_schedule_svg.is_empty() {
+            write_pdf("05_door_schedule.pdf", &docs.door_schedule_svg)?;
+        }
+        if !docs.window_schedule_svg.is_empty() {
+            write_pdf("05_window_schedule.pdf", &docs.window_schedule_svg)?;
+        }
+        for (i, detail) in docs.wall_details.iter().enumerate() {
+            let name = format!(
+                "07_wall_detail_{:02}_{}.pdf",
+                i + 1,
+                detail.detail.wall_type_id
+            );
+            write_pdf(&name, &detail.svg)?;
+        }
         return Ok(());
     }
 

@@ -53,6 +53,40 @@ pub struct Documentation {
     pub window_schedule_svg: String,
 }
 
+/// Convert an SVG string to a PDF byte vector using `svg2pdf`.
+///
+/// Page size is derived from the SVG's `viewBox` (mm units, 1 user unit = 1 mm).
+/// Text is embedded as selectable text by default.
+///
+/// # Errors
+///
+/// Returns `svg2pdf::ConversionError` if the SVG is malformed or contains
+/// unsupported features.
+/// Errors from SVG → PDF conversion.
+#[derive(Debug, thiserror::Error)]
+pub enum PdfError {
+    /// The SVG parser rejected the input.
+    #[error("svg parse: {0}")]
+    Parse(String),
+    /// The PDF conversion failed.
+    #[error("pdf conversion: {0}")]
+    Conversion(String),
+}
+
+/// Convert an SVG string to a PDF byte vector using `svg2pdf`.
+///
+/// Page size is derived from the SVG's natural size (viewBox or width/height).
+/// Text is embedded as selectable text by default.
+pub fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, PdfError> {
+    use svg2pdf::{ConversionOptions, PageOptions, usvg};
+    let mut opts = usvg::Options::default();
+    opts.fontdb_mut().load_system_fonts();
+    let tree = usvg::Tree::from_str(svg, &opts)
+        .map_err(|e| PdfError::Parse(e.to_string()))?;
+    svg2pdf::to_pdf(&tree, ConversionOptions::default(), PageOptions::default())
+        .map_err(|e| PdfError::Conversion(e.to_string()))
+}
+
 /// Geometry export scale for the floor plan: `export_to_svg` maps plan
 /// `(x, y)` to SVG `(x*scale, -y*scale)`. Annotations are authored in plan-mm
 /// and lifted into this space by [`lift`].

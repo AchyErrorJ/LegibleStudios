@@ -286,13 +286,20 @@ def generate_drawings_via_rust(building_file: Path, drawings_dir: Path):
             lot_depth_ft=120.0,
         )
 
+    args = [
+        str(rust_bin),
+        str(building_file),
+        "--bundle", str(drawings_dir),
+        "--project", "Smoke Test (Rust)",
+    ]
+    # Also emit PDFs when --pdf flag is passed to smoke_test.
+    pdf_dir = None
+    if "--pdf" in sys.argv:
+        pdf_dir = drawings_dir.parent / "pdfs"
+        args.extend(["--pdf", str(pdf_dir)])
+
     proc = subprocess.run(
-        [
-            str(rust_bin),
-            str(building_file),
-            "--bundle", str(drawings_dir),
-            "--project", "Smoke Test (Rust)",
-        ],
+        args,
         capture_output=True,
         text=True,
         check=False,
@@ -306,7 +313,13 @@ def generate_drawings_via_rust(building_file: Path, drawings_dir: Path):
         print(f"   {line}")
     sheets = sorted(p.name for p in drawings_dir.iterdir() if p.is_file())
     print(f"   Rust produced {len(sheets)} sheets in {drawings_dir}")
-    return {"sheet_count": len(sheets), "sheets": sheets}
+    result = {"sheet_count": len(sheets), "sheets": sheets}
+    if pdf_dir is not None and pdf_dir.exists():
+        pdfs = sorted(p.name for p in pdf_dir.iterdir() if p.suffix == ".pdf")
+        result["pdf_count"] = len(pdfs)
+        result["pdfs"] = pdfs
+        print(f"   PDFs: {len(pdfs)} files in {pdf_dir}")
+    return result
 
 
 @stage("5. DB save (SQLite via SQLAlchemy)")
