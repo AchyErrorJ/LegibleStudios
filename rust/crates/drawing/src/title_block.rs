@@ -40,6 +40,7 @@ pub struct DrawingInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawingType {
     SitePlan,
+    FoundationPlan,
     FloorPlan,
     RoofPlan,
     ElevationSouth,
@@ -56,15 +57,16 @@ impl DrawingType {
     #[must_use] 
     pub fn default_info(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            DrawingType::SitePlan => ("A-001", "SITE PLAN", "1 OF 8"),
-            DrawingType::FloorPlan => ("A-101", "FLOOR PLAN - LEVEL 1", "1 OF 8"),
-            DrawingType::RoofPlan => ("A-102", "ROOF PLAN", "2 OF 8"),
-            DrawingType::ElevationSouth => ("A-201", "SOUTH ELEVATION", "3 OF 8"),
-            DrawingType::ElevationNorth => ("A-202", "NORTH ELEVATION", "4 OF 8"),
-            DrawingType::ElevationEast => ("A-203", "EAST ELEVATION", "5 OF 8"),
-            DrawingType::ElevationWest => ("A-204", "WEST ELEVATION", "6 OF 8"),
-            DrawingType::SectionA => ("A-301", "SECTION A-A", "7 OF 8"),
-            DrawingType::SectionB => ("A-302", "SECTION B-B", "8 OF 8"),
+            DrawingType::SitePlan => ("A-001", "SITE PLAN", "1 OF 10"),
+            DrawingType::FoundationPlan => ("A-002", "FOUNDATION PLAN", "2 OF 10"),
+            DrawingType::FloorPlan => ("A-101", "FLOOR PLAN - LEVEL 1", "3 OF 10"),
+            DrawingType::RoofPlan => ("A-102", "ROOF PLAN", "4 OF 10"),
+            DrawingType::ElevationSouth => ("A-201", "SOUTH ELEVATION", "5 OF 10"),
+            DrawingType::ElevationNorth => ("A-202", "NORTH ELEVATION", "6 OF 10"),
+            DrawingType::ElevationEast => ("A-203", "EAST ELEVATION", "7 OF 10"),
+            DrawingType::ElevationWest => ("A-204", "WEST ELEVATION", "8 OF 10"),
+            DrawingType::SectionA => ("A-301", "SECTION A-A", "9 OF 10"),
+            DrawingType::SectionB => ("A-302", "SECTION B-B", "10 OF 10"),
         }
     }
 }
@@ -304,7 +306,7 @@ mod tests {
         assert_eq!(info.title, "FLOOR PLAN - LEVEL 1");
         assert_eq!(info.number, "A-101");
         assert_eq!(info.scale, "1:100");
-        assert_eq!(info.sheet, "1 OF 8");
+        assert_eq!(info.sheet, "3 OF 10");
         assert_eq!(info.revision, "-");
         assert_eq!(info.drawn_by, "AE");
         assert_eq!(info.date, "2026-05-16");

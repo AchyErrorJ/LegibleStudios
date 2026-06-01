@@ -168,6 +168,14 @@ fn smoke_small_building() {
     assert!(docs.floor_plan_svg.contains("</svg>"));
     assert!(docs.site_plan_svg.contains("</svg>"));
     assert!(docs.section_svg.contains("</svg>"));
+    assert!(
+        docs.foundation_plan_svg.contains("</svg>"),
+        "foundation plan must be generated"
+    );
+    assert!(
+        docs.foundation_plan_svg.contains("FOUNDATION PLAN"),
+        "foundation plan must have title block"
+    );
 
     // Detectors rendered on floor plan.
     let detector_count = docs.floor_plan_svg.matches("fill=\"#c00\">S</text>").count();

@@ -1278,6 +1278,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "glam",
+ "ls-archgeometry",
  "ls-domain",
  "serde",
  "serde_json",

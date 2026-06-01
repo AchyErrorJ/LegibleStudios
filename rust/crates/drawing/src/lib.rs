@@ -16,6 +16,7 @@ pub mod config;
 pub mod detail;
 pub mod dimensions;
 pub mod elevation_sheet;
+pub mod foundation_plan;
 pub mod primitives;
 pub mod roof;
 pub mod room_labels;
@@ -43,6 +44,9 @@ pub use dimensions::{
 pub use elevation_sheet::{
     Direction as ElevationDirection, ElevationInput, ElevationOpeningInput, ElevationWallInput,
     generate_elevation_sheet_svg, sheet_name as elevation_sheet_name,
+};
+pub use foundation_plan::{
+    generate_foundation_plan, generate_foundation_plan_svg,
 };
 pub use primitives::{
     Arc2D, Circle2D, Dimension2D, Hatch2D, Line2D, Point2D, Polyline2D, SliceResult, Text2D,

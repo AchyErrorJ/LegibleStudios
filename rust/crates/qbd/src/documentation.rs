@@ -9,8 +9,9 @@ use std::fmt::Write as _;
 use drawing::{
     Config, DrawingInfo, DrawingType, ElevationDirection, ElevationInput, ElevationOpeningInput,
     ElevationWallInput, ProjectInfo, SectionInput, SectionWallInput, SitePlan, WallSectionDetail,
-    drawing_info_for, export_to_svg_padded, generate_elevation_sheet_svg, generate_section_sheet_svg,
-    generate_site_plan_svg, generate_title_block, generate_wall_detail, wall_detail_to_svg,
+    drawing_info_for, export_to_svg_padded, generate_elevation_sheet_svg, generate_foundation_plan_svg,
+    generate_section_sheet_svg, generate_site_plan_svg, generate_title_block, generate_wall_detail,
+    wall_detail_to_svg,
 };
 
 use crate::floor_plan::generate_floor_plan_with_openings;
@@ -51,6 +52,8 @@ pub struct Documentation {
     pub door_schedule_svg: String,
     /// Window schedule SVG, empty string if the building has no windows.
     pub window_schedule_svg: String,
+    /// Foundation plan — footing outline under exterior walls, slab edge.
+    pub foundation_plan_svg: String,
 }
 
 /// Convert an SVG string to a PDF byte vector using `svg2pdf`.
@@ -512,6 +515,11 @@ pub fn generate_documentation(
         window_schedule_svg: render_schedule_svg(
             &crate::schedule::window_entries(doc),
             "WINDOW SCHEDULE",
+        ),
+        foundation_plan_svg: with_tb(
+            generate_foundation_plan_svg(doc, FP_SCALE, FP_PAD),
+            DrawingType::FoundationPlan,
+            "1:100",
         ),
     }
 }
