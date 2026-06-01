@@ -17,6 +17,7 @@ members = [
     "crates/catalog",
     "crates/solver",
     "crates/site",
+    "smoke-test",
 ]
 
 [workspace.package]

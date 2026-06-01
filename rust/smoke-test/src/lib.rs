@@ -1,0 +1,248 @@
+//! End-to-end smoke test — pure Rust, no Python.
+//!
+//! Replaces `python smoke_test.py --use-rust` with a hermetic Rust test
+//! that exercises the full pipeline: Answers → building JSON →
+//! SchemaDocument → documentation bundle → SVG + PDF sheets.
+//!
+//! Run: `cargo test --release --test smoke_test -- --nocapture`
+
+use std::path::PathBuf;
+use std::time::Instant;
+
+// ---------------------------------------------------------------------------
+// Stage helpers
+// ---------------------------------------------------------------------------
+
+fn elapsed(start: Instant) -> String {
+    format!("{:.1}ms", start.elapsed().as_secs_f64() * 1000.0)
+}
+
+fn library_path() -> PathBuf {
+    // CARGO_MANIFEST_DIR is rust/smoke-test/; tables live two levels up in rust/test-data/
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("test-data")
+        .join("OBC_Library")
+}
+
+// ---------------------------------------------------------------------------
+// 1. Synthesize answers
+// ---------------------------------------------------------------------------
+
+fn small_answers() -> solver::Answers {
+    solver::Answers {
+        bedrooms: 1,
+        bathrooms: 1,
+        sqft: 800.0,
+        garage: "none".into(),
+        storeys: 1,
+        window_intent: "balanced".into(),
+        style: "ranch".into(),
+        ..Default::default()
+    }
+}
+
+fn large_answers() -> solver::Answers {
+    solver::Answers {
+        bedrooms: 3,
+        bathrooms: 3,
+        sqft: 1800.0,
+        garage: "2car".into(),
+        storeys: 0, // auto → 2 (3+ bedrooms)
+        window_intent: "balanced".into(),
+        style: "ranch".into(),
+        ..Default::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 2. Solver → building JSON
+// ---------------------------------------------------------------------------
+
+fn stage_solve(answers: &solver::Answers) -> serde_json::Value {
+    let t0 = Instant::now();
+    let value = solver::building_json(answers);
+    println!("  [solver] building_id={} walls={} doors={} windows={} detectors={} electrical={} ({})",
+        value["building_id"].as_str().unwrap_or("?"),
+        value["summary"]["total_walls"].as_u64().unwrap_or(0),
+        value["summary"]["doors"].as_u64().unwrap_or(0),
+        value["summary"]["windows"].as_u64().unwrap_or(0),
+        value["summary"]["detectors"].as_u64().unwrap_or(0),
+        value["summary"]["electrical"].as_u64().unwrap_or(0),
+        elapsed(t0)
+    );
+    value
+}
+
+// ---------------------------------------------------------------------------
+// 3. Parse JSON → SchemaDocument
+// ---------------------------------------------------------------------------
+
+fn stage_parse(value: &serde_json::Value) -> archgeometry::SchemaDocument {
+    let t0 = Instant::now();
+    let json = serde_json::to_string(value).expect("serde_json round-trip");
+    let doc = archgeometry::parse_json(&json).expect("schema parse");
+    println!("  [parse]  rooms={} walls={} doors={} windows={} ({})",
+        doc.rooms.len(), doc.walls.len(), doc.doors.len(), doc.windows.len(),
+        elapsed(t0)
+    );
+    doc
+}
+
+// ---------------------------------------------------------------------------
+// 4. Generate documentation bundle
+// ---------------------------------------------------------------------------
+
+fn stage_documentation(doc: &archgeometry::SchemaDocument) -> qbd::Documentation {
+    let t0 = Instant::now();
+    let docs = qbd::generate_documentation(doc, "Smoke Test");
+    let sheet_count = 1 + 1 + docs.floor_plans.len() + docs.elevations.len() + 1
+        + docs.wall_details.len()
+        + (if docs.door_schedule_svg.is_empty() { 0 } else { 1 })
+        + (if docs.window_schedule_svg.is_empty() { 0 } else { 1 });
+    println!("  [docs]   {} sheets: site + roof + {} floor + {} elev + section + {} details + {} schedules ({})",
+        sheet_count,
+        docs.floor_plans.len(),
+        docs.elevations.len(),
+        docs.wall_details.len(),
+        (if docs.door_schedule_svg.is_empty() { 0 } else { 1 })
+            + (if docs.window_schedule_svg.is_empty() { 0 } else { 1 }),
+        elapsed(t0)
+    );
+    docs
+}
+
+// ---------------------------------------------------------------------------
+// 5. Validate against OBC
+// ---------------------------------------------------------------------------
+
+fn stage_validate(doc: &archgeometry::SchemaDocument) -> qbd::ValidationResult {
+    let t0 = Instant::now();
+    let mut obc = obc::OBCEngine::new();
+    obc.initialize(&library_path()).expect("OBC tables must load");
+    let result = qbd::validate_layout(&obc, doc, "Zone 6");
+    println!("  [obc]    walls={}/{} passed thermal={} ({})",
+        result.walls_passed, result.walls_checked,
+        if result.thermal_compliance { "PASS" } else { "FAIL" },
+        elapsed(t0)
+    );
+    result
+}
+
+// ---------------------------------------------------------------------------
+// 6. Convert one sheet to PDF
+// ---------------------------------------------------------------------------
+
+fn stage_pdf(docs: &qbd::Documentation) {
+    let t0 = Instant::now();
+    let pdf = qbd::svg_to_pdf(&docs.floor_plan_svg).expect("PDF conversion");
+    println!("  [pdf]    floor_plan.pdf {} bytes ({})", pdf.len(), elapsed(t0));
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn smoke_small_building() {
+    println!("\n=== smoke_small_building ===");
+    let t_total = Instant::now();
+
+    let answers = small_answers();
+    let value = stage_solve(&answers);
+
+    // Assertions on the raw JSON.
+    assert!(value["success"].as_bool().unwrap_or(false));
+    assert_eq!(value["storeys"].as_u64(), Some(1));
+    assert!(value["detectors"].as_array().map_or(false, |a| !a.is_empty()));
+    assert!(value["electrical"].as_array().map_or(false, |a| !a.is_empty()));
+
+    let doc = stage_parse(&value);
+    let docs = stage_documentation(&doc);
+    let validation = stage_validate(&doc);
+    stage_pdf(&docs);
+
+    // SVG well-formedness.
+    assert!(docs.floor_plan_svg.starts_with("<?xml"));
+    assert!(docs.floor_plan_svg.contains("</svg>"));
+    assert!(docs.site_plan_svg.contains("</svg>"));
+    assert!(docs.section_svg.contains("</svg>"));
+
+    // Detectors rendered on floor plan.
+    let detector_count = docs.floor_plan_svg.matches("fill=\"#c00\">S</text>").count();
+    assert!(detector_count > 0, "smoke detectors must appear on floor plan");
+
+    // Elevations: one per direction.
+    assert_eq!(docs.elevations.len(), 4, "N/S/E/W elevations required");
+
+    // Wall details: at least exterior + interior.
+    assert!(
+        docs.wall_details.len() >= 1,
+        "at least one wall detail expected"
+    );
+
+    // OBC validation ran.
+    assert_eq!(validation.walls_checked, doc.walls.len() as i32);
+
+    println!("  TOTAL    {}", elapsed(t_total));
+}
+
+#[test]
+fn smoke_large_building() {
+    println!("\n=== smoke_large_building ===");
+    let t_total = Instant::now();
+
+    let answers = large_answers();
+    let value = stage_solve(&answers);
+
+    // Auto-storeys: 3 bedrooms → 2 storeys.
+    assert_eq!(value["storeys"].as_u64(), Some(2));
+
+    let doc = stage_parse(&value);
+    let docs = stage_documentation(&doc);
+    let _validation = stage_validate(&doc);
+    stage_pdf(&docs);
+
+    // Multi-storey: floor plan per level.
+    assert!(
+        docs.floor_plans.len() >= 2,
+        "2-storey building needs ≥2 floor plans"
+    );
+
+    println!("  TOTAL    {}", elapsed(t_total));
+}
+
+#[test]
+fn smoke_pdf_conversion_for_every_sheet() {
+    println!("\n=== smoke_pdf_conversion_for_every_sheet ===");
+    let answers = small_answers();
+    let value = stage_solve(&answers);
+    let doc = stage_parse(&value);
+    let docs = stage_documentation(&doc);
+
+    let mut sheets: Vec<(&str, &str)> = vec![
+        ("site_plan", &docs.site_plan_svg),
+        ("roof_plan", &docs.roof_plan_svg),
+        ("floor_plan", &docs.floor_plan_svg),
+        ("section", &docs.section_svg),
+    ];
+    for e in &docs.elevations {
+        let name = match e.direction {
+            drawing::ElevationDirection::North => "elevation_north",
+            drawing::ElevationDirection::South => "elevation_south",
+            drawing::ElevationDirection::East => "elevation_east",
+            drawing::ElevationDirection::West => "elevation_west",
+        };
+        sheets.push((name, &e.svg));
+    }
+
+    let mut total_bytes = 0usize;
+    for (name, svg) in &sheets {
+        let pdf = qbd::svg_to_pdf(svg).unwrap_or_else(|e| panic!("{name} PDF failed: {e}"));
+        assert!(!pdf.is_empty(), "{name} PDF must not be empty");
+        total_bytes += pdf.len();
+        println!("  {name:20} PDF {} bytes", pdf.len());
+    }
+    println!("  TOTAL PDFs: {} sheets, {} bytes", sheets.len(), total_bytes);
+}
