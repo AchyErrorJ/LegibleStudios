@@ -94,20 +94,25 @@ fn stage_parse(value: &serde_json::Value) -> archgeometry::SchemaDocument {
 // 4. Generate documentation bundle
 // ---------------------------------------------------------------------------
 
-fn stage_documentation(doc: &archgeometry::SchemaDocument) -> qbd::Documentation {
+fn stage_documentation(
+    doc: &archgeometry::SchemaDocument,
+    validation: &qbd::ValidationResult,
+) -> qbd::Documentation {
     let t0 = Instant::now();
-    let docs = qbd::generate_documentation(doc, "Smoke Test");
+    let docs = qbd::generate_documentation_with_validation(doc, "Smoke Test", validation);
     let sheet_count = 1 + 1 + docs.floor_plans.len() + docs.elevations.len() + 1
         + docs.wall_details.len()
         + (if docs.door_schedule_svg.is_empty() { 0 } else { 1 })
-        + (if docs.window_schedule_svg.is_empty() { 0 } else { 1 });
-    println!("  [docs]   {} sheets: site + roof + {} floor + {} elev + section + {} details + {} schedules ({})",
+        + (if docs.window_schedule_svg.is_empty() { 0 } else { 1 })
+        + (if docs.compliance_report_svg.is_empty() { 0 } else { 1 });
+    println!("  [docs]   {} sheets: site + roof + {} floor + {} elev + section + {} details + {} schedules + {} report ({})",
         sheet_count,
         docs.floor_plans.len(),
         docs.elevations.len(),
         docs.wall_details.len(),
         (if docs.door_schedule_svg.is_empty() { 0 } else { 1 })
             + (if docs.window_schedule_svg.is_empty() { 0 } else { 1 }),
+        if docs.compliance_report_svg.is_empty() { 0 } else { 1 },
         elapsed(t0)
     );
     docs
@@ -159,8 +164,8 @@ fn smoke_small_building() {
     assert!(value["electrical"].as_array().map_or(false, |a| !a.is_empty()));
 
     let doc = stage_parse(&value);
-    let docs = stage_documentation(&doc);
     let validation = stage_validate(&doc);
+    let docs = stage_documentation(&doc, &validation);
     stage_pdf(&docs);
 
     // SVG well-formedness.
@@ -175,6 +180,18 @@ fn smoke_small_building() {
     assert!(
         docs.foundation_plan_svg.contains("FOUNDATION PLAN"),
         "foundation plan must have title block"
+    );
+    assert!(
+        docs.compliance_report_svg.contains("</svg>"),
+        "compliance report must be generated"
+    );
+    assert!(
+        docs.compliance_report_svg.contains("CODE COMPLIANCE REPORT"),
+        "compliance report must have title"
+    );
+    assert!(
+        docs.compliance_report_svg.contains("WALLS CHECKED"),
+        "compliance report must show wall check summary"
     );
 
     // Detectors rendered on floor plan.
@@ -208,8 +225,8 @@ fn smoke_large_building() {
     assert_eq!(value["storeys"].as_u64(), Some(2));
 
     let doc = stage_parse(&value);
-    let docs = stage_documentation(&doc);
-    let _validation = stage_validate(&doc);
+    let validation = stage_validate(&doc);
+    let docs = stage_documentation(&doc, &validation);
     stage_pdf(&docs);
 
     // Multi-storey: floor plan per level.
@@ -227,7 +244,8 @@ fn smoke_pdf_conversion_for_every_sheet() {
     let answers = small_answers();
     let value = stage_solve(&answers);
     let doc = stage_parse(&value);
-    let docs = stage_documentation(&doc);
+    let validation = stage_validate(&doc);
+    let docs = stage_documentation(&doc, &validation);
 
     let mut sheets: Vec<(&str, &str)> = vec![
         ("site_plan", &docs.site_plan_svg),

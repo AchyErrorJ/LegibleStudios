@@ -54,6 +54,8 @@ pub struct Documentation {
     pub window_schedule_svg: String,
     /// Foundation plan — footing outline under exterior walls, slab edge.
     pub foundation_plan_svg: String,
+    /// Code compliance report — tabular wall-by-wall pass/fail summary.
+    pub compliance_report_svg: String,
 }
 
 /// Convert an SVG string to a PDF byte vector using `svg2pdf`.
@@ -521,7 +523,35 @@ pub fn generate_documentation(
             DrawingType::FoundationPlan,
             "1:100",
         ),
+        compliance_report_svg: String::new(), // filled by caller after validation
     }
+}
+
+/// Generate documentation **and** the compliance report sheet in one call.
+///
+/// This is the preferred entry point when OBC validation has already been
+/// run; it injects the compliance report SVG (with title block) into the
+/// returned `Documentation`.
+#[must_use]
+pub fn generate_documentation_with_validation(
+    doc: &SchemaDocument,
+    project_name: impl Into<String>,
+    validation: &crate::ValidationResult,
+) -> Documentation {
+    let mut docs = generate_documentation(doc, project_name);
+    if !validation.wall_reports.is_empty() {
+        let report_svg = crate::compliance_report::compliance_report_to_svg(validation, &docs.project_name);
+        // The compliance report lives in a small px coordinate space (like
+        // the site plan), so we use the fitted title-block path.
+        let info = drawing_info_for(DrawingType::ComplianceReport, "—", &docs.generated_date);
+        docs.compliance_report_svg = inject_fitted_title_block(&report_svg, &ProjectInfo {
+            name: docs.project_name.clone(),
+            number: doc.building_id.clone(),
+            solver: "QBD Layout".into(),
+            ..Default::default()
+        }, &info);
+    }
+    docs
 }
 
 /// Wrap `drawing::schedule_to_svg` with an empty-input short-circuit:

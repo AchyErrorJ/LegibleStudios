@@ -8,6 +8,7 @@
 //! per-layer wall CSG mesh path is also skipped (3D-render only, not
 //! needed for permit drawings).
 
+pub mod compliance_report;
 pub mod convert;
 pub mod documentation;
 pub mod floor_plan;
@@ -17,8 +18,9 @@ pub mod terrain;
 pub mod validation;
 pub mod wall_types;
 
+pub use compliance_report::compliance_report_to_svg;
 pub use convert::{layout_to_building, wall_type_for_wall, walls_to_parametric};
-pub use documentation::{Documentation, PdfError, generate_documentation, svg_to_pdf};
+pub use documentation::{Documentation, PdfError, generate_documentation, generate_documentation_with_validation, svg_to_pdf};
 pub use floor_plan::generate_floor_plan_with_openings;
 pub use schedule::{door_entries, window_entries};
 pub use validation::{ValidationResult, validate_layout, validate_wall};
