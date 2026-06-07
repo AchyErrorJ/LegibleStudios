@@ -12,6 +12,10 @@ use crate::slice_plane::{SlicePlane, SlicePlaneType};
 use domain::{Building, ElementType, ParametricWall, StructuralElement, WallType};
 use glam::{Vec2, Vec3};
 
+/// Mid-grey used for as-built (existing) reference linework on the design
+/// overlay. New-design walls render in the configured (black) wall colour.
+const AS_BUILT_GREY: Vec3 = Vec3::new(0.5, 0.5, 0.5);
+
 /// Slice a parametric wall against `plane`. Matches `Slicer2D::sliceWall`
 /// (`slicer_2d.cpp:256`).
 ///
@@ -50,27 +54,45 @@ pub fn slice_wall(
         let p3 = wall.end_point - wall_normal * half_thick;
         let p4 = wall.start_point - wall_normal * half_thick;
 
+        // As-built (existing) walls are reference linework: dashed, grey, and
+        // unhatched, so a new design drawn on the same plan reads as the solid
+        // black foreground. New-design walls keep the configured layer style.
+        let is_as_built = wall.existing || wall.category == "as_built";
+
         let outline = Polyline2D {
             points: vec![p1, p2, p3, p4],
             closed: true,
-            layer: wall_layer.name.clone(),
-            line_type: wall_layer.line_type.clone(),
+            layer: if is_as_built {
+                "A-WALL-EXST".to_string()
+            } else {
+                wall_layer.name.clone()
+            },
+            line_type: if is_as_built {
+                "dashed".to_string()
+            } else {
+                wall_layer.line_type.clone()
+            },
             line_weight: wall_layer.line_weight,
-            color: wall_layer.color,
+            color: if is_as_built {
+                AS_BUILT_GREY
+            } else {
+                wall_layer.color
+            },
         };
 
-        let hatch_layer = config.layer_for("hatch");
-        let hatch = Hatch2D {
-            boundaries: vec![outline.clone()],
-            pattern: "ANSI31".to_string(),
-            scale: 1.0,
-            angle: 0.0,
-            layer: hatch_layer.name.clone(),
-            color: hatch_layer.color,
-        };
+        result.polylines.push(outline.clone());
 
-        result.polylines.push(outline);
-        result.hatches.push(hatch);
+        if !is_as_built {
+            let hatch_layer = config.layer_for("hatch");
+            result.hatches.push(Hatch2D {
+                boundaries: vec![outline],
+                pattern: "ANSI31".to_string(),
+                scale: 1.0,
+                angle: 0.0,
+                layer: hatch_layer.name.clone(),
+                color: hatch_layer.color,
+            });
+        }
     } else {
         // Section view: stack of layer rectangles in the cut plane.
         let mut current_offset = -total_thickness * 0.5;
@@ -384,6 +406,46 @@ mod tests {
         assert!(r.polylines[0].closed);
         assert_eq!(r.hatches.len(), 1);
         assert_eq!(r.hatches[0].pattern, "ANSI31");
+    }
+
+    #[test]
+    fn as_built_wall_is_dashed_grey_and_unhatched() {
+        let mut wall = straight_wall();
+        wall.category = "as_built".into();
+        let plane = SlicePlane::horizontal(1500.0, "Plan");
+        let r = slice_wall(&wall, &simple_wall_type(), &plane, &Config::with_defaults());
+
+        assert_eq!(r.polylines.len(), 1);
+        let outline = &r.polylines[0];
+        assert_eq!(outline.line_type, "dashed", "as-built outline should be dashed");
+        assert_eq!(outline.layer, "A-WALL-EXST");
+        assert_eq!(outline.color, AS_BUILT_GREY);
+        assert!(r.hatches.is_empty(), "as-built walls carry no fill hatch");
+    }
+
+    #[test]
+    fn existing_flag_alone_styles_wall_as_overlay() {
+        // The renovation `existing` flag styles a wall dashed/grey even when
+        // its category is a normal construction type (not "as_built").
+        let mut wall = straight_wall();
+        wall.category = "exterior".into();
+        wall.existing = true;
+        let plane = SlicePlane::horizontal(1500.0, "Plan");
+        let r = slice_wall(&wall, &simple_wall_type(), &plane, &Config::with_defaults());
+        assert_eq!(r.polylines[0].line_type, "dashed");
+        assert_eq!(r.polylines[0].color, AS_BUILT_GREY);
+        assert!(r.hatches.is_empty());
+    }
+
+    #[test]
+    fn new_design_wall_keeps_solid_hatched_style() {
+        // No category → new design: solid layer style + hatch (regression).
+        let plane = SlicePlane::horizontal(1500.0, "Plan");
+        let r = slice_wall(&straight_wall(), &simple_wall_type(), &plane, &Config::with_defaults());
+        assert_eq!(r.polylines.len(), 1);
+        assert_ne!(r.polylines[0].line_type, "dashed");
+        assert_eq!(r.polylines[0].layer, "A-WALL");
+        assert_eq!(r.hatches.len(), 1);
     }
 
     #[test]

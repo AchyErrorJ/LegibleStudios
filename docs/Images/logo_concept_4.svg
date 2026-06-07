@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.1"/>
+      <stop offset="40%" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="70%" stop-color="#000000" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="400" height="400" fill="#0d0d0d"/>
+
+  <!-- 4 Quadrants - each with distinct character -->
+  <!-- Quadrant 1: Top-Right - Education / Teaching (lighter, ordered grid) -->
+  <g stroke="#ffffff" stroke-width="0.6" opacity="0.25">
+    <path d="M 200 200 L 200 30" stroke-width="1.2" opacity="0.5"/>
+    <path d="M 200 200 L 370 200" stroke-width="1.2" opacity="0.5"/>
+    <path d="M 200 50 Q 280 120 340 200" fill="none" opacity="0.15"/>
+    <path d="M 200 80 Q 260 140 320 200" fill="none" opacity="0.15"/>
+    <path d="M 200 120 Q 240 160 280 200" fill="none" opacity="0.15"/>
+  </g>
+
+  <!-- Quadrant 2: Bottom-Right - Technology / AR (dashed, precise) -->
+  <g stroke="#ffffff" stroke-width="0.6" opacity="0.25">
+    <path d="M 200 200 L 370 200" stroke-width="1.2" opacity="0.5"/>
+    <path d="M 200 200 L 200 370" stroke-width="1.2" opacity="0.5"/>
+    <path d="M 340 200 Q 280 280 200 340" fill="none" stroke-dasharray="4 3" opacity="0.2"/>
+    <path d="M 320 200 Q 260 260 200 320" fill="none" stroke-dasharray="4 3" opacity="0.2"/>
+    <path d="M 280 200 Q 240 240 200 280" fill="none" stroke-dasharray="4 3" opacity="0.2"/>
+  </g>
+
+  <!-- Quadrant 3: Bottom-Left - Construction / Building (heavy, structural) -->
+  <g stroke="#ffffff" stroke-width="0.8" opacity="0.3">
+    <path d="M 200 200 L 200 370" stroke-width="1.2" opacity="0.5"/>
+    <path d="M 200 200 L 30 200" stroke-width="1.2" opacity="0.5"/>
+    <path d="M 200 340 Q 120 280 60 200" fill="none" opacity="0.25"/>
+    <path d="M 200 320 Q 140 260 80 200" fill="none" opacity="0.25"/>
+    <path d="M 200 280 Q 160 240 120 200" fill="none" opacity="0.25"/>
+  </g>
+
+  <!-- Quadrant 4: Top-Left - Design / Architecture (organic, flowing) -->
+  <g stroke="#ffffff" stroke-width="0.6" opacity="0.25">
+    <path d="M 200 200 L 30 200" stroke-width="1.2" opacity="0.5"/>
+    <path d="M 200 200 L 200 30" stroke-width="1.2" opacity="0.5"/>
+    <path d="M 60 200 Q 120 120 200 60" fill="none" stroke-linecap="round" opacity="0.15"/>
+    <path d="M 80 200 Q 140 140 200 80" fill="none" stroke-linecap="round" opacity="0.15"/>
+    <path d="M 120 200 Q 160 160 200 120" fill="none" stroke-linecap="round" opacity="0.15"/>
+  </g>
+
+  <!-- The event horizon - where all four collapse -->
+  <circle cx="200" cy="200" r="58" fill="#000000"/>
+  <circle cx="200" cy="200" r="60" fill="none" stroke="#ffffff" stroke-width="2" opacity="0.9"/>
+  <circle cx="200" cy="200" r="64" fill="none" stroke="#ffffff" stroke-width="0.8" opacity="0.3"/>
+
+  <!-- 4 pull vectors - showing each field being drawn in -->
+  <g stroke="#ffffff" stroke-width="0.5" opacity="0.15" stroke-linecap="round">
+    <path d="M 200 200 Q 200 160 200 120" />
+    <path d="M 200 200 Q 240 200 280 200" />
+    <path d="M 200 200 Q 200 240 200 280" />
+    <path d="M 200 200 Q 160 200 120 200" />
+  </g>
+
+  <!-- Typography -->
+  <text x="200" y="385" font-family="Helvetica Neue, Arial, sans-serif" font-size="14" font-weight="300" text-anchor="middle" fill="#ffffff" letter-spacing="8" opacity="0.8">LEGIBLE</text>
+</svg>

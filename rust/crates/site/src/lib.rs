@@ -6,8 +6,12 @@
 //! tile fetcher (increment 2), the native map widget (increment 3), and
 //! the LiDAR backend (increments 4–6) build on.
 
+pub mod aselevation;
+pub mod aswall;
+pub mod cloud;
 pub mod coord;
 pub mod downloader;
+pub mod footprint;
 pub mod geotiff;
 pub mod mesh;
 pub mod ontario;
@@ -15,7 +19,18 @@ pub mod overpass;
 pub mod tile;
 pub mod tilefetch;
 
+pub use aselevation::{
+    AsBuiltElevation, AsBuiltOpening, ElevationError, ElevationParams, Facade,
+    project_all_elevations, project_elevation,
+};
+pub use aswall::{
+    AsBuiltError, AsBuiltResult, AsBuiltWall, WallDetectParams, detect_walls,
+};
+pub use cloud::parse_xyz;
 pub use coord::{LatLon, UtmCoord, utm17_from_wgs84, wgs84_from_utm17};
+pub use footprint::{
+    FootprintError, FootprintResult, extract_footprint,
+};
 pub use geotiff::{
     ElevationRaster, GeoAffine, GeoTiffError, GeoTiffInfo, read_elevation, read_info,
 };

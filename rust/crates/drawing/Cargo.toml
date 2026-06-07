@@ -24,4 +24,4 @@ serde_json.workspace = true
 anyhow.workspace = true
 ls-domain.workspace = true
 ls-archgeometry.workspace = true
-# dxf = "0.5"  # add when implementing dxf emission
+dxf = "0.6"

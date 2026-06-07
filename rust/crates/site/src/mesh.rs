@@ -88,7 +88,7 @@ pub enum StitchError {
 pub const DEFAULT_GRID_N: usize = 33;
 
 const M_TO_FT: f32 = 3.280_84;
-const M_TO_MM: f32 = 1000.0;
+pub(crate) const M_TO_MM: f32 = 1000.0;
 
 /// Stitch a `TerrainMesh` covering the WGS84 bbox `(nw, se)`, sampling on
 /// a `grid_n × grid_n` lattice. Tiles are opened lazily and reused across

@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-16
 **Status:** Design. Decisions locked (see below); no code yet.
-**Supersedes scope in:** `RUST_PORT_ROADMAP.md` §2 (which assumed headless + deferred UI). The UI is now in scope, bare-metal, and the product scope broadened to general object generation.
+**Supersedes scope in:** `history/docs/RUST_PORT_ROADMAP.md` §2 (which assumed headless + deferred UI). The UI is now in scope, bare-metal, and the product scope broadened to general object generation.
 
 > **This doc is the Legible-Studio-specific view.** The domain-neutral object model, primitive
 > library, CSG, registry traits, and the `Surface` seam live in the **shared `parametric-kernel`**

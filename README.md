@@ -1,210 +1,177 @@
-# Generative CAD for Residential Construction
+# Legible Studio
 
-Permit-ready drawing generation from simple inputs. No manual drafting required.
+**Code-compliant Part 9 residential permit sets, generated in one sitting.**
 
-## Quick Start
+Answer a handful of questions about a house → get a permit-ready drawing set
+(floor plans, elevations, sections, foundation, framing, details, schedules,
+compliance report) as SVG + PDF, plus IFC for engineers and DWG/DXF for
+AutoCAD. Capture an existing building with LiDAR and overlay the new design on
+the as-built.
 
-### 1. Generate a Complete Permit Drawing Set (9 Sheets)
+Scope: Ontario Building Code (OBC) Part 9, new construction. Zoning and Part 11
+(renovations) are out of v1 scope.
+
+> This is a pure-Rust workspace (`rust/`). The earlier Python/C++ ArchEngine and
+> the UE5 viewer are legacy and not part of the current build.
+
+---
+
+## Status (June 2026)
+
+Three build phases are complete end-to-end:
+
+| Phase | Outcome | State |
+|---|---|---|
+| **1 — Permit-ready PDF** | One command → a PDF bundle a building department can accept for a simple house. | ✅ |
+| **2 — Engineer handoff** | IFC (walls/openings/slabs/footings) for Revit, DWG/DXF for AutoCAD, an HTTP API. | ✅ |
+| **3 — LiDAR as-built → plans** | Capture existing conditions from LiDAR and overlay new design (existing dashed grey, new solid black). | ✅ |
+
+Detail lives in [`docs/ROADMAP_2026-05-31.md`](docs/ROADMAP_2026-05-31.md).
+
+**Tested:** ~620 tests across the workspace (`cargo test --release --workspace`),
+including a pure-Rust end-to-end `smoke-test` crate that round-trips every core
+sheet to PDF.
+
+---
+
+## What works today
+
+### Generate a permit set from answers
 
 ```bash
-cd /root/ArchEngine
-python permit_drawing_set.py
+cd rust
+
+# Answers → building JSON (rooms, walls, doors, windows, detectors, electrical)
+cargo run --release --bin qbd_solve -- \
+    --bedrooms 3 --bathrooms 2 --sqft 1600 --garage 2car --roof gable > house.json
+
+# Building JSON → full permit-set bundle (SVG + PDF + DXF)
+cargo run --release --bin qbd_dump -- house.json --bundle permit_set --pdf permit_set --dxf permit_set
 ```
 
-This creates:
-- **01_site_plan.svg** — Lot, setbacks, driveway, north arrow
-- **02_floor_plan.svg** — Floor plan with 4-tier intelligent dimensions
-- **03-06_elevation_*.svg** — North, South, East, West elevations with materials
-- **04_section_aa.svg** — Transverse section through building center
-- **05_door_schedule.svg** — Door schedule table
-- **05_window_schedule.svg** — Window schedule table
+`permit_set/` then contains ~16 sheets:
 
-Output location: `test_pipeline/permit_set/`
+- `01_site_plan` · `02_floor_plan` (one per storey) · `03_elevation_{n,s,e,w}`
+- `04_section_aa` · `06_roof_plan` · `08_foundation_plan` · `10_framing_plan`
+- `07_wall_detail_*` · `11_footing_detail` · `09_compliance_report`
+- `05_door_schedule` · `05_window_schedule` · `manifest.json`
 
-### 2. Use the GUI (Optional)
+Each sheet is emitted as SVG, the same set as PDF (permit submission / engineer
+review), and the plan + elevations also as DXF (AutoCAD).
+
+### Export for engineers
 
 ```bash
-pip install PyQt6
-python archengine_gui.py
+# IFC4 for Revit — walls, spaces, doors/windows with opening voids, slabs, strip footings
+cargo run --release --bin qbd_dump -- house.json --ifc house.ifc
+
+# Title block + designer/BCIN on every sheet
+cargo run --release --bin qbd_dump -- house.json --bundle permit_set \
+    --project "123 Main St" --designer "Jane Doe" --bcin 12345
 ```
 
-GUI inputs:
-- Site address, lot dimensions, setbacks
-- Building type, target area, room counts
-- Generate button → complete drawing set
-
-### 3. API Server (Headless)
+### Run the HTTP API
 
 ```bash
-cd headless
-python api_server.py
-
-# Then POST to /solve_building
-curl -X POST http://localhost:8000/solve_building \
-  -H "Content-Type: application/json" \
-  -d '{
-    "structure_type": "residential",
-    "target_area_m2": 150,
-    "width_m": 12,
-    "depth_m": 13,
-    "max_rooms": 15,
-    "floor": 0
-  }'
+cargo run --release --bin ls-api-server      # binds a local port, ctrl-c to stop
 ```
 
-## Input Format
+- `GET  /health`
+- `POST /solve` — answers JSON → building JSON
+- `POST /draw`  — building JSON → SVG bundle (+ optional IFC, DXF, compliance summary
+  via `?include_ifc=true&include_dxf=true`)
 
-### Minimal Input (Building JSON)
+### LiDAR as-built capture (Ontario)
 
-```json
-{
-  "name": "My House",
-  "structure_type": "residential",
-  "target_area_m2": 150,
-  "width_m": 12,
-  "depth_m": 13,
-  "rooms": [
-    {"id": "kitchen", "name": "Kitchen", "min_area_m2": 12, "preferred_aspect": "square"},
-    {"id": "living", "name": "Living Room", "min_area_m2": 20, "preferred_aspect": "wide"}
-  ],
-  "walls": [...],
-  "doors": [...],
-  "windows": [...]
-}
-```
-
-### Full Solver Pipeline
-
-```python
-from headless.api_server import solve_building
-
-result = solve_building({
-    "structure_type": "residential",
-    "target_area_m2": 150,
-    "width_m": 12,
-    "depth_m": 13,
-    "solver_type": "grid"  # or "wave_collapse", "tree", "hybrid"
-})
-
-# result contains:
-# - rooms: placed rooms with positions
-# - walls: generated wall segments
-# - openings: doors and windows
-# - svg_url: path to generated floor plan
-```
-
-## Key Features
-
-### 4-Tier Intelligent Dimensioning
-
-The floor plan includes architectural-standard dimensions:
-
-| Tier | Location | Example |
-|------|----------|---------|
-| **OVERALL** | Outside building | 13.4 m (full envelope) |
-| **STRUCTURAL** | Outside, closer | 3.0 m, 2.4 m (wall grid) |
-| **OPENING** | Centered on opening | 929 mm (door), 1219 mm (window) |
-| **INTERIOR** | Inside rooms | 4.9 m × 4.9 m (room size) |
-
-### 9 Integrated Solvers
-
-- `grid` — Grid-based room placement
-- `wave_collapse` — WFC constraint solving
-- `tree` — Tree-structured branching
-- `perfect_adjacency` — Graph-based adjacency
-- `constraint` — CSP solver
-- `genetic` — Genetic algorithm optimization
-- `annealing` — Simulated annealing
-- `force_directed` — Force-directed layout
-- `space_colonization` — Growth-based placement
-- `hybrid` — Combines multiple approaches
-
-### Layout Refiner
-
-Post-solver pass that:
-- Removes walls between adjacent spaces (open plan)
-- Adds doors between connected rooms
-- Places windows on exterior walls
-- Applies design fragments (PRIVATE_WING, EFFICIENT_CIRCULATION, etc.)
-
-## Output Formats
-
-| Format | Use Case | Command |
-|--------|----------|---------|
-| **SVG** | Permit submission, editing | Default output |
-| **PDF** | Professional printing | `pdf_exporter.py` |
-| **JSON** — 3D viewer, AR | `api_server.py` output |
-
-### SVG to PDF
-
-```python
-from ArchEngine_CAD.exports.pdf_exporter import export_floor_plan_pdf
-
-export_floor_plan_pdf(
-    svg_path="floor_plan.svg",
-    pdf_path="floor_plan.pdf",
-    paper_size="ARCH_D"  # 24"×36" for permits
-)
-```
-
-## File Structure
-
-```
-/root/ArchEngine/
-├── archengine_gui.py              ← GUI frontend (PyQt6)
-├── permit_drawing_set.py          ← Complete permit set generator
-├── ArchEngine_kernel/
-│   └── scripts/
-│       ├── generate_elevations.py ← 4 elevations with materials
-│       ├── generate_sections.py   ← Section drawings
-│       ├── generate_schedules.py  ← Door/window schedules
-│       ├── generate_plans.py      ← Floor plan with dimensions
-│       ├── generate_site_plan.py  ← Site plan generator
-│       └── intelligent_dimensions.py ← 4-tier dimensioning
-├── headless/
-│   └── api_server.py              ← FastAPI server
-└── ArchEngine_CAD/
-    └── exports/
-        └── pdf_exporter.py        ← PDF export bridge
-```
-
-## Permit Submission Checklist
-
-- [x] Site plan with setbacks and north arrow
-- [x] Floor plan with dimensions (4-tier)
-- [x] 4 elevations (N, S, E, W)
-- [x] Section drawing
-- [x] Door schedule
-- [x] Window schedule
-
-All generated automatically from your inputs.
-
-## Troubleshooting
-
-### "No module named 'PyQt6'"
 ```bash
-pip install PyQt6
+# 1. Building footprint from DSM/DTM tiles (height-threshold + convex hull)
+cargo run --release --bin legible-footprint -- --site site.json --dsm ./dsm --dtm ./dtm --out footprint.json
+
+# 2. Interior walls from a point cloud (Hough vertical-plane segmentation)
+cargo run --release --bin legible-aswall -- --cloud interior.xyz --out aswalls.json
+
+# 3. Elevations from an exterior point cloud (per-facade outline + window/door openings)
+cargo run --release --bin legible-elevation -- --cloud exterior.xyz --out elevations.json
 ```
 
-### "No module named 'reportlab'"
+Merge the as-built walls (`category: "as_built"` / `existing: true`) into a
+building doc and the floor plan renders them **dashed grey** under your new
+**solid black** design — including existing doors and windows.
+
+### Desktop app
+
 ```bash
-pip install reportlab svglib
+cargo run --release --bin legible -- [house.json]
 ```
 
-### Elevations show no roof
-Fixed in latest version — roofs now generate from building bounds if vertex data missing.
+A bare-metal window (winit + tiny-skia software rendering — no GPU, no webview).
+What you can do today:
 
-### Dimensions don't align
-Fixed — dimensions now use raw mm coordinates (identity transform) matching wall geometry.
+- **View mode** (default): pan (right-drag), zoom (scroll). If you pass a
+  `house.json`, it renders that permit floor plan as the underlay.
+- **`b` boundary mode**: click to sketch a lot outline, `Enter` to close — the
+  room solver lays out a 3-bed/2-bath program inside it, live.
+- **`f` freeform mode**: sketch arbitrary shapes.
+- **`m` map mode**: OSM map tiles; click to trace a parcel polygon, `Enter`
+  saves `site.json`. **`g`** fires the LiDAR fetch + terrain-stitch pipeline for
+  that parcel on a background thread.
+- **`v`** back to view, **`c`** clear, **`Esc`** quit.
 
-## Next Steps / Roadmap
+It's a working sketch/site front end, not yet a full Revit-style editor — wall/
+door/window editing in-app is the active next direction.
 
-- [ ] Vulkan viewer integration (3D walkthrough)
-- [ ] Section box tool (interactive cutting planes)
-- [ ] Elevation depth adjustment (clipping planes for protruded faces)
-- [ ] PDF batch export (all 9 sheets)
-- [ ] Topography import for site plans
+---
+
+## How it fits together
+
+```
+answers ──► solver ──► building JSON (schema) ──► drawing ──► SVG/PDF/DXF
+            (ls-solver)   (ls-archgeometry)        (ls-drawing)
+                              │                        │
+                              ├──► OBC rules ──────────┤  (ls-obc: spans, thermal,
+                              │    (compliance report)    smoke/CO, electrical)
+                              └──► IFC4 export (ls-qbd → house.ifc)
+
+LiDAR DEM / point cloud ──► ls-site ──► footprint / as-built walls / elevations
+                                          └──► merged into building JSON ──► overlay
+```
+
+| Crate | Responsibility |
+|---|---|
+| `ls-solver` | Answers → room layout, walls, doors, windows, smoke/CO detectors, electrical |
+| `ls-archgeometry` | Schema types (the building-JSON contract), room/wall geometry, renovation flag |
+| `ls-obc` | OBC span tables (joist/stud/header/rafter), thermal, detector + electrical placement |
+| `ls-drawing` | 2D slicer → SVG/DXF: plans, elevations, sections, details, schedules, as-built overlay |
+| `ls-qbd` | Orchestration, documentation bundle, IFC4 export, compliance report, SVG→PDF, title blocks |
+| `ls-site` | LiDAR download, GeoTIFF/terrain, OSM streets, map widget, footprint + as-built detection |
+| `ls-api` | `axum` HTTP server (`/health`, `/solve`, `/draw`) |
+| `ls-app` | `legible` desktop head (sketch pad, map mode, floor-plan view) |
+| `domain`, `csg`, `bvh`, `mesh-gen`, `wall-system`, `catalog`, `geometry-loader` | Shared kernel: object model, geometry, primitives |
+
+---
+
+## Build & test
+
+```bash
+cd rust
+cargo build --release            # all crates + binaries
+cargo test  --release --workspace
+cargo test  --release -p smoke-test   # end-to-end: answers → bundle → PDF round-trip
+```
+
+Requires a recent stable Rust (workspace pins `rust-version = 1.92`, edition 2024).
+
+---
+
+## Not in v1 (and why)
+
+| Item | Reason |
+|---|---|
+| **Part 11 (renovations)** | Different code + drawing conventions. The data model already flags existing-vs-new; rules come later. |
+| **Plumbing / HVAC plans** | Not required for an Ontario Part 9 permit. Most-requested nice-to-have. |
+| **3D render / Vulkan** | Separate product line (LegiView). Permit drawings are 2D. |
+| **Full structural engineering** | Requires an engineer's stamp. We pre-mark assumptions; the engineer verifies via the IFC/PDF handoff. |
 
 ## License
 
-Copyright (c) 2026 Legible Studios
+MIT · Copyright (c) 2026 Legible Studios

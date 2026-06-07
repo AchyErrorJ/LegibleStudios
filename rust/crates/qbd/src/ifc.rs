@@ -2,12 +2,11 @@
 //!
 //! Emits the spatial hierarchy (`IfcProject` → `IfcSite` → `IfcBuilding` →
 //! `IfcBuildingStorey`) plus `IfcWall` / `IfcSpace` / `IfcDoor` / `IfcWindow`
-//! as placed extruded solids, units in millimetres. This is the decoupled
-//! Revit-import / structured-data bridge — not full IFC4, but a valid file
-//! that round-trips the building's spatial model.
-//!
-//! v1 limitation: doors/windows are placed elements; they do **not** yet void
-//! their host wall (`IfcOpeningElement` + `IfcRelVoidsElement`/`RelFillsElement`).
+//! / `IfcSlab` (one floor per storey) / `IfcFooting` (one strip per exterior
+//! wall on the lowest storey) as placed extruded solids, units in
+//! millimetres. Doors and windows cut a through-wall `IfcOpeningElement`
+//! (`IfcRelVoidsElement`) and fill it (`IfcRelFillsElement`) so Revit
+//! imports them as proper openings.
 
 use archgeometry::SchemaDocument;
 use std::fmt::Write as _;
@@ -197,6 +196,71 @@ pub fn to_ifc(doc: &SchemaDocument, project_name: &str, date: &str) -> String {
         ));
         let st = storey_of(&r.level);
         contained[contained_idx(st)].1.push(id);
+    }
+
+    // --- Slabs: one IfcSlab per storey, sized to the building footprint.
+    // The slab's top face sits at the storey elevation so wall feet land on
+    // it; thickness extrudes downward.
+    const SLAB_THICKNESS_MM: f32 = 150.0;
+    if doc.width >= 1.0 && doc.depth >= 1.0 {
+        for (name, st_id) in &storey_ids {
+            let elev = doc
+                .levels
+                .iter()
+                .find(|l| &l.name == name)
+                .map_or(0.0, |l| l.elevation);
+            let cx = doc.width * 0.5;
+            let cz = doc.depth * 0.5;
+            let plc = placement_dir(&mut s, Some(bldg_plc), cx, cz, elev - SLAB_THICKNESS_MM, 1.0, 0.0);
+            let solid = extruded_box(&mut s, doc.width, doc.depth, SLAB_THICKNESS_MM);
+            let shape = shape_rep(&mut s, ctx, solid);
+            let prod = s.add(&format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
+            let g = s.guid();
+            let id = s.add(&format!(
+                "IFCSLAB('{g}',#{owner},'Slab - {name}',$,$,#{plc},#{prod},$,.FLOOR.)"
+            ));
+            contained[contained_idx(*st_id)].1.push(id);
+        }
+    }
+
+    // --- Footings: one strip footing per exterior wall on the lowest storey.
+    // Width matches drawing::footing_detail (500 mm); positioned below the
+    // ground-floor slab so its top supports the foundation wall above.
+    const FOOTING_WIDTH_MM: f32 = 500.0;
+    const FOOTING_THICKNESS_MM: f32 = 200.0;
+    const GRAVEL_DEPTH_MM: f32 = 150.0;
+    let ground_storey_id = storey_ids.first().map(|(_, id)| *id);
+    let ground_storey_elev = storey_ids
+        .first()
+        .map(|(name, _)| name.clone())
+        .and_then(|n| doc.levels.iter().find(|l| l.name == n).map(|l| l.elevation))
+        .unwrap_or(0.0);
+    for w in &doc.walls {
+        if w.category != "exterior" {
+            continue;
+        }
+        if !(w.level_name.is_empty() || Some(&w.level_name) == storey_ids.first().map(|(n, _)| n)) {
+            continue;
+        }
+        let (sx, sz, ex, ez) = (w.start.x, w.start.z, w.end.x, w.end.z);
+        let len_mm = ((ex - sx).powi(2) + (ez - sz).powi(2)).sqrt();
+        if len_mm < 1.0 {
+            continue;
+        }
+        let (mx, mz) = ((sx + ex) * 0.5, (sz + ez) * 0.5);
+        let (dx, dz) = ((ex - sx) / len_mm, (ez - sz) / len_mm);
+        let z = ground_storey_elev - SLAB_THICKNESS_MM - GRAVEL_DEPTH_MM - FOOTING_THICKNESS_MM;
+        let plc = placement_dir(&mut s, Some(bldg_plc), mx, mz, z, dx, dz);
+        let solid = extruded_box(&mut s, len_mm, FOOTING_WIDTH_MM, FOOTING_THICKNESS_MM);
+        let shape = shape_rep(&mut s, ctx, solid);
+        let prod = s.add(&format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))"));
+        let g = s.guid();
+        let id = s.add(&format!(
+            "IFCFOOTING('{g}',#{owner},'Strip Footing',$,$,#{plc},#{prod},$,.STRIP_FOOTING.)"
+        ));
+        if let Some(st_id) = ground_storey_id {
+            contained[contained_idx(st_id)].1.push(id);
+        }
     }
 
     // --- Doors + windows: each cuts an IfcOpeningElement that voids its host
@@ -426,5 +490,40 @@ mod tests {
         assert_eq!(openings, 1);
         assert_eq!(ifc.matches("=IFCRELVOIDSELEMENT(").count(), openings);
         assert_eq!(ifc.matches("=IFCRELFILLSELEMENT(").count(), openings);
+    }
+
+    #[test]
+    fn one_slab_per_storey_with_floor_type() {
+        let ifc = to_ifc(&two_storey_doc(), "Test", "2026-06-04");
+        // Two non-roof storeys → two IfcSlab entities.
+        assert_eq!(ifc.matches("=IFCSLAB(").count(), 2);
+        // Predefined type is .FLOOR.
+        assert!(ifc.contains(".FLOOR.)"));
+        // Each slab carries the storey name in the label.
+        assert!(ifc.contains("'Slab - Level 1'"));
+        assert!(ifc.contains("'Slab - Level 2'"));
+    }
+
+    #[test]
+    fn one_strip_footing_per_exterior_wall_on_ground_storey() {
+        let ifc = to_ifc(&two_storey_doc(), "Test", "2026-06-04");
+        // Fixture has one exterior wall on Level 1, one on Level 2.
+        // Only the Level-1 wall gets a footing.
+        assert_eq!(ifc.matches("=IFCFOOTING(").count(), 1);
+        assert!(ifc.contains(".STRIP_FOOTING.)"));
+        assert!(ifc.contains("'Strip Footing'"));
+    }
+
+    #[test]
+    fn empty_doc_omits_slabs_and_footings_cleanly() {
+        let mut doc = SchemaDocument::default();
+        doc.width = 0.0;
+        doc.depth = 0.0;
+        let ifc = to_ifc(&doc, "Empty", "2026-06-04");
+        assert_eq!(ifc.matches("=IFCSLAB(").count(), 0);
+        assert_eq!(ifc.matches("=IFCFOOTING(").count(), 0);
+        // STEP file is still valid.
+        assert!(ifc.starts_with("ISO-10303-21;"));
+        assert!(ifc.trim_end().ends_with("END-ISO-10303-21;"));
     }
 }

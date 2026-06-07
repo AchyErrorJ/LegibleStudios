@@ -108,6 +108,8 @@ pub fn walls_to_parametric(building: &mut Building, walls: &[SchemaWall]) {
             base_height: wall.start.y,
             top_height: wall.start.y + wall.height,
             wall_type_index: wt_idx,
+            category: wall.category.clone(),
+            existing: wall.is_existing(),
             ..Default::default()
         });
     }
@@ -332,7 +334,7 @@ mod tests {
         let idx = wall_type_for_wall(&mut b, &wall);
         // Default exterior wall type was added.
         assert_eq!(b.wall_types.len(), 1);
-        assert_eq!(b.wall_types[idx as usize].id, "ext_2x6_r21");
+        assert_eq!(b.wall_types[idx as usize].id, "ext_2x6_r22_ci");
         // Second exterior wall reuses the same index.
         let idx2 = wall_type_for_wall(&mut b, &wall);
         assert_eq!(idx, idx2);
@@ -389,7 +391,7 @@ mod tests {
         let b = layout_to_building(&doc);
         assert_eq!(b.parametric_walls.len(), 4);
         assert_eq!(b.wall_types.len(), 1, "single exterior default reused");
-        assert_eq!(b.wall_types[0].id, "ext_2x6_r21");
+        assert_eq!(b.wall_types[0].id, "ext_2x6_r22_ci");
     }
 
     #[test]

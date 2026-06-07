@@ -56,20 +56,27 @@ impl ValidationResult {
     }
 }
 
+/// Millimetres per imperial foot — used to convert schema wall heights
+/// (mm) into the foot-based units the OBC stud-span tables expect.
+const MM_PER_FT: f32 = 304.8;
+
 /// Validate one wall against the OBC engine using the default wall-type
 /// for its category. Matches `QBDInterface::validateWall`
 /// (`qbd_interface.cpp:923`).
+///
+/// `wall_height_mm` is the schema-native millimetre height; the OBC engine
+/// works in feet, so the conversion happens at the boundary.
 #[must_use]
 pub fn validate_wall(
     obc: &OBCEngine,
     wall: &SchemaWall,
-    wall_height: f32,
+    wall_height_mm: f32,
     climate_zone: &str,
 ) -> ComplianceReport {
     let wall_type = wall_types::for_category(&wall.category);
     obc.validate_wall_assembly(
         &wall_type,
-        wall_height,
+        wall_height_mm / MM_PER_FT,
         wall.category == "exterior",
         climate_zone,
     )
@@ -104,7 +111,7 @@ pub fn validate_layout(
     }
 
     if exterior_wall_count > 0 {
-        let exterior_default = wall_types::exterior_2x6_r21();
+        let exterior_default = wall_types::for_category("exterior");
         result.average_r_value = exterior_default.total_r_value();
         let required_r = obc.minimum_r_value(climate_zone, "wall");
         result.thermal_compliance = result.average_r_value >= required_r;
@@ -149,10 +156,10 @@ mod tests {
         assert_eq!(r.walls_checked, 1);
         // Area = 5000mm × 2700mm = 13_500_000 (mm² in this aggregation).
         assert!((r.total_exterior_wall_area - 13_500_000.0).abs() < 1.0);
-        // Default exterior wall type has total R = 22.45.
-        assert!((r.average_r_value - 22.45).abs() < 0.01);
-        // Zone 6 requires R-24 → fails thermal.
-        assert!(!r.thermal_compliance);
+        // Default exterior wall type (R-22 batt + R-5 c.i.) has total R = 28.45.
+        assert!((r.average_r_value - 28.45).abs() < 0.01);
+        // Zone 6 requires R-24 → passes thermal with R-28.45.
+        assert!(r.thermal_compliance);
     }
 
     #[test]

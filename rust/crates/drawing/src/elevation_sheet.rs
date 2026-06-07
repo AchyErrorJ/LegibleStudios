@@ -8,7 +8,7 @@
 
 use std::fmt::Write as _;
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 
 /// Which cardinal direction the viewer is looking from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,6 +326,224 @@ fn project_opening(
     })
 }
 
+/// Build a [`SliceResult`] from the same projected geometry used by the SVG
+/// elevation.  Y is grade-at-zero, positive-up (no flip) so the DXF exports
+/// in a conventional engineering coordinate system.
+fn elevation_to_slice_result(input: &ElevationInput, dir: Direction) -> crate::SliceResult {
+    use crate::primitives::{Line2D, Polyline2D};
+    let mut result = crate::SliceResult::default();
+
+    let walls: Vec<WallSegment> = input
+        .walls
+        .iter()
+        .map(|w| project_wall(w, dir, input))
+        .filter(|w| (w.end_x - w.start_x).abs() > 1.0)
+        .collect();
+
+    let openings: Vec<Opening> = input
+        .openings
+        .iter()
+        .filter_map(|op| {
+            let wall = input.walls.get(op.wall_index)?;
+            let projected_wall = project_wall(wall, dir, input);
+            if (projected_wall.end_x - projected_wall.start_x).abs() < 1.0 {
+                return None;
+            }
+            project_opening(op, wall, dir, input)
+        })
+        .collect();
+
+    // Bounds
+    let (mut min_x, mut max_x, mut max_y) =
+        (f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for w in &walls {
+        min_x = min_x.min(w.start_x);
+        max_x = max_x.max(w.end_x);
+        max_y = max_y.max(w.top_y);
+    }
+    for op in &openings {
+        max_y = max_y.max(op.top_y);
+    }
+    let max_wall_top = walls.iter().map(|w| w.top_y).fold(0.0_f32, f32::max);
+    let gable_top_y = if !input.footprint_polygon_mm.is_empty() {
+        let by_x = matches!(dir, Direction::North | Direction::South);
+        let rects = decompose_rectilinear(&input.footprint_polygon_mm, by_x);
+        let pitch = if input.roof_pitch > 0.0 { input.roof_pitch } else { 0.5 };
+        let max_ridge = rects
+            .iter()
+            .map(|r| {
+                let (w, d) = wing_dims(r, by_x);
+                w.min(d) * 0.5 * pitch
+            })
+            .fold(0.0_f32, f32::max);
+        max_wall_top + max_ridge
+    } else if input.gable_ridge_above_plate > 0.0 {
+        max_wall_top + input.gable_ridge_above_plate
+    } else {
+        0.0
+    };
+    if gable_top_y > max_y {
+        max_y = gable_top_y;
+    }
+    if !min_x.is_finite() {
+        min_x = 0.0;
+        max_x = match dir {
+            Direction::South | Direction::North => input.width.max(10_000.0),
+            Direction::East | Direction::West => input.depth.max(10_000.0),
+        };
+    }
+    if !max_y.is_finite() || max_y <= 0.0 {
+        max_y = 2700.0;
+    }
+
+    let plate_y = walls.iter().map(|w| w.top_y).fold(0.0_f32, f32::max);
+
+    // Wall envelope
+    if !walls.is_empty() {
+        result.polylines.push(Polyline2D {
+            points: vec![
+                Vec2::new(min_x, 0.0),
+                Vec2::new(max_x, 0.0),
+                Vec2::new(max_x, plate_y),
+                Vec2::new(min_x, plate_y),
+            ],
+            closed: true,
+            layer: "A-WALL".into(),
+            line_type: "continuous".into(),
+            line_weight: 0.35,
+            color: Vec3::new(0.9, 0.9, 0.85),
+        });
+    }
+
+    // Floor lines
+    if !walls.is_empty() {
+        for &fy in &input.floor_lines {
+            if fy > 0.0 && fy < max_y {
+                result.lines.push(Line2D {
+                    start: Vec2::new(min_x, fy),
+                    end: Vec2::new(max_x, fy),
+                    layer: "A-FLOR".into(),
+                    line_type: "dashed".into(),
+                    line_weight: 0.25,
+                    color: Vec3::new(0.4, 0.4, 0.4),
+                });
+            }
+        }
+    }
+
+    // Roof silhouette
+    if !input.footprint_polygon_mm.is_empty() && !walls.is_empty() {
+        let silhouette = polygon_roof_silhouette(input, dir, plate_y);
+        if !silhouette.is_empty() {
+            let pts: Vec<Vec2> = silhouette.iter().map(|(x, y)| Vec2::new(*x, *y)).collect();
+            result.polylines.push(Polyline2D {
+                points: pts,
+                closed: true,
+                layer: "A-ROOF".into(),
+                line_type: "continuous".into(),
+                line_weight: 0.35,
+                color: Vec3::new(0.5, 0.5, 0.5),
+            });
+        }
+    } else if input.gable_ridge_above_plate > 0.0 && !walls.is_empty() {
+        let ridge_y = plate_y + input.gable_ridge_above_plate;
+        let is_gable_end = match dir {
+            Direction::East | Direction::West => input.ridge_along_width,
+            Direction::North | Direction::South => !input.ridge_along_width,
+        };
+        if is_gable_end {
+            let cx = (min_x + max_x) * 0.5;
+            result.polylines.push(Polyline2D {
+                points: vec![
+                    Vec2::new(min_x, plate_y),
+                    Vec2::new(cx, ridge_y),
+                    Vec2::new(max_x, plate_y),
+                ],
+                closed: true,
+                layer: "A-ROOF".into(),
+                line_type: "continuous".into(),
+                line_weight: 0.35,
+                color: Vec3::new(0.5, 0.5, 0.5),
+            });
+        } else if input.hip {
+            let inset = input.width.min(input.depth) * 0.5;
+            let (rl, rr) = (min_x + inset, max_x - inset);
+            result.polylines.push(Polyline2D {
+                points: vec![
+                    Vec2::new(min_x, plate_y),
+                    Vec2::new(max_x, plate_y),
+                    Vec2::new(rr, ridge_y),
+                    Vec2::new(rl, ridge_y),
+                ],
+                closed: true,
+                layer: "A-ROOF".into(),
+                line_type: "continuous".into(),
+                line_weight: 0.35,
+                color: Vec3::new(0.5, 0.5, 0.5),
+            });
+        } else {
+            result.polylines.push(Polyline2D {
+                points: vec![
+                    Vec2::new(min_x, plate_y),
+                    Vec2::new(max_x, plate_y),
+                    Vec2::new(max_x, ridge_y),
+                    Vec2::new(min_x, ridge_y),
+                ],
+                closed: true,
+                layer: "A-ROOF".into(),
+                line_type: "continuous".into(),
+                line_weight: 0.35,
+                color: Vec3::new(0.5, 0.5, 0.5),
+            });
+            result.lines.push(Line2D {
+                start: Vec2::new(min_x, ridge_y),
+                end: Vec2::new(max_x, ridge_y),
+                layer: "A-ROOF".into(),
+                line_type: "continuous".into(),
+                line_weight: 0.35,
+                color: Vec3::ZERO,
+            });
+        }
+    }
+
+    // Openings
+    for op in &openings {
+        result.polylines.push(Polyline2D {
+            points: vec![
+                Vec2::new(op.center_x - op.width * 0.5, op.bottom_y),
+                Vec2::new(op.center_x + op.width * 0.5, op.bottom_y),
+                Vec2::new(op.center_x + op.width * 0.5, op.top_y),
+                Vec2::new(op.center_x - op.width * 0.5, op.top_y),
+            ],
+            closed: true,
+            layer: if op.is_door { "A-DOOR".into() } else { "A-WIND".into() },
+            line_type: "continuous".into(),
+            line_weight: 0.25,
+            color: Vec3::ONE,
+        });
+    }
+
+    // Grade line
+    if max_x > min_x {
+        result.lines.push(Line2D {
+            start: Vec2::new(min_x - 500.0, 0.0),
+            end: Vec2::new(max_x + 500.0, 0.0),
+            layer: "A-GRADE".into(),
+            line_type: "continuous".into(),
+            line_weight: 0.5,
+            color: Vec3::new(0.4, 0.4, 0.4),
+        });
+    }
+
+    result
+}
+
+/// Render an elevation drawing to a DXF byte vector.
+pub fn generate_elevation_dxf(input: &ElevationInput, dir: Direction) -> Result<Vec<u8>, String> {
+    let slice = elevation_to_slice_result(input, dir);
+    crate::export_to_dxf(&slice)
+}
+
 /// Render an elevation drawing to an SVG string. `scale` is mm-to-pixels
 /// (the Python default is 0.05, i.e. 1 px per 20 mm).
 #[must_use]
@@ -403,9 +621,12 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
 
     let margin_x = 1000.0_f32;
     let margin_y = 800.0_f32;
+    // Extra room on the right edge for level-marker callouts (Phase 2.5
+    // adds T.O. FOUNDATION / SUBFLOOR / PLATE labels off the building).
+    let right_extra = if max_y > 0.0 { 5500.0_f32 } else { 0.0 };
     let vb_x = min_x - margin_x;
     let vb_y = min_y - margin_y;
-    let vb_w = (max_x - min_x) + 2.0 * margin_x;
+    let vb_w = (max_x - min_x) + 2.0 * margin_x + right_extra;
     let vb_h = (max_y - min_y) + 2.0 * margin_y;
 
     #[allow(clippy::cast_possible_truncation)]
@@ -558,6 +779,69 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
 
     s.push_str("  </g>\n");
 
+    // Level markers (Phase 2.5) — drawn OUTSIDE the flip group so the
+    // labels read upright. Each marker is a short leader off the right
+    // edge of the building with a filled triangle bubble at the level
+    // line, plus a `T.O. ...` callout in feet-inches + mm.
+    if !walls.is_empty() && max_y > 0.0 {
+        let leader_x_start = max_x + 250.0;
+        let leader_x_end = max_x + 1800.0;
+        // Build the list of levels to label.
+        let mut levels: Vec<(f32, String)> = Vec::new();
+        levels.push((0.0, "T.O. FOUNDATION".to_string()));
+        for (i, &fy) in input.floor_lines.iter().enumerate() {
+            if fy > 0.0 && fy < plate_y {
+                levels.push((fy, format!("T.O. SUBFLOOR L{}", i + 2)));
+            }
+        }
+        if plate_y > 0.0 {
+            levels.push((plate_y, "T.O. PLATE".to_string()));
+        }
+
+        s.push_str("  <g id=\"level-markers\">\n");
+        for (y_mm, label) in &levels {
+            // Convert flipped (positive-up) Y to the surrounding SVG's
+            // positive-down Y. `flip_y = max_y + min_y`.
+            let svg_y = flip_y - y_mm;
+            // Leader line.
+            let _ = writeln!(
+                s,
+                r##"    <line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" stroke="#222" stroke-width="3"/>"##,
+                x1 = leader_x_start,
+                x2 = leader_x_end,
+                y = svg_y,
+            );
+            // Triangle bubble at the building edge.
+            let tri_y = svg_y;
+            let _ = writeln!(
+                s,
+                r##"    <polygon points="{p1x},{p1y} {p2x},{p2y} {p3x},{p3y}" fill="#222"/>"##,
+                p1x = leader_x_start,
+                p1y = tri_y,
+                p2x = leader_x_start + 140.0,
+                p2y = tri_y - 80.0,
+                p3x = leader_x_start + 140.0,
+                p3y = tri_y + 80.0,
+            );
+            // Label + elevation in ft-in and mm.
+            let _ = writeln!(
+                s,
+                r#"    <text x="{tx}" y="{ty}" class="label">{label}</text>"#,
+                tx = leader_x_end + 80.0,
+                ty = svg_y - 40.0,
+            );
+            let _ = writeln!(
+                s,
+                r#"    <text x="{tx}" y="{ty}" class="label">EL. {ftin}  [{mm:.0} mm]</text>"#,
+                tx = leader_x_end + 80.0,
+                ty = svg_y + 220.0,
+                ftin = format_ft_in(*y_mm),
+                mm = y_mm,
+            );
+        }
+        s.push_str("  </g>\n");
+    }
+
     // Title (NOT flipped).
     let title_y = vb_y + vb_h - 200.0;
     let title_x = vb_x + vb_w * 0.5;
@@ -569,6 +853,15 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
 
     s.push_str("</svg>\n");
     s
+}
+
+/// Format a millimetre height as `<feet>'-<inches>"` (rounded to nearest inch).
+fn format_ft_in(mm: f32) -> String {
+    const MM_PER_INCH: f32 = 25.4;
+    let total_inches = (mm / MM_PER_INCH).round() as i32;
+    let feet = total_inches / 12;
+    let inches = total_inches.rem_euclid(12);
+    format!("{feet}'-{inches}\"")
 }
 
 /// Sheet number prefix for the elevation drawing — matches the Python
@@ -754,5 +1047,47 @@ mod tests {
         assert_eq!(sheet_name(Direction::South), "03_elevation_south.svg");
         assert_eq!(sheet_name(Direction::East), "03_elevation_east.svg");
         assert_eq!(sheet_name(Direction::West), "03_elevation_west.svg");
+    }
+
+    #[test]
+    fn format_ft_in_handles_round_and_fractional_values() {
+        assert_eq!(format_ft_in(0.0), "0'-0\"");
+        assert_eq!(format_ft_in(2438.4), "8'-0\""); // 8 ft = 2438.4 mm
+        assert_eq!(format_ft_in(3048.0), "10'-0\""); // 10 ft
+        // 100 inches = 8 ft 4 in.
+        assert_eq!(format_ft_in(100.0 * 25.4), "8'-4\"");
+    }
+
+    #[test]
+    fn level_markers_appear_at_foundation_subfloor_and_plate() {
+        let mut input = ElevationInput {
+            width: 5000.0,
+            depth: 4000.0,
+            floor_lines: vec![3000.0],
+            ..Default::default()
+        };
+        for base in [0.0, 3000.0] {
+            input.walls.push(ElevationWallInput {
+                start: Vec3::new(0.0, 0.0, 0.0),
+                end: Vec3::new(5000.0, 0.0, 0.0),
+                height: 2700.0,
+                base,
+            });
+        }
+        let svg = generate_elevation_sheet_svg(&input, Direction::South, 0.05);
+        assert!(svg.contains(r#"id="level-markers""#));
+        assert!(svg.contains("T.O. FOUNDATION"));
+        assert!(svg.contains("T.O. SUBFLOOR L2"));
+        assert!(svg.contains("T.O. PLATE"));
+        // Foundation is at 0 → 0'-0".
+        assert!(svg.contains("EL. 0'-0\"  [0 mm]"));
+    }
+
+    #[test]
+    fn no_level_markers_for_empty_walls() {
+        let input = ElevationInput::default();
+        let svg = generate_elevation_sheet_svg(&input, Direction::South, 0.05);
+        assert!(!svg.contains("level-markers"));
+        assert!(!svg.contains("T.O. FOUNDATION"));
     }
 }

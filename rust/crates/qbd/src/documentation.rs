@@ -8,10 +8,12 @@ use archgeometry::SchemaDocument;
 use std::fmt::Write as _;
 use drawing::{
     Config, DrawingInfo, DrawingType, ElevationDirection, ElevationInput, ElevationOpeningInput,
-    ElevationWallInput, ProjectInfo, SectionInput, SectionWallInput, SitePlan, WallSectionDetail,
-    drawing_info_for, export_to_svg_padded, generate_elevation_sheet_svg, generate_foundation_plan_svg,
-    generate_section_sheet_svg, generate_site_plan_svg, generate_title_block, generate_wall_detail,
-    wall_detail_to_svg,
+    ElevationWallInput, FootingSpec, JoistSpec, ProjectInfo, SectionInput, SectionWallInput,
+    SitePlan, WallSectionDetail, drawing_info_for, export_to_svg_padded,
+    generate_elevation_sheet_svg, generate_footing_detail_svg, generate_foundation_plan_svg,
+    generate_framing_plan_svg, generate_obc_notes_block, generate_section_sheet_svg,
+    generate_site_plan_svg, generate_title_block, generate_wall_detail,
+    notes_block_size_mm, wall_detail_to_svg,
 };
 
 use crate::floor_plan::generate_floor_plan_with_openings;
@@ -29,6 +31,8 @@ pub struct WallDetail {
 pub struct Elevation {
     pub direction: ElevationDirection,
     pub svg: String,
+    /// ASCII DXF bytes for the same elevation geometry (no annotations).
+    pub dxf: Vec<u8>,
 }
 
 /// Permit-set bundle. Carries the floor-plan SVG plus the surrounding
@@ -43,6 +47,8 @@ pub struct Documentation {
     pub roof_plan_svg: String,
     /// Ground-floor (Level 1) plan — kept for back-compat / single-storey.
     pub floor_plan_svg: String,
+    /// ASCII DXF for the ground-floor plan geometry (walls, openings, hatches).
+    pub floor_plan_dxf: Vec<u8>,
     /// One `(level name, SVG)` per storey; `floor_plan_svg` is the first.
     pub floor_plans: Vec<(String, String)>,
     pub elevations: Vec<Elevation>,
@@ -54,6 +60,10 @@ pub struct Documentation {
     pub window_schedule_svg: String,
     /// Foundation plan — footing outline under exterior walls, slab edge.
     pub foundation_plan_svg: String,
+    /// Framing plan — joist direction + spacing per room, midspan beams.
+    pub framing_plan_svg: String,
+    /// Typical footing detail — section through gravel/footing/wall + rebar.
+    pub footing_detail_svg: String,
     /// Code compliance report — tabular wall-by-wall pass/fail summary.
     pub compliance_report_svg: String,
 }
@@ -192,6 +202,14 @@ fn filter_doc_to_level(doc: &SchemaDocument, level: &str) -> SchemaDocument {
     let electrical = doc.electrical.iter().filter(|e| e.level_name == level).cloned().collect();
     let headers = doc.headers.iter().filter(|h| h.level_name == level).cloned().collect();
     SchemaDocument { walls, doors, windows, rooms, detectors, electrical, headers, ..doc.clone() }
+}
+
+/// Build the raw [`SliceResult`] for a floor plan (walls, openings, hatches).
+/// Used by the DXF export path which needs editable geometry, not annotated
+/// SVG.
+fn build_floor_plan_slice_result(doc: &SchemaDocument, config: &Config) -> drawing::SliceResult {
+    let cut_height = 1219.0;
+    generate_floor_plan_with_openings(doc, cut_height, config)
 }
 
 /// Build one floor-plan SVG (geometry + dimension tiers + room labels, no
@@ -410,6 +428,24 @@ fn build_floor_plan_svg(doc: &SchemaDocument, config: &Config) -> String {
         floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&elec));
     }
 
+    // Section-cut marker (Phase 2.5): a dashed line at the default cut
+    // with A-A bubbles at each end referencing sheet A-301. Only sensible
+    // when the building has a real footprint.
+    if doc.width > 0.0 && doc.depth > 0.0 {
+        let section_input = drawing::SectionInput {
+            width: doc.width,
+            ..Default::default()
+        };
+        let cut = drawing::default_cut(&section_input);
+        let marker = drawing::generate_section_marker(
+            &cut,
+            doc.width,
+            doc.depth,
+            DrawingType::SectionA.default_info().0,
+        );
+        floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&marker));
+    }
+
     // Header callouts (rules-engine annotation): the OBC member size over each
     // opening, labelled at the opening centre (red if flagged for engineer
     // review). Y pre-negated for the export's flipped space.
@@ -440,16 +476,28 @@ pub fn generate_documentation(
     doc: &SchemaDocument,
     project_name: impl Into<String>,
 ) -> Documentation {
-    let config = Config::with_defaults();
     let project_name: String = project_name.into();
-    let date = today_iso();
-
     let project = ProjectInfo {
-        name: project_name.clone(),
+        name: project_name,
         number: doc.building_id.clone(),
         solver: "QBD Layout".into(),
         ..Default::default()
     };
+    generate_documentation_for_project(doc, project)
+}
+
+/// Variant of [`generate_documentation`] that takes the full
+/// `ProjectInfo` — lets callers populate qualified-designer + BCIN fields
+/// that flow into every sheet's title block.
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn generate_documentation_for_project(
+    doc: &SchemaDocument,
+    project: ProjectInfo,
+) -> Documentation {
+    let config = Config::with_defaults();
+    let project_name = project.name.clone();
+    let date = today_iso();
 
     // Inject a title block into each generated SVG so the bundle reads
     // like a permit set (project info, drawing number, scale, sheet
@@ -458,6 +506,23 @@ pub fn generate_documentation(
         let info = drawing_info_for(dt, scale, &date);
         let tb = generate_title_block(doc.width, doc.depth, &project, &info, 500.0);
         inject_before_svg_close(&svg, &tb)
+    };
+    // Floor-plan variant: title block + OBC general-notes block stacked
+    // immediately above it. Permit convention puts the OBC 9.10.19 / 9.33.4
+    // notes on the plan sheet itself.
+    let with_tb_and_obc_notes = |svg: String, dt: DrawingType, scale: &str| -> String {
+        let info = drawing_info_for(dt, scale, &date);
+        let tb = generate_title_block(doc.width, doc.depth, &project, &info, 500.0);
+        let (_notes_w, notes_h) = notes_block_size_mm();
+        // Title-block position mirrors the formula inside
+        // `generate_title_block`: bottom-right corner of the inner border.
+        let tb_x = -200.0_f32 + (doc.width + 400.0) - 4000.0 - 100.0;
+        let tb_y = -200.0_f32 + (doc.depth + 400.0) - 1200.0 - 100.0;
+        let notes_x = tb_x;
+        let notes_y = tb_y - notes_h - 200.0;
+        let notes = generate_obc_notes_block(notes_x, notes_y);
+        let combined = format!("{tb}{notes}");
+        inject_before_svg_close(&svg, &combined)
     };
     // Site and roof plans live in a small coordinate space of their own, so
     // the floor-plan-sized title block must be scaled to fit their viewBox.
@@ -481,18 +546,39 @@ pub fn generate_documentation(
             .into_iter()
             .map(|ln| {
                 let view = filter_doc_to_level(doc, &ln);
-                let svg =
-                    with_tb(build_floor_plan_svg(&view, &config), DrawingType::FloorPlan, "1:100");
+                let svg = with_tb_and_obc_notes(
+                    build_floor_plan_svg(&view, &config),
+                    DrawingType::FloorPlan,
+                    "1:100",
+                );
                 (ln, svg)
             })
             .collect()
     } else {
         vec![(
             "Level 1".to_string(),
-            with_tb(build_floor_plan_svg(doc, &config), DrawingType::FloorPlan, "1:100"),
+            with_tb_and_obc_notes(
+                build_floor_plan_svg(doc, &config),
+                DrawingType::FloorPlan,
+                "1:100",
+            ),
         )]
     };
     let floor_plan_svg = floor_plans.first().map_or_else(String::new, |(_, s)| s.clone());
+
+    // DXF for the ground-floor plan (Level 1 view).
+    let floor_plan_dxf = {
+        let slice = if distinct.len() > 1 {
+            let first_level = level_names(doc).into_iter().next();
+            match first_level {
+                Some(ln) => build_floor_plan_slice_result(&filter_doc_to_level(doc, &ln), &config),
+                None => build_floor_plan_slice_result(doc, &config),
+            }
+        } else {
+            build_floor_plan_slice_result(doc, &config)
+        };
+        drawing::export_to_dxf(&slice).unwrap_or_default()
+    };
 
     Documentation {
         project_name: project_name.clone(),
@@ -500,12 +586,14 @@ pub fn generate_documentation(
         site_plan_svg: with_fitted_tb(generate_site_plan(doc), DrawingType::SitePlan, "1:200"),
         roof_plan_svg: with_fitted_tb(generate_roof_plan(doc), DrawingType::RoofPlan, "1:100"),
         floor_plan_svg,
+        floor_plan_dxf,
         floor_plans,
         elevations: generate_elevations(doc)
             .into_iter()
             .map(|e| Elevation {
                 direction: e.direction,
                 svg: with_tb(e.svg, drawing_type_for_direction(e.direction), "1:100"),
+                dxf: e.dxf,
             })
             .collect(),
         section_svg: with_tb(generate_section(doc), DrawingType::SectionA, "1:100"),
@@ -523,6 +611,18 @@ pub fn generate_documentation(
             DrawingType::FoundationPlan,
             "1:100",
         ),
+        framing_plan_svg: with_tb(
+            generate_framing_plan_svg(doc, &JoistSpec::default(), "Level 1", FP_SCALE, FP_PAD),
+            DrawingType::FramingPlan,
+            "1:100",
+        ),
+        footing_detail_svg: with_fitted_tb(
+            // 1.5× viewport scale + a healthy pad makes the rebar dots and
+            // callout text legible at sheet scale.
+            generate_footing_detail_svg(&FootingSpec::default(), 1.5, 400.0),
+            DrawingType::FootingDetail,
+            "1:20",
+        ),
         compliance_report_svg: String::new(), // filled by caller after validation
     }
 }
@@ -538,18 +638,33 @@ pub fn generate_documentation_with_validation(
     project_name: impl Into<String>,
     validation: &crate::ValidationResult,
 ) -> Documentation {
-    let mut docs = generate_documentation(doc, project_name);
+    let project_name: String = project_name.into();
+    let project = ProjectInfo {
+        name: project_name,
+        number: doc.building_id.clone(),
+        solver: "QBD Layout".into(),
+        ..Default::default()
+    };
+    generate_documentation_with_validation_for_project(doc, project, validation)
+}
+
+/// Variant of [`generate_documentation_with_validation`] that takes the
+/// full `ProjectInfo` — same designer/BCIN routing as
+/// [`generate_documentation_for_project`].
+#[must_use]
+pub fn generate_documentation_with_validation_for_project(
+    doc: &SchemaDocument,
+    project: ProjectInfo,
+    validation: &crate::ValidationResult,
+) -> Documentation {
+    let mut docs = generate_documentation_for_project(doc, project.clone());
     if !validation.wall_reports.is_empty() {
         let report_svg = crate::compliance_report::compliance_report_to_svg(validation, &docs.project_name);
         // The compliance report lives in a small px coordinate space (like
-        // the site plan), so we use the fitted title-block path.
+        // the site plan), so we use the fitted title-block path. Reuse the
+        // caller's ProjectInfo so the designer/BCIN appear here too.
         let info = drawing_info_for(DrawingType::ComplianceReport, "—", &docs.generated_date);
-        docs.compliance_report_svg = inject_fitted_title_block(&report_svg, &ProjectInfo {
-            name: docs.project_name.clone(),
-            number: doc.building_id.clone(),
-            solver: "QBD Layout".into(),
-            ..Default::default()
-        }, &info);
+        docs.compliance_report_svg = inject_fitted_title_block(&report_svg, &project, &info);
     }
     docs
 }
@@ -801,6 +916,7 @@ fn generate_elevations(doc: &SchemaDocument) -> Vec<Elevation> {
         .map(|&dir| Elevation {
             direction: dir,
             svg: generate_elevation_sheet_svg(&input, dir, 0.05),
+            dxf: drawing::generate_elevation_dxf(&input, dir).unwrap_or_default(),
         })
         .collect()
 }

@@ -15,12 +15,17 @@ pub mod annotate;
 pub mod config;
 pub mod detail;
 pub mod dimensions;
+pub mod dxf;
 pub mod elevation_sheet;
+pub mod footing_detail;
 pub mod foundation_plan;
+pub mod framing_plan;
+pub mod obc_notes;
 pub mod primitives;
 pub mod roof;
 pub mod room_labels;
 pub mod schedule;
+pub mod section_marker;
 pub mod section_sheet;
 pub mod site_plan;
 pub mod slice;
@@ -43,11 +48,18 @@ pub use dimensions::{
 };
 pub use elevation_sheet::{
     Direction as ElevationDirection, ElevationInput, ElevationOpeningInput, ElevationWallInput,
-    generate_elevation_sheet_svg, sheet_name as elevation_sheet_name,
+    generate_elevation_dxf, generate_elevation_sheet_svg, sheet_name as elevation_sheet_name,
+};
+pub use footing_detail::{
+    FootingSpec, generate_footing_detail, generate_footing_detail_svg,
 };
 pub use foundation_plan::{
     generate_foundation_plan, generate_foundation_plan_svg,
 };
+pub use framing_plan::{
+    JoistSpec, generate_framing_plan, generate_framing_plan_svg,
+};
+pub use obc_notes::{generate_obc_notes_block, notes_block_size_mm};
 pub use primitives::{
     Arc2D, Circle2D, Dimension2D, Hatch2D, Line2D, Point2D, Polyline2D, SliceResult, Text2D,
 };
@@ -55,6 +67,7 @@ pub use room_labels::{RoomLabelInput, render_room_label, render_room_labels};
 pub use schedule::{
     ScheduleEntry, door_type_for_width, format_dim_mm, schedule_to_svg, window_type_for_width,
 };
+pub use section_marker::generate_section_marker;
 pub use section_sheet::{
     CutDirection, SectionCut, SectionInput, SectionWallInput, ViewDirection, default_cut,
     generate_section_sheet_svg,
@@ -67,6 +80,7 @@ pub use slice::{
     slice_element, slice_wall,
 };
 pub use slice_plane::{SlicePlane, SlicePlaneType, intersect_line_with_plane, project_to_2d};
+pub use dxf::export_to_dxf;
 pub use svg::{
     color_to_svg, cpp_double, export_to_svg, export_to_svg_padded, svg_arc, svg_circle, svg_hatch,
     svg_line, svg_polyline, svg_text,

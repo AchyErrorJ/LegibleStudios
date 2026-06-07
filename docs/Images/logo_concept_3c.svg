@@ -1,0 +1,67 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <radialGradient id="shadow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#000000"/>
+      <stop offset="70%" stop-color="#000000"/>
+      <stop offset="100%" stop-color="#111111"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="400" height="400" fill="#fafafa"/>
+
+  <!-- Subtle warped grid — blueprint being pulled into the center -->
+  <g stroke="#000000" stroke-width="0.4" opacity="0.06">
+    <path d="M 80 0 Q 110 200 80 400" fill="none"/>
+    <path d="M 120 0 Q 140 200 120 400" fill="none"/>
+    <path d="M 160 0 Q 170 200 160 400" fill="none"/>
+    <path d="M 240 0 Q 230 200 240 400" fill="none"/>
+    <path d="M 280 0 Q 260 200 280 400" fill="none"/>
+    <path d="M 320 0 Q 290 200 320 400" fill="none"/>
+    <path d="M 0 80 Q 200 110 400 80" fill="none"/>
+    <path d="M 0 120 Q 200 140 400 120" fill="none"/>
+    <path d="M 0 160 Q 200 170 400 160" fill="none"/>
+    <path d="M 0 240 Q 200 230 400 240" fill="none"/>
+    <path d="M 0 280 Q 200 260 400 280" fill="none"/>
+    <path d="M 0 320 Q 200 290 400 320" fill="none"/>
+  </g>
+
+  <!-- The "L" — formed by gravitational lensing paths
+       The vertical leg descends and curves toward the black hole
+       The horizontal leg extends from the bottom and also curves
+       The corner is being pulled into the event horizon -->
+  <g stroke="#000000" stroke-linecap="round" fill="none">
+    <!-- Vertical leg: descends from upper-left, curves toward center, then into the dark -->
+    <path d="M 115 90 Q 118 140 128 165 Q 138 185 148 195" 
+          stroke-width="2.5" opacity="0.85"/>
+    <!-- Horizontal leg: extends from the bottom of the vertical, curves up toward center -->
+    <path d="M 148 195 Q 165 198 182 195 Q 198 190 208 182" 
+          stroke-width="2.5" opacity="0.85"/>
+    <!-- Faint continuation: the L is being pulled into the event horizon -->
+    <path d="M 148 195 L 155 202" 
+          stroke-width="1.5" opacity="0.25"/>
+  </g>
+
+  <!-- The event horizon — slightly sheared -->
+  <ellipse cx="200" cy="200" rx="62" ry="64" fill="url(#shadow)" transform="rotate(-8 200 200)"/>
+
+  <!-- The photon ring — an ellipse with a "bright spot" on one side (Doppler) -->
+  <ellipse cx="200" cy="200" rx="65" ry="67" fill="none" stroke="#000000" stroke-width="2.5" transform="rotate(-8 200 200)"/>
+  <ellipse cx="200" cy="200" rx="70" ry="72" fill="none" stroke="#000000" stroke-width="1" opacity="0.4" transform="rotate(-8 200 200)"/>
+  <ellipse cx="200" cy="200" rx="75" ry="77" fill="none" stroke="#000000" stroke-width="0.5" opacity="0.15" transform="rotate(-8 200 200)"/>
+
+  <!-- The "hot spot" — a bright arc on the approaching side, offset from the ring -->
+  <path d="M 235 165 A 42 42 0 0 1 265 195" fill="none" stroke="#000000" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 240 170 A 38 38 0 0 1 260 190" fill="none" stroke="#000000" stroke-width="1.5" opacity="0.4" stroke-linecap="round"/>
+
+  <!-- The "cool spot" — a faint arc on the receding side -->
+  <path d="M 135 205 A 42 42 0 0 0 165 235" fill="none" stroke="#000000" stroke-width="0.8" opacity="0.15" stroke-linecap="round" transform="rotate(-8 200 200)"/>
+
+  <!-- Typography -->
+  <text x="200" y="340" font-family="Helvetica Neue, Arial, sans-serif" font-size="26" font-weight="350" text-anchor="middle" fill="#000000" letter-spacing="8">LEGIBLE</text>
+  <text x="200" y="366" font-family="Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="450" text-anchor="middle" fill="#666666" letter-spacing="6">STUDIO</text>
+
+  <!-- A subtle "registration mark" -->
+  <circle cx="200" cy="200" r="2.5" fill="#000000" opacity="0.15"/>
+  <circle cx="200" cy="200" r="1" fill="#000000" opacity="0.3"/>
+</svg>

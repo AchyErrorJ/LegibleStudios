@@ -91,6 +91,13 @@ pub struct SchemaWall {
     pub is_pinned: bool,
     #[serde(default)]
     pub locked_properties: Vec<String>,
+
+    /// Renovation lifecycle: `true` for an existing (as-built) wall captured
+    /// from a survey, `false` (default) for new construction. Kept separate
+    /// from `category` (which is the construction type). Part 11 work reads
+    /// this to split existing-vs-new; Part 9 new builds leave it `false`.
+    #[serde(default)]
+    pub existing: bool,
 }
 
 fn default_wall_height() -> f32 {
@@ -98,6 +105,13 @@ fn default_wall_height() -> f32 {
 }
 
 impl SchemaWall {
+    /// True if this wall is existing (as-built). Honours the legacy
+    /// `category == "as_built"` convention as well as the explicit flag.
+    #[must_use]
+    pub fn is_existing(&self) -> bool {
+        self.existing || self.category == "as_built"
+    }
+
     /// Wall length in the XZ plane (ignores Y).
     #[must_use]
     pub fn length(&self) -> f32 {
@@ -188,6 +202,19 @@ pub struct SchemaDoor {
     pub is_pinned: bool,
     #[serde(default)]
     pub locked_properties: Vec<String>,
+
+    /// Renovation lifecycle: `true` for an existing (as-built) door,
+    /// `false` (default) for a new one. See [`SchemaWall::existing`].
+    #[serde(default)]
+    pub existing: bool,
+}
+
+impl SchemaDoor {
+    /// True if this door is existing (as-built).
+    #[must_use]
+    pub fn is_existing(&self) -> bool {
+        self.existing
+    }
 }
 
 fn default_door_width() -> f32 {
@@ -225,6 +252,19 @@ pub struct SchemaWindow {
     pub is_pinned: bool,
     #[serde(default)]
     pub locked_properties: Vec<String>,
+
+    /// Renovation lifecycle: `true` for an existing (as-built) window,
+    /// `false` (default) for a new one. See [`SchemaWall::existing`].
+    #[serde(default)]
+    pub existing: bool,
+}
+
+impl SchemaWindow {
+    /// True if this window is existing (as-built).
+    #[must_use]
+    pub fn is_existing(&self) -> bool {
+        self.existing
+    }
 }
 
 fn default_window_width() -> f32 {
@@ -680,6 +720,37 @@ mod tests {
         let back: SchemaWall = serde_json::from_str(&json).unwrap();
         assert_eq!(back.wall_type, w.wall_type);
         assert_eq!(back.start, w.start);
+    }
+
+    #[test]
+    fn is_existing_honours_flag_and_legacy_category() {
+        // New construction by default.
+        let mut w = SchemaWall::default();
+        assert!(!w.is_existing());
+        // Explicit renovation flag.
+        w.existing = true;
+        assert!(w.is_existing());
+        // Legacy convention: category == "as_built" with no flag.
+        let legacy = SchemaWall {
+            category: "as_built".into(),
+            ..Default::default()
+        };
+        assert!(legacy.is_existing());
+        // Doors and windows: flag only.
+        assert!(!SchemaDoor::default().is_existing());
+        assert!(SchemaDoor { existing: true, ..Default::default() }.is_existing());
+        assert!(!SchemaWindow::default().is_existing());
+        assert!(SchemaWindow { existing: true, ..Default::default() }.is_existing());
+    }
+
+    #[test]
+    fn existing_flag_defaults_false_and_round_trips() {
+        let json = r#"{"start":[0,0,0],"end":[1000,0,0]}"#;
+        let w: SchemaWall = serde_json::from_str(json).unwrap();
+        assert!(!w.existing);
+        let w2 = SchemaWall { existing: true, ..w };
+        let back: SchemaWall = serde_json::from_str(&serde_json::to_string(&w2).unwrap()).unwrap();
+        assert!(back.existing);
     }
 
     #[test]

@@ -149,11 +149,30 @@ pub fn svg_polyline(poly: &Polyline2D, scale: f32) -> String {
     }
     let _ = write!(
         out,
-        r#"" fill="none" stroke="{}" stroke-width="{}"/>"#,
+        r#"" fill="none" stroke="{}" stroke-width="{}"#,
         color_to_svg(poly.color),
         cpp_double(poly.line_weight * scale),
     );
-    out.push('\n');
+    match poly.line_type.as_str() {
+        "dashed" => {
+            let _ = write!(
+                out,
+                r#"" stroke-dasharray="{},{}"#,
+                cpp_double(4.0 * scale),
+                cpp_double(2.0 * scale),
+            );
+        }
+        "hidden" => {
+            let _ = write!(
+                out,
+                r#"" stroke-dasharray="{},{}"#,
+                cpp_double(2.0 * scale),
+                cpp_double(2.0 * scale),
+            );
+        }
+        _ => {}
+    }
+    out.push_str("\"/>\n");
     out
 }
 
@@ -226,7 +245,23 @@ pub fn svg_text(text: &Text2D, scale: f32) -> String {
             cpp_double(-text.position.y * scale),
         );
     }
-    let _ = writeln!(out, ">{}</text>", text.text);
+    let _ = writeln!(out, ">{}</text>", xml_escape(&text.text));
+    out
+}
+
+/// Minimal XML-text escaping — required so callouts containing `&`, `<`,
+/// or `>` survive `svg2pdf::usvg::Tree::from_str`. We only escape what's
+/// strictly disallowed inside a text node.
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
     out
 }
 
@@ -440,6 +475,31 @@ mod tests {
         };
         let s = svg_polyline(&poly, 1.0);
         assert!(s.starts_with("<polyline"));
+    }
+
+    #[test]
+    fn svg_polyline_dashed_includes_dasharray() {
+        let poly = Polyline2D {
+            points: vec![Vec2::ZERO, Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0)],
+            closed: true,
+            line_type: "dashed".into(),
+            ..Default::default()
+        };
+        let s = svg_polyline(&poly, 1.0);
+        assert!(s.starts_with("<polygon"));
+        assert!(s.contains(r#"stroke-dasharray="4,2""#), "got {s}");
+        assert!(s.trim_end().ends_with("/>"), "got {s}");
+    }
+
+    #[test]
+    fn svg_polyline_continuous_has_no_dasharray() {
+        let poly = Polyline2D {
+            points: vec![Vec2::ZERO, Vec2::new(10.0, 0.0)],
+            closed: false,
+            ..Default::default()
+        };
+        let s = svg_polyline(&poly, 1.0);
+        assert!(!s.contains("stroke-dasharray"));
     }
 
     #[test]

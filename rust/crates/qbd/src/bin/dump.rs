@@ -11,7 +11,10 @@
 use anyhow::Context;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--pdf <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--streets <streets.json>] [--footprint <poly.json>] [--project <name>] [--bare]";
+const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--pdf <dir>] [--dxf <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--streets <streets.json>] [--footprint <poly.json>] [--obc <library-dir>] [--climate-zone <zone>] [--project <name>] [--designer <name>] [--bcin <number>] [--bare]";
+
+/// Climate zone fed to OBC thermal compliance when `--climate-zone` isn't passed.
+const DEFAULT_CLIMATE_ZONE: &str = "Zone 6";
 
 /// Longest displayed edge, in CSS px, for a written sheet.
 const DISPLAY_MAX_PX: f32 = 1100.0;
@@ -73,12 +76,17 @@ fn main() -> anyhow::Result<()> {
     let mut out: Option<PathBuf> = None;
     let mut bundle_dir: Option<PathBuf> = None;
     let mut pdf_dir: Option<PathBuf> = None;
+    let mut dxf_dir: Option<PathBuf> = None;
     let mut ifc_out: Option<PathBuf> = None;
     let mut terrain_path: Option<PathBuf> = None;
     let mut parcel_path: Option<PathBuf> = None;
     let mut streets_path: Option<PathBuf> = None;
     let mut footprint_path: Option<PathBuf> = None;
+    let mut obc_path: Option<PathBuf> = None;
+    let mut climate_zone = String::from(DEFAULT_CLIMATE_ZONE);
     let mut project = String::from("QBD Project");
+    let mut designer = String::new();
+    let mut bcin = String::new();
     // `--bare`: emit just the slicer's raw floor-plan SVG (no dimensions,
     // no title block, no room labels). The m5_cpp_diff oracle relies on
     // this — the C++ QBDInterface doesn't add annotations, so a fair
@@ -98,6 +106,10 @@ fn main() -> anyhow::Result<()> {
             }
             "--pdf" if i + 1 < args.len() => {
                 pdf_dir = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--dxf" if i + 1 < args.len() => {
+                dxf_dir = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
             "--project" if i + 1 < args.len() => {
@@ -122,6 +134,22 @@ fn main() -> anyhow::Result<()> {
             }
             "--footprint" if i + 1 < args.len() => {
                 footprint_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--obc" if i + 1 < args.len() => {
+                obc_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--climate-zone" if i + 1 < args.len() => {
+                climate_zone.clone_from(&args[i + 1]);
+                i += 2;
+            }
+            "--designer" if i + 1 < args.len() => {
+                designer.clone_from(&args[i + 1]);
+                i += 2;
+            }
+            "--bcin" if i + 1 < args.len() => {
+                bcin.clone_from(&args[i + 1]);
                 i += 2;
             }
             "--bare" => {
@@ -329,10 +357,43 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let docs = qbd::generate_documentation(&doc, project);
+    // Run OBC validation when `--obc <library>` was supplied so the bundle
+    // can include the compliance-report sheet. Without it, the rest of the
+    // pipeline still runs — just with an empty compliance section.
+    let validation = if let Some(lib) = &obc_path {
+        let mut engine = obc::OBCEngine::new();
+        engine
+            .initialize(lib)
+            .with_context(|| format!("failed to initialize OBC from {}", lib.display()))?;
+        let v = qbd::validate_layout(&engine, &doc, &climate_zone);
+        eprintln!(
+            "  obc: {}/{} walls passed, thermal {} ({})",
+            v.walls_passed,
+            v.walls_checked,
+            if v.thermal_compliance { "PASS" } else { "FAIL" },
+            climate_zone,
+        );
+        Some(v)
+    } else {
+        None
+    };
 
-    if let Some(dir) = bundle_dir {
-        std::fs::create_dir_all(&dir)
+    // Carry CLI-provided project identity into every sheet's title block.
+    let project_info = drawing::ProjectInfo {
+        name: project.clone(),
+        number: doc.building_id.clone(),
+        solver: "QBD Layout".into(),
+        designer: designer.clone(),
+        designer_bcin: bcin.clone(),
+        ..Default::default()
+    };
+    let docs = match &validation {
+        Some(v) => qbd::generate_documentation_with_validation_for_project(&doc, project_info, v),
+        None => qbd::generate_documentation_for_project(&doc, project_info),
+    };
+
+    if let Some(dir) = &bundle_dir {
+        std::fs::create_dir_all(dir)
             .with_context(|| format!("failed to create bundle dir {}", dir.display()))?;
 
         // Rust-side bundle: all 8 sheets that the Rust pipeline can produce
@@ -351,6 +412,12 @@ fn main() -> anyhow::Result<()> {
         };
 
         write_sheet("01_site_plan.svg", &docs.site_plan_svg)?;
+        if !docs.foundation_plan_svg.is_empty() {
+            write_sheet("08_foundation_plan.svg", &docs.foundation_plan_svg)?;
+        }
+        if !docs.framing_plan_svg.is_empty() {
+            write_sheet("10_framing_plan.svg", &docs.framing_plan_svg)?;
+        }
         write_sheet("06_roof_plan.svg", &docs.roof_plan_svg)?;
         // Floor plans: ground floor keeps the canonical name; upper storeys
         // get their own sheet so the storeys aren't overlaid.
@@ -391,6 +458,13 @@ fn main() -> anyhow::Result<()> {
             write_sheet(&name, &detail.svg)?;
         }
 
+        if !docs.footing_detail_svg.is_empty() {
+            write_sheet("11_footing_detail.svg", &docs.footing_detail_svg)?;
+        }
+        if !docs.compliance_report_svg.is_empty() {
+            write_sheet("09_compliance_report.svg", &docs.compliance_report_svg)?;
+        }
+
         // Manifest declaring what's present vs M5+ deferred.
         let elev_lines: String = docs
             .elevations
@@ -406,19 +480,38 @@ fn main() -> anyhow::Result<()> {
                 )
             })
             .collect();
+        let foundation_line = if docs.foundation_plan_svg.is_empty() {
+            String::new()
+        } else {
+            String::from(",\n    \"08_foundation_plan.svg\"")
+        };
+        let framing_line = if docs.framing_plan_svg.is_empty() {
+            String::new()
+        } else {
+            String::from(",\n    \"10_framing_plan.svg\"")
+        };
+        let footing_line = if docs.footing_detail_svg.is_empty() {
+            String::new()
+        } else {
+            String::from(",\n    \"11_footing_detail.svg\"")
+        };
+        let compliance_line = if docs.compliance_report_svg.is_empty() {
+            String::new()
+        } else {
+            String::from(",\n    \"09_compliance_report.svg\"")
+        };
         let manifest = format!(
-            "{{\n  \"project\": \"{}\",\n  \"generated_date\": \"{}\",\n  \"produced\": [\n    \"01_site_plan.svg\",\n    \"02_floor_plan.svg\"{elev_lines},\n    \"04_section_aa.svg\"{detail_lines}\n  ],\n  \"deferred_to_m5_plus\": [\n    \"05_door_schedule.svg\",\n    \"05_window_schedule.svg\"\n  ]\n}}\n",
+            "{{\n  \"project\": \"{}\",\n  \"generated_date\": \"{}\",\n  \"produced\": [\n    \"01_site_plan.svg\"{foundation_line},\n    \"02_floor_plan.svg\"{elev_lines},\n    \"04_section_aa.svg\"{detail_lines}{framing_line}{footing_line}{compliance_line}\n  ],\n  \"deferred_to_m5_plus\": [\n    \"05_door_schedule.svg\",\n    \"05_window_schedule.svg\"\n  ]\n}}\n",
             docs.project_name, docs.generated_date,
         );
         std::fs::write(dir.join("manifest.json"), manifest)?;
         eprintln!("  wrote {}/manifest.json", dir.display());
-
-        return Ok(());
     }
 
-    // PDF bundle: one PDF per sheet, same naming as SVG bundle.
-    if let Some(dir) = pdf_dir {
-        std::fs::create_dir_all(&dir)
+    // PDF bundle: one PDF per sheet, same naming as SVG bundle. Runs in
+    // addition to `--bundle` so one invocation can emit both.
+    if let Some(dir) = &pdf_dir {
+        std::fs::create_dir_all(dir)
             .with_context(|| format!("failed to create pdf dir {}", dir.display()))?;
 
         let write_pdf = |name: &str, svg: &str| -> anyhow::Result<()> {
@@ -432,6 +525,12 @@ fn main() -> anyhow::Result<()> {
         };
 
         write_pdf("01_site_plan.pdf", &docs.site_plan_svg)?;
+        if !docs.foundation_plan_svg.is_empty() {
+            write_pdf("08_foundation_plan.pdf", &docs.foundation_plan_svg)?;
+        }
+        if !docs.framing_plan_svg.is_empty() {
+            write_pdf("10_framing_plan.pdf", &docs.framing_plan_svg)?;
+        }
         write_pdf("06_roof_plan.pdf", &docs.roof_plan_svg)?;
         if docs.floor_plans.len() <= 1 {
             write_pdf("02_floor_plan.pdf", &docs.floor_plan_svg)?;
@@ -465,21 +564,55 @@ fn main() -> anyhow::Result<()> {
             );
             write_pdf(&name, &detail.svg)?;
         }
-        return Ok(());
+        if !docs.footing_detail_svg.is_empty() {
+            write_pdf("11_footing_detail.pdf", &docs.footing_detail_svg)?;
+        }
+        if !docs.compliance_report_svg.is_empty() {
+            write_pdf("09_compliance_report.pdf", &docs.compliance_report_svg)?;
+        }
     }
 
-    match out {
-        Some(out_path) => {
-            std::fs::write(&out_path, &docs.floor_plan_svg)
-                .with_context(|| format!("failed to write {}", out_path.display()))?;
-            eprintln!(
-                "wrote {} ({} bytes)",
-                out_path.display(),
-                docs.floor_plan_svg.len()
-            );
+    // DXF bundle: floor plan + elevations as editable geometry.
+    if let Some(dir) = &dxf_dir {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("failed to create dxf dir {}", dir.display()))?;
+
+        let write_dxf = |name: &str, bytes: &[u8]| -> anyhow::Result<()> {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes)
+                .with_context(|| format!("failed to write {}", p.display()))?;
+            eprintln!("  wrote {} ({} bytes)", p.display(), bytes.len());
+            Ok(())
+        };
+
+        if !docs.floor_plan_dxf.is_empty() {
+            write_dxf("02_floor_plan.dxf", &docs.floor_plan_dxf)?;
         }
-        None => {
-            print!("{}", docs.floor_plan_svg);
+        for elev in &docs.elevations {
+            if !elev.dxf.is_empty() {
+                let name = drawing::elevation_sheet_name(elev.direction).replace(".svg", ".dxf");
+                write_dxf(&name, &elev.dxf)?;
+            }
+        }
+    }
+
+    // Single-sheet emit only runs when nothing else has produced output —
+    // otherwise `--bundle` invocations would also dump a 60 KB floor plan
+    // to stdout.
+    if bundle_dir.is_none() && pdf_dir.is_none() && dxf_dir.is_none() {
+        match out {
+            Some(out_path) => {
+                std::fs::write(&out_path, &docs.floor_plan_svg)
+                    .with_context(|| format!("failed to write {}", out_path.display()))?;
+                eprintln!(
+                    "wrote {} ({} bytes)",
+                    out_path.display(),
+                    docs.floor_plan_svg.len()
+                );
+            }
+            None => {
+                print!("{}", docs.floor_plan_svg);
+            }
         }
     }
 

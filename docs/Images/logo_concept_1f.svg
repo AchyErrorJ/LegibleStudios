@@ -1,0 +1,65 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="15%" stop-color="#e8e8e8" stop-opacity="0.6"/>
+      <stop offset="40%" stop-color="#666666" stop-opacity="0.2"/>
+      <stop offset="70%" stop-color="#111111" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dark" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#000000"/>
+      <stop offset="85%" stop-color="#000000"/>
+      <stop offset="100%" stop-color="#0a0a0a"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="400" height="400" fill="#0d0d0d"/>
+
+  <!-- Curved grid — warped by the black hole's gravity -->
+  <g stroke="#ffffff" stroke-width="0.5" opacity="0.12">
+    <path d="M 0 50 Q 200 55 400 50" fill="none"/>
+    <path d="M 0 100 Q 200 115 400 100" fill="none"/>
+    <path d="M 0 150 Q 200 180 400 150" fill="none"/>
+    <path d="M 0 200 Q 200 200 400 200" fill="none" stroke-width="0.8" opacity="0.25"/>
+    <path d="M 0 250 Q 200 220 400 250" fill="none"/>
+    <path d="M 0 300 Q 200 285 400 300" fill="none"/>
+    <path d="M 0 350 Q 200 345 400 350" fill="none"/>
+    <path d="M 50 0 Q 55 200 50 400" fill="none"/>
+    <path d="M 100 0 Q 115 200 100 400" fill="none"/>
+    <path d="M 150 0 Q 180 200 150 400" fill="none"/>
+    <path d="M 200 0 Q 200 200 200 400" fill="none" stroke-width="0.8" opacity="0.25"/>
+    <path d="M 250 0 Q 220 200 250 400" fill="none"/>
+    <path d="M 300 0 Q 285 200 300 400" fill="none"/>
+    <path d="M 350 0 Q 345 200 350 400" fill="none"/>
+  </g>
+
+  <!-- The soft glow behind the black hole -->
+  <circle cx="200" cy="200" r="110" fill="url(#glow)"/>
+
+  <!-- The event horizon -->
+  <circle cx="200" cy="200" r="75" fill="url(#dark)"/>
+
+  <!-- The inner bright ring (photon sphere) -->
+  <circle cx="200" cy="200" r="78" fill="none" stroke="#ffffff" stroke-width="1.5" opacity="0.9"/>
+  <circle cx="200" cy="200" r="82" fill="none" stroke="#ffffff" stroke-width="0.8" opacity="0.4"/>
+
+  <!-- Distortion lines showing space being pulled in -->
+  <g stroke="#ffffff" stroke-width="0.5" opacity="0.08" stroke-linecap="round">
+    <path d="M 200 200 L 50 50" />
+    <path d="M 200 200 L 350 50" />
+    <path d="M 200 200 L 50 350" />
+    <path d="M 200 200 L 350 350" />
+    <path d="M 200 200 L 200 50" />
+    <path d="M 200 200 L 200 350" />
+    <path d="M 200 200 L 50 200" />
+    <path d="M 200 200 L 350 200" />
+  </g>
+
+  <!-- Tiny registration mark -->
+  <circle cx="200" cy="200" r="1.5" fill="#ffffff" opacity="0.2"/>
+
+  <!-- Typography -->
+  <text x="200" y="385" font-family="Helvetica Neue, Arial, sans-serif" font-size="14" font-weight="300" text-anchor="middle" fill="#ffffff" letter-spacing="8" opacity="0.8">LEGIBLE</text>
+</svg>

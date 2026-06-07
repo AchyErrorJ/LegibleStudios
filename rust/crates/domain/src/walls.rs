@@ -190,6 +190,16 @@ pub struct ParametricWall {
     /// End point after corner cleanup.
     #[serde(default)]
     pub adjusted_end: Vec2,
+    /// Schema wall category (`exterior` / `interior` / `wet_wall` / `as_built`).
+    /// Carried through from `SchemaWall` so the slicer can style existing
+    /// (as-built) walls distinctly. Empty for C++-written walls; not emitted
+    /// when empty to preserve byte-compatibility with the kernel's JSON.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
+    /// Renovation lifecycle: `true` for an existing (as-built) wall. Carried
+    /// from `SchemaWall::is_existing`. Not emitted when false (the C++ default).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub existing: bool,
 }
 
 impl ParametricWall {

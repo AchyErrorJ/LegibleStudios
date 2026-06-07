@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -37,6 +38,18 @@ path = "src/bin/fetch.rs"
 [[bin]]
 name = "legible-streets"
 path = "src/bin/streets.rs"
+
+[[bin]]
+name = "legible-footprint"
+path = "src/bin/footprint.rs"
+
+[[bin]]
+name = "legible-aswall"
+path = "src/bin/aswall.rs"
+
+[[bin]]
+name = "legible-elevation"
+path = "src/bin/elevation.rs"
 
 [[example]]
 name = "gen_synthetic_dem"

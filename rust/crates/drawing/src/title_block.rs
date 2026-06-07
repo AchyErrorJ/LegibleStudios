@@ -18,6 +18,12 @@ pub struct ProjectInfo {
     pub number: String,
     /// Free-text label for the solver — "QBD Layout", "Grid Solver", etc.
     pub solver: String,
+    /// Qualified designer name (Ontario Part 9 designs must be stamped by a
+    /// qualified designer or P.Eng).
+    pub designer: String,
+    /// Building Code Identification Number — Ontario MMAH registration
+    /// number for the qualified designer (e.g. `"BCIN 12345"`).
+    pub designer_bcin: String,
 }
 
 /// Per-sheet metadata. Different for each drawing in the set.
@@ -49,6 +55,8 @@ pub enum DrawingType {
     ElevationWest,
     SectionA,
     SectionB,
+    FramingPlan,
+    FootingDetail,
     ComplianceReport,
 }
 
@@ -58,17 +66,19 @@ impl DrawingType {
     #[must_use] 
     pub fn default_info(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            DrawingType::SitePlan => ("A-001", "SITE PLAN", "1 OF 11"),
-            DrawingType::FoundationPlan => ("A-002", "FOUNDATION PLAN", "2 OF 11"),
-            DrawingType::FloorPlan => ("A-101", "FLOOR PLAN - LEVEL 1", "3 OF 11"),
-            DrawingType::RoofPlan => ("A-102", "ROOF PLAN", "4 OF 11"),
-            DrawingType::ElevationSouth => ("A-201", "SOUTH ELEVATION", "5 OF 11"),
-            DrawingType::ElevationNorth => ("A-202", "NORTH ELEVATION", "6 OF 11"),
-            DrawingType::ElevationEast => ("A-203", "EAST ELEVATION", "7 OF 11"),
-            DrawingType::ElevationWest => ("A-204", "WEST ELEVATION", "8 OF 11"),
-            DrawingType::SectionA => ("A-301", "SECTION A-A", "9 OF 11"),
-            DrawingType::SectionB => ("A-302", "SECTION B-B", "10 OF 11"),
-            DrawingType::ComplianceReport => ("A-401", "CODE COMPLIANCE REPORT", "11 OF 11"),
+            DrawingType::SitePlan => ("A-001", "SITE PLAN", "1 OF 13"),
+            DrawingType::FoundationPlan => ("A-002", "FOUNDATION PLAN", "2 OF 13"),
+            DrawingType::FloorPlan => ("A-101", "FLOOR PLAN - LEVEL 1", "3 OF 13"),
+            DrawingType::RoofPlan => ("A-102", "ROOF PLAN", "4 OF 13"),
+            DrawingType::ElevationSouth => ("A-201", "SOUTH ELEVATION", "5 OF 13"),
+            DrawingType::ElevationNorth => ("A-202", "NORTH ELEVATION", "6 OF 13"),
+            DrawingType::ElevationEast => ("A-203", "EAST ELEVATION", "7 OF 13"),
+            DrawingType::ElevationWest => ("A-204", "WEST ELEVATION", "8 OF 13"),
+            DrawingType::SectionA => ("A-301", "SECTION A-A", "9 OF 13"),
+            DrawingType::SectionB => ("A-302", "SECTION B-B", "10 OF 13"),
+            DrawingType::FramingPlan => ("A-103", "FRAMING PLAN - LEVEL 1", "11 OF 13"),
+            DrawingType::FootingDetail => ("A-501", "TYPICAL FOOTING DETAIL", "12 OF 13"),
+            DrawingType::ComplianceReport => ("A-401", "CODE COMPLIANCE REPORT", "13 OF 13"),
         }
     }
 }
@@ -123,6 +133,8 @@ pub fn generate_title_block(
     let pclient = &project.client;
     let pnum = pick(&project.number, "P-001");
     let psolver = pick(&project.solver, "QBD Layout");
+    let pdesigner = project.designer.as_str();
+    let pbcin = project.designer_bcin.as_str();
 
     let dtitle = pick(&drawing.title, "FLOOR PLAN");
     let dnum = pick(&drawing.number, "A-101");
@@ -246,6 +258,23 @@ pub fn generate_title_block(
         y = tb_y + 50.0,
     );
 
+    // Qualified designer + BCIN (top-right of TB box). Required on
+    // Ontario Part 9 permit drawings — every sheet carries the stamp.
+    if !pdesigner.is_empty() || !pbcin.is_empty() {
+        let _ = writeln!(
+            s,
+            r##"  <text x="{x}" y="{y}" font-family="Arial" font-size="60" fill="#555" text-anchor="end">QUALIFIED DESIGNER: {pdesigner}</text>"##,
+            x = tb_x + tb_width - 50.0,
+            y = tb_y + 50.0,
+        );
+        let _ = writeln!(
+            s,
+            r##"  <text x="{x}" y="{y}" font-family="Arial" font-size="60" fill="#555" text-anchor="end">{pbcin}</text>"##,
+            x = tb_x + tb_width - 50.0,
+            y = tb_y + 130.0,
+        );
+    }
+
     s.push_str("</g>\n");
     s
 }
@@ -291,6 +320,8 @@ mod tests {
             client: "ACME Builders".into(),
             number: "P-042".into(),
             solver: "QBD Layout".into(),
+            designer: String::new(),
+            designer_bcin: String::new(),
         }
     }
 
@@ -308,7 +339,7 @@ mod tests {
         assert_eq!(info.title, "FLOOR PLAN - LEVEL 1");
         assert_eq!(info.number, "A-101");
         assert_eq!(info.scale, "1:100");
-        assert_eq!(info.sheet, "3 OF 11");
+        assert_eq!(info.sheet, "3 OF 13");
         assert_eq!(info.revision, "-");
         assert_eq!(info.drawn_by, "AE");
         assert_eq!(info.date, "2026-05-16");
@@ -345,5 +376,18 @@ mod tests {
         assert!(svg.contains("A-101")); // dnum default
         assert!(svg.contains("P-001")); // pnum default
         assert!(svg.contains("QBD Layout"));
+        // Empty designer/BCIN → no QUALIFIED DESIGNER line emitted.
+        assert!(!svg.contains("QUALIFIED DESIGNER"));
+    }
+
+    #[test]
+    fn designer_and_bcin_render_when_populated() {
+        let mut p = test_project();
+        p.designer = "JANE DOE".into();
+        p.designer_bcin = "BCIN 12345".into();
+        let d = drawing_info_for(DrawingType::FloorPlan, "1:100", "2026-06-04");
+        let svg = generate_title_block(10000.0, 8000.0, &p, &d, 500.0);
+        assert!(svg.contains("QUALIFIED DESIGNER: JANE DOE"));
+        assert!(svg.contains("BCIN 12345"));
     }
 }

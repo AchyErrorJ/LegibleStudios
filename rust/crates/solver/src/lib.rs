@@ -84,7 +84,8 @@ impl RoomSpec {
 
 /// QBD answers — the questionnaire inputs. Mirrors the fields
 /// `create_spatial_graph_from_qbd` reads.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Answers {
     pub bedrooms: u32,
     pub bathrooms: u32,

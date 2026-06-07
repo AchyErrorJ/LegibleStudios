@@ -193,6 +193,67 @@ fn smoke_small_building() {
         docs.compliance_report_svg.contains("WALLS CHECKED"),
         "compliance report must show wall check summary"
     );
+    assert!(
+        docs.framing_plan_svg.contains("</svg>"),
+        "framing plan must be generated"
+    );
+    assert!(
+        docs.framing_plan_svg.contains("FRAMING PLAN"),
+        "framing plan must have title block"
+    );
+    assert!(
+        docs.framing_plan_svg.contains("FLOOR JOISTS"),
+        "framing plan legend missing"
+    );
+    assert!(
+        docs.footing_detail_svg.contains("</svg>"),
+        "footing detail must be generated"
+    );
+    assert!(
+        docs.footing_detail_svg.contains("TYPICAL FOOTING DETAIL"),
+        "footing detail must have title text"
+    );
+    assert!(
+        docs.footing_detail_svg.contains("2-15M"),
+        "footing detail must carry rebar callout"
+    );
+    // OBC general-notes block must appear on the floor plan with both
+    // required code sections (Phase 2.4).
+    assert!(
+        docs.floor_plan_svg.contains("obc-notes"),
+        "OBC notes block must be injected on the floor plan"
+    );
+    assert!(
+        docs.floor_plan_svg.contains("9.10.19"),
+        "OBC smoke-alarm note reference missing"
+    );
+    assert!(
+        docs.floor_plan_svg.contains("9.33.4"),
+        "OBC CO-alarm note reference missing"
+    );
+    // Phase 2.5 — cross-sheet references.
+    assert!(
+        docs.floor_plan_svg.contains("section-marker"),
+        "section cut marker must be injected on the floor plan"
+    );
+    assert!(
+        docs.floor_plan_svg.contains(">A-301</text>"),
+        "section marker must reference the section sheet number"
+    );
+    // Level markers on at least one elevation.
+    let first_elev_svg = &docs.elevations[0].svg;
+    assert!(
+        first_elev_svg.contains("level-markers"),
+        "elevation must include level-markers group"
+    );
+    assert!(
+        first_elev_svg.contains("T.O. FOUNDATION"),
+        "elevation must label T.O. FOUNDATION"
+    );
+    assert!(
+        first_elev_svg.contains("T.O. PLATE"),
+        "elevation must label T.O. PLATE"
+    );
 
     // Detectors rendered on floor plan.
     let detector_count = docs.floor_plan_svg.matches("fill=\"#c00\">S</text>").count();

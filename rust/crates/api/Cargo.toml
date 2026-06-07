@@ -10,10 +10,27 @@ description = "axum HTTP API (replaces the C++ ipc_server)"
 [lib]
 name = "api"
 
+[[bin]]
+name = "ls-api-server"
+path = "src/bin/server.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
 ls-qbd.workspace = true
-# axum = "0.8"  # add when implementing the HTTP layer
-# tokio = { version = "1", features = ["full"] }
+ls-solver.workspace = true
+ls-archgeometry.workspace = true
+ls-obc.workspace = true
+ls-drawing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
+tower = "0.5"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

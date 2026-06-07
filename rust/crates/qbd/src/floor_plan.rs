@@ -18,6 +18,10 @@ fn wall_thickness_for(category: &str) -> f32 {
     if category == "interior" { 115.0 } else { 175.0 }
 }
 
+/// Mid-grey for existing (as-built) openings on the design overlay, matching
+/// the as-built wall colour in `drawing::slice`.
+const EXISTING_GREY: Vec3 = Vec3::new(0.5, 0.5, 0.5);
+
 /// Generate the full floor-plan SliceResult, including doors and windows.
 #[must_use]
 pub fn generate_floor_plan_with_openings(
@@ -71,6 +75,12 @@ fn add_door_primitives(result: &mut SliceResult, door: &SchemaDoor, walls: &[Sch
     let wall_thick = wall_thickness_for(&wall.category);
     let half_thick = wall_thick * 0.5;
 
+    // Existing (as-built) openings render as grey, dashed reference linework to
+    // match the as-built walls; new doors stay solid black.
+    let existing = door.is_existing();
+    let leaf_color = if existing { EXISTING_GREY } else { Vec3::ZERO };
+    let leaf_line_type = if existing { "dashed" } else { "continuous" };
+
     // White rectangle that "cuts" the wall outline.
     let p1 = door_center - wall_dir * half_width - wall_normal * half_thick;
     let p2 = door_center + wall_dir * half_width - wall_normal * half_thick;
@@ -106,7 +116,7 @@ fn add_door_primitives(result: &mut SliceResult, door: &SchemaDoor, walls: &[Sch
             layer: "A-DOOR".into(),
             line_type: "dashed".into(),
             line_weight: 15.0,
-            color: Vec3::ZERO,
+            color: leaf_color,
         });
         return;
     }
@@ -126,9 +136,9 @@ fn add_door_primitives(result: &mut SliceResult, door: &SchemaDoor, walls: &[Sch
         start: hinge_pos,
         end: hinge_pos + swing_normal * door.width,
         layer: "A-DOOR".into(),
-        line_type: "continuous".into(),
+        line_type: leaf_line_type.into(),
         line_weight: 20.0,
-        color: Vec3::ZERO,
+        color: leaf_color,
     });
     result.arcs.push(Arc2D {
         center: hinge_pos,
@@ -137,7 +147,7 @@ fn add_door_primitives(result: &mut SliceResult, door: &SchemaDoor, walls: &[Sch
         end_angle: swing_normal.y.atan2(swing_normal.x),
         layer: "A-DOOR".into(),
         line_weight: 15.0,
-        color: Vec3::ZERO,
+        color: leaf_color,
     });
 }
 
@@ -159,14 +169,19 @@ fn add_window_primitives(result: &mut SliceResult, window: &SchemaWindow, walls:
     // The C++ uses a fixed 175mm exterior thickness × 0.3 = 52.5mm line offset.
     let line_offset = wall_thickness_for("exterior") * 0.3;
 
+    // Existing windows render grey + dashed like the as-built walls.
+    let existing = window.is_existing();
+    let glaz_color = if existing { EXISTING_GREY } else { Vec3::ZERO };
+    let glaz_line_type = if existing { "dashed" } else { "continuous" };
+
     let push_line = |result: &mut SliceResult, start: Point2D, end: Point2D| {
         result.lines.push(Line2D {
             start,
             end,
             layer: "A-GLAZ".into(),
-            line_type: "continuous".into(),
+            line_type: glaz_line_type.into(),
             line_weight: 20.0,
-            color: Vec3::ZERO,
+            color: glaz_color,
         });
     };
 
@@ -234,6 +249,55 @@ mod tests {
     }
 
     #[test]
+    fn existing_door_renders_grey_dashed_leaf_and_arc() {
+        let mut r = SliceResult::default();
+        let walls = vec![x_wall()];
+        add_door_primitives(
+            &mut r,
+            &SchemaDoor {
+                wall_index: 0,
+                offset: 2500.0,
+                width: 900.0,
+                height: 2100.0,
+                door_type: "swing".into(),
+                swing: "left_in".into(),
+                existing: true,
+                ..Default::default()
+            },
+            &walls,
+        );
+        assert_eq!(r.lines.len(), 1);
+        assert_eq!(r.lines[0].line_type, "dashed", "existing door leaf dashed");
+        assert_eq!(r.lines[0].color, EXISTING_GREY);
+        assert_eq!(r.arcs.len(), 1);
+        assert_eq!(r.arcs[0].color, EXISTING_GREY);
+    }
+
+    #[test]
+    fn existing_window_renders_grey_dashed_lines() {
+        let mut r = SliceResult::default();
+        let walls = vec![x_wall()];
+        add_window_primitives(
+            &mut r,
+            &SchemaWindow {
+                wall_index: 0,
+                offset: 2500.0,
+                width: 1200.0,
+                height: 1200.0,
+                sill_height: 900.0,
+                existing: true,
+                ..Default::default()
+            },
+            &walls,
+        );
+        assert_eq!(r.lines.len(), 4);
+        for line in &r.lines {
+            assert_eq!(line.line_type, "dashed");
+            assert_eq!(line.color, EXISTING_GREY);
+        }
+    }
+
+    #[test]
     fn pocket_door_emits_dashed_line_no_arc() {
         let mut r = SliceResult::default();
         let walls = vec![x_wall()];
@@ -295,6 +359,35 @@ mod tests {
         assert!(r.hatches.is_empty());
         assert!(r.lines.is_empty());
         assert!(r.arcs.is_empty());
+    }
+
+    #[test]
+    fn as_built_overlay_renders_existing_walls_dashed_grey() {
+        // A new-design wall plus an existing (as-built) wall on the same plan.
+        let doc = SchemaDocument {
+            walls: vec![
+                x_wall(), // category "exterior" → new design
+                SchemaWall {
+                    start: Vec3::new(0.0, 0.0, 3000.0),
+                    end: Vec3::new(5000.0, 0.0, 3000.0),
+                    height: 2700.0,
+                    category: "as_built".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let r = generate_floor_plan_with_openings(&doc, 1500.0, &Config::with_defaults());
+        // Two wall outlines; only the new-design wall is hatched.
+        assert_eq!(r.polylines.len(), 2);
+        assert_eq!(r.hatches.len(), 1, "as-built wall must not be hatched");
+
+        let dashed: Vec<_> = r.polylines.iter().filter(|p| p.line_type == "dashed").collect();
+        assert_eq!(dashed.len(), 1, "exactly one as-built (dashed) wall");
+        assert_eq!(dashed[0].layer, "A-WALL-EXST");
+        // Grey, not black.
+        assert!(dashed[0].color.x > 0.4 && dashed[0].color.x < 0.6);
     }
 
     #[test]
