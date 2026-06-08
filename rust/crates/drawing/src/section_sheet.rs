@@ -26,6 +26,19 @@ pub struct SectionWallInput {
     pub base: f32,
 }
 
+/// One envelope-assembly callout for the section's thermal notes block.
+/// Drives the OBC 9.25 / SB-12 thermal demonstration: each lists an assembly
+/// (wall / roof-ceiling / floor) with its effective R-value and a spec line.
+#[derive(Debug, Clone)]
+pub struct AssemblyCallout {
+    /// Short heading, e.g. `"EXTERIOR WALL"`, `"ROOF / CEILING"`, `"FLOOR"`.
+    pub label: String,
+    /// Assembly description, e.g. `"2x6 @ 16\" o.c. + R-22 batt + R-5 c.i."`.
+    pub spec: String,
+    /// Effective R-value shown as `R-{n}` (rounded).
+    pub r_value: f32,
+}
+
 /// Minimal building input for section-sheet generation. `width` is used
 /// only to pick the default cut plane (centre of building).
 #[derive(Debug, Clone, Default)]
@@ -37,6 +50,12 @@ pub struct SectionInput {
     pub ridge_heights_above_plate: Vec<f32>,
     /// Storey base elevations (mm) above grade — a level line is drawn at each.
     pub floor_lines: Vec<f32>,
+    /// Clear floor-to-plate ceiling height (mm) for the ground storey. When 0,
+    /// it is derived from the tallest ground-storey wall.
+    pub ceiling_height_mm: f32,
+    /// Envelope-assembly callouts rendered as a thermal notes block. Empty =
+    /// no block (back-compatible with callers that don't supply them).
+    pub assemblies: Vec<AssemblyCallout>,
 }
 
 /// Direction of the section cut plane.
@@ -220,13 +239,18 @@ pub fn generate_section_sheet_svg(input: &SectionInput, cut: &SectionCut, scale:
         (min_y, max_y)
     };
 
-    let margin_x = 1000.0_f32;
-    let margin_y = 500.0_f32;
+    // Asymmetric margins: left holds the height dim + grade labels, right holds
+    // the ceiling-height dim, top holds the assembly notes block, bottom holds
+    // the overall width dim + title.
+    let margin_left = 2200.0_f32;
+    let margin_right = 1800.0_f32;
+    let margin_top = if input.assemblies.is_empty() { 800.0 } else { 3000.0 };
+    let margin_bottom = 1600.0_f32;
 
-    let vb_x = min_x - margin_x;
-    let vb_y = min_y - margin_y;
-    let vb_w = (max_x - min_x) + 2.0 * margin_x;
-    let vb_h = (max_y - min_y) + 2.0 * margin_y;
+    let vb_x = min_x - margin_left;
+    let vb_y = min_y - margin_top;
+    let vb_w = (max_x - min_x) + margin_left + margin_right;
+    let vb_h = (max_y - min_y) + margin_top + margin_bottom;
 
     #[allow(clippy::cast_possible_truncation)]
     let px_w = (vb_w * scale) as i32;
@@ -274,8 +298,12 @@ pub fn generate_section_sheet_svg(input: &SectionInput, cut: &SectionCut, scale:
     s.push_str("    </pattern>\n");
     s.push_str("  </defs>\n");
 
-    // Flip Y axis so positive-Y in mm goes UP on the page.
+    // Flip Y axis so positive-Y in mm goes UP on the page. ONLY geometry goes
+    // in this group — text drawn here would render mirrored, so all labels and
+    // dimensions are emitted upright afterwards in screen coordinates.
     let flip_y = max_y + min_y;
+    // Map a model-space Y (mm, up-positive) to its screen Y inside the page.
+    let sy = |model_y: f32| flip_y - model_y;
     let _ = writeln!(s, r#"<g transform="translate(0, {flip_y}) scale(1, -1)">"#);
 
     for elem in &elements {
@@ -324,44 +352,100 @@ pub fn generate_section_sheet_svg(input: &SectionInput, cut: &SectionCut, scale:
         }
     }
 
-    // Grade + level markers.
+    // Grade line (geometry).
     let _ = writeln!(
         s,
         r#"    <line x1="{x1}" y1="0" x2="{x2}" y2="0" class="grade"/>"#,
         x1 = min_x - 500.0,
         x2 = max_x + 500.0,
     );
+
+    s.push_str("  </g>\n");
+
+    // ---------------------------------------------------------------------
+    // Upright annotations (screen coordinates, OUTSIDE the flipped group).
+    // ---------------------------------------------------------------------
+
+    // Grade marker + label.
+    let grade_y = sy(0.0);
     let _ = writeln!(
         s,
-        r#"    <line x1="{x1}" y1="0" x2="{x2}" y2="0" class="level-line"/>"#,
-        x1 = min_x - 800.0,
-        x2 = max_x + 800.0,
+        r#"  <line x1="{x1}" y1="{grade_y}" x2="{x2}" y2="{grade_y}" class="level-line"/>"#,
+        x1 = min_x - 900.0,
+        x2 = max_x + 900.0,
     );
     let _ = writeln!(
         s,
-        r#"    <text x="{x}" y="100" class="level-text">0.0m</text>"#,
-        x = min_x - 1000.0,
-    );
-    let _ = writeln!(
-        s,
-        r#"    <text x="{x}" y="300" class="level-text">Grade</text>"#,
-        x = min_x - 1200.0,
+        r#"  <text x="{x}" y="{y}" class="level-text">EL. 0.0 (GRADE)</text>"#,
+        x = vb_x + 100.0,
+        y = grade_y - 80.0,
     );
 
     // Overall envelope dimensions: section width along the bottom, height
     // (ground-to-ridge) along the left.
     if max_x > min_x {
-        let width_dim = crate::dimensions::LinearDim::horizontal_mm(min_x, max_x, -600.0);
+        let width_dim =
+            crate::dimensions::LinearDim::horizontal_mm(min_x, max_x, sy(min_y) + 700.0);
         s.push_str(&crate::dimensions::render_horizontal(&width_dim, 200.0));
     }
     if max_y > 0.0 {
-        let height_dim = crate::dimensions::LinearDim::vertical_mm(0.0, max_y, min_x - 600.0);
+        let height_dim =
+            crate::dimensions::LinearDim::vertical_mm(sy(max_y), sy(0.0), min_x - 800.0);
         s.push_str(&crate::dimensions::render_vertical(&height_dim, 200.0));
     }
 
-    s.push_str("  </g>\n");
+    // Ceiling-height dimension (right side, ground storey floor-to-plate).
+    let ground_plate = if input.ceiling_height_mm > 0.0 {
+        input.ceiling_height_mm
+    } else {
+        elements
+            .iter()
+            .filter(|e| e.element_type == ElementType::Wall && e.y_bottom < 100.0)
+            .map(|e| e.y_top)
+            .fold(0.0_f32, f32::max)
+    };
+    if ground_plate > 0.0 {
+        let clg_dim =
+            crate::dimensions::LinearDim::vertical_mm(sy(ground_plate), sy(0.0), max_x + 800.0);
+        s.push_str(&crate::dimensions::render_vertical(&clg_dim, 200.0));
+        let _ = writeln!(
+            s,
+            r#"  <text x="{x}" y="{y}" class="dimension" text-anchor="middle">CEILING HT.</text>"#,
+            x = max_x + 800.0,
+            y = sy(ground_plate) - 150.0,
+        );
+    }
 
-    // Title (NOT in the flipped group).
+    // Envelope-assembly thermal notes block (top-left, upright). Demonstrates
+    // OBC 9.25 / SB-12 effective R-values for the building envelope.
+    if !input.assemblies.is_empty() {
+        let bx = vb_x + 300.0;
+        let mut by = vb_y + 500.0;
+        let _ = writeln!(
+            s,
+            r##"  <text x="{bx}" y="{by}" font-family="Arial, sans-serif" font-size="240" font-weight="bold" fill="#333">ENVELOPE ASSEMBLIES (OBC SB-12)</text>"##,
+        );
+        by += 360.0;
+        for a in &input.assemblies {
+            #[allow(clippy::cast_possible_truncation)]
+            let r = a.r_value.round() as i32;
+            let _ = writeln!(
+                s,
+                r##"  <text x="{bx}" y="{by}" font-family="Arial, sans-serif" font-size="220" font-weight="bold" fill="#333">{label}: R-{r}</text>"##,
+                label = crate::svg::xml_escape(&a.label),
+            );
+            by += 280.0;
+            let _ = writeln!(
+                s,
+                r##"  <text x="{x}" y="{by}" font-family="Arial, sans-serif" font-size="185" fill="#555">{spec}</text>"##,
+                x = bx + 200.0,
+                spec = crate::svg::xml_escape(&a.spec),
+            );
+            by += 340.0;
+        }
+    }
+
+    // Title + view label (upright, screen coordinates).
     let title_y = vb_y + vb_h - 200.0;
     let title_x = vb_x + vb_w * 0.5;
     let _ = writeln!(
@@ -373,7 +457,7 @@ pub fn generate_section_sheet_svg(input: &SectionInput, cut: &SectionCut, scale:
         s,
         r#"  <text x="{x}" y="{y}" class="label">View: Looking {dir}</text>"#,
         x = vb_x + 200.0,
-        y = vb_y + 300.0,
+        y = title_y - 450.0,
         dir = cut.view_direction.as_str(),
     );
 
@@ -500,6 +584,67 @@ mod tests {
         assert!(svg.contains("View: Looking east"));
         // The flip group is what makes positive-Y go up.
         assert!(svg.contains("scale(1, -1)"));
+    }
+
+    #[test]
+    fn annotations_render_upright_outside_the_flip_group() {
+        // All text/dims must be emitted AFTER the flipped geometry group
+        // closes, otherwise they render upside-down.
+        let input = rectangular_input();
+        let cut = default_cut(&input);
+        let svg = generate_section_sheet_svg(&input, &cut, 0.05);
+        let close = svg.find("</g>").expect("flip group should close");
+        // No <text> may appear before the group closes.
+        let first_text = svg.find("<text").expect("section has text");
+        assert!(
+            first_text > close,
+            "text at {first_text} appears before </g> at {close} — would render mirrored"
+        );
+        // The overall dimension value (a width in mm) is also outside.
+        let dim = svg.find(" mm<").or_else(|| svg.find("mm</text>")).unwrap();
+        assert!(dim > close, "dimension text must be outside the flip group");
+    }
+
+    #[test]
+    fn ceiling_height_dimension_is_emitted() {
+        let mut input = rectangular_input();
+        input.ceiling_height_mm = 2700.0;
+        let cut = default_cut(&input);
+        let svg = generate_section_sheet_svg(&input, &cut, 0.05);
+        assert!(svg.contains("CEILING HT."), "missing ceiling-height label");
+        assert!(svg.contains("2700 mm"), "missing ceiling-height value: {svg}");
+    }
+
+    #[test]
+    fn assembly_notes_block_lists_r_values() {
+        let mut input = rectangular_input();
+        input.assemblies = vec![
+            AssemblyCallout {
+                label: "EXTERIOR WALL".into(),
+                spec: "2x6 @ 16\" o.c. + R-22 batt + R-5 c.i.".into(),
+                r_value: 28.0,
+            },
+            AssemblyCallout {
+                label: "ROOF / CEILING".into(),
+                spec: "Vented attic, blown cellulose".into(),
+                r_value: 60.0,
+            },
+        ];
+        let cut = default_cut(&input);
+        let svg = generate_section_sheet_svg(&input, &cut, 0.05);
+        assert!(svg.contains("ENVELOPE ASSEMBLIES (OBC SB-12)"));
+        assert!(svg.contains("EXTERIOR WALL: R-28"), "got {svg}");
+        assert!(svg.contains("ROOF / CEILING: R-60"));
+        // The quote in the spec must be XML-escaped, not raw.
+        assert!(svg.contains("16&quot; o.c.") || svg.contains("16\" o.c."));
+    }
+
+    #[test]
+    fn no_assemblies_means_no_notes_block() {
+        let input = rectangular_input(); // assemblies empty
+        let cut = default_cut(&input);
+        let svg = generate_section_sheet_svg(&input, &cut, 0.05);
+        assert!(!svg.contains("ENVELOPE ASSEMBLIES"));
     }
 
     #[test]

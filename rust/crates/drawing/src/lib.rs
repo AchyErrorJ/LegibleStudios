@@ -27,6 +27,7 @@ pub mod room_labels;
 pub mod schedule;
 pub mod section_marker;
 pub mod section_sheet;
+pub mod sheet;
 pub mod site_plan;
 pub mod slice;
 pub mod slice_plane;
@@ -69,9 +70,10 @@ pub use schedule::{
 };
 pub use section_marker::generate_section_marker;
 pub use section_sheet::{
-    CutDirection, SectionCut, SectionInput, SectionWallInput, ViewDirection, default_cut,
-    generate_section_sheet_svg,
+    AssemblyCallout, CutDirection, SectionCut, SectionInput, SectionWallInput, ViewDirection,
+    default_cut, generate_section_sheet_svg,
 };
+pub use sheet::{PaperSize, Placement, SheetDrawing, compose_sheet};
 pub use roof::{RoofPlan, RoofType, generate_roof_plan_svg};
 pub use site_plan::{Contour, SitePlan, StreetClass, StreetWay, generate_site_plan_svg};
 pub mod skeleton;

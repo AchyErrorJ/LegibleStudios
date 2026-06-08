@@ -15,7 +15,7 @@ pub mod tables;
 pub mod windows;
 pub mod zoning;
 
-pub use engine::{InitError, OBCEngine};
+pub use engine::{InitError, OBCEngine, sb12_minimum_r};
 pub use format::{cpp_float, cpp_int};
 pub use report::{ComplianceCheck, ComplianceReport, ComplianceStatus};
 pub use tables::{

@@ -24,6 +24,9 @@ pub struct ProjectInfo {
     /// Building Code Identification Number — Ontario MMAH registration
     /// number for the qualified designer (e.g. `"BCIN 12345"`).
     pub designer_bcin: String,
+    /// OBC SB-12 climate zone for the project site (e.g. `"Zone 6"`). Drives
+    /// the section's thermal R-value callouts. Empty → treated as Zone 6.
+    pub climate_zone: String,
 }
 
 /// Per-sheet metadata. Different for each drawing in the set.
@@ -322,6 +325,7 @@ mod tests {
             solver: "QBD Layout".into(),
             designer: String::new(),
             designer_bcin: String::new(),
+            climate_zone: String::new(),
         }
     }
 

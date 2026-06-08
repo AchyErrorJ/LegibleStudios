@@ -136,35 +136,16 @@ impl OBCEngine {
     }
 
     fn load_thermal_requirements(&mut self) {
-        // OBC SB-12 thermal requirements by climate zone. Values mirror
-        // `obc_engine.cpp:247-275`.
-        let mut z4: HashMap<String, f32> = HashMap::new();
-        z4.insert("wall".into(), 17.0);
-        z4.insert("ceiling".into(), 38.0);
-        z4.insert("floor".into(), 28.0);
-        z4.insert("basement_wall".into(), 17.0);
-        self.thermal_requirements.insert("Zone 4".into(), z4);
-
-        let mut z5: HashMap<String, f32> = HashMap::new();
-        z5.insert("wall".into(), 20.0);
-        z5.insert("ceiling".into(), 44.0);
-        z5.insert("floor".into(), 28.0);
-        z5.insert("basement_wall".into(), 20.0);
-        self.thermal_requirements.insert("Zone 5".into(), z5);
-
-        let mut z6: HashMap<String, f32> = HashMap::new();
-        z6.insert("wall".into(), 24.0);
-        z6.insert("ceiling".into(), 50.0);
-        z6.insert("floor".into(), 31.0);
-        z6.insert("basement_wall".into(), 20.0);
-        self.thermal_requirements.insert("Zone 6".into(), z6);
-
-        let mut z7a: HashMap<String, f32> = HashMap::new();
-        z7a.insert("wall".into(), 27.0);
-        z7a.insert("ceiling".into(), 60.0);
-        z7a.insert("floor".into(), 35.0);
-        z7a.insert("basement_wall".into(), 24.0);
-        self.thermal_requirements.insert("Zone 7A".into(), z7a);
+        // OBC SB-12 thermal requirements by climate zone. The canonical values
+        // live in the free function `sb12_minimum_r`; mirror them into the
+        // instance map so `minimum_r_value` keeps its existing behaviour.
+        for zone in ["Zone 4", "Zone 5", "Zone 6", "Zone 7A"] {
+            let mut m: HashMap<String, f32> = HashMap::new();
+            for assembly in ["wall", "ceiling", "floor", "basement_wall"] {
+                m.insert(assembly.into(), sb12_minimum_r(zone, assembly));
+            }
+            self.thermal_requirements.insert(zone.into(), m);
+        }
     }
 
     // -----------------------------------------------------------------
@@ -676,6 +657,29 @@ enum TableKind {
     Rafters,
     Studs,
     Headers,
+}
+
+/// OBC SB-12 prescriptive minimum effective R-value for an assembly in a
+/// climate zone. `assembly_type` is one of `"wall"`, `"ceiling"`, `"floor"`,
+/// `"basement_wall"`. Unknown zones fall back to Zone 6 (southern Ontario /
+/// GTA); unknown assemblies return 0. Mirrors `obc_engine.cpp:247-275`.
+#[must_use]
+pub fn sb12_minimum_r(climate_zone: &str, assembly_type: &str) -> f32 {
+    // (wall, ceiling, floor, basement_wall)
+    let (wall, ceiling, floor, basement) = match climate_zone {
+        "Zone 4" => (17.0, 38.0, 28.0, 17.0),
+        "Zone 5" => (20.0, 44.0, 28.0, 20.0),
+        "Zone 7A" => (27.0, 60.0, 35.0, 24.0),
+        // Zone 6 is the default for any unrecognised zone.
+        _ => (24.0, 50.0, 31.0, 20.0),
+    };
+    match assembly_type {
+        "wall" => wall,
+        "ceiling" => ceiling,
+        "floor" => floor,
+        "basement_wall" => basement,
+        _ => 0.0,
+    }
 }
 
 #[cfg(test)]

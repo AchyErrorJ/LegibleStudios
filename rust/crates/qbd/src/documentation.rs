@@ -98,7 +98,20 @@ pub fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, PdfError> {
     opts.fontdb_mut().load_system_fonts();
     let tree = usvg::Tree::from_str(svg, &opts)
         .map_err(|e| PdfError::Parse(e.to_string()))?;
-    svg2pdf::to_pdf(&tree, ConversionOptions::default(), PageOptions::default())
+    // svg2pdf maps 1 user-unit -> 1 pt at 72 dpi. Our sheets are authored in
+    // millimetres, so the default would produce absurd multi-metre pages (e.g.
+    // a floor plan at ~167000 pt ≈ 59 m wide) that PDF viewers can't render.
+    // Normalise so the longest page side is ~TARGET_PT, preserving aspect.
+    const TARGET_PT: f32 = 1400.0; // ≈ 19.4" longest side
+    let size = tree.size();
+    let max_side = size.width().max(size.height());
+    let dpi = if max_side > TARGET_PT {
+        max_side * 72.0 / TARGET_PT
+    } else {
+        72.0
+    };
+    let page = PageOptions { dpi, ..PageOptions::default() };
+    svg2pdf::to_pdf(&tree, ConversionOptions::default(), page)
         .map_err(|e| PdfError::Conversion(e.to_string()))
 }
 
@@ -596,7 +609,11 @@ pub fn generate_documentation_for_project(
                 dxf: e.dxf,
             })
             .collect(),
-        section_svg: with_tb(generate_section(doc), DrawingType::SectionA, "1:100"),
+        section_svg: with_tb(
+            generate_section(doc, &project.climate_zone),
+            DrawingType::SectionA,
+            "1:100",
+        ),
         wall_details: generate_wall_details(doc, &config),
         door_schedule_svg: render_schedule_svg(
             &crate::schedule::door_entries(doc),
@@ -824,9 +841,37 @@ fn generate_roof_plan(doc: &SchemaDocument) -> String {
     drawing::generate_roof_plan_svg(&roof)
 }
 
+/// Compose the ground-floor plan onto a permit sheet at a true paper scale
+/// (e.g. 1:50) with a bottom title block. The floor-plan geometry and its
+/// dimension/label annotations are authored in plan millimetres, so they land
+/// at a legible paper size once scaled to 1:N.
+#[must_use]
+pub fn floor_plan_sheet(
+    doc: &SchemaDocument,
+    project: &drawing::ProjectInfo,
+    scale_denominator: f32,
+    paper: drawing::PaperSize,
+) -> (String, drawing::Placement) {
+    let config = Config::with_defaults();
+    let raw = build_floor_plan_svg(doc, &config);
+    let info = drawing_info_for(
+        DrawingType::FloorPlan,
+        &format!("1:{}", scale_denominator.round() as i64),
+        &today_iso(),
+    );
+    let d = drawing::SheetDrawing {
+        svg: raw,
+        model_units_per_mm: FP_SCALE,
+        scale_denominator,
+        caption: String::new(),
+    };
+    drawing::compose_sheet(&d, paper, project, &info)
+}
+
 /// Build a SectionInput from the schema document and render the default
-/// (transverse, centre, looking-east) section.
-fn generate_section(doc: &SchemaDocument) -> String {
+/// (transverse, centre, looking-east) section. `climate_zone` (OBC SB-12,
+/// e.g. `"Zone 6"`) drives the envelope thermal R-value callouts.
+fn generate_section(doc: &SchemaDocument, climate_zone: &str) -> String {
     let level_base: std::collections::HashMap<&str, f32> =
         doc.levels.iter().map(|l| (l.name.as_str(), l.elevation)).collect();
     let input = SectionInput {
@@ -847,9 +892,53 @@ fn generate_section(doc: &SchemaDocument) -> String {
         // the gable cross-section.
         ridge_heights_above_plate: vec![doc.width.min(doc.depth) * 0.5 * 0.5],
         floor_lines: doc.levels.iter().map(|l| l.elevation).filter(|&e| e > 1.0).collect(),
+        // Ceiling height auto-derives from the ground-storey wall plate.
+        ceiling_height_mm: 0.0,
+        assemblies: envelope_assemblies(doc, climate_zone),
     };
     let cut = drawing::default_cut(&input);
     generate_section_sheet_svg(&input, &cut, 0.05)
+}
+
+/// Build the envelope-assembly thermal callouts shown on the section.
+/// Wall R is the *design* value of the exterior wall type; roof/ceiling and
+/// floor R are the OBC SB-12 prescriptive minimums for the climate zone.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn envelope_assemblies(doc: &SchemaDocument, climate_zone: &str) -> Vec<drawing::AssemblyCallout> {
+    let zone = if climate_zone.is_empty() { "Zone 6" } else { climate_zone };
+
+    // Exterior wall: prefer the schema's own exterior wall type; otherwise the
+    // Part-9 default that `convert` injects for the "exterior" category.
+    let ext_wt = doc
+        .wall_types
+        .iter()
+        .find(|wt| wt.id == "ext_2x6_r22_ci" || wt.name.to_lowercase().contains("exterior"))
+        .map_or_else(
+            || crate::wall_types::for_category("exterior"),
+            crate::convert::schema_wall_type_to_domain,
+        );
+    let wall_r = ext_wt.total_r_value();
+
+    let ceiling_r = obc::sb12_minimum_r(zone, "ceiling");
+    let floor_r = obc::sb12_minimum_r(zone, "floor");
+
+    vec![
+        drawing::AssemblyCallout {
+            label: "EXTERIOR WALL".into(),
+            spec: ext_wt.name.clone(),
+            r_value: wall_r,
+        },
+        drawing::AssemblyCallout {
+            label: "ROOF / CEILING".into(),
+            spec: format!("Vented attic — blown insulation to min R-{} ({zone})", ceiling_r.round() as i32),
+            r_value: ceiling_r,
+        },
+        drawing::AssemblyCallout {
+            label: "FLOOR (EXPOSED / OVER UNHEATED)".into(),
+            spec: format!("Batt insulation to min R-{} ({zone})", floor_r.round() as i32),
+            r_value: floor_r,
+        },
+    ]
 }
 
 /// Build an ElevationInput from the schema document and render one
@@ -1063,6 +1152,32 @@ mod tests {
         assert!(docs.floor_plan_svg.starts_with("<?xml version=\"1.0\""));
         assert!(docs.floor_plan_svg.contains("<svg"));
         assert!(docs.floor_plan_svg.ends_with("</svg>\n"));
+    }
+
+    #[test]
+    fn section_carries_envelope_assemblies_and_ceiling_height() {
+        let docs = generate_documentation(&rect_room_doc(), "Test Project");
+        let s = &docs.section_svg;
+        // OBC 9.25 / SB-12 thermal demonstration on the section.
+        assert!(s.contains("ENVELOPE ASSEMBLIES (OBC SB-12)"), "no thermal block");
+        assert!(s.contains("EXTERIOR WALL: R-"), "no wall R-value");
+        assert!(s.contains("ROOF / CEILING: R-"), "no ceiling R-value");
+        assert!(s.contains("CEILING HT."), "no ceiling-height dimension");
+        // Default (empty) climate zone resolves to Zone 6 minimums.
+        assert!(s.contains("(Zone 6)"), "expected Zone 6 thermal minimums");
+    }
+
+    #[test]
+    fn section_uses_the_project_climate_zone() {
+        let project = ProjectInfo {
+            name: "Cold House".into(),
+            climate_zone: "Zone 7A".into(),
+            ..Default::default()
+        };
+        let docs = generate_documentation_for_project(&rect_room_doc(), project);
+        // Zone 7A ceiling minimum is R-60 (vs R-50 for Zone 6).
+        assert!(docs.section_svg.contains("ROOF / CEILING: R-60"), "got {}", docs.section_svg);
+        assert!(docs.section_svg.contains("(Zone 7A)"));
     }
 
     #[test]

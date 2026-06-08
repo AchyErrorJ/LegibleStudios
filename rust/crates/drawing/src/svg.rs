@@ -252,7 +252,7 @@ pub fn svg_text(text: &Text2D, scale: f32) -> String {
 /// Minimal XML-text escaping — required so callouts containing `&`, `<`,
 /// or `>` survive `svg2pdf::usvg::Tree::from_str`. We only escape what's
 /// strictly disallowed inside a text node.
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {

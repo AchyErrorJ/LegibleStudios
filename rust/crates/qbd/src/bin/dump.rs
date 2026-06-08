@@ -385,6 +385,7 @@ fn main() -> anyhow::Result<()> {
         solver: "QBD Layout".into(),
         designer: designer.clone(),
         designer_bcin: bcin.clone(),
+        climate_zone: climate_zone.clone(),
         ..Default::default()
     };
     let docs = match &validation {

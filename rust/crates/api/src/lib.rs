@@ -196,6 +196,8 @@ async fn draw(
         solver: "QBD Layout".into(),
         designer: q.designer.unwrap_or_default(),
         designer_bcin: q.bcin.unwrap_or_default(),
+        // Matches the validation zone above; drives the section's R-value notes.
+        climate_zone: "Zone 6".into(),
         ..Default::default()
     };
 
