@@ -163,7 +163,7 @@ fn generate_section_elements(input: &SectionInput, cut: &SectionCut) -> Vec<Sect
         });
     }
 
-    // Floor slab (150 mm below grade).
+    // Ground-floor slab (150 mm below grade).
     elements.push(SectionElement {
         element_type: ElementType::Floor,
         x: 0.0,
@@ -171,6 +171,22 @@ fn generate_section_elements(input: &SectionInput, cut: &SectionCut) -> Vec<Sect
         y_top: 0.0,
         width: 0.0,
     });
+
+    // Intermediate floor platforms: a joist+subfloor band at each upper-storey
+    // level, so the section shows the floor structure cut through (not just a
+    // line). Depth ≈ 2x10 joist + subfloor.
+    const FLOOR_PLATFORM_MM: f32 = 300.0;
+    for &fy in &input.floor_lines {
+        if fy > 1.0 {
+            elements.push(SectionElement {
+                element_type: ElementType::Floor,
+                x: 0.0,
+                y_bottom: fy - FLOOR_PLATFORM_MM,
+                y_top: fy,
+                width: 0.0,
+            });
+        }
+    }
 
     // Roof elements sit on the top plate — the tallest wall top in the cut
     // (so a multi-storey roof rides above the upper storey), with a 2700 mm
@@ -535,6 +551,24 @@ mod tests {
         assert!(svg.contains(r#"y="3000""#), "upper storey wall not stacked: {svg}");
         // Floor line between storeys.
         assert!(svg.contains(r#"y1="3000""#), "missing inter-storey floor line");
+    }
+
+    #[test]
+    fn floor_lines_emit_intermediate_floor_platforms() {
+        // Two storeys with an upper floor at 3000 → ground slab + one platform.
+        let mut input = rectangular_input();
+        input.floor_lines = vec![3000.0];
+        let cut = default_cut(&input);
+        let elements = generate_section_elements(&input, &cut);
+        let floors: Vec<_> = elements
+            .iter()
+            .filter(|e| e.element_type == ElementType::Floor)
+            .collect();
+        assert_eq!(floors.len(), 2, "ground slab + one intermediate platform");
+        // The platform is a band just below the storey line, not a zero-height line.
+        let platform = floors.iter().find(|f| f.y_top > 1.0).expect("platform");
+        assert!(platform.y_top - platform.y_bottom > 50.0, "platform has depth");
+        assert!((platform.y_top - 3000.0).abs() < 1.0, "platform top at storey line");
     }
 
     #[test]

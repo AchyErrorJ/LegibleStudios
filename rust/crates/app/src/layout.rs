@@ -42,13 +42,13 @@ struct Placement {
     locked: bool,
 }
 
-/// A running export: SVGs are written up front; PDFs render one-per-frame so
-/// the progress bar animates.
+/// A running export. SVGs are written up front; the slow PDF renders run on a
+/// background thread that bumps `done`, so the UI thread can animate the bar.
 struct ExportJob {
     dir: std::path::PathBuf,
-    pdfs: Vec<(String, String)>, // (filename, svg) pending PDF render
-    done: usize,
+    done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     total: usize,
+    _handle: std::thread::JoinHandle<()>,
 }
 
 /// Screen↔paper mapping for the sheet (fit to the area right of the palette).
@@ -303,26 +303,37 @@ impl Layout {
         }
         let total = pdfs.len();
         eprintln!("sheet export: {total} sheet(s) → {}", dir.display());
-        self.export_job = Some(ExportJob { dir, pdfs, done: 0, total });
+
+        // Render PDFs on a background thread, bumping `done` so the UI thread
+        // can animate the bar (svg_to_pdf is hundreds of ms per complex sheet).
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let done = Arc::new(AtomicUsize::new(0));
+        let done_bg = Arc::clone(&done);
+        let dir_bg = dir.clone();
+        let handle = std::thread::spawn(move || {
+            for (fname, svg) in pdfs {
+                match qbd::svg_to_pdf(&svg) {
+                    Ok(pdf) => {
+                        let _ = std::fs::write(dir_bg.join(&fname), pdf);
+                    }
+                    Err(e) => eprintln!("{fname}: pdf failed — {e}"),
+                }
+                done_bg.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        self.export_job = Some(ExportJob { dir, done, total, _handle: handle });
     }
 
-    /// Render the next queued PDF (one per frame) so the export progress bar
-    /// can animate. No-op when no export is running.
+    /// Clear the export job once the background thread has rendered every PDF.
     pub fn export_tick(&mut self) {
-        let Some(job) = self.export_job.as_mut() else { return };
-        if job.done >= job.total {
-            eprintln!("sheet export: wrote {} sheet(s) to {}", job.total, job.dir.display());
-            self.export_job = None;
-            return;
-        }
-        let (fname, svg) = &job.pdfs[job.done];
-        match qbd::svg_to_pdf(svg) {
-            Ok(pdf) => {
-                let _ = std::fs::write(job.dir.join(fname), pdf);
+        use std::sync::atomic::Ordering;
+        if let Some(job) = &self.export_job {
+            if job.done.load(Ordering::SeqCst) >= job.total {
+                eprintln!("sheet export: wrote {} sheet(s) to {}", job.total, job.dir.display());
+                self.export_job = None;
             }
-            Err(e) => eprintln!("{fname}: pdf failed — {e}"),
         }
-        job.done += 1;
     }
 
     // ----- render -----
@@ -419,6 +430,7 @@ impl Layout {
 
         // Export progress bar (modal overlay).
         if let Some(job) = &self.export_job {
+            let done = job.done.load(std::sync::atomic::Ordering::SeqCst).min(job.total);
             let pw = 420.0_f32;
             let ph = 90.0_f32;
             let px0 = (vp_w - pw) * 0.5;
@@ -429,7 +441,7 @@ impl Layout {
             stroke_rect(pix, px0, py0, pw, ph, Color::from_rgba8(0, 120, 215, 255), 2.0);
             self.text(
                 pix,
-                &format!("Exporting PDFs…  {}/{}", job.done.min(job.total), job.total),
+                &format!("Exporting PDFs…  {done}/{}", job.total),
                 px0 + 20.0,
                 py0 + 30.0,
                 14.0,
@@ -443,7 +455,7 @@ impl Layout {
             fill_rect(pix, bx, by, bw, bh, Color::from_rgba8(70, 70, 78, 255));
             #[allow(clippy::cast_precision_loss)]
             let frac = if job.total > 0 {
-                (job.done as f32 / job.total as f32).clamp(0.0, 1.0)
+                (done as f32 / job.total as f32).clamp(0.0, 1.0)
             } else {
                 1.0
             };
