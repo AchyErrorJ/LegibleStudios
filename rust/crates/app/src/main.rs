@@ -155,7 +155,7 @@ fn main() -> anyhow::Result<()> {
                         sh.add_sheet();
                     }
                     InputEvent::Key { code: KeyCode::Char('e'), pressed: true, .. } => {
-                        sh.export();
+                        sh.begin_export();
                     }
                     InputEvent::Scroll { dy, .. } => {
                         sh.resize_selected(if dy > 0.0 { 1.1 } else { 0.9 });
@@ -367,7 +367,8 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
         let mut pixmap = Pixmap::new(w, h).ok_or_else(|| anyhow::anyhow!("pixmap alloc"))?;
-        if let Some(sh) = &sheet {
+        if let Some(sh) = sheet.as_mut() {
+            sh.export_tick(); // renders one queued PDF per frame, drives the bar
             sh.render(&mut pixmap);
         } else if let Some(m) = &mut map {
             m.render(&mut pixmap);

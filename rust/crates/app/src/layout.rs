@@ -42,6 +42,15 @@ struct Placement {
     locked: bool,
 }
 
+/// A running export: SVGs are written up front; PDFs render one-per-frame so
+/// the progress bar animates.
+struct ExportJob {
+    dir: std::path::PathBuf,
+    pdfs: Vec<(String, String)>, // (filename, svg) pending PDF render
+    done: usize,
+    total: usize,
+}
+
 /// Screen↔paper mapping for the sheet (fit to the area right of the palette).
 #[derive(Clone, Copy)]
 struct SheetView {
@@ -69,6 +78,7 @@ pub struct Layout {
     project: drawing::ProjectInfo,
     out_dir: std::path::PathBuf,
     font: Option<fontdue::Font>,
+    export_job: Option<ExportJob>,
 }
 
 impl Layout {
@@ -105,6 +115,7 @@ impl Layout {
             project,
             out_dir,
             font: load_ui_font(),
+            export_job: None,
         }
     }
 
@@ -242,9 +253,10 @@ impl Layout {
         self.selected = None;
     }
 
-    /// Export every non-empty sheet as SVG + PDF, prompting for a destination
-    /// folder with a native save dialog (defaults to `out_dir`).
-    pub fn export(&self) {
+    /// Begin export: prompt for a folder, compose + write every non-empty
+    /// sheet's SVG immediately (fast), and queue the slow PDF renders so they
+    /// run one-per-frame with a progress bar (see [`Layout::export_tick`]).
+    pub fn begin_export(&mut self) {
         if self.sheets.iter().all(Vec::is_empty) {
             eprintln!("sheet export: nothing placed yet");
             return;
@@ -261,11 +273,9 @@ impl Layout {
             eprintln!("sheet export: cancelled");
             return;
         };
-        let mut n = 0;
-        for (si, sheet) in self.sheets.iter().enumerate() {
-            if sheet.is_empty() {
-                continue;
-            }
+        let mut pdfs: Vec<(String, String)> = Vec::new();
+        for sheet in self.sheets.iter().filter(|s| !s.is_empty()) {
+            let n = pdfs.len() + 1;
             let items: Vec<FreePlacement> = sheet
                 .iter()
                 .map(|p| {
@@ -281,23 +291,38 @@ impl Layout {
                 })
                 .collect();
             let info = drawing::DrawingInfo {
-                title: format!("SHEET {}", si + 1),
-                number: format!("A-1{:02}", si + 1),
+                title: format!("SHEET {n}"),
+                number: format!("A-1{n:02}"),
                 scale: "AS NOTED".into(),
                 date: qbd_today(),
                 ..Default::default()
             };
             let svg = drawing::compose_freeform(&items, self.paper, &self.project, &info);
-            let _ = std::fs::write(dir.join(format!("sheet_{:02}.svg", si + 1)), &svg);
-            match qbd::svg_to_pdf(&svg) {
-                Ok(pdf) => {
-                    let _ = std::fs::write(dir.join(format!("sheet_{:02}.pdf", si + 1)), pdf);
-                }
-                Err(e) => eprintln!("sheet {}: pdf failed — {e}", si + 1),
-            }
-            n += 1;
+            let _ = std::fs::write(dir.join(format!("sheet_{n:02}.svg")), &svg);
+            pdfs.push((format!("sheet_{n:02}.pdf"), svg));
         }
-        eprintln!("sheet export: wrote {n} sheet(s) to {}", dir.display());
+        let total = pdfs.len();
+        eprintln!("sheet export: {total} sheet(s) → {}", dir.display());
+        self.export_job = Some(ExportJob { dir, pdfs, done: 0, total });
+    }
+
+    /// Render the next queued PDF (one per frame) so the export progress bar
+    /// can animate. No-op when no export is running.
+    pub fn export_tick(&mut self) {
+        let Some(job) = self.export_job.as_mut() else { return };
+        if job.done >= job.total {
+            eprintln!("sheet export: wrote {} sheet(s) to {}", job.total, job.dir.display());
+            self.export_job = None;
+            return;
+        }
+        let (fname, svg) = &job.pdfs[job.done];
+        match qbd::svg_to_pdf(svg) {
+            Ok(pdf) => {
+                let _ = std::fs::write(job.dir.join(fname), pdf);
+            }
+            Err(e) => eprintln!("{fname}: pdf failed — {e}"),
+        }
+        job.done += 1;
     }
 
     // ----- render -----
@@ -391,6 +416,40 @@ impl Layout {
             self.sheets.len(),
         );
         self.text(pix, &sheet_no, PALETTE_W + 8.0, vp_h - 8.0, 10.0, (60, 60, 60));
+
+        // Export progress bar (modal overlay).
+        if let Some(job) = &self.export_job {
+            let pw = 420.0_f32;
+            let ph = 90.0_f32;
+            let px0 = (vp_w - pw) * 0.5;
+            let py0 = (vp_h - ph) * 0.5;
+            // Dim the canvas, then the panel.
+            fill_rect(pix, 0.0, 0.0, vp_w, vp_h, Color::from_rgba8(0, 0, 0, 90));
+            fill_rect(pix, px0, py0, pw, ph, Color::from_rgba8(40, 40, 46, 255));
+            stroke_rect(pix, px0, py0, pw, ph, Color::from_rgba8(0, 120, 215, 255), 2.0);
+            self.text(
+                pix,
+                &format!("Exporting PDFs…  {}/{}", job.done.min(job.total), job.total),
+                px0 + 20.0,
+                py0 + 30.0,
+                14.0,
+                (235, 235, 235),
+            );
+            // Bar track + fill.
+            let bx = px0 + 20.0;
+            let by = py0 + 48.0;
+            let bw = pw - 40.0;
+            let bh = 18.0;
+            fill_rect(pix, bx, by, bw, bh, Color::from_rgba8(70, 70, 78, 255));
+            #[allow(clippy::cast_precision_loss)]
+            let frac = if job.total > 0 {
+                (job.done as f32 / job.total as f32).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            fill_rect(pix, bx, by, bw * frac, bh, Color::from_rgba8(0, 150, 90, 255));
+            stroke_rect(pix, bx, by, bw, bh, Color::from_rgba8(20, 20, 24, 255), 1.0);
+        }
     }
 
     /// Draw left-anchored text with `y` as the baseline (no-op if no font).
