@@ -868,6 +868,144 @@ pub fn floor_plan_sheet(
     drawing::compose_sheet(&d, paper, project, &info)
 }
 
+/// Compose all floor-plan levels onto one multi-up permit sheet at a true
+/// paper scale. Each level is placed side by side (one column per level) with
+/// a "FLOOR PLAN — {level}" caption, sharing a single bottom title block.
+#[must_use]
+pub fn plans_sheet(
+    doc: &SchemaDocument,
+    project: &drawing::ProjectInfo,
+    scale_denominator: f32,
+    paper: drawing::PaperSize,
+) -> (String, Vec<drawing::Placement>) {
+    let config = Config::with_defaults();
+    let levels = level_names(doc);
+    let drawings: Vec<drawing::SheetDrawing> = levels
+        .iter()
+        .map(|level| {
+            let view = if levels.len() > 1 {
+                filter_doc_to_level(doc, level)
+            } else {
+                doc.clone()
+            };
+            drawing::SheetDrawing {
+                svg: build_floor_plan_svg(&view, &config),
+                model_units_per_mm: FP_SCALE,
+                scale_denominator,
+                caption: format!("FLOOR PLAN — {level}"),
+            }
+        })
+        .collect();
+    let mut info = drawing_info_for(
+        DrawingType::FloorPlan,
+        &format!("1:{}", scale_denominator.round() as i64),
+        &today_iso(),
+    );
+    if drawings.len() > 1 {
+        info.title = "FLOOR PLANS".to_string();
+    }
+    let cols = drawings.len().min(2).max(1);
+    drawing::compose_multi(&drawings, cols, paper, project, &info)
+}
+
+/// One drawing available to place on a sheet: a human title and its raw SVG
+/// (no title block). This is the catalogue the in-app sheet-layout editor
+/// rasterises into draggable thumbnails.
+#[derive(Debug, Clone)]
+pub struct CatalogDrawing {
+    pub title: String,
+    pub svg: String,
+    /// Authored SVG units per real-world millimetre (the exporter `scale`).
+    /// The editor divides the SVG viewBox by this to recover the real size and
+    /// label the placed drawing's scale. `0.0` means "not to scale" (e.g. the
+    /// feet-based site plan).
+    pub model_units_per_mm: f32,
+}
+
+// Per-generator export scales (SVG units per mm).
+const SECTION_SCALE: f32 = 0.05;
+const ELEVATION_SCALE: f32 = 0.05;
+const ROOF_SCALE: f32 = 0.08;
+const FOOTING_SCALE: f32 = 1.5;
+const WALL_DETAIL_SCALE: f32 = 18.0; // wall_detail_to_svg: 1.0 * detail_scale(1.5) * 12
+
+/// Build the catalogue of every drawing the permit set can contain, as raw
+/// SVGs. Order: floor plans (per level), elevations, section, roof, site,
+/// foundation, framing, footing detail, wall details.
+#[must_use]
+pub fn drawing_catalog(doc: &SchemaDocument, climate_zone: &str) -> Vec<CatalogDrawing> {
+    let config = Config::with_defaults();
+    let mut out: Vec<CatalogDrawing> = Vec::new();
+
+    let levels = level_names(doc);
+    for level in &levels {
+        let view = if levels.len() > 1 {
+            filter_doc_to_level(doc, level)
+        } else {
+            doc.clone()
+        };
+        out.push(CatalogDrawing {
+            title: format!("FLOOR PLAN — {level}"),
+            svg: build_floor_plan_svg(&view, &config),
+            model_units_per_mm: FP_SCALE,
+        });
+    }
+
+    for e in generate_elevations(doc) {
+        out.push(CatalogDrawing {
+            title: format!("{:?} ELEVATION", e.direction).to_uppercase(),
+            svg: e.svg,
+            model_units_per_mm: ELEVATION_SCALE,
+        });
+    }
+
+    out.push(CatalogDrawing {
+        title: "SECTION A-A".into(),
+        svg: generate_section(doc, climate_zone),
+        model_units_per_mm: SECTION_SCALE,
+    });
+    out.push(CatalogDrawing {
+        title: "ROOF PLAN".into(),
+        svg: generate_roof_plan(doc),
+        model_units_per_mm: ROOF_SCALE,
+    });
+    out.push(CatalogDrawing {
+        title: "SITE PLAN".into(),
+        svg: generate_site_plan(doc),
+        model_units_per_mm: 0.0, // feet-based, dynamic — labelled NTS
+    });
+    out.push(CatalogDrawing {
+        title: "FOUNDATION PLAN".into(),
+        svg: generate_foundation_plan_svg(doc, FP_SCALE, FP_PAD),
+        model_units_per_mm: FP_SCALE,
+    });
+    out.push(CatalogDrawing {
+        title: "FRAMING PLAN".into(),
+        svg: generate_framing_plan_svg(doc, &JoistSpec::default(), "Level 1", FP_SCALE, FP_PAD),
+        model_units_per_mm: FP_SCALE,
+    });
+    out.push(CatalogDrawing {
+        title: "FOOTING DETAIL".into(),
+        svg: generate_footing_detail_svg(&FootingSpec::default(), 1.5, 400.0),
+        model_units_per_mm: FOOTING_SCALE,
+    });
+    for (i, wd) in generate_wall_details(doc, &config).into_iter().enumerate() {
+        out.push(CatalogDrawing {
+            title: format!("WALL DETAIL {}", i + 1),
+            svg: wd.svg,
+            model_units_per_mm: WALL_DETAIL_SCALE,
+        });
+    }
+
+    out.push(CatalogDrawing {
+        title: "SYMBOLS LEGEND".into(),
+        svg: drawing::generate_symbols_legend_svg(),
+        model_units_per_mm: 0.0, // a key, not to scale
+    });
+
+    out
+}
+
 /// Build a SectionInput from the schema document and render the default
 /// (transverse, centre, looking-east) section. `climate_zone` (OBC SB-12,
 /// e.g. `"Zone 6"`) drives the envelope thermal R-value callouts.

@@ -26,6 +26,7 @@
 //!   c            clear active mode's strokes
 //!   right-drag   pan      scroll  zoom      Esc  quit
 
+mod layout;
 mod map;
 mod render;
 mod sketch;
@@ -68,13 +69,11 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    let slice = building.as_ref().and_then(|p| {
-        let doc = archgeometry::parse_file(p).ok()?;
-        Some(qbd::generate_floor_plan_with_openings(
-            &doc,
-            1219.0,
-            &drawing::Config::with_defaults(),
-        ))
+    // Parsed building doc (for the floor-plan underlay AND the sheet editor's
+    // drawing catalogue).
+    let doc = building.as_ref().and_then(|p| archgeometry::parse_file(p).ok());
+    let slice = doc.as_ref().map(|d| {
+        qbd::generate_floor_plan_with_openings(d, 1219.0, &drawing::Config::with_defaults())
     });
 
     let mut surface = WinitSurface::new(1000, 800, "Legible Studio — Sketch")
@@ -99,6 +98,8 @@ fn main() -> anyhow::Result<()> {
     // touches the filesystem to create the cache dir, so don't pay that
     // unless the user opens the map).
     let mut map: Option<Map> = None;
+    // Sheet-layout editor (key `s`). Lazily built from the building doc.
+    let mut sheet: Option<layout::Layout> = None;
     // Real program-driven zoned layout (3-bed/2-bath default program). The
     // sketched boundary is the envelope; rooms tile it proportionally.
     let solver = SubdivisionRoomSolver::from_answers(&Answers::default());
@@ -119,6 +120,61 @@ fn main() -> anyhow::Result<()> {
 
     while !surface.should_close() {
         for ev in surface.poll_input() {
+            // Sheet-layout editor intercepts all input while active.
+            if let Some(sh) = sheet.as_mut() {
+                let (w, h) = surface.size();
+                let (w, h) = (w as f32, h as f32);
+                match ev {
+                    InputEvent::Key { code: KeyCode::Escape, pressed: true, .. } => {
+                        return Ok(());
+                    }
+                    InputEvent::Key { code: KeyCode::Char('v'), pressed: true, .. } => {
+                        sheet = None;
+                    }
+                    InputEvent::Key { code: KeyCode::Char('['), pressed: true, .. } => {
+                        sh.resize_selected(0.9);
+                    }
+                    InputEvent::Key { code: KeyCode::Char(']'), pressed: true, .. } => {
+                        sh.resize_selected(1.1);
+                    }
+                    InputEvent::Key { code: KeyCode::Char('x'), pressed: true, .. } => {
+                        sh.delete_selected();
+                    }
+                    InputEvent::Key { code: KeyCode::Char('l'), pressed: true, .. } => {
+                        sh.toggle_lock_selected();
+                    }
+                    InputEvent::Key { code: KeyCode::Char(','), pressed: true, .. }
+                    | InputEvent::Key { code: KeyCode::ArrowLeft, pressed: true, .. } => {
+                        sh.prev_sheet();
+                    }
+                    InputEvent::Key { code: KeyCode::Char('.'), pressed: true, .. }
+                    | InputEvent::Key { code: KeyCode::ArrowRight, pressed: true, .. } => {
+                        sh.next_sheet();
+                    }
+                    InputEvent::Key { code: KeyCode::Char('n'), pressed: true, .. } => {
+                        sh.add_sheet();
+                    }
+                    InputEvent::Key { code: KeyCode::Char('e'), pressed: true, .. } => {
+                        sh.export();
+                    }
+                    InputEvent::Scroll { dy, .. } => {
+                        sh.resize_selected(if dy > 0.0 { 1.1 } else { 0.9 });
+                    }
+                    InputEvent::PointerDown { button: Button::Left, x, y } => {
+                        sh.on_pointer_down(x, y, w, h);
+                        last = (x, y);
+                    }
+                    InputEvent::PointerMove { x, y } => {
+                        sh.on_pointer_move(x, y, w, h);
+                        last = (x, y);
+                    }
+                    InputEvent::PointerUp { button: Button::Left, .. } => {
+                        sh.on_pointer_up();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             match ev {
                 InputEvent::Key {
                     code: KeyCode::Escape,
@@ -207,6 +263,41 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 InputEvent::Key {
+                    code: KeyCode::Char('s'),
+                    pressed: true,
+                    ..
+                } => {
+                    if sheet.is_none() {
+                        match &doc {
+                            Some(d) => {
+                                let name = building
+                                    .as_ref()
+                                    .and_then(|p| p.file_stem())
+                                    .map_or_else(|| "Sheet Set".to_string(), |s| s.to_string_lossy().into_owned());
+                                let project = drawing::ProjectInfo {
+                                    name,
+                                    climate_zone: "Zone 6".into(),
+                                    ..Default::default()
+                                };
+                                let cat = qbd::drawing_catalog(d, "Zone 6");
+                                sheet = Some(layout::Layout::new(
+                                    cat,
+                                    project,
+                                    std::path::PathBuf::from("sheets"),
+                                ));
+                                eprintln!(
+                                    "sheet editor: click a palette thumbnail to place it; \
+                                     drag to move, [/] resize, x delete, ,/. switch sheet, \
+                                     n new sheet, e export, v exit"
+                                );
+                            }
+                            None => eprintln!(
+                                "sheet mode needs a building.json — pass it as the first arg"
+                            ),
+                        }
+                    }
+                }
+                InputEvent::Key {
                     code: KeyCode::Char('c'),
                     pressed: true,
                     ..
@@ -276,7 +367,9 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
         let mut pixmap = Pixmap::new(w, h).ok_or_else(|| anyhow::anyhow!("pixmap alloc"))?;
-        if let Some(m) = &mut map {
+        if let Some(sh) = &sheet {
+            sh.render(&mut pixmap);
+        } else if let Some(m) = &mut map {
             m.render(&mut pixmap);
         } else {
             match &slice {

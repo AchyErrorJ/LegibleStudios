@@ -25,6 +25,7 @@ pub mod primitives;
 pub mod roof;
 pub mod room_labels;
 pub mod schedule;
+pub mod legend;
 pub mod section_marker;
 pub mod section_sheet;
 pub mod sheet;
@@ -73,7 +74,11 @@ pub use section_sheet::{
     AssemblyCallout, CutDirection, SectionCut, SectionInput, SectionWallInput, ViewDirection,
     default_cut, generate_section_sheet_svg,
 };
-pub use sheet::{PaperSize, Placement, SheetDrawing, compose_sheet};
+pub use legend::generate_symbols_legend_svg;
+pub use sheet::{
+    FreePlacement, PaperSize, Placement, SheetDrawing, compose_freeform, compose_multi,
+    compose_sheet,
+};
 pub use roof::{RoofPlan, RoofType, generate_roof_plan_svg};
 pub use site_plan::{Contour, SitePlan, StreetClass, StreetWay, generate_site_plan_svg};
 pub mod skeleton;

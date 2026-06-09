@@ -21,9 +21,10 @@ pub mod wall_types;
 pub use compliance_report::compliance_report_to_svg;
 pub use convert::{layout_to_building, wall_type_for_wall, walls_to_parametric};
 pub use documentation::{
-    Documentation, PdfError, floor_plan_sheet, generate_documentation,
-    generate_documentation_for_project, generate_documentation_with_validation,
-    generate_documentation_with_validation_for_project, svg_to_pdf,
+    CatalogDrawing, Documentation, PdfError, drawing_catalog, floor_plan_sheet,
+    generate_documentation, generate_documentation_for_project,
+    generate_documentation_with_validation, generate_documentation_with_validation_for_project,
+    plans_sheet, svg_to_pdf,
 };
 pub use floor_plan::generate_floor_plan_with_openings;
 pub use schedule::{door_entries, window_entries};

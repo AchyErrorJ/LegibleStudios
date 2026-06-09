@@ -202,7 +202,11 @@ pub fn svg_arc(arc: &Arc2D, scale: f32) -> String {
         angle_diff += std::f32::consts::TAU;
     }
     let large_arc_flag = i32::from(angle_diff > std::f32::consts::PI);
-    let sweep_flag = 1;
+    // The exporter negates Y (`-start_y`/`-end_y`), mirroring the arc, which
+    // reverses the visual sweep. Compensate so the angle range `start→end`
+    // (CCW in model space) renders correctly — door swings bulge away from the
+    // hinge instead of caving toward it.
+    let sweep_flag = 0;
 
     format!(
         "<path d=\"M {} {} A {} {} 0 {} {} {} {}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\"/>\n",
