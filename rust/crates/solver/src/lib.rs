@@ -735,10 +735,15 @@ fn is_bedroom_floor(program: &[RoomSpec]) -> bool {
 fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32]) -> Vec<PlacedRoom> {
     const STAIR_W_FT: f32 = 6.0;
     const STAIR_RUN_FT: f32 = 11.0;
-    const HALL_D_FT: f32 = 4.0;
+    // Keep the corridor's footprint proportional to the floor and no wider than
+    // needed: a full-width corridor's share of the floor is just its depth over
+    // the floor depth, so target ~9% but never below a ~3 ft (914 mm) code-min
+    // clear width.
+    const HALL_AREA_RATIO: f32 = 0.09;
+    const MIN_HALL_FT: f32 = 3.0;
     let sw = STAIR_W_FT.min(env.w * 0.4);
     let run = STAIR_RUN_FT.min(env.h * 0.5);
-    let hall_d = HALL_D_FT.min((env.h - run) * 0.5).max(3.0);
+    let hall_d = (HALL_AREA_RATIO * env.h).clamp(MIN_HALL_FT, (env.h - run) * 0.4);
 
     let mk = |i: usize, r: Rect| PlacedRoom {
         id: program[i].id.clone(),
