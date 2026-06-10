@@ -938,8 +938,8 @@ fn generate_roof_plan(doc: &SchemaDocument) -> String {
         width: doc.width,
         depth: doc.depth,
         roof_type,
-        pitch: 0.5,      // 6:12, matches the elevations
-        overhang: 400.0, // ~16" eave
+        pitch: 0.5, // 6:12, matches the elevations
+        overhang: doc.roof_overhang_mm,
         footprint_polygon_mm: doc
             .footprint_polygon_mm
             .iter()
@@ -1149,6 +1149,7 @@ fn generate_section(doc: &SchemaDocument, climate_zone: &str) -> String {
         // Ceiling height auto-derives from the ground-storey wall plate.
         ceiling_height_mm: 0.0,
         assemblies: envelope_assemblies(doc, climate_zone),
+        eave_overhang_mm: doc.roof_overhang_mm,
     };
     let cut = drawing::default_cut(&input);
     generate_section_sheet_svg(&input, &cut, 0.05)
@@ -1253,6 +1254,7 @@ fn generate_elevations(doc: &SchemaDocument) -> Vec<Elevation> {
             .map(|p| (p[0], p[1]))
             .collect(),
         roof_pitch: 0.5,
+        eave_overhang_mm: doc.roof_overhang_mm,
     };
     ElevationDirection::ALL
         .iter()

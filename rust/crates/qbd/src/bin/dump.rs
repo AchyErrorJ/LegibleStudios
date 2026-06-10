@@ -11,7 +11,7 @@
 use anyhow::Context;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--pdf <dir>] [--pdf-combined <set.pdf>] [--dxf <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--streets <streets.json>] [--footprint <poly.json>] [--obc <library-dir>] [--climate-zone <zone>] [--project <name>] [--designer <name>] [--bcin <number>] [--bare]";
+const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--pdf <dir>] [--pdf-combined <set.pdf>] [--dxf <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--streets <streets.json>] [--footprint <poly.json>] [--obc <library-dir>] [--climate-zone <zone>] [--roof-overhang <mm>] [--project <name>] [--designer <name>] [--bcin <number>] [--bare]";
 
 /// Climate zone fed to OBC thermal compliance when `--climate-zone` isn't passed.
 const DEFAULT_CLIMATE_ZONE: &str = "Zone 6";
@@ -85,6 +85,7 @@ fn main() -> anyhow::Result<()> {
     let mut footprint_path: Option<PathBuf> = None;
     let mut obc_path: Option<PathBuf> = None;
     let mut climate_zone = String::from(DEFAULT_CLIMATE_ZONE);
+    let mut roof_overhang: Option<f32> = None;
     let mut project = String::from("QBD Project");
     let mut designer = String::new();
     let mut bcin = String::new();
@@ -149,6 +150,10 @@ fn main() -> anyhow::Result<()> {
                 climate_zone.clone_from(&args[i + 1]);
                 i += 2;
             }
+            "--roof-overhang" if i + 1 < args.len() => {
+                roof_overhang = args[i + 1].parse().ok();
+                i += 2;
+            }
             "--designer" if i + 1 < args.len() => {
                 designer.clone_from(&args[i + 1]);
                 i += 2;
@@ -178,6 +183,14 @@ fn main() -> anyhow::Result<()> {
 
     let mut doc = archgeometry::parse_file(&path)
         .with_context(|| format!("failed to parse {}", path.display()))?;
+
+    // `--roof-overhang <mm>` overrides the building's eave overhang (the schema
+    // default is 400 mm); it drives the elevation/section roof projection and
+    // the roof-plan eave outline.
+    if let Some(oh) = roof_overhang {
+        doc.roof_overhang_mm = oh;
+        eprintln!("  roof overhang: {oh:.0} mm");
+    }
 
     // Raw contour segments (per cell) — kept out of the schema until they've
     // been clipped to the parcel and stitched into polylines below.

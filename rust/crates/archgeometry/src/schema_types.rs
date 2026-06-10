@@ -336,6 +336,11 @@ pub struct SchemaRoof {
 fn default_roof_type() -> String {
     "gable".to_string()
 }
+/// Document-level eave overhang default (16", matching the roof plan). Distinct
+/// from `default_roof_overhang` below, which is the per-`SchemaRoof` default.
+fn default_doc_roof_overhang() -> f32 {
+    400.0
+}
 fn default_roof_pitch() -> f32 {
     6.0
 }
@@ -574,6 +579,12 @@ pub struct SchemaDocument {
     /// Roof type for generated roof geometry: `"gable"` (default) or `"hip"`.
     #[serde(default)]
     pub roof_type: String,
+    /// Eave/rake overhang projected beyond the wall face (mm). Adjustable;
+    /// ~400 mm (16") is a typical residential eave. Drives the roof-plan eave
+    /// outline and the elevation/section roof projection. 0 = roof flush with
+    /// the wall. Absent in older JSON → defaults to 400 mm.
+    #[serde(default = "default_doc_roof_overhang")]
+    pub roof_overhang_mm: f32,
     /// Irregular building footprint as CCW `[x, z]` mm vertices. Empty → the
     /// rectangular `width × depth` is used and the roof generator produces a
     /// gable/hip over that rectangle; non-empty triggers the straight-skeleton
@@ -772,6 +783,20 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(w.length(), 5000.0);
+    }
+
+    #[test]
+    fn roof_overhang_defaults_to_400_and_round_trips() {
+        // Absent in older JSON → the 16" (400 mm) document default.
+        let doc: SchemaDocument = serde_json::from_str(r#"{"width":9000,"depth":7000}"#).unwrap();
+        assert_eq!(doc.roof_overhang_mm, 400.0);
+        // An explicit value (including 0 for a flush roof) round-trips verbatim.
+        for set in [0.0_f32, 600.0] {
+            let d = SchemaDocument { roof_overhang_mm: set, ..Default::default() };
+            let back: SchemaDocument =
+                serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+            assert_eq!(back.roof_overhang_mm, set);
+        }
     }
 
     #[test]

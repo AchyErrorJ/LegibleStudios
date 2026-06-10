@@ -56,6 +56,10 @@ pub struct SectionInput {
     /// Envelope-assembly callouts rendered as a thermal notes block. Empty =
     /// no block (back-compatible with callers that don't supply them).
     pub assemblies: Vec<AssemblyCallout>,
+    /// Eave overhang projected past the exterior wall (mm). The roof profile
+    /// extends this far beyond each side wall so the section shows the eaves.
+    /// 0 = roof flush with the wall (legacy).
+    pub eave_overhang_mm: f32,
 }
 
 /// Direction of the section cut plane.
@@ -271,9 +275,11 @@ pub fn generate_section_sheet_svg(input: &SectionInput, cut: &SectionCut, scale:
 
     // Asymmetric margins: left holds the height dim + grade labels, right holds
     // the ceiling-height dim, top holds the assembly notes block, bottom holds
-    // the overall width dim + title.
-    let margin_left = 2200.0_f32;
-    let margin_right = 1800.0_f32;
+    // the overall width dim + title. Both sides also keep room for the roof's
+    // eave overhang projecting past the wall.
+    let oh = input.eave_overhang_mm.max(0.0);
+    let margin_left = 2200.0_f32.max(oh + 700.0);
+    let margin_right = 1800.0_f32.max(oh + 700.0);
     let margin_top = if input.assemblies.is_empty() { 800.0 } else { 3000.0 };
     let margin_bottom = 1600.0_f32;
 
@@ -365,10 +371,14 @@ pub fn generate_section_sheet_svg(input: &SectionInput, cut: &SectionCut, scale:
                 );
             }
             ElementType::Roof => {
+                // The roof eaves overhang the side walls by `eave_overhang_mm`,
+                // so the cut profile is wider than the wall box at the plate.
+                let oh = input.eave_overhang_mm.max(0.0);
                 let center_x = (min_x + max_x) * 0.5;
+                let (xl, xr) = (min_x - oh, max_x + oh);
                 let _ = writeln!(
                     s,
-                    r#"    <polygon points="{min_x},{yb} {center_x},{yt} {max_x},{yb}" class="roof"/>"#,
+                    r#"    <polygon points="{xl},{yb} {center_x},{yt} {xr},{yb}" class="roof"/>"#,
                     yb = elem.y_bottom,
                     yt = elem.y_top,
                 );

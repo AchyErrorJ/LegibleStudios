@@ -98,6 +98,10 @@ pub struct ElevationInput {
     /// Roof pitch (rise/run); only used by the polygon path to size each
     /// wing's ridge height. Defaults to 6:12 if 0.
     pub roof_pitch: f32,
+    /// Eave/rake overhang projected beyond the wall (mm). 0 = roof flush with
+    /// the wall (legacy). Drives how far the roof silhouette extends past the
+    /// wall horizontally and how far the eave/fascia drops below the plate.
+    pub eave_overhang_mm: f32,
 }
 
 struct WallSegment {
@@ -654,7 +658,9 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
         max_y = 2700.0;
     }
 
-    let margin_x = 1000.0_f32;
+    // Keep the side margin wide enough that the roof's rake/eave overhang
+    // (which projects `eave_overhang_mm` past the wall) stays inside the sheet.
+    let margin_x = 1000.0_f32.max(input.eave_overhang_mm.max(0.0) + 700.0);
     let margin_y = 800.0_f32;
     // Extra room on the right edge for level-marker callouts (Phase 2.5
     // adds T.O. FOUNDATION / SUBFLOOR / PLATE labels off the building).
@@ -753,6 +759,14 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
     // decomposed polygon footprint). The wall envelope stays a single rect.
     let mut roof_poly: Option<String> = None;
     let mut roof_top = plate_y;
+    // Eave/rake overhang: the roof projects past the wall by `oh` horizontally;
+    // on eave sides the fascia also drops `eave_drop` below the plate (the slope
+    // run over the overhang plus a fascia board). 0 = roof flush with the wall.
+    let oh = input.eave_overhang_mm.max(0.0);
+    let pitch_e = if input.roof_pitch > 0.0 { input.roof_pitch } else { 0.5 };
+    let eave_drop = if oh > 0.0 { oh * pitch_e + 150.0 } else { 0.0 };
+    let (xl, xr) = (min_x - oh, max_x + oh);
+    let eave_y = plate_y - eave_drop;
     if !input.footprint_polygon_mm.is_empty() && !walls.is_empty() {
         let silhouette = polygon_roof_silhouette(input, dir, plate_y);
         if !silhouette.is_empty() {
@@ -773,17 +787,19 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
             Direction::North | Direction::South => !input.ridge_along_width,
         };
         roof_poly = Some(if is_gable_end {
+            // Gable end: the rake overhangs sideways at plate level; the apex
+            // stays centred over the wall.
             let cx = (min_x + max_x) * 0.5;
-            format!("{min_x},{plate_y} {cx},{ridge_y} {max_x},{plate_y}")
+            format!("{xl},{plate_y} {cx},{ridge_y} {xr},{plate_y}")
         } else if input.hip {
-            // Hip eave side: the slope foreshortens to a trapezoid — the ridge
-            // is inset by half the short span at each end.
+            // Hip eave side: trapezoid — eaves overhang out + down, ridge inset
+            // by half the short span at each end.
             let inset = input.width.min(input.depth) * 0.5;
             let (rl, rr) = (min_x + inset, max_x - inset);
-            format!("{min_x},{plate_y} {max_x},{plate_y} {rr},{ridge_y} {rl},{ridge_y}")
+            format!("{xl},{eave_y} {xr},{eave_y} {rr},{ridge_y} {rl},{ridge_y}")
         } else {
-            // Gable eave side: the slope foreshortens to a plate→ridge band.
-            format!("{min_x},{plate_y} {max_x},{plate_y} {max_x},{ridge_y} {min_x},{ridge_y}")
+            // Gable eave side: a plate→ridge band; the eave overhangs out + down.
+            format!("{xl},{eave_y} {xr},{eave_y} {xr},{ridge_y} {xl},{ridge_y}")
         });
     }
     if let Some(pts) = &roof_poly {
@@ -796,11 +812,11 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
         );
         s.push_str("    <g clip-path=\"url(#roofclip)\">\n");
         const COURSE: f32 = 320.0;
-        let mut ry = plate_y + COURSE;
+        let mut ry = eave_y + COURSE;
         while ry < roof_top {
             let _ = writeln!(
                 s,
-                r#"      <line x1="{min_x}" y1="{ry}" x2="{max_x}" y2="{ry}" class="shingle"/>"#,
+                r#"      <line x1="{xl}" y1="{ry}" x2="{xr}" y2="{ry}" class="shingle"/>"#,
             );
             ry += COURSE;
         }
