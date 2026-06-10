@@ -685,12 +685,22 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
     // Styles.
     s.push_str("  <style>\n");
     s.push_str("    .wall-face { fill: #e8e4d8; stroke: #000; stroke-width: 4; }\n");
+    s.push_str("    .siding { stroke: #cfc7b6; stroke-width: 2; }\n");
     s.push_str("    .opening { fill: white; stroke: #000; stroke-width: 3; }\n");
     s.push_str("    .door { fill: #c8c0b0; stroke: #000; stroke-width: 3; }\n");
     s.push_str("    .roof { fill: #888; stroke: #000; stroke-width: 4; }\n");
+    s.push_str("    .shingle { stroke: #565656; stroke-width: 4; }\n");
+    // Window glazing, frame, muntins, sill/head.
+    s.push_str("    .glass { fill: #d9e6ef; stroke: #000; stroke-width: 3; }\n");
+    s.push_str("    .frame { fill: none; stroke: #000; stroke-width: 6; }\n");
+    s.push_str("    .muntin { stroke: #000; stroke-width: 3; }\n");
+    s.push_str("    .trim { fill: #f3efe6; stroke: #000; stroke-width: 3; }\n");
+    s.push_str("    .panel { fill: none; stroke: #000; stroke-width: 3; }\n");
     s.push_str("    .grade { stroke: #666; stroke-width: 6; fill: none; }\n");
     s.push_str("    .title { font-family: Arial, sans-serif; font-size: 350px; font-weight: bold; fill: #333; }\n");
     s.push_str("    .label { font-family: Arial, sans-serif; font-size: 200px; fill: #333; }\n");
+    s.push_str("    .note-h { font-family: Arial, sans-serif; font-size: 190px; font-weight: bold; fill: #222; }\n");
+    s.push_str("    .note { font-family: Arial, sans-serif; font-size: 150px; fill: #333; }\n");
     s.push_str("  </style>\n");
 
     // Flip Y so 0 is at the bottom (grade) and ridges go up the page. Geometry
@@ -712,6 +722,18 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
             x = min_x,
             w = max_x - min_x,
         );
+        // Horizontal lap-siding courses across the wall face. Drawn before the
+        // openings so the window/door rects mask the lines that fall behind
+        // them. SIDING_COURSE is a typical exposed lap height.
+        const SIDING_COURSE: f32 = 200.0;
+        let mut cy = SIDING_COURSE;
+        while cy < plate_y {
+            let _ = writeln!(
+                s,
+                r#"    <line x1="{min_x}" y1="{cy}" x2="{max_x}" y2="{cy}" class="siding"/>"#,
+            );
+            cy += SIDING_COURSE;
+        }
     }
 
     // Floor lines between storeys, so a multi-storey elevation reads as stacked.
@@ -726,67 +748,137 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
         }
     }
 
-    // Polygon footprint path: decompose into wings and overlay each wing's
-    // own hip silhouette. The wall envelope is still a single rect (uniform
-    // wall height) so the only stepped element is the roof.
+    // Roof — capture its silhouette polygon so shingle courses can be clipped
+    // to whatever shape (gable triangle, hip trapezoid, eave-side band, or a
+    // decomposed polygon footprint). The wall envelope stays a single rect.
+    let mut roof_poly: Option<String> = None;
+    let mut roof_top = plate_y;
     if !input.footprint_polygon_mm.is_empty() && !walls.is_empty() {
         let silhouette = polygon_roof_silhouette(input, dir, plate_y);
         if !silhouette.is_empty() {
-            let pts = silhouette
-                .iter()
-                .map(|(x, y)| format!("{x},{y}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let _ = writeln!(s, r#"    <polygon points="{pts}" class="roof"/>"#);
+            roof_top = silhouette.iter().map(|&(_, y)| y).fold(plate_y, f32::max);
+            roof_poly = Some(
+                silhouette
+                    .iter()
+                    .map(|(x, y)| format!("{x},{y}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
         }
     } else if input.gable_ridge_above_plate > 0.0 && !walls.is_empty() {
         let ridge_y = plate_y + input.gable_ridge_above_plate;
+        roof_top = ridge_y;
         let is_gable_end = match dir {
             Direction::East | Direction::West => input.ridge_along_width,
             Direction::North | Direction::South => !input.ridge_along_width,
         };
-        if is_gable_end {
+        roof_poly = Some(if is_gable_end {
             let cx = (min_x + max_x) * 0.5;
-            let _ = writeln!(
-                s,
-                r#"    <polygon points="{min_x},{plate_y} {cx},{ridge_y} {max_x},{plate_y}" class="roof"/>"#,
-            );
+            format!("{min_x},{plate_y} {cx},{ridge_y} {max_x},{plate_y}")
         } else if input.hip {
             // Hip eave side: the slope foreshortens to a trapezoid — the ridge
             // is inset by half the short span at each end.
             let inset = input.width.min(input.depth) * 0.5;
             let (rl, rr) = (min_x + inset, max_x - inset);
-            let _ = writeln!(
-                s,
-                r#"    <polygon points="{min_x},{plate_y} {max_x},{plate_y} {rr},{ridge_y} {rl},{ridge_y}" class="roof"/>"#,
-            );
+            format!("{min_x},{plate_y} {max_x},{plate_y} {rr},{ridge_y} {rl},{ridge_y}")
         } else {
-            // Gable eave side: the slope foreshortens to a band plate→ridge,
-            // with the ridge line along the top.
-            let _ = writeln!(
-                s,
-                r#"    <rect x="{min_x}" y="{plate_y}" width="{w}" height="{rise}" class="roof"/>"#,
-                w = max_x - min_x,
-                rise = input.gable_ridge_above_plate,
-            );
-            let _ = writeln!(
-                s,
-                r##"    <line x1="{min_x}" y1="{ridge_y}" x2="{max_x}" y2="{ridge_y}" stroke="#000" stroke-width="4"/>"##,
-            );
-        }
+            // Gable eave side: the slope foreshortens to a plate→ridge band.
+            format!("{min_x},{plate_y} {max_x},{plate_y} {max_x},{ridge_y} {min_x},{ridge_y}")
+        });
     }
-
-    // Openings — door (filled tinted) or window (white, no sill bar).
-    for op in &openings {
-        let class_attr = if op.is_door { "door" } else { "opening" };
+    if let Some(pts) = &roof_poly {
+        let _ = writeln!(s, r#"    <polygon points="{pts}" class="roof"/>"#);
+        // Shingle courses, clipped to the roof silhouette so they read as a
+        // shingled slope rather than crossing the sky.
         let _ = writeln!(
             s,
-            r#"    <rect x="{x}" y="{yb}" width="{w}" height="{h}" class="{class_attr}"/>"#,
-            x = op.center_x - op.width * 0.5,
-            yb = op.bottom_y,
-            w = op.width,
-            h = op.top_y - op.bottom_y,
+            r#"    <clipPath id="roofclip"><polygon points="{pts}"/></clipPath>"#,
         );
+        s.push_str("    <g clip-path=\"url(#roofclip)\">\n");
+        const COURSE: f32 = 320.0;
+        let mut ry = plate_y + COURSE;
+        while ry < roof_top {
+            let _ = writeln!(
+                s,
+                r#"      <line x1="{min_x}" y1="{ry}" x2="{max_x}" y2="{ry}" class="shingle"/>"#,
+            );
+            ry += COURSE;
+        }
+        s.push_str("    </g>\n");
+    }
+
+    // Openings — drawn as real architectural elements: windows get glazing +
+    // frame + muntins + a projecting sill/head; doors get a slab with panels.
+    for op in &openings {
+        let x0 = op.center_x - op.width * 0.5;
+        let x1 = op.center_x + op.width * 0.5;
+        let (yb, yt) = (op.bottom_y, op.top_y);
+        let h = yt - yb;
+        if op.is_door {
+            // Door slab + two recessed panels.
+            let _ = writeln!(
+                s,
+                r#"    <rect x="{x0}" y="{yb}" width="{w}" height="{h}" class="door"/>"#,
+                w = op.width,
+            );
+            let inset = (op.width * 0.18).min(150.0);
+            let pw = op.width - 2.0 * inset;
+            // Lower (tall) and upper (short) panels.
+            let _ = writeln!(
+                s,
+                r#"    <rect x="{px}" y="{py}" width="{pw}" height="{ph}" class="panel"/>"#,
+                px = x0 + inset,
+                py = yb + inset,
+                ph = h * 0.5 - inset * 1.5,
+            );
+            let _ = writeln!(
+                s,
+                r#"    <rect x="{px}" y="{py}" width="{pw}" height="{ph}" class="panel"/>"#,
+                px = x0 + inset,
+                py = yb + h * 0.5 + inset * 0.5,
+                ph = h * 0.5 - inset * 1.5,
+            );
+        } else {
+            // Projecting sill below and head trim above, slightly wider.
+            let ext = 90.0_f32;
+            let band = 80.0_f32;
+            let _ = writeln!(
+                s,
+                r#"    <rect x="{x}" y="{y}" width="{w}" height="{band}" class="trim"/>"#,
+                x = x0 - ext,
+                y = yb - band,
+                w = op.width + 2.0 * ext,
+            );
+            let _ = writeln!(
+                s,
+                r#"    <rect x="{x}" y="{y}" width="{w}" height="{band}" class="trim"/>"#,
+                x = x0 - ext,
+                y = yt,
+                w = op.width + 2.0 * ext,
+            );
+            // Glazing + frame.
+            let _ = writeln!(
+                s,
+                r#"    <rect x="{x0}" y="{yb}" width="{w}" height="{h}" class="glass"/>"#,
+                w = op.width,
+            );
+            let _ = writeln!(
+                s,
+                r#"    <rect x="{x0}" y="{yb}" width="{w}" height="{h}" class="frame"/>"#,
+                w = op.width,
+            );
+            // Muntins: one horizontal at mid-height, and vertical mullions every
+            // ~600 mm so wide windows read as ganged units, not one big pane.
+            let my = yb + h * 0.5;
+            let _ = writeln!(s, r#"    <line x1="{x0}" y1="{my}" x2="{x1}" y2="{my}" class="muntin"/>"#);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let lites = ((op.width / 600.0).round() as i32).max(1);
+            for i in 1..lites {
+                #[allow(clippy::cast_precision_loss)]
+                let mx = x0 + op.width * (i as f32) / (lites as f32);
+                let _ = writeln!(s, r#"    <line x1="{mx}" y1="{yb}" x2="{mx}" y2="{yt}" class="muntin"/>"#);
+            }
+        }
     }
 
     // Grade line at Y=0.
@@ -884,6 +976,27 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
             );
         }
         s.push_str("  </g>\n");
+    }
+
+    // Exterior-finish / assembly notes (top-left, upright — the sky area is
+    // free). Complements the section's SB-12 R-value assemblies with the
+    // finishes a builder reads off the elevation.
+    if !walls.is_empty() {
+        let nx = vb_x + 250.0;
+        let mut ny = vb_y + 450.0;
+        let _ = writeln!(
+            s,
+            r#"  <text x="{nx}" y="{ny}" class="note-h">EXTERIOR FINISHES</text>"#,
+        );
+        for line in [
+            "ROOF: asphalt shingles o/ ice &amp; water o/ 12.7mm sheathing",
+            "WALLS: siding o/ building wrap o/ 2x6 studs @ 406mm o.c.",
+            "         R-22 batt + R-5 c.i. (OBC SB-12, zone-dependent)",
+            "FOUNDATION: parging o/ damp-proofing on conc. wall",
+        ] {
+            ny += 280.0;
+            let _ = writeln!(s, r#"  <text x="{nx}" y="{ny}" class="note">{line}</text>"#);
+        }
     }
 
     // Title (NOT flipped).
@@ -1087,7 +1200,7 @@ mod tests {
         assert!(svg.contains(r#"class="door""#), "south view must show door");
         // Window is on east-facing wall — should not appear in south view.
         assert!(
-            !svg.contains(r#"class="opening""#),
+            !svg.contains(r#"class="glass""#),
             "south view should not show east-facing window: {svg}"
         );
     }
@@ -1096,7 +1209,7 @@ mod tests {
     fn east_elevation_shows_the_window_not_the_south_door() {
         let input = rectangular_input();
         let svg = generate_elevation_sheet_svg(&input, Direction::East, 0.05);
-        assert!(svg.contains(r#"class="opening""#));
+        assert!(svg.contains(r#"class="glass""#));
         assert!(
             !svg.contains(r#"class="door""#),
             "east view should not show south-facing door: {svg}"
@@ -1137,11 +1250,11 @@ mod tests {
         let south = generate_elevation_sheet_svg(&input, Direction::South, 0.05);
         // Exactly one door (the south wall's), and no windows (north window hidden).
         assert_eq!(south.matches(r#"class="door""#).count(), 1, "only the south door: {south}");
-        assert!(!south.contains(r#"class="opening""#), "north/interior windows hidden");
+        assert!(!south.contains(r#"class="glass""#), "north/interior windows hidden");
 
         // The north window does show on the north elevation.
         let north = generate_elevation_sheet_svg(&input, Direction::North, 0.05);
-        assert!(north.contains(r#"class="opening""#), "north window shows on north view");
+        assert!(north.contains(r#"class="glass""#), "north window shows on north view");
     }
 
     #[test]
