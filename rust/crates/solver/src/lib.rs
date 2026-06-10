@@ -740,7 +740,7 @@ fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32]) -> Vec<P
     // the floor depth, so target ~9% but never below a ~3 ft (914 mm) code-min
     // clear width.
     const HALL_AREA_RATIO: f32 = 0.09;
-    const MIN_HALL_FT: f32 = 3.0;
+    const MIN_HALL_FT: f32 = 3.3; // ≈ 1.0 m clear width (minimum)
     let sw = STAIR_W_FT.min(env.w * 0.4);
     let run = STAIR_RUN_FT.min(env.h * 0.5);
     let hall_d = (HALL_AREA_RATIO * env.h).clamp(MIN_HALL_FT, (env.h - run) * 0.4);

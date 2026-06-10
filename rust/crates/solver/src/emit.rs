@@ -181,6 +181,9 @@ fn door_between(a: &str, b: &str) -> bool {
     let bedroom = |t: &str| t.contains("bedroom");
     let bath = |t: &str| t.contains("bath");
     let connect = |a: &str, b: &str| -> bool {
+        if a == "stairs" {
+            return matches!(b, "hallway" | "landing" | "foyer"); // stairs reach only the hall
+        }
         if circ(a) {
             return !closet(b) && b != "primary_bath"; // hall → bedroom/bath/stair
         }
