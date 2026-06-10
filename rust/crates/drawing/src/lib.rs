@@ -93,5 +93,6 @@ pub use svg::{
     svg_line, svg_polyline, svg_text,
 };
 pub use title_block::{
-    DrawingInfo, DrawingType, ProjectInfo, drawing_info_for, generate_title_block,
+    DrawingInfo, DrawingType, ProjectInfo, TITLE_BLOCK_H, TITLE_BLOCK_W, drawing_info_for,
+    generate_title_block, title_block_box,
 };

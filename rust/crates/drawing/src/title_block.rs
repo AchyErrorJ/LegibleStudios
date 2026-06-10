@@ -118,8 +118,6 @@ pub fn generate_title_block(
     drawing: &DrawingInfo,
     margin: f32,
 ) -> String {
-    let tb_width = 4000.0_f32;
-    let tb_height = 1200.0_f32;
     let border_margin = 300.0_f32;
 
     let border_x = -margin + border_margin;
@@ -128,24 +126,8 @@ pub fn generate_title_block(
     let border_h = height + 2.0 * margin - 2.0 * border_margin;
 
     // Title block bottom-right of the border.
-    let tb_x = border_x + border_w - tb_width - 100.0;
-    let tb_y = border_y + border_h - tb_height - 100.0;
-
-    let pname = pick(&project.name, "RESIDENTIAL PROJECT");
-    let paddr = &project.address;
-    let pclient = &project.client;
-    let pnum = pick(&project.number, "P-001");
-    let psolver = pick(&project.solver, "QBD Layout");
-    let pdesigner = project.designer.as_str();
-    let pbcin = project.designer_bcin.as_str();
-
-    let dtitle = pick(&drawing.title, "FLOOR PLAN");
-    let dnum = pick(&drawing.number, "A-101");
-    let dscale = pick(&drawing.scale, "1:100");
-    let dsheet = pick(&drawing.sheet, "1 OF 8");
-    let drev = pick(&drawing.revision, "-");
-    let ddrawn = pick(&drawing.drawn_by, "ARCHENGINE");
-    let ddate = pick(&drawing.date, "");
+    let tb_x = border_x + border_w - TITLE_BLOCK_W - 100.0;
+    let tb_y = border_y + border_h - TITLE_BLOCK_H - 100.0;
 
     let mut s = String::with_capacity(2048);
     s.push_str("<!-- Title Block -->\n");
@@ -165,6 +147,52 @@ pub fn generate_title_block(
         ibw = border_w - 100.0,
         ibh = border_h - 100.0,
     );
+    // Title-block box (bottom-right of the border).
+    s.push_str(&title_block_box(tb_x, tb_y, project, drawing));
+    s.push_str("</g>\n");
+    s
+}
+
+/// Natural dimensions of the title-block box (model mm). Its internal text
+/// layout is tuned to this size; resize it by scaling uniformly, never by
+/// changing these (which would not move the text with the box).
+pub const TITLE_BLOCK_W: f32 = 4000.0;
+/// Natural height of the title-block box (model mm). See [`TITLE_BLOCK_W`].
+pub const TITLE_BLOCK_H: f32 = 1200.0;
+
+/// Emit just the title-block box (no sheet border), top-left corner at
+/// `(tb_x, tb_y)`, at its natural [`TITLE_BLOCK_W`]×[`TITLE_BLOCK_H`] size.
+///
+/// Split out of [`generate_title_block`] so a sheet composer can place the box
+/// at a *uniform* scale anywhere in a viewBox — keeping the title block a
+/// consistent size and aspect on every sheet regardless of drawing scale.
+#[must_use]
+pub fn title_block_box(
+    tb_x: f32,
+    tb_y: f32,
+    project: &ProjectInfo,
+    drawing: &DrawingInfo,
+) -> String {
+    let tb_width = TITLE_BLOCK_W;
+    let tb_height = TITLE_BLOCK_H;
+
+    let pname = pick(&project.name, "RESIDENTIAL PROJECT");
+    let paddr = &project.address;
+    let pclient = &project.client;
+    let pnum = pick(&project.number, "P-001");
+    let psolver = pick(&project.solver, "QBD Layout");
+    let pdesigner = project.designer.as_str();
+    let pbcin = project.designer_bcin.as_str();
+
+    let dtitle = pick(&drawing.title, "FLOOR PLAN");
+    let dnum = pick(&drawing.number, "A-101");
+    let dscale = pick(&drawing.scale, "1:100");
+    let dsheet = pick(&drawing.sheet, "1 OF 8");
+    let drev = pick(&drawing.revision, "-");
+    let ddrawn = pick(&drawing.drawn_by, "ARCHENGINE");
+    let ddate = pick(&drawing.date, "");
+
+    let mut s = String::with_capacity(1536);
     // Title-block box.
     let _ = writeln!(
         s,
@@ -278,7 +306,6 @@ pub fn generate_title_block(
         );
     }
 
-    s.push_str("</g>\n");
     s
 }
 

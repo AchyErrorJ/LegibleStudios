@@ -12,8 +12,8 @@ use drawing::{
     SitePlan, WallSectionDetail, drawing_info_for, export_to_svg_padded,
     generate_elevation_sheet_svg, generate_footing_detail_svg, generate_foundation_plan_svg,
     generate_framing_plan_svg, generate_obc_notes_block, generate_section_sheet_svg,
-    generate_site_plan_svg, generate_title_block, generate_wall_detail,
-    notes_block_size_mm, wall_detail_to_svg,
+    generate_site_plan_svg, generate_wall_detail, notes_block_size_mm, title_block_box,
+    wall_detail_to_svg, TITLE_BLOCK_H, TITLE_BLOCK_W,
 };
 
 use crate::floor_plan::generate_floor_plan_with_openings;
@@ -602,36 +602,24 @@ pub fn generate_documentation_for_project(
     let project_name = project.name.clone();
     let date = today_iso();
 
-    // Inject a title block into each generated SVG so the bundle reads
-    // like a permit set (project info, drawing number, scale, sheet
-    // count) rather than a bare geometry dump.
+    // Every sheet gets the same border + title block, sized as a fixed fraction
+    // of that sheet's own page (uniform scale, bottom-right anchored) so the
+    // block reads identically regardless of the drawing's scale or aspect.
     let with_tb = |svg: String, dt: DrawingType, scale: &str| -> String {
         let info = drawing_info_for(dt, scale, &date);
-        let tb = generate_title_block(doc.width, doc.depth, &project, &info, 500.0);
-        inject_before_svg_close(&svg, &tb)
+        inject_sheet_titleblock(&svg, &project, &info, false)
     };
-    // Floor-plan variant: title block + OBC general-notes block stacked
-    // immediately above it. Permit convention puts the OBC 9.10.19 / 9.33.4
+    // Floor-plan variant: also stacks the OBC general-notes block immediately
+    // above the title block. Permit convention puts the OBC 9.10.19 / 9.33.4
     // notes on the plan sheet itself.
     let with_tb_and_obc_notes = |svg: String, dt: DrawingType, scale: &str| -> String {
         let info = drawing_info_for(dt, scale, &date);
-        let tb = generate_title_block(doc.width, doc.depth, &project, &info, 500.0);
-        let (_notes_w, notes_h) = notes_block_size_mm();
-        // Title-block position mirrors the formula inside
-        // `generate_title_block`: bottom-right corner of the inner border.
-        let tb_x = -200.0_f32 + (doc.width + 400.0) - 4000.0 - 100.0;
-        let tb_y = -200.0_f32 + (doc.depth + 400.0) - 1200.0 - 100.0;
-        let notes_x = tb_x;
-        let notes_y = tb_y - notes_h - 200.0;
-        let notes = generate_obc_notes_block(notes_x, notes_y);
-        let combined = format!("{tb}{notes}");
-        inject_before_svg_close(&svg, &combined)
+        inject_sheet_titleblock(&svg, &project, &info, true)
     };
-    // Site and roof plans live in a small coordinate space of their own, so
-    // the floor-plan-sized title block must be scaled to fit their viewBox.
+    // Site and roof plans use the same consistent injector.
     let with_fitted_tb = |svg: String, dt: DrawingType, scale: &str| -> String {
         let info = drawing_info_for(dt, scale, &date);
-        inject_fitted_title_block(&svg, &project, &info)
+        inject_sheet_titleblock(&svg, &project, &info, false)
     };
 
     // One floor plan per storey when the walls genuinely span multiple levels
@@ -767,11 +755,10 @@ pub fn generate_documentation_with_validation_for_project(
     let mut docs = generate_documentation_for_project(doc, project.clone());
     if !validation.wall_reports.is_empty() {
         let report_svg = crate::compliance_report::compliance_report_to_svg(validation, &docs.project_name);
-        // The compliance report lives in a small px coordinate space (like
-        // the site plan), so we use the fitted title-block path. Reuse the
-        // caller's ProjectInfo so the designer/BCIN appear here too.
+        // Same consistent sheet frame + title block as every other sheet.
+        // Reuse the caller's ProjectInfo so the designer/BCIN appear here too.
         let info = drawing_info_for(DrawingType::ComplianceReport, "—", &docs.generated_date);
-        docs.compliance_report_svg = inject_fitted_title_block(&report_svg, &project, &info);
+        docs.compliance_report_svg = inject_sheet_titleblock(&report_svg, &project, &info, false);
     }
     docs
 }
@@ -793,38 +780,69 @@ fn parse_viewbox(svg: &str) -> Option<(f32, f32, f32, f32)> {
     if n.len() == 4 { Some((n[0], n[1], n[2], n[3])) } else { None }
 }
 
-/// Inject a title block sized to the sheet's *own* coordinate space.
+/// Frame a sheet identically to every other: a border inset from the viewBox,
+/// plus a title block anchored bottom-right at a *consistent* size — a fixed
+/// fraction (`TB_FRAC_LONG`) of the page's longest side, scaled uniformly so it
+/// never distorts or clips no matter the drawing's scale or aspect. Previously
+/// the block was a fixed model-mm box tied to the building's plan dimensions,
+/// so it came out huge on small/portrait sheets and clipped past the edge on
+/// sheets shaped differently than the plan.
 ///
-/// `generate_title_block` lays out in mm "model space" with absolute sizes
-/// (4000-wide box, 200px text) tuned for floor-plan-sized drawings (~10000
-/// units). The site and roof plans use a much smaller coordinate space, so
-/// the raw fragment would land far off-screen. We render the title block at
-/// its natural size for a drawing matching this sheet's aspect ratio, then
-/// wrap it in a `transform` that maps that natural extent onto the sheet's
-/// viewBox — giving a correctly framed border + title block on any sheet.
-fn inject_fitted_title_block(svg: &str, project: &ProjectInfo, info: &DrawingInfo) -> String {
-    const NATURAL_MAX: f32 = 10_000.0; // matches the title block's design scale
-    const MARGIN: f32 = 500.0;
+/// `with_obc_notes` stacks the OBC general-notes block directly above the title
+/// block in the same scaled space (floor-plan sheets only).
+fn inject_sheet_titleblock(
+    svg: &str,
+    project: &ProjectInfo,
+    info: &DrawingInfo,
+    with_obc_notes: bool,
+) -> String {
+    /// Title-block width as a fraction of the sheet's longest side.
+    const TB_FRAC_LONG: f32 = 0.26;
     let Some((vx, vy, vw, vh)) = parse_viewbox(svg) else {
         return svg.to_string();
     };
     if vw <= 0.0 || vh <= 0.0 {
         return svg.to_string();
     }
-    // Natural drawing dimensions preserving the sheet's aspect ratio.
-    let max_dim = vw.max(vh);
-    let (nw, nh) = (NATURAL_MAX * vw / max_dim, NATURAL_MAX * vh / max_dim);
-    let tb = generate_title_block(nw, nh, project, info, MARGIN);
-    // The fragment's border spans model x ∈ [-MARGIN+300, nw+MARGIN-300] =
-    // [-200, nw+200] (and likewise y). Map that onto [vx, vx+vw].
-    let span_w = nw + 400.0;
-    let span_h = nh + 400.0;
-    let sx = vw / span_w;
-    let sy = vh / span_h;
-    let tx = vx + 200.0 * sx;
-    let ty = vy + 200.0 * sy;
-    let wrapped = format!("<g transform=\"translate({tx} {ty}) scale({sx} {sy})\">\n{tb}</g>\n");
-    inject_before_svg_close(svg, &wrapped)
+    let long = vw.max(vh);
+    let inset = 0.012 * long;
+
+    let mut frag = String::with_capacity(2048);
+    // Sheet border (outer + inner), framing the viewBox.
+    let _ = writeln!(
+        frag,
+        r##"  <rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="none" stroke="#000" stroke-width="{sw:.1}"/>"##,
+        x = vx + inset,
+        y = vy + inset,
+        w = vw - 2.0 * inset,
+        h = vh - 2.0 * inset,
+        sw = long * 0.0007,
+    );
+    let _ = writeln!(
+        frag,
+        r##"  <rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="none" stroke="#000" stroke-width="{sw:.1}"/>"##,
+        x = vx + inset * 1.5,
+        y = vy + inset * 1.5,
+        w = vw - 3.0 * inset,
+        h = vh - 3.0 * inset,
+        sw = long * 0.0003,
+    );
+
+    // Title block: uniform scale to the target width, bottom-right corner.
+    let k = (TB_FRAC_LONG * long) / TITLE_BLOCK_W;
+    let gap = inset + 0.006 * long;
+    let tb_x = vx + vw - gap - TITLE_BLOCK_W * k;
+    let tb_y = vy + vh - gap - TITLE_BLOCK_H * k;
+    let _ = writeln!(frag, r#"  <g transform="translate({tb_x:.2} {tb_y:.2}) scale({k:.5})">"#);
+    // OBC notes stack directly above the box, sharing this scale + left edge.
+    if with_obc_notes {
+        let (_nw, nh) = notes_block_size_mm();
+        frag.push_str(&generate_obc_notes_block(0.0, -(nh + 200.0)));
+    }
+    frag.push_str(&title_block_box(0.0, 0.0, project, info));
+    frag.push_str("  </g>\n");
+
+    inject_before_svg_close(svg, &frag)
 }
 
 /// Inject SVG content before the closing `</svg>` tag. If the input has
@@ -1350,27 +1368,46 @@ mod tests {
     }
 
     #[test]
-    fn fitted_title_block_scales_into_the_sheet_viewbox() {
-        // A small-coordinate sheet (like the site plan): the title block must
-        // be scaled to fit, with its border framing the viewBox exactly.
+    fn sheet_title_block_scales_uniformly_into_the_viewbox() {
+        // A small-coordinate sheet (like the site plan): the title block is
+        // placed at a uniform scale, anchored bottom-right inside the viewBox.
         let svg = "<svg viewBox=\"0 0 540 730\">\n<rect/>\n</svg>\n";
         let project = ProjectInfo { name: "Acme".into(), ..Default::default() };
         let info = drawing_info_for(DrawingType::SitePlan, "1:200", "2026-05-26");
-        let out = inject_fitted_title_block(svg, &project, &info);
-        // Wrapped in a scaling transform, not injected raw.
+        let out = inject_sheet_titleblock(svg, &project, &info, false);
+        // Wrapped in a single uniform scaling transform, not injected raw.
         assert!(out.contains("<g transform=\"translate("));
         assert!(out.contains("scale("));
-        assert!(out.contains("id=\"title-block\""));
         assert!(out.contains("SITE PLAN"));
         assert!(out.ends_with("</svg>\n"));
-        // Scale must shrink the ~10000-unit title block to the 540-wide sheet.
-        let sx: f32 = out
-            .split("scale(")
-            .nth(1)
-            .and_then(|s| s.split_whitespace().next())
-            .and_then(|s| s.parse().ok())
-            .expect("scale x");
-        assert!(sx < 0.1 && sx > 0.0, "sx={sx}");
+        // Uniform scale: `scale(k)` has one argument, shrinking the 4000-wide
+        // box to a fraction of the 730-tall sheet's long side.
+        let arg = out.split("scale(").nth(1).and_then(|s| s.split(')').next()).expect("scale");
+        assert!(!arg.contains(' '), "scale must be uniform (one arg), got: {arg}");
+        let k: f32 = arg.parse().expect("scale k");
+        assert!(k < 0.1 && k > 0.0, "k={k}");
+    }
+
+    #[test]
+    fn title_block_is_a_consistent_fraction_across_sheet_sizes() {
+        // The same project/drawing rendered into a small and a large viewBox
+        // must produce title blocks at the same fraction of each page — that's
+        // the whole point of the uniform-fraction sizing.
+        let project = ProjectInfo { name: "Acme".into(), ..Default::default() };
+        let info = drawing_info_for(DrawingType::FloorPlan, "1:100", "2026-06-10");
+        let scale_for = |vb: &str| -> f32 {
+            let svg = format!("<svg viewBox=\"{vb}\">\n<rect/>\n</svg>\n");
+            let out = inject_sheet_titleblock(&svg, &project, &info, false);
+            out.split("scale(")
+                .nth(1)
+                .and_then(|s| s.split(')').next())
+                .and_then(|s| s.parse().ok())
+                .expect("scale k")
+        };
+        // k is proportional to the long side, so k/long is invariant.
+        let small = scale_for("0 0 6000 4000") / 6000.0;
+        let large = scale_for("0 0 18000 12000") / 18000.0;
+        assert!((small - large).abs() < 1e-4, "small={small} large={large}");
     }
 
     #[test]
