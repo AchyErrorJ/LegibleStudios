@@ -179,7 +179,6 @@ fn door_between(a: &str, b: &str) -> bool {
     }
     let closet = |t: &str| t.contains("closet");
     let bedroom = |t: &str| t.contains("bedroom");
-    let bath = |t: &str| t.contains("bath");
     let connect = |a: &str, b: &str| -> bool {
         if a == "stairs" {
             return matches!(b, "hallway" | "landing" | "foyer"); // stairs reach only the hall
@@ -188,11 +187,14 @@ fn door_between(a: &str, b: &str) -> bool {
             return !closet(b) && b != "primary_bath"; // hall → bedroom/bath/stair
         }
         if closet(a) {
-            return bedroom(b) || bath(b); // closet → its bedroom (or behind a bath)
+            return bedroom(b); // a closet opens only to its bedroom, never the
+                               // bath it backs onto
         }
-        if bath(a) {
-            return bedroom(b); // ensuite → bedroom
+        if a == "primary_bath" {
+            return bedroom(b); // ensuite → the bedroom
         }
+        // A shared bathroom opens off the hall (handled by the circ branch),
+        // never directly into a bedroom.
         false
     };
     connect(a, b) || connect(b, a)
@@ -840,6 +842,56 @@ mod tests {
             .filter(|dr| dr["wall_index"].as_u64().unwrap() < 4)
             .count();
         assert_eq!(perimeter_doors, 1, "expected exactly the entry door on the perimeter");
+    }
+
+    #[test]
+    fn bedroom_floor_doors_are_circulation_correct() {
+        use crate::RoomSpec;
+        // A clean upper (bedroom) floor: stair, hall spine, two bedrooms each
+        // with a closet, and a shared bath that stacks behind a closet.
+        let p = vec![
+            RoomSpec::new("stairs", "stairs", 1.0, 60.0),
+            RoomSpec::new("hallway_2", "hallway", 1.0, 40.0),
+            RoomSpec::new("bedroom_2", "bedroom", 2.5, 120.0),
+            RoomSpec::new("closet_2", "closet", 1.0, 16.0),
+            RoomSpec::new("bedroom_3", "bedroom", 2.5, 120.0),
+            RoomSpec::new("closet_3", "closet", 1.0, 16.0),
+            RoomSpec::new("bath_2", "bathroom", 1.0, 45.0),
+        ];
+        let env = Rect { x: 0.0, y: 0.0, w: 38.0, h: 27.0 };
+        let placed = subdivide(env, &p, "south");
+        let walls = generate_walls(&placed, env, /* is_ground */ false);
+        let kind = |id: &str| {
+            placed.iter().find(|r| r.id == id).map_or("", |r| r.room_type.as_str()).to_string()
+        };
+        // Every interior wall carrying a door, by the two room *types* it joins.
+        let doored: Vec<(String, String)> = walls
+            .iter()
+            .filter(|w| w.category == "interior" && !w.openings.is_empty())
+            .map(|w| (kind(&w.room1), kind(&w.room2)))
+            .collect();
+        let joins = |a: &str, b: &str| {
+            doored.iter().any(|(x, y)| (x == a && y == b) || (x == b && y == a))
+        };
+
+        // The stair opens ONLY to the hall — never straight into a bedroom.
+        for (a, b) in &doored {
+            if a == "stairs" || b == "stairs" {
+                let other = if a == "stairs" { b } else { a };
+                assert_eq!(other, "hallway", "stairs doored to a {other}, not the hall");
+            }
+        }
+        let stair_doors =
+            doored.iter().filter(|(a, b)| a == "stairs" || b == "stairs").count();
+        assert_eq!(stair_doors, 1, "stairs should have exactly one (hall) door");
+
+        // A closet never doors into the bath it stacks behind.
+        assert!(!joins("closet", "bathroom"), "closet should not open into the bath");
+        // The shared bath opens off the hall, not into a bedroom.
+        assert!(joins("hallway", "bathroom"), "shared bath should open off the hall");
+        assert!(!joins("bedroom", "bathroom"), "shared bath should not open into a bedroom");
+        // Every bedroom reaches the hall directly.
+        assert!(joins("bedroom", "hallway"), "a bedroom is not doored to the hall");
     }
 
     #[test]

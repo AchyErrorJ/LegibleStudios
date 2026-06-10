@@ -781,13 +781,35 @@ fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32]) -> Vec<P
 
     // Keep each bedroom with its closet(s)/ensuite as a suite, seriated so the
     // suites order sensibly along the hall.
-    let suites: Vec<Suite> = group_suites(program)
+    let mut suites: Vec<Suite> = group_suites(program)
         .into_iter()
         .filter(|s| {
             let t = &program[s.lead].room_type;
             t != "stairs" && t != "hallway"
         })
         .collect();
+    // Attach standalone *shared* bathrooms to a bedroom suite so the bath stacks
+    // with a closet in one bay (rotating their divider) instead of taking a full
+    // bay of its own between the bedrooms.
+    let shared_baths: Vec<usize> = suites
+        .iter()
+        .filter(|s| program[s.lead].room_type == "bathroom" && s.inboard.is_empty())
+        .map(|s| s.lead)
+        .collect();
+    suites.retain(|s| !(program[s.lead].room_type == "bathroom" && s.inboard.is_empty()));
+    let bed_targets: Vec<usize> = suites
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| program[s.lead].room_type == "bedroom")
+        .map(|(i, _)| i)
+        .collect();
+    for (k, &bath) in shared_baths.iter().enumerate() {
+        if bed_targets.is_empty() {
+            suites.push(Suite { lead: bath, inboard: Vec::new() });
+        } else {
+            suites[bed_targets[k % bed_targets.len()]].inboard.push(bath);
+        }
+    }
     let lead_specs: Vec<RoomSpec> = suites.iter().map(|s| program[s.lead].clone()).collect();
     let order = seriate(&lead_specs);
     let ordered: Vec<&Suite> = order.iter().map(|&o| &suites[o]).collect();
@@ -806,21 +828,26 @@ fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32]) -> Vec<P
         }
     }
 
-    place_suite_band(&mut placed, &fr, front, &mk, areas);
-    place_suite_band(&mut placed, &nr, north, &mk, areas);
+    // Front band's hall edge is its north (top) side; the north band's is its
+    // south (bottom) side.
+    place_suite_band(&mut placed, &fr, front, &mk, program, areas, false);
+    place_suite_band(&mut placed, &nr, north, &mk, program, areas, true);
     placed
 }
 
 /// Tile suite bays across `region` (each full region depth, sized by suite
-/// area); within each bay the bedroom takes the wide part and its closet/ensuite
-/// sit beside it — all touching the hall on one edge and the exterior on the
-/// other.
+/// area). Within a bay the bedroom takes the wide part, full depth (touching the
+/// hall and an exterior wall); its closet/bath stack in the leftover column with
+/// the bath on the hall side (so a shared bath opens to the hall, a closet sits
+/// behind). `hall_at_bottom` says which edge of the bay borders the corridor.
 fn place_suite_band(
     placed: &mut Vec<PlacedRoom>,
     suites: &[&Suite],
     region: Rect,
     mk: &impl Fn(usize, Rect) -> PlacedRoom,
+    program: &[RoomSpec],
     areas: &[f32],
+    hall_at_bottom: bool,
 ) {
     if suites.is_empty() || region.w <= 0.0 || region.h <= 0.0 {
         return;
@@ -831,14 +858,33 @@ fn place_suite_band(
         let bw = region.w * suite_total(s, areas) / total;
         let bay = Rect { x, y: region.y, w: bw, h: region.h };
         x += bw;
-        // Within the bay: bedroom (lead) first, then its inboard rooms beside it.
+
         let bay_total =
             (areas[s.lead] + s.inboard.iter().map(|&i| areas[i]).sum::<f32>()).max(1e-3);
-        let mut bx = bay.x;
-        for &i in std::iter::once(&s.lead).chain(s.inboard.iter()) {
-            let w = bay.w * areas[i] / bay_total;
-            placed.push(mk(i, Rect { x: bx, y: bay.y, w, h: bay.h }));
-            bx += w;
+        let lead_w = bay.w * areas[s.lead] / bay_total;
+        // Bedroom: full-depth left part.
+        placed.push(mk(s.lead, Rect { x: bay.x, y: bay.y, w: lead_w, h: bay.h }));
+
+        if s.inboard.is_empty() {
+            continue;
+        }
+        // Stack the inboard rooms in the leftover column, baths on the hall side.
+        let col_x = bay.x + lead_w;
+        let col_w = (bay.w - lead_w).max(0.0);
+        let in_total: f32 = s.inboard.iter().map(|&i| areas[i]).sum::<f32>().max(1e-3);
+        let mut ordered = s.inboard.clone();
+        ordered.sort_by_key(|&i| usize::from(!program[i].room_type.contains("bath")));
+        let mut frac = 0.0;
+        for &i in &ordered {
+            let f = areas[i] / in_total;
+            let h = bay.h * f;
+            let ry = if hall_at_bottom {
+                bay.y + bay.h * frac
+            } else {
+                bay.y + bay.h * (1.0 - frac - f)
+            };
+            placed.push(mk(i, Rect { x: col_x, y: ry, w: col_w, h }));
+            frac += f;
         }
     }
 }
