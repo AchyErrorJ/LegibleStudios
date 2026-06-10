@@ -87,6 +87,15 @@ fn generate_walls(rooms: &[PlacedRoom], env: Rect, is_ground: bool) -> Vec<Wall>
     let half = DOOR_WIDTH_FT * 0.5;
     let mut walls = Vec::new();
 
+    // On a dedicated bedroom floor, only door rooms that should connect (so the
+    // hall reaches every bedroom and we don't door bedroom-to-bedroom or
+    // closet-to-hall). The main floor keeps a door on every shared wall.
+    let bed_floor = rooms.iter().any(|r| r.room_type.contains("bedroom"))
+        && rooms.iter().any(|r| r.room_type == "hallway")
+        && !rooms
+            .iter()
+            .any(|r| matches!(r.room_type.as_str(), "entry" | "living" | "kitchen" | "great_room"));
+
     // Exterior perimeter, CCW from south-west: indices 0=south, 1=east,
     // 2=north, 3=west.
     for (s, e) in [
@@ -139,9 +148,12 @@ fn generate_walls(rooms: &[PlacedRoom], env: Rect, is_ground: bool) -> Vec<Wall>
                     room2: rooms[j].id.clone(),
                     openings: Vec::new(),
                 };
-                // Centred door if the shared edge is wide enough.
+                // Centred door if the shared edge is wide enough — and, on a
+                // bedroom floor, only between rooms that should connect.
                 let len = ((e.0 - s.0).powi(2) + (e.1 - s.1).powi(2)).sqrt();
-                if len > DOOR_WIDTH_FT + 1.0 {
+                let wants_door = !bed_floor
+                    || door_between(&rooms[i].room_type, &rooms[j].room_type);
+                if wants_door && len > DOOR_WIDTH_FT + 1.0 {
                     let t0 = (len * 0.5 - half) / len;
                     let t1 = (len * 0.5 + half) / len;
                     let lerp = |t: f32| (s.0 + (e.0 - s.0) * t, s.1 + (e.1 - s.1) * t);
@@ -155,6 +167,32 @@ fn generate_walls(rooms: &[PlacedRoom], env: Rect, is_ground: bool) -> Vec<Wall>
         }
     }
     walls
+}
+
+/// Whether two rooms on a bedroom floor should share a door. Circulation
+/// (hall/stairs) reaches habitable rooms but not closets or the ensuite; a
+/// closet opens to its bedroom (or the bath it sits behind); the ensuite opens
+/// to the bedroom. Bedrooms never door to each other.
+fn door_between(a: &str, b: &str) -> bool {
+    fn circ(t: &str) -> bool {
+        matches!(t, "hallway" | "stairs" | "entry" | "foyer" | "mudroom" | "landing")
+    }
+    let closet = |t: &str| t.contains("closet");
+    let bedroom = |t: &str| t.contains("bedroom");
+    let bath = |t: &str| t.contains("bath");
+    let connect = |a: &str, b: &str| -> bool {
+        if circ(a) {
+            return !closet(b) && b != "primary_bath"; // hall → bedroom/bath/stair
+        }
+        if closet(a) {
+            return bedroom(b) || bath(b); // closet → its bedroom (or behind a bath)
+        }
+        if bath(a) {
+            return bedroom(b); // ensuite → bedroom
+        }
+        false
+    };
+    connect(a, b) || connect(b, a)
 }
 
 /// The shared boundary segment between two axis-aligned rects, if they abut

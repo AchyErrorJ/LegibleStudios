@@ -594,23 +594,38 @@ fn place_suite(rect: Rect, suite: &Suite, program: &[RoomSpec], areas: &[f32], e
     let f = (lead_area / (lead_area + in_area)).clamp(0.05, 0.95);
     let (lx, ly, hx, hy) = (env.x, env.y, env.x + env.w, env.y + env.h);
 
-    // Put the lead against an exterior edge; carve inboard from the opposite
-    // (interior) side. Prefer south/north (split Y) so bedrooms face front/back.
-    let (lead_rect, in_rect) = if (rect.y - ly).abs() < E {
-        // south edge → lead at bottom
-        (Rect { h: rect.h * f, ..rect }, Rect { y: rect.y + rect.h * f, h: rect.h * (1.0 - f), ..rect })
-    } else if ((rect.y + rect.h) - hy).abs() < E {
-        // north edge → lead at top
-        (Rect { y: rect.y + rect.h * (1.0 - f), h: rect.h * f, ..rect }, Rect { h: rect.h * (1.0 - f), ..rect })
-    } else if (rect.x - lx).abs() < E {
-        // west edge → lead at left
-        (Rect { w: rect.w * f, ..rect }, Rect { x: rect.x + rect.w * f, w: rect.w * (1.0 - f), ..rect })
-    } else if ((rect.x + rect.w) - hx).abs() < E {
-        // east edge → lead at right
-        (Rect { x: rect.x + rect.w * (1.0 - f), w: rect.w * f, ..rect }, Rect { w: rect.w * (1.0 - f), ..rect })
-    } else {
-        // interior suite (rare): split the longer side, lead first.
-        rect.split(f)
+    // Candidate placements — lead against each exterior edge the suite touches,
+    // inboard (closet) carved from the opposite, interior side:
+    //   S: lead bottom · N: lead top · W: lead left · E: lead right
+    let candidates = [
+        ((rect.y - ly).abs() < E, // south
+         Rect { h: rect.h * f, ..rect },
+         Rect { y: rect.y + rect.h * f, h: rect.h * (1.0 - f), ..rect }),
+        (((rect.y + rect.h) - hy).abs() < E, // north
+         Rect { y: rect.y + rect.h * (1.0 - f), h: rect.h * f, ..rect },
+         Rect { h: rect.h * (1.0 - f), ..rect }),
+        ((rect.x - lx).abs() < E, // west
+         Rect { w: rect.w * f, ..rect },
+         Rect { x: rect.x + rect.w * f, w: rect.w * (1.0 - f), ..rect }),
+        (((rect.x + rect.w) - hx).abs() < E, // east
+         Rect { x: rect.x + rect.w * (1.0 - f), w: rect.w * f, ..rect },
+         Rect { w: rect.w * (1.0 - f), ..rect }),
+    ];
+
+    // Pick the placement that keeps the inboard rooms (the closet) off exterior
+    // walls — those are reserved for the bedroom's egress window. Score: fewest
+    // closet perimeter edges first, then the most bedroom perimeter edges. Only
+    // edges the suite actually touches are eligible (the lead needs a window).
+    let best = candidates
+        .iter()
+        .filter(|(touches, _, _)| *touches)
+        .min_by_key(|(_, lead_r, in_r)| {
+            (perim_edges(*in_r, env), -perim_edges(*lead_r, env))
+        });
+    let (lead_rect, in_rect) = match best {
+        Some((_, l, i)) => (*l, *i),
+        // Interior suite (rare): split the longer side, lead first.
+        None => rect.split(f),
     };
 
     let mut out = vec![mk(suite.lead, lead_rect)];
@@ -697,6 +712,132 @@ fn layout_with_stair(env: Rect, suites: &[Suite], stair_pos: usize, program: &[R
     placed
 }
 
+/// True when this program is a dedicated **bedroom floor** (bedrooms + a
+/// hallway + a stair, and none of the main-floor public rooms). Such floors get
+/// the hall-spine layout so every bedroom opens onto the hallway.
+fn is_bedroom_floor(program: &[RoomSpec]) -> bool {
+    let has = |t: &str| program.iter().any(|r| r.room_type == t);
+    let has_bed = program.iter().any(|r| r.room_type.contains("bedroom"));
+    has_bed
+        && has("stairs")
+        && program.iter().any(|r| r.room_type == "hallway")
+        && !has("entry")
+        && !has("living")
+        && !has("kitchen")
+        && !has("great_room")
+}
+
+/// Hall-spine bedroom floor: pin the stair to the shared front-left bay, run a
+/// hallway corridor across the floor just behind it, and tile every other room
+/// as a full-depth bay touching that corridor — so each bedroom opens onto the
+/// hall and reaches an exterior wall for its window. Rooms are seriated so a
+/// closet lands next to its bedroom.
+fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32]) -> Vec<PlacedRoom> {
+    const STAIR_W_FT: f32 = 6.0;
+    const STAIR_RUN_FT: f32 = 11.0;
+    const HALL_D_FT: f32 = 4.0;
+    let sw = STAIR_W_FT.min(env.w * 0.4);
+    let run = STAIR_RUN_FT.min(env.h * 0.5);
+    let hall_d = HALL_D_FT.min((env.h - run) * 0.5).max(3.0);
+
+    let mk = |i: usize, r: Rect| PlacedRoom {
+        id: program[i].id.clone(),
+        room_type: program[i].room_type.clone(),
+        zone: program[i].zone(),
+        rect: r,
+    };
+    let pos = |t: &str| program.iter().position(|r| r.room_type == t);
+    let stair_i = pos("stairs");
+    let hall_i = pos("hallway");
+    let (Some(stair_i), Some(hall_i)) = (stair_i, hall_i) else {
+        // Shouldn't happen (is_bedroom_floor guards), but fall back safely.
+        let suites = group_suites(program);
+        return layout_suites_in(env, &suites, program, areas, env);
+    };
+
+    let mut placed = Vec::new();
+    // Stair: same bay as every other floor, so stacked stairs align.
+    placed.push(mk(stair_i, Rect { x: env.x, y: env.y, w: sw, h: run }));
+    // Hallway corridor across the floor, just north of the stair run (so the
+    // stair landing opens onto it).
+    let hall_y = env.y + run;
+    placed.push(mk(hall_i, Rect { x: env.x, y: hall_y, w: env.w, h: hall_d }));
+
+    // Two bedroom regions: the front band beside the stair (south of the hall)
+    // and the deep north band (north of the hall). Every bay in either touches
+    // the corridor.
+    let front = Rect { x: env.x + sw, y: env.y, w: env.w - sw, h: run };
+    let north = Rect {
+        x: env.x,
+        y: hall_y + hall_d,
+        w: env.w,
+        h: (env.y + env.h) - (hall_y + hall_d),
+    };
+
+    // Keep each bedroom with its closet(s)/ensuite as a suite, seriated so the
+    // suites order sensibly along the hall.
+    let suites: Vec<Suite> = group_suites(program)
+        .into_iter()
+        .filter(|s| {
+            let t = &program[s.lead].room_type;
+            t != "stairs" && t != "hallway"
+        })
+        .collect();
+    let lead_specs: Vec<RoomSpec> = suites.iter().map(|s| program[s.lead].clone()).collect();
+    let order = seriate(&lead_specs);
+    let ordered: Vec<&Suite> = order.iter().map(|&o| &suites[o]).collect();
+
+    // Assign whole suites to the front band (up to its area) or the north band,
+    // so a bedroom and its closet never split across the hall.
+    let af = front.area();
+    let (mut fr, mut nr): (Vec<&Suite>, Vec<&Suite>) = (Vec::new(), Vec::new());
+    let mut acc = 0.0;
+    for s in ordered {
+        if acc < af && fr.len() < 1 {
+            acc += suite_total(s, areas);
+            fr.push(s);
+        } else {
+            nr.push(s);
+        }
+    }
+
+    place_suite_band(&mut placed, &fr, front, &mk, areas);
+    place_suite_band(&mut placed, &nr, north, &mk, areas);
+    placed
+}
+
+/// Tile suite bays across `region` (each full region depth, sized by suite
+/// area); within each bay the bedroom takes the wide part and its closet/ensuite
+/// sit beside it — all touching the hall on one edge and the exterior on the
+/// other.
+fn place_suite_band(
+    placed: &mut Vec<PlacedRoom>,
+    suites: &[&Suite],
+    region: Rect,
+    mk: &impl Fn(usize, Rect) -> PlacedRoom,
+    areas: &[f32],
+) {
+    if suites.is_empty() || region.w <= 0.0 || region.h <= 0.0 {
+        return;
+    }
+    let total: f32 = suites.iter().map(|s| suite_total(s, areas)).sum::<f32>().max(1e-3);
+    let mut x = region.x;
+    for s in suites {
+        let bw = region.w * suite_total(s, areas) / total;
+        let bay = Rect { x, y: region.y, w: bw, h: region.h };
+        x += bw;
+        // Within the bay: bedroom (lead) first, then its inboard rooms beside it.
+        let bay_total =
+            (areas[s.lead] + s.inboard.iter().map(|&i| areas[i]).sum::<f32>()).max(1e-3);
+        let mut bx = bay.x;
+        for &i in std::iter::once(&s.lead).chain(s.inboard.iter()) {
+            let w = bay.w * areas[i] / bay_total;
+            placed.push(mk(i, Rect { x: bx, y: bay.y, w, h: bay.h }));
+            bx += w;
+        }
+    }
+}
+
 /// Lay out the program inside `envelope` (feet) by adjacency. Rooms are
 /// allocated real areas and grouped into suites (bedroom + its closet/bath),
 /// the suites are seriated along the relationship graph ([`seriate`]) and
@@ -709,11 +850,17 @@ pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str) -> Vec<
         return Vec::new();
     }
     let areas = allocate_areas(program, envelope.area());
-    let suites = group_suites(program);
 
-    let mut placed = match suites.iter().position(|s| program[s.lead].room_type == "stairs") {
-        Some(stair_pos) => layout_with_stair(envelope, &suites, stair_pos, program, &areas),
-        None => layout_suites_in(envelope, &suites, program, &areas, envelope),
+    // Dedicated bedroom floor → hall-spine layout (every bedroom opens onto the
+    // hall). Otherwise the generic suite layout, stair-aware when there's one.
+    let mut placed = if is_bedroom_floor(program) {
+        layout_bedroom_floor(envelope, program, &areas)
+    } else {
+        let suites = group_suites(program);
+        match suites.iter().position(|s| program[s.lead].room_type == "stairs") {
+            Some(stair_pos) => layout_with_stair(envelope, &suites, stair_pos, program, &areas),
+            None => layout_suites_in(envelope, &suites, program, &areas, envelope),
+        }
     };
 
     // For a north entry, mirror depth so the entry cluster sits at high Y.
@@ -870,6 +1017,37 @@ mod tests {
         // Placed area tiles the whole envelope (BSP leaves no gaps).
         let total: f32 = placed.iter().map(|r| r.rect.area()).sum();
         assert!((total - w * d).abs() < 1.0, "tiled {total} vs {}", w * d);
+    }
+
+    #[test]
+    fn bedroom_floor_every_bedroom_opens_onto_the_hall() {
+        let p = vec![
+            RoomSpec::new("stairs", "stairs", 1.0, 60.0),
+            RoomSpec::new("hallway_2", "hallway", 1.0, 40.0),
+            RoomSpec::new("primary_bedroom", "primary_bedroom", 3.0, 140.0),
+            RoomSpec::new("primary_bath", "primary_bath", 1.0, 50.0),
+            RoomSpec::new("primary_closet", "walk_in_closet", 1.0, 25.0),
+            RoomSpec::new("bedroom_2", "bedroom", 2.5, 110.0),
+            RoomSpec::new("closet_2", "closet", 1.0, 15.0),
+            RoomSpec::new("bedroom_3", "bedroom", 2.5, 110.0),
+            RoomSpec::new("closet_3", "closet", 1.0, 15.0),
+        ];
+        assert!(is_bedroom_floor(&p), "should be detected as a bedroom floor");
+        let env = Rect { x: 0.0, y: 0.0, w: 38.0, h: 27.0 };
+        let placed = subdivide(env, &p, "south");
+        let hall = placed.iter().find(|r| r.room_type == "hallway").expect("hall").rect;
+        let abuts = |a: &Rect, b: &Rect| -> bool {
+            let vert = ((a.x + a.w - b.x).abs() < 0.6 || (b.x + b.w - a.x).abs() < 0.6)
+                && a.y.max(b.y) < (a.y + a.h).min(b.y + b.h) - 0.5;
+            let horiz = ((a.y + a.h - b.y).abs() < 0.6 || (b.y + b.h - a.y).abs() < 0.6)
+                && a.x.max(b.x) < (a.x + a.w).min(b.x + b.w) - 0.5;
+            vert || horiz
+        };
+        for room in &placed {
+            if room.room_type.contains("bedroom") {
+                assert!(abuts(&room.rect, &hall), "{} does not open onto the hall", room.id);
+            }
+        }
     }
 
     #[test]
