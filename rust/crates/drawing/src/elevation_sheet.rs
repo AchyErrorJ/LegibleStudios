@@ -659,10 +659,14 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
     // Extra room on the right edge for level-marker callouts (Phase 2.5
     // adds T.O. FOUNDATION / SUBFLOOR / PLATE labels off the building).
     let right_extra = if max_y > 0.0 { 5500.0_f32 } else { 0.0 };
+    // Extra room below grade so the width dimension (≈500 below grade) and the
+    // centred drawing title (at the very bottom) get their own bands instead of
+    // overlapping each other.
+    let bottom_extra = 1400.0_f32;
     let vb_x = min_x - margin_x;
     let vb_y = min_y - margin_y;
     let vb_w = (max_x - min_x) + 2.0 * margin_x + right_extra;
-    let vb_h = (max_y - min_y) + 2.0 * margin_y;
+    let vb_h = (max_y - min_y) + 2.0 * margin_y + bottom_extra;
 
     #[allow(clippy::cast_possible_truncation)]
     let px_w = (vb_w * scale) as i32;
@@ -689,8 +693,11 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
     s.push_str("    .label { font-family: Arial, sans-serif; font-size: 200px; fill: #333; }\n");
     s.push_str("  </style>\n");
 
-    // Flip Y so 0 is at the bottom (grade) and ridges go up the page.
+    // Flip Y so 0 is at the bottom (grade) and ridges go up the page. Geometry
+    // is drawn in this flipped (positive-up) space; text/dimensions are emitted
+    // upright afterwards in screen coordinates via `sy`.
     let flip_y = max_y + min_y;
+    let sy = |model_y: f32| flip_y - model_y;
     let _ = writeln!(s, r#"<g transform="translate(0, {flip_y}) scale(1, -1)">"#);
 
     // Wall plate height — the wall stops here; the roof sits above it (so the
@@ -790,29 +797,31 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
         x2 = max_x + 500.0,
     );
 
-    // Overall envelope dimensions (Tier-1): width along the bottom,
-    // height along the left. Skip if the building bounds are degenerate.
+    s.push_str("  </g>\n");
+
+    // Dimensions — emitted OUTSIDE the flip group (screen coordinates via `sy`)
+    // so the value text reads upright instead of mirrored. Grade is model-Y 0.
+    // Overall envelope (Tier-1): width along the bottom, height along the left.
     if max_x > min_x {
-        let width_dim = crate::dimensions::LinearDim::horizontal_mm(min_x, max_x, -500.0);
+        let width_dim = crate::dimensions::LinearDim::horizontal_mm(min_x, max_x, sy(0.0) + 500.0);
         s.push_str(&crate::dimensions::render_horizontal(&width_dim, 250.0));
     }
     if max_y > 0.0 {
-        let height_dim = crate::dimensions::LinearDim::vertical_mm(0.0, max_y, min_x - 500.0);
+        let height_dim =
+            crate::dimensions::LinearDim::vertical_mm(sy(max_y), sy(0.0), min_x - 500.0);
         s.push_str(&crate::dimensions::render_vertical(&height_dim, 250.0));
     }
 
-    // Per-opening width dimensions (Tier-3): each door/window gets a
-    // small width callout just below the elevation grade line.
+    // Per-opening width dimensions (Tier-3): each door/window gets a small width
+    // callout just below the elevation grade line.
     for op in &openings {
         let dim = crate::dimensions::LinearDim::horizontal_mm(
             op.center_x - op.width * 0.5,
             op.center_x + op.width * 0.5,
-            -200.0,
+            sy(0.0) + 200.0,
         );
         s.push_str(&crate::dimensions::render_horizontal(&dim, 150.0));
     }
-
-    s.push_str("  </g>\n");
 
     // Level markers (Phase 2.5) — drawn OUTSIDE the flip group so the
     // labels read upright. Each marker is a short leader off the right
@@ -1050,6 +1059,24 @@ mod tests {
             assert!(svg.contains("scale(1, -1)"));
             assert!(svg.contains(r#"class="wall-face""#));
             assert!(svg.contains(r#"class="roof""#));
+        }
+    }
+
+    #[test]
+    fn dimensions_and_labels_render_upright_outside_the_flip_group() {
+        // All text (dimensions, level markers, drawing title) must be emitted
+        // AFTER the flipped geometry group closes, otherwise scale(1,-1) mirrors
+        // the glyphs and the value text reads upside down.
+        let input = rectangular_input();
+        for dir in Direction::ALL {
+            let svg = generate_elevation_sheet_svg(&input, dir, 0.05);
+            let flip_close = svg.find("</g>").expect("flip group should close");
+            if let Some(first_text) = svg.find("<text") {
+                assert!(
+                    first_text > flip_close,
+                    "{dir:?}: text at {first_text} precedes </g> at {flip_close} — would mirror"
+                );
+            }
         }
     }
 
