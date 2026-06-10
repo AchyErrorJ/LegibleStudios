@@ -672,44 +672,86 @@ fn layout_with_stair(env: Rect, suites: &[Suite], stair_pos: usize, program: &[R
     let sw = STAIR_W_FT.min(env.w * 0.4);
     let run = STAIR_RUN_FT.min(env.h * 0.5);
 
+    let mk = |i: usize, r: Rect| PlacedRoom {
+        id: program[i].id.clone(),
+        room_type: program[i].room_type.clone(),
+        zone: program[i].zone(),
+        rect: r,
+    };
     let stair_rect = Rect { x: env.x, y: env.y, w: sw, h: run };
-    let mut placed = vec![PlacedRoom {
-        id: program[stair.lead].id.clone(),
-        room_type: program[stair.lead].room_type.clone(),
-        zone: program[stair.lead].zone(),
-        rect: stair_rect,
-    }];
+    let mut placed = vec![mk(stair.lead, stair_rect)];
 
-    // Two clean rectangles around the bay: front band beside the stair, and
-    // the deep main band behind both.
-    let front = Rect { x: env.x + sw, y: env.y, w: env.w - sw, h: run };
-    let back = Rect { x: env.x, y: env.y + run, w: env.w, h: env.h - run };
-
-    // Other suites, seriated; fill the front band up to its area, the rest go
-    // to the main band. (slice_seriated fills each rect proportionally, so a
-    // small area mismatch just rescales — no gaps.)
-    let others: Vec<Suite> = suites
+    let mut others: Vec<Suite> = suites
         .iter()
         .enumerate()
         .filter(|(i, _)| *i != stair_pos)
         .map(|(_, s)| s.clone())
         .collect();
-    let lead_specs: Vec<RoomSpec> = others.iter().map(|s| program[s.lead].clone()).collect();
-    let order = seriate(&lead_specs);
-    let af = front.area();
-    let (mut front_suites, mut back_suites) = (Vec::new(), Vec::new());
-    let mut acc = 0.0;
-    for &oi in &order {
-        if acc < af {
-            acc += suite_total(&others[oi], areas);
-            front_suites.push(others[oi].clone());
+
+    // Attached garage → pull it onto the street wall as a full-depth side
+    // column (opposite the stair) and tuck the entry against it, so the front
+    // door and the garage's overhead door sit side by side on the facade.
+    // Full depth keeps areas balanced: gw·env.h ≈ the garage area, so the rest
+    // of the house keeps its width.
+    if let Some(gp) = others.iter().position(|s| program[s.lead].room_type == "garage") {
+        let garage = others.remove(gp);
+        let gw = (suite_total(&garage, areas) / env.h).clamp(env.w * 0.22, env.w * 0.45);
+        let gx = env.x + env.w - gw;
+        placed.push(mk(garage.lead, Rect { x: gx, y: env.y, w: gw, h: env.h }));
+
+        let hw = env.w - gw; // house column, left of the garage
+        if let Some(ep) = others.iter().position(|s| program[s.lead].room_type == "entry") {
+            let entry = others.remove(ep);
+            let ew = (areas[entry.lead] / run).clamp(4.0, (hw - sw).max(4.0));
+            // Entry against the garage's left edge, on the front wall.
+            placed.push(mk(entry.lead, Rect { x: env.x + hw - ew, y: env.y, w: ew, h: run }));
+            let fc = Rect { x: env.x + sw, y: env.y, w: (hw - sw - ew).max(0.0), h: run };
+            let bk = Rect { x: env.x, y: env.y + run, w: hw, h: env.h - run };
+            let (fcs, bks) = partition_front_back(&others, fc.area(), program, areas);
+            placed.extend(layout_suites_in(fc, &fcs, program, areas, env));
+            placed.extend(layout_suites_in(bk, &bks, program, areas, env));
         } else {
-            back_suites.push(others[oi].clone());
+            let front = Rect { x: env.x + sw, y: env.y, w: hw - sw, h: run };
+            let back = Rect { x: env.x, y: env.y + run, w: hw, h: env.h - run };
+            let (fs, bs) = partition_front_back(&others, front.area(), program, areas);
+            placed.extend(layout_suites_in(front, &fs, program, areas, env));
+            placed.extend(layout_suites_in(back, &bs, program, areas, env));
         }
+        return placed;
     }
+
+    // No garage → the original shallow-front / deep-back split: a front band
+    // beside the stair and the deep main band behind both.
+    let front = Rect { x: env.x + sw, y: env.y, w: env.w - sw, h: run };
+    let back = Rect { x: env.x, y: env.y + run, w: env.w, h: env.h - run };
+    let (front_suites, back_suites) = partition_front_back(&others, front.area(), program, areas);
     placed.extend(layout_suites_in(front, &front_suites, program, areas, env));
     placed.extend(layout_suites_in(back, &back_suites, program, areas, env));
     placed
+}
+
+/// Seriate `suites` and split them into a front group (filling up to
+/// `front_area`) and a back group, keeping adjacency order. Shared by the
+/// stair-floor layouts.
+fn partition_front_back(
+    suites: &[Suite],
+    front_area: f32,
+    program: &[RoomSpec],
+    areas: &[f32],
+) -> (Vec<Suite>, Vec<Suite>) {
+    let lead_specs: Vec<RoomSpec> = suites.iter().map(|s| program[s.lead].clone()).collect();
+    let order = seriate(&lead_specs);
+    let (mut front, mut back) = (Vec::new(), Vec::new());
+    let mut acc = 0.0;
+    for &oi in &order {
+        if acc < front_area {
+            acc += suite_total(&suites[oi], areas);
+            front.push(suites[oi].clone());
+        } else {
+            back.push(suites[oi].clone());
+        }
+    }
+    (front, back)
 }
 
 /// True when this program is a dedicated **bedroom floor** (bedrooms + a

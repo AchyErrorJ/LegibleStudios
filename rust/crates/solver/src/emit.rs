@@ -136,6 +136,31 @@ fn generate_walls(rooms: &[PlacedRoom], env: Rect, is_ground: bool) -> Vec<Wall>
         }
     }
 
+    // Garage overhead door (ground floor) on whichever street-facing exterior
+    // wall the garage fronts — preferring south, so it shares the facade with
+    // the front door. Wider than a person door (most of the garage frontage).
+    if let Some(g) = rooms.iter().find(|r| is_ground && r.room_type == "garage") {
+        const EPS: f32 = 0.5;
+        let gr = g.rect;
+        let (cx, cy) = (gr.x + gr.w * 0.5, gr.y + gr.h * 0.5);
+        let hw = (gr.w * 0.82).clamp(8.0, 18.0) * 0.5; // half overhead-door width
+        let hh = (gr.h * 0.82).clamp(8.0, 18.0) * 0.5; // when it fronts a side wall
+        let door = if (gr.y - y0).abs() < EPS {
+            Some((0, Opening { start: (cx - hw, y0), end: (cx + hw, y0) }))
+        } else if ((gr.x + gr.w) - x1).abs() < EPS {
+            Some((1, Opening { start: (x1, cy - hh), end: (x1, cy + hh) }))
+        } else if (gr.x - x0).abs() < EPS {
+            Some((3, Opening { start: (x0, cy - hh), end: (x0, cy + hh) }))
+        } else if ((gr.y + gr.h) - y1).abs() < EPS {
+            Some((2, Opening { start: (cx - hw, y1), end: (cx + hw, y1) }))
+        } else {
+            None
+        };
+        if let Some((wi, op)) = door {
+            walls[wi].openings.push(op);
+        }
+    }
+
     // Interior partitions: for each adjacent room pair, the shared boundary.
     for i in 0..rooms.len() {
         for j in (i + 1)..rooms.len() {
@@ -149,10 +174,18 @@ fn generate_walls(rooms: &[PlacedRoom], env: Rect, is_ground: bool) -> Vec<Wall>
                     openings: Vec::new(),
                 };
                 // Centred door if the shared edge is wide enough — and, on a
-                // bedroom floor, only between rooms that should connect.
+                // bedroom floor, only between rooms that should connect. The
+                // garage reaches the house through a single service/entry door,
+                // never straight into the living/kitchen.
                 let len = ((e.0 - s.0).powi(2) + (e.1 - s.1).powi(2)).sqrt();
-                let wants_door = !bed_floor
-                    || door_between(&rooms[i].room_type, &rooms[j].room_type);
+                let (ta, tb) = (&rooms[i].room_type, &rooms[j].room_type);
+                let wants_door = if ta == "garage" || tb == "garage" {
+                    false // garage doors are added in a post-pass: exactly one
+                } else if bed_floor {
+                    door_between(ta, tb)
+                } else {
+                    true
+                };
                 if wants_door && len > DOOR_WIDTH_FT + 1.0 {
                     let t0 = (len * 0.5 - half) / len;
                     let t1 = (len * 0.5 + half) / len;
@@ -166,6 +199,46 @@ fn generate_walls(rooms: &[PlacedRoom], env: Rect, is_ground: bool) -> Vec<Wall>
             }
         }
     }
+
+    // Garage → house: exactly one pedestrian door, on the widest interior wall
+    // the garage shares with a service/circulation room (mudroom/entry/foyer/
+    // hallway/kitchen/laundry), falling back to its widest interior wall. Done
+    // as a post-pass so the garage never opens straight into the living/dining
+    // yet always has one door (for access + its light switch).
+    if let Some(garage) = rooms.iter().find(|r| r.room_type == "garage") {
+        let gid = garage.id.clone();
+        let room_type = |id: &str| rooms.iter().find(|r| r.id == id).map_or("", |r| r.room_type.as_str());
+        let preferred = |t: &str| {
+            matches!(t, "mudroom" | "entry" | "foyer" | "hallway" | "kitchen" | "laundry")
+        };
+        let wall_len = |w: &Wall| ((w.end.0 - w.start.0).powi(2) + (w.end.1 - w.start.1).powi(2)).sqrt();
+        let other = |w: &Wall| -> &str {
+            if w.room1 == gid { room_type(&w.room2) } else { room_type(&w.room1) }
+        };
+        let pick = walls
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| {
+                w.category == "interior"
+                    && (w.room1 == gid || w.room2 == gid)
+                    && wall_len(w) > DOOR_WIDTH_FT + 1.0
+            })
+            .max_by(|(_, a), (_, b)| {
+                preferred(other(a))
+                    .cmp(&preferred(other(b)))
+                    .then(wall_len(a).total_cmp(&wall_len(b)))
+            })
+            .map(|(idx, _)| idx);
+        if let Some(idx) = pick {
+            let (s, e) = (walls[idx].start, walls[idx].end);
+            let len = ((e.0 - s.0).powi(2) + (e.1 - s.1).powi(2)).sqrt();
+            let t0 = (len * 0.5 - half) / len;
+            let t1 = (len * 0.5 + half) / len;
+            let lerp = |t: f32| (s.0 + (e.0 - s.0) * t, s.1 + (e.1 - s.1) * t);
+            walls[idx].openings.push(Opening { start: lerp(t0), end: lerp(t1) });
+        }
+    }
+
     walls
 }
 
@@ -842,6 +915,50 @@ mod tests {
             .filter(|dr| dr["wall_index"].as_u64().unwrap() < 4)
             .count();
         assert_eq!(perimeter_doors, 1, "expected exactly the entry door on the perimeter");
+    }
+
+    #[test]
+    fn front_door_and_garage_door_share_the_street_wall() {
+        let v = building_json(&Answers {
+            bedrooms: 3,
+            bathrooms: 2,
+            sqft: 1700.0,
+            garage: "2car".into(),
+            special_rooms: vec![],
+            storeys: 2,
+            window_intent: "balanced".into(),
+            style: "balanced".into(),
+            ..Answers::default()
+        });
+        let rooms = v["rooms"].as_object().unwrap();
+        let ground = |rt: &str| {
+            rooms
+                .values()
+                .find(|r| r["room_type"] == json!(rt) && r["level"] == json!("Level 1"))
+                .unwrap_or_else(|| panic!("no ground-floor {rt}"))
+        };
+        let entry = ground("entry");
+        let garage = ground("garage");
+        let f = |r: &serde_json::Value, k: &str| r["bounds"][k].as_f64().unwrap();
+        // Both front the street wall (plan Z ≈ 0).
+        assert!(f(entry, "y") < 1.0, "entry is not on the front wall");
+        assert!(f(garage, "y") < 1.0, "garage is not on the front wall");
+        // The entry sits immediately against the garage (shared vertical edge),
+        // so the front door and the garage door are side by side.
+        let entry_right = f(entry, "x") + f(entry, "width");
+        assert!(
+            (entry_right - f(garage, "x")).abs() < 50.0,
+            "entry ({entry_right}) is not against the garage ({})",
+            f(garage, "x")
+        );
+        // Exactly two perimeter doors: the front door + the garage overhead door.
+        let perim = v["doors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["wall_index"].as_u64().unwrap() < 4)
+            .count();
+        assert_eq!(perim, 2, "expected the front door + garage door on the perimeter");
     }
 
     #[test]
