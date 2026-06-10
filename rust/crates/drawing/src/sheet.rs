@@ -7,7 +7,7 @@
 //! treats those as *viewports*: it parses a drawing's `viewBox`, scales it so
 //! the real-world geometry lands at a chosen paper scale (e.g. 1:50), and
 //! places it inside the drawing area of a fixed paper size (default ARCH D),
-//! with a full-width title block strip along the bottom.
+//! with a title block in the bottom-right corner.
 //!
 //! The sheet itself is authored in **paper millimetres** (1 user unit = 1 mm),
 //! so [`crate::sheet::PaperSize`] dimensions are the real page size. Render to
@@ -44,8 +44,7 @@ impl Default for PaperSize {
 
 /// Sheet layout constants (paper millimetres).
 const BORDER_MM: f32 = 12.0; // outer margin to the sheet edge
-const TITLE_STRIP_MM: f32 = 40.0; // height of the bottom title-block strip
-const GUTTER_MM: f32 = 8.0; // gap between drawing area and title strip
+const GUTTER_MM: f32 = 8.0; // gap between drawing area and the title block
 
 /// One drawing to place on a sheet.
 #[derive(Debug, Clone)]
@@ -77,7 +76,9 @@ fn drawing_area(paper: PaperSize) -> (f32, f32, f32, f32) {
     let x = BORDER_MM;
     let y = BORDER_MM;
     let w = paper.w_mm - 2.0 * BORDER_MM;
-    let h = paper.h_mm - 2.0 * BORDER_MM - TITLE_STRIP_MM - GUTTER_MM;
+    // Reserve the corner-block height along the bottom so auto-laid drawings
+    // clear it (the block itself only occupies the bottom-right corner).
+    let h = paper.h_mm - 2.0 * BORDER_MM - TB_H - GUTTER_MM;
     (x, y, w, h)
 }
 
@@ -238,7 +239,7 @@ pub fn compose_freeform(
             );
         }
     }
-    s.push_str(&bottom_title_block(paper, project, info, "AS NOTED"));
+    s.push_str(&corner_title_block(paper, project, info, "AS NOTED"));
     s.push_str("</svg>\n");
     s
 }
@@ -256,7 +257,7 @@ pub fn compose_sheet(
     let (ax, ay, aw, ah) = drawing_area(paper);
     let mut s = sheet_open(paper);
     let place = place_into(&mut s, 0, drawing, ax, ay, aw, ah);
-    s.push_str(&bottom_title_block(paper, project, info, &drawing.scale_label()));
+    s.push_str(&corner_title_block(paper, project, info, &drawing.scale_label()));
     s.push_str("</svg>\n");
     (s, place)
 }
@@ -314,59 +315,45 @@ pub fn compose_multi(
         placements.push(p);
     }
 
-    s.push_str(&bottom_title_block(paper, project, info, "AS NOTED"));
+    s.push_str(&corner_title_block(paper, project, info, "AS NOTED"));
     s.push_str("</svg>\n");
     (s, placements)
 }
 
-/// Render the full-width bottom title block (paper-mm coordinates, paper-sized
-/// text). Lays out a single horizontal strip divided into labelled cells.
-fn bottom_title_block(
+/// Title-block corner box dimensions (paper mm).
+const TB_W: f32 = 195.0;
+const TB_H: f32 = 64.0;
+
+/// Render the title block as a compact box in the **bottom-right corner**
+/// (paper-mm coordinates, paper-sized text): project info on top, the drawing
+/// title centred, and a SHEET / SCALE / DATE cell row along the bottom.
+fn corner_title_block(
     paper: PaperSize,
     project: &ProjectInfo,
     info: &DrawingInfo,
     scale_label: &str,
 ) -> String {
-    let x0 = BORDER_MM;
-    let y0 = paper.h_mm - BORDER_MM - TITLE_STRIP_MM;
-    let w = paper.w_mm - 2.0 * BORDER_MM;
-    let h = TITLE_STRIP_MM;
-
-    // Right-hand data block columns (sheet metadata); the left is project info.
-    let meta_w = 150.0_f32.min(w * 0.35);
-    let meta_x = x0 + w - meta_w;
-
-    let mut s = String::with_capacity(1024);
+    let x0 = paper.w_mm - BORDER_MM - TB_W;
+    let y0 = paper.h_mm - BORDER_MM - TB_H;
     let esc = crate::svg::xml_escape;
+    let mut s = String::with_capacity(1024);
 
-    // Strip outline.
+    // Outer box.
     let _ = writeln!(
         s,
-        r#"<rect x="{x0}" y="{y0}" width="{w}" height="{h}" fill="white" stroke="black" stroke-width="1"/>"#,
+        r#"<rect x="{x0}" y="{y0}" width="{TB_W}" height="{TB_H}" fill="white" stroke="black" stroke-width="1"/>"#,
     );
-    // Divider between project info and metadata.
-    let _ = writeln!(
-        s,
-        r#"<line x1="{mx}" y1="{y0}" x2="{mx}" y2="{y1}" stroke="black" stroke-width="0.8"/>"#,
-        mx = meta_x,
-        y1 = y0 + h,
-    );
-
-    // --- left: project name + address + designer ---
+    // Project name + address + qualified designer.
     let _ = writeln!(
         s,
         r#"<text x="{x}" y="{y}" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="black">{name}</text>"#,
-        x = x0 + 6.0,
-        y = y0 + 12.0,
-        name = esc(&project.name),
+        x = x0 + 5.0, y = y0 + 11.0, name = esc(&project.name),
     );
     if !project.address.is_empty() {
         let _ = writeln!(
             s,
-            r#"<text x="{x}" y="{y}" font-family="Arial, sans-serif" font-size="4.5" fill="rgb(51,51,51)">{addr}</text>"#,
-            x = x0 + 6.0,
-            y = y0 + 20.0,
-            addr = esc(&project.address),
+            r#"<text x="{x}" y="{y}" font-family="Arial, sans-serif" font-size="4.2" fill="rgb(51,51,51)">{a}</text>"#,
+            x = x0 + 5.0, y = y0 + 18.0, a = esc(&project.address),
         );
     }
     let designer_line = if project.designer.is_empty() {
@@ -374,49 +361,61 @@ fn bottom_title_block(
     } else if project.designer_bcin.is_empty() {
         format!("QUALIFIED DESIGNER: {}", project.designer)
     } else {
-        format!(
-            "QUALIFIED DESIGNER: {}   {}",
-            project.designer, project.designer_bcin
-        )
+        format!("QUALIFIED DESIGNER: {}   {}", project.designer, project.designer_bcin)
     };
     if !designer_line.is_empty() {
         let _ = writeln!(
             s,
-            r#"<text x="{x}" y="{y}" font-family="Arial, sans-serif" font-size="4.5" fill="rgb(51,51,51)">{d}</text>"#,
-            x = x0 + 6.0,
-            y = y0 + h - 6.0,
-            d = esc(&designer_line),
+            r#"<text x="{x}" y="{y}" font-family="Arial, sans-serif" font-size="4.2" fill="rgb(51,51,51)">{d}</text>"#,
+            x = x0 + 5.0, y = y0 + 25.0, d = esc(&designer_line),
         );
     }
-    // Drawing title — large, centred in the left zone.
+    // Divider, then the drawing title (large, centred).
     let _ = writeln!(
         s,
-        r#"<text x="{x}" y="{y}" font-family="Arial, sans-serif" font-size="8" font-weight="bold" fill="black" text-anchor="middle">{title}</text>"#,
-        x = x0 + (meta_x - x0) * 0.5,
-        y = y0 + h - 6.0,
-        title = esc(&info.title),
+        r#"<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" stroke="black" stroke-width="0.6"/>"#,
+        y = y0 + 30.0, x1 = x0 + TB_W,
     );
-
-    // --- right: metadata cells (sheet no, scale, date) ---
-    let cell = |s: &mut String, row: usize, label: &str, value: &str| {
-        let cy = y0 + 8.0 + (row as f32) * 11.0;
+    let _ = writeln!(
+        s,
+        r#"<text x="{cx}" y="{y}" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="black" text-anchor="middle">{t}</text>"#,
+        cx = x0 + TB_W * 0.5, y = y0 + 43.0, t = esc(&info.title),
+    );
+    // Divider, then SHEET / SCALE / DATE cells.
+    let cells_y = y0 + 48.0;
+    let _ = writeln!(
+        s,
+        r#"<line x1="{x0}" y1="{cells_y}" x2="{x1}" y2="{cells_y}" stroke="black" stroke-width="0.6"/>"#,
+        x1 = x0 + TB_W,
+    );
+    let cw = TB_W / 3.0;
+    for (i, (label, value)) in [
+        ("SHEET", info.number.as_str()),
+        ("SCALE", scale_label),
+        ("DATE", info.date.as_str()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let cx = x0 + (i as f32) * cw;
+        if i > 0 {
+            let _ = writeln!(
+                s,
+                r#"<line x1="{cx}" y1="{cells_y}" x2="{cx}" y2="{y2}" stroke="black" stroke-width="0.6"/>"#,
+                y2 = y0 + TB_H,
+            );
+        }
         let _ = writeln!(
             s,
-            r#"<text x="{lx}" y="{cy}" font-family="Arial, sans-serif" font-size="3.5" fill="rgb(102,102,102)">{label}</text>"#,
-            lx = meta_x + 4.0,
+            r#"<text x="{lx}" y="{ly}" font-family="Arial, sans-serif" font-size="3.2" fill="rgb(102,102,102)">{label}</text>"#,
+            lx = cx + 3.0, ly = cells_y + 6.0,
         );
         let _ = writeln!(
             s,
-            r#"<text x="{vx}" y="{vy}" font-family="Arial, sans-serif" font-size="6" font-weight="bold" fill="black">{value}</text>"#,
-            vx = meta_x + 4.0,
-            vy = cy + 6.0,
-            value = esc(value),
+            r#"<text x="{vx}" y="{vy}" font-family="Arial, sans-serif" font-size="5.5" font-weight="bold" fill="black">{v}</text>"#,
+            vx = cx + 3.0, vy = cells_y + 13.5, v = esc(value),
         );
-    };
-    cell(&mut s, 0, "SHEET", &info.number);
-    cell(&mut s, 1, "SCALE", scale_label);
-    cell(&mut s, 2, "DATE", &info.date);
-
+    }
     s
 }
 
@@ -527,14 +526,16 @@ mod tests {
     }
 
     #[test]
-    fn title_block_sits_in_the_bottom_strip() {
+    fn title_block_sits_in_the_bottom_right_corner() {
         let (svg, _) = compose_sheet(
             &dummy_drawing(50.0),
             PaperSize::ARCH_D,
             &ProjectInfo::default(),
             &info(),
         );
-        // The strip's top edge is at h - border - strip = 610 - 12 - 40 = 558.
-        assert!(svg.contains(r#"y="558""#), "title strip not at expected y: {svg}");
+        // Corner box: top edge h-border-TB_H = 610-12-64 = 534;
+        // left edge w-border-TB_W = 914-12-195 = 707.
+        assert!(svg.contains(r#"y="534""#), "corner block not at expected y: {svg}");
+        assert!(svg.contains(r#"x="707""#), "corner block not at expected x: {svg}");
     }
 }

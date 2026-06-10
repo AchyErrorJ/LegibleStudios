@@ -352,12 +352,21 @@ impl Layout {
         let (px, py) = view.to_screen(0.0, 0.0);
         fill_rect(pix, px, py, sheet_w, sheet_h, Color::WHITE);
         stroke_rect(pix, px, py, sheet_w, sheet_h, Color::from_rgba8(0, 0, 0, 255), 1.5);
-        // Title-block strip (bottom) outline.
-        let strip_top = self.paper.h_mm - 12.0 - 40.0;
-        let (_, sy) = view.to_screen(0.0, strip_top);
-        stroke_line(pix, px, sy, px + sheet_w, sy, Color::from_rgba8(120, 120, 120, 255));
-        self.text(pix, &self.project.name, px + 6.0, sy + 14.0, 11.0, (20, 20, 20));
-        self.text(pix, "TITLE BLOCK", px + sheet_w * 0.5 - 28.0, sy + 14.0, 9.0, (130, 130, 130));
+        // Title-block corner box (bottom-right) — matches drawing::sheet's
+        // corner_title_block (TB 195 × 64 mm, 12 mm border).
+        const TB_W: f32 = 195.0;
+        const TB_H: f32 = 64.0;
+        const TB_BORDER: f32 = 12.0;
+        let (tbx, tby) = view.to_screen(
+            self.paper.w_mm - TB_BORDER - TB_W,
+            self.paper.h_mm - TB_BORDER - TB_H,
+        );
+        let tbw = TB_W * view.s;
+        let tbh = TB_H * view.s;
+        fill_rect(pix, tbx, tby, tbw, tbh, Color::WHITE);
+        stroke_rect(pix, tbx, tby, tbw, tbh, Color::from_rgba8(80, 80, 80, 255), 1.0);
+        self.text(pix, &self.project.name, tbx + 5.0, tby + 14.0, 11.0, (20, 20, 20));
+        self.text(pix, "TITLE BLOCK", tbx + 5.0, tby + tbh - 6.0, 8.0, (130, 130, 130));
 
         // Placements.
         for (i, p) in self.sheets[self.current].iter().enumerate() {
