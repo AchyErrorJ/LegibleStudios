@@ -88,31 +88,121 @@ pub enum PdfError {
     Conversion(String),
 }
 
-/// Convert an SVG string to a PDF byte vector using `svg2pdf`.
+/// Longest page side, in PDF points, for a normalised sheet (≈19.4").
 ///
-/// Page size is derived from the SVG's natural size (viewBox or width/height).
-/// Text is embedded as selectable text by default.
-pub fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, PdfError> {
-    use svg2pdf::{ConversionOptions, PageOptions, usvg};
-    let mut opts = usvg::Options::default();
+/// svg2pdf maps 1 user-unit -> 1 pt at 72 dpi. Our sheets are authored in
+/// millimetres, so the raw size would produce absurd multi-metre pages (e.g. a
+/// floor plan at ~167000 pt ≈ 59 m wide) that PDF viewers can't render. We
+/// normalise every page so its longest side is `TARGET_PT`, preserving aspect.
+const TARGET_PT: f32 = 1400.0;
+
+/// Parse an SVG sheet into a usvg `Tree` with system fonts loaded.
+fn parse_sheet(svg: &str) -> Result<svg2pdf::usvg::Tree, PdfError> {
+    let mut opts = svg2pdf::usvg::Options::default();
     opts.fontdb_mut().load_system_fonts();
-    let tree = usvg::Tree::from_str(svg, &opts)
-        .map_err(|e| PdfError::Parse(e.to_string()))?;
-    // svg2pdf maps 1 user-unit -> 1 pt at 72 dpi. Our sheets are authored in
-    // millimetres, so the default would produce absurd multi-metre pages (e.g.
-    // a floor plan at ~167000 pt ≈ 59 m wide) that PDF viewers can't render.
-    // Normalise so the longest page side is ~TARGET_PT, preserving aspect.
-    const TARGET_PT: f32 = 1400.0; // ≈ 19.4" longest side
+    svg2pdf::usvg::Tree::from_str(svg, &opts).map_err(|e| PdfError::Parse(e.to_string()))
+}
+
+/// Convert an SVG string to a single-page PDF byte vector using `svg2pdf`.
+///
+/// Page size is derived from the SVG's natural size (viewBox or width/height),
+/// normalised to [`TARGET_PT`]. Text is embedded as selectable text by default.
+pub fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, PdfError> {
+    use svg2pdf::{ConversionOptions, PageOptions};
+    let tree = parse_sheet(svg)?;
     let size = tree.size();
     let max_side = size.width().max(size.height());
-    let dpi = if max_side > TARGET_PT {
-        max_side * 72.0 / TARGET_PT
-    } else {
-        72.0
-    };
+    let dpi = if max_side > TARGET_PT { max_side * 72.0 / TARGET_PT } else { 72.0 };
     let page = PageOptions { dpi, ..PageOptions::default() };
     svg2pdf::to_pdf(&tree, ConversionOptions::default(), page)
         .map_err(|e| PdfError::Conversion(e.to_string()))
+}
+
+/// Assemble many SVG sheets into one multi-page PDF — the permit set as a single
+/// document. Each sheet becomes one page, sized to [`TARGET_PT`] on its longest
+/// side (aspect preserved). Pure Rust: `svg2pdf::to_chunk` turns each sheet into
+/// an embeddable XObject and `pdf-writer` lays them out across pages. Sheets that
+/// fail to parse are skipped (their `name` is returned in the error only if *all*
+/// fail).
+///
+/// `sheets` is a list of `(name, svg)`; `name` currently just documents order
+/// (and feeds the page label / errors).
+pub fn svgs_to_pdf(sheets: &[(String, String)]) -> Result<Vec<u8>, PdfError> {
+    use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
+    use svg2pdf::ConversionOptions;
+
+    let mut alloc = Ref::new(1);
+    let catalog_id = alloc.bump();
+    let page_tree_id = alloc.bump();
+
+    // Convert each sheet to a chunk + page now so we know the page count and
+    // can collect their refs for the page tree's /Kids.
+    struct Page {
+        page_id: Ref,
+        content_id: Ref,
+        svg_id: Ref,
+        chunk: pdf_writer::Chunk,
+        w: f32,
+        h: f32,
+    }
+    let mut pages: Vec<Page> = Vec::new();
+    for (name, svg) in sheets {
+        let tree = match parse_sheet(svg) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("  skipping unparseable sheet {name}: {e}");
+                continue;
+            }
+        };
+        let size = tree.size();
+        let max_side = size.width().max(size.height()).max(1.0);
+        let k = TARGET_PT / max_side;
+        let (w, h) = (size.width() * k, size.height() * k);
+
+        let (chunk, svg_ref) = svg2pdf::to_chunk(&tree, ConversionOptions::default())
+            .map_err(|e| PdfError::Conversion(e.to_string()))?;
+        // Renumber the chunk's objects into our document's id space.
+        let mut map = std::collections::HashMap::new();
+        let chunk = chunk.renumber(|old| *map.entry(old).or_insert_with(|| alloc.bump()));
+        let svg_id = *map.get(&svg_ref).expect("renumbered svg root present");
+
+        pages.push(Page {
+            page_id: alloc.bump(),
+            content_id: alloc.bump(),
+            svg_id,
+            chunk,
+            w,
+            h,
+        });
+    }
+    if pages.is_empty() {
+        return Err(PdfError::Conversion("no sheets could be converted".into()));
+    }
+
+    let mut pdf = Pdf::new();
+    pdf.catalog(catalog_id).pages(page_tree_id);
+    pdf.pages(page_tree_id)
+        .kids(pages.iter().map(|p| p.page_id))
+        .count(pages.len() as i32);
+
+    let svg_name = Name(b"S1");
+    for p in &pages {
+        // The to_chunk XObject is a 1pt unit square; scale it to fill the page
+        // (aspect already baked into w/h, so no distortion).
+        let mut page = pdf.page(p.page_id);
+        page.media_box(Rect::new(0.0, 0.0, p.w, p.h));
+        page.parent(page_tree_id);
+        page.resources().x_objects().pair(svg_name, p.svg_id);
+        page.contents(p.content_id);
+        page.finish();
+
+        let mut content = Content::new();
+        content.transform([p.w, 0.0, 0.0, p.h, 0.0, 0.0]).x_object(svg_name);
+        pdf.stream(p.content_id, &content.finish());
+
+        pdf.extend(&p.chunk);
+    }
+    Ok(pdf.finish())
 }
 
 /// Geometry export scale for the floor plan: `export_to_svg` maps plan

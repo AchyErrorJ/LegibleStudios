@@ -1854,6 +1854,7 @@ dependencies = [
  "ls-domain",
  "ls-drawing",
  "ls-obc",
+ "pdf-writer",
  "serde",
  "serde_json",
  "svg2pdf",

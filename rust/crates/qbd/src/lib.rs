@@ -24,7 +24,7 @@ pub use documentation::{
     CatalogDrawing, Documentation, PdfError, drawing_catalog, floor_plan_sheet,
     generate_documentation, generate_documentation_for_project,
     generate_documentation_with_validation, generate_documentation_with_validation_for_project,
-    plans_sheet, svg_to_pdf,
+    plans_sheet, svg_to_pdf, svgs_to_pdf,
 };
 pub use floor_plan::generate_floor_plan_with_openings;
 pub use schedule::{door_entries, window_entries};
