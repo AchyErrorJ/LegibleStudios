@@ -284,6 +284,40 @@ fn project_wall(wall: &ElevationWallInput, dir: Direction, input: &ElevationInpu
     }
 }
 
+/// Building plan bounds `(min_x, max_x, min_z, max_z)` from the walls.
+fn building_bounds(input: &ElevationInput) -> (f32, f32, f32, f32) {
+    let mut b = (f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY);
+    for w in &input.walls {
+        b.0 = b.0.min(w.start.x).min(w.end.x);
+        b.1 = b.1.max(w.start.x).max(w.end.x);
+        b.2 = b.2.min(w.start.z).min(w.end.z);
+        b.3 = b.3.max(w.start.z).max(w.end.z);
+    }
+    if b.0 > b.1 {
+        (0.0, input.width, 0.0, input.depth)
+    } else {
+        b
+    }
+}
+
+/// True if `wall` is the perimeter exterior wall facing `dir` — i.e. roughly
+/// perpendicular to the view AND sitting on the matching side of the footprint.
+/// This is what keeps a south elevation from drawing the *north* wall's and
+/// interior partitions' openings.
+fn wall_faces(wall: &ElevationWallInput, dir: Direction, b: (f32, f32, f32, f32)) -> bool {
+    const T: f32 = 400.0; // mm: a wall-thickness-ish tolerance to the perimeter
+    let (min_x, max_x, min_z, max_z) = b;
+    let xc = (wall.start.x + wall.end.x) * 0.5;
+    let zc = (wall.start.z + wall.end.z) * 0.5;
+    let runs_x = (wall.end.x - wall.start.x).abs() >= (wall.end.z - wall.start.z).abs();
+    match dir {
+        Direction::South => runs_x && (zc - min_z).abs() < T,
+        Direction::North => runs_x && (zc - max_z).abs() < T,
+        Direction::West => !runs_x && (xc - min_x).abs() < T,
+        Direction::East => !runs_x && (xc - max_x).abs() < T,
+    }
+}
+
 // Drawing math uses s/e for start/end and dx/dz for axis deltas; renaming
 // to satisfy clippy::pedantic would obscure the geometry vocabulary.
 #[allow(clippy::similar_names, clippy::many_single_char_names)]
@@ -340,13 +374,14 @@ fn elevation_to_slice_result(input: &ElevationInput, dir: Direction) -> crate::S
         .filter(|w| (w.end_x - w.start_x).abs() > 1.0)
         .collect();
 
+    let bounds = building_bounds(input);
     let openings: Vec<Opening> = input
         .openings
         .iter()
         .filter_map(|op| {
             let wall = input.walls.get(op.wall_index)?;
-            let projected_wall = project_wall(wall, dir, input);
-            if (projected_wall.end_x - projected_wall.start_x).abs() < 1.0 {
+            // Only openings on the perimeter wall facing this elevation.
+            if !wall_faces(wall, dir, bounds) {
                 return None;
             }
             project_opening(op, wall, dir, input)
@@ -559,15 +594,15 @@ pub fn generate_elevation_sheet_svg(input: &ElevationInput, dir: Direction, scal
         .filter(|w| (w.end_x - w.start_x).abs() > 1.0)
         .collect();
 
-    // Project openings onto walls that survive projection. Openings on
-    // collapsed walls don't appear in this view.
+    // Project only the openings on the perimeter wall that faces this
+    // elevation — not the back wall or interior partitions.
+    let bounds = building_bounds(input);
     let openings: Vec<Opening> = input
         .openings
         .iter()
         .filter_map(|op| {
             let wall = input.walls.get(op.wall_index)?;
-            let projected_wall = project_wall(wall, dir, input);
-            if (projected_wall.end_x - projected_wall.start_x).abs() < 1.0 {
+            if !wall_faces(wall, dir, bounds) {
                 return None;
             }
             project_opening(op, wall, dir, input)
@@ -1039,6 +1074,47 @@ mod tests {
             !svg.contains(r#"class="door""#),
             "east view should not show south-facing door: {svg}"
         );
+    }
+
+    #[test]
+    fn back_wall_and_interior_openings_dont_appear_on_the_front() {
+        // Rectangular building + a window on the NORTH (back) wall and an
+        // opening on an INTERIOR east-west partition. Neither may show on the
+        // south elevation — only the south wall's door does.
+        let mut input = rectangular_input(); // walls 0=S 1=E 2=N 3=W, door on S
+        // Window on wall 2 (north, z=4000).
+        input.openings.push(ElevationOpeningInput {
+            wall_index: 2,
+            offset: 2500.0,
+            width: 1000.0,
+            height: 1000.0,
+            sill_height: 900.0,
+            is_door: false,
+        });
+        // Interior partition (E-W) at mid-depth + a door on it (wall 4).
+        input.walls.push(ElevationWallInput {
+            start: Vec3::new(0.0, 0.0, 2000.0),
+            end: Vec3::new(5000.0, 0.0, 2000.0),
+            height: 2700.0,
+            base: 0.0,
+        });
+        input.openings.push(ElevationOpeningInput {
+            wall_index: 4,
+            offset: 1000.0,
+            width: 800.0,
+            height: 2100.0,
+            sill_height: 0.0,
+            is_door: true,
+        });
+
+        let south = generate_elevation_sheet_svg(&input, Direction::South, 0.05);
+        // Exactly one door (the south wall's), and no windows (north window hidden).
+        assert_eq!(south.matches(r#"class="door""#).count(), 1, "only the south door: {south}");
+        assert!(!south.contains(r#"class="opening""#), "north/interior windows hidden");
+
+        // The north window does show on the north elevation.
+        let north = generate_elevation_sheet_svg(&input, Direction::North, 0.05);
+        assert!(north.contains(r#"class="opening""#), "north window shows on north view");
     }
 
     #[test]

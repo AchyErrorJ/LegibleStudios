@@ -197,6 +197,20 @@ fn generate_section_elements(input: &SectionInput, cut: &SectionCut) -> Vec<Sect
         .map(|e| e.y_top)
         .fold(0.0_f32, f32::max)
         .max(2700.0);
+
+    // Ceiling joists: a band just below the top plate. Drawn wall-to-wall so it
+    // stays under the roof line (it must NOT poke past the eaves).
+    const CEILING_MM: f32 = 250.0;
+    if plate > CEILING_MM {
+        elements.push(SectionElement {
+            element_type: ElementType::Floor,
+            x: 0.0,
+            y_bottom: plate - CEILING_MM,
+            y_top: plate,
+            width: 0.0,
+        });
+    }
+
     for &ridge_above_base in &input.ridge_heights_above_plate {
         let base_height = plate;
         elements.push(SectionElement {
@@ -335,12 +349,18 @@ pub fn generate_section_sheet_svg(input: &SectionInput, cut: &SectionCut, scale:
                 );
             }
             ElementType::Floor => {
+                // The ground slab (at/below grade) oversails the walls for the
+                // foundation; floor platforms + ceiling joists stay wall-to-wall
+                // so they never poke past the roof line.
+                let (x, w) = if elem.y_top <= 0.0 {
+                    (min_x - 500.0, max_x - min_x + 1000.0)
+                } else {
+                    (min_x, max_x - min_x)
+                };
                 let _ = writeln!(
                     s,
                     r#"    <rect x="{x}" y="{yb}" width="{w}" height="{h}" class="floor"/>"#,
-                    x = min_x - 500.0,
                     yb = elem.y_bottom,
-                    w = max_x - min_x + 1000.0,
                     h = elem.y_top - elem.y_bottom,
                 );
             }
@@ -515,7 +535,8 @@ mod tests {
         // The 4-wall rectangle: 2 X-running walls (top/bottom) span X=[0,5000]
         // and intersect cut_x=2500; the 2 Z-running walls (left/right) have
         // a single X coordinate (0 or 5000), neither within ±100 of 2500.
-        // So 2 walls hit. Plus the floor slab = 1 floor element.
+        // So 2 walls hit. Floor elements: the ground slab + a ceiling-joist band
+        // below the plate = 2.
         let wall_count = elements
             .iter()
             .filter(|e| e.element_type == ElementType::Wall)
@@ -525,7 +546,7 @@ mod tests {
             .iter()
             .filter(|e| e.element_type == ElementType::Floor)
             .count();
-        assert_eq!(floor_count, 1);
+        assert_eq!(floor_count, 2);
     }
 
     #[test]
@@ -564,11 +585,14 @@ mod tests {
             .iter()
             .filter(|e| e.element_type == ElementType::Floor)
             .collect();
-        assert_eq!(floors.len(), 2, "ground slab + one intermediate platform");
-        // The platform is a band just below the storey line, not a zero-height line.
-        let platform = floors.iter().find(|f| f.y_top > 1.0).expect("platform");
+        // Ground slab + intermediate platform at 3000 + ceiling band at the plate.
+        assert_eq!(floors.len(), 3);
+        // The platform is a band at the storey line, not a zero-height line.
+        let platform = floors
+            .iter()
+            .find(|f| (f.y_top - 3000.0).abs() < 1.0)
+            .expect("intermediate platform at 3000");
         assert!(platform.y_top - platform.y_bottom > 50.0, "platform has depth");
-        assert!((platform.y_top - 3000.0).abs() < 1.0, "platform top at storey line");
     }
 
     #[test]

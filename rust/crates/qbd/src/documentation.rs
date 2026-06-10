@@ -1029,7 +1029,15 @@ fn generate_section(doc: &SchemaDocument, climate_zone: &str) -> String {
         // (matches the elevations). The default cut is transverse, so it shows
         // the gable cross-section.
         ridge_heights_above_plate: vec![doc.width.min(doc.depth) * 0.5 * 0.5],
-        floor_lines: doc.levels.iter().map(|l| l.elevation).filter(|&e| e > 1.0).collect(),
+        // Intermediate-floor platforms: storey bases above grade, EXCLUDING the
+        // roof level (its band would sit at the plate and poke past the roof).
+        floor_lines: doc
+            .levels
+            .iter()
+            .filter(|l| !l.name.to_lowercase().contains("roof"))
+            .map(|l| l.elevation)
+            .filter(|&e| e > 1.0)
+            .collect(),
         // Ceiling height auto-derives from the ground-storey wall plate.
         ceiling_height_mm: 0.0,
         assemblies: envelope_assemblies(doc, climate_zone),
