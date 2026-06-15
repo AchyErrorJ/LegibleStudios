@@ -304,7 +304,18 @@ fn filter_doc_to_level(doc: &SchemaDocument, level: &str) -> SchemaDocument {
     let detectors = doc.detectors.iter().filter(|d| d.level_name == level).cloned().collect();
     let electrical = doc.electrical.iter().filter(|e| e.level_name == level).cloned().collect();
     let headers = doc.headers.iter().filter(|h| h.level_name == level).cloned().collect();
-    SchemaDocument { walls, doors, windows, rooms, detectors, electrical, headers, ..doc.clone() }
+    let stairs = doc.stairs.iter().filter(|s| s.level_name == level).cloned().collect();
+    SchemaDocument {
+        walls,
+        doors,
+        windows,
+        rooms,
+        detectors,
+        electrical,
+        headers,
+        stairs,
+        ..doc.clone()
+    }
 }
 
 /// Build the raw [`SliceResult`] for a floor plan (walls, openings, hatches).
@@ -450,6 +461,28 @@ fn build_floor_plan_svg(doc: &SchemaDocument, config: &Config) -> String {
         if !t3.is_empty() {
             floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&t3));
         }
+    }
+
+    // Stairs (OBC 9.8): tread nosings + a direction arrow + UP/DN label drawn
+    // from the solved riser/tread geometry. `render_stair_symbol` already bakes
+    // in the negated-Y plan convention, so it injects like the other passes.
+    if !doc.stairs.is_empty() {
+        let mut stairs = String::new();
+        for st in &doc.stairs {
+            let plan = drawing::StairPlan {
+                x: st.x,
+                y: st.y,
+                across: st.width,
+                run: st.depth,
+                run_dir: if st.run_dir.is_empty() { "+y".into() } else { st.run_dir.clone() },
+                num_treads: st.num_treads,
+                tread_run: if st.tread_run > 0.0 { st.tread_run } else { 255.0 },
+                shape: st.shape.clone(),
+                going: st.going.clone(),
+            };
+            stairs.push_str(&drawing::render_stair_symbol(&plan, 280.0));
+        }
+        floor_plan_raw = inject_before_svg_close(&floor_plan_raw, &lift(&stairs));
     }
 
     // Life-safety alarms (rules-engine annotation): smoke = S, CO = CO, drawn
@@ -1418,6 +1451,32 @@ mod tests {
         assert!(docs.site_plan_svg.contains("SITE PLAN"));
         assert!(docs.site_plan_svg.contains("<g transform=\"translate("));
         assert!(docs.roof_plan_svg.contains("ROOF PLAN"));
+    }
+
+    #[test]
+    fn floor_plan_renders_a_stair_symbol_with_direction() {
+        let mut doc = rect_room_doc();
+        doc.stairs.push(archgeometry::SchemaStair {
+            id: "stairs_1".into(),
+            level_name: "Level 1".into(),
+            x: 0.0,
+            y: 0.0,
+            width: 1828.8,
+            depth: 3352.8,
+            run_dir: "+y".into(),
+            num_risers: 16,
+            num_treads: 15,
+            riser_height: 190.5,
+            tread_run: 255.0,
+            width_clear: 864.0,
+            floor_to_floor: 3048.0,
+            shape: "switchback".into(),
+            going: "up".into(),
+        });
+        let docs = generate_documentation(&doc, "Stair House");
+        // The UP label + an arrowhead polygon land on the floor plan.
+        assert!(docs.floor_plan_svg.contains(">UP</text>"), "no UP label");
+        assert!(docs.floor_plan_svg.contains("<polygon"), "no direction arrowhead");
     }
 
     #[test]

@@ -14,6 +14,8 @@ use crate::wall_types;
 pub struct ValidationResult {
     pub overall_pass: bool,
     pub wall_reports: Vec<ComplianceReport>,
+    /// Stair compliance (OBC 9.8) — one report per stair shaft.
+    pub stair_reports: Vec<ComplianceReport>,
 
     // Thermal summary.
     pub total_exterior_wall_area: f32,
@@ -120,8 +122,39 @@ pub fn validate_layout(
         result.thermal_compliance = true;
     }
 
-    result.overall_pass = result.walls_failed == 0 && result.thermal_compliance;
+    // Stair compliance (OBC 9.8): rise/run/width per stair shaft.
+    result.stair_reports = stair_reports(doc);
+    let stairs_pass = result.stair_reports.iter().all(ComplianceReport::passes);
+
+    result.overall_pass = result.walls_failed == 0 && result.thermal_compliance && stairs_pass;
     result
+}
+
+/// One compliance report per stair, checking the solved rise/run/width against
+/// OBC 9.8. The element id reads `"Stair … Level n (shape)"` so it groups
+/// cleanly in the report table.
+fn stair_reports(doc: &SchemaDocument) -> Vec<ComplianceReport> {
+    doc.stairs
+        .iter()
+        .map(|st| {
+            let spec = obc::stairs::StairSpec {
+                num_risers: st.num_risers,
+                num_treads: st.num_treads,
+                riser_height_mm: st.riser_height,
+                tread_run_mm: st.tread_run,
+                floor_to_floor_mm: st.floor_to_floor,
+            };
+            let shape = if st.shape.is_empty() { "straight" } else { &st.shape };
+            let mut report = ComplianceReport {
+                element_id: format!("{} ({shape})", st.level_name),
+                element_type: "stair".into(),
+                checks: obc::stairs::check_stair(&spec, st.width_clear),
+                ..Default::default()
+            };
+            report.compute_overall_status();
+            report
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -160,6 +193,52 @@ mod tests {
         assert!((r.average_r_value - 28.45).abs() < 0.01);
         // Zone 6 requires R-24 → passes thermal with R-28.45.
         assert!(r.thermal_compliance);
+    }
+
+    #[test]
+    fn compliant_stair_adds_a_passing_report() {
+        let obc = OBCEngine::new();
+        let doc = SchemaDocument {
+            stairs: vec![archgeometry::SchemaStair {
+                level_name: "Level 1".into(),
+                num_risers: 16,
+                num_treads: 15,
+                riser_height: 190.5,
+                tread_run: 255.0,
+                width_clear: 864.0,
+                floor_to_floor: 3048.0,
+                shape: "switchback".into(),
+                going: "up".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let r = validate_layout(&obc, &doc, "Zone 6");
+        assert_eq!(r.stair_reports.len(), 1);
+        assert!(r.stair_reports[0].passes());
+        assert!(r.overall_pass, "compliant stair keeps the layout passing");
+    }
+
+    #[test]
+    fn narrow_stair_fails_the_layout() {
+        let obc = OBCEngine::new();
+        let doc = SchemaDocument {
+            stairs: vec![archgeometry::SchemaStair {
+                level_name: "Level 1".into(),
+                num_risers: 16,
+                num_treads: 15,
+                riser_height: 190.5,
+                tread_run: 255.0,
+                width_clear: 700.0, // below the 860 mm minimum
+                floor_to_floor: 3048.0,
+                shape: "switchback".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let r = validate_layout(&obc, &doc, "Zone 6");
+        assert!(!r.stair_reports[0].passes());
+        assert!(!r.overall_pass, "a non-compliant stair must fail the layout");
     }
 
     #[test]

@@ -8,17 +8,44 @@ use crate::ValidationResult;
 use obc::ComplianceStatus;
 use std::fmt::Write as _;
 
-/// One row in the wall-checks table.
+/// One row in the checks table.
 #[derive(Debug, Clone, Default)]
 struct CheckRow {
-    wall_idx: usize,
-    wall_cat: String,
+    /// First-column label (e.g. `"W3 exterior"` or `"Level 1 (switchback)"`).
+    tag: String,
     status: ComplianceStatus,
     rule: String,
     code: String,
     requirement: String,
     actual: String,
     message: String,
+}
+
+/// Flatten one report's checks into rows under a shared first-column `tag`.
+fn rows_for(report: &obc::ComplianceReport, tag: &str, rows: &mut Vec<CheckRow>) {
+    if report.checks.is_empty() {
+        rows.push(CheckRow {
+            tag: tag.to_string(),
+            status: report.overall_status,
+            rule: "—".into(),
+            code: "—".into(),
+            requirement: "—".into(),
+            actual: "—".into(),
+            message: "No checks performed".into(),
+        });
+    } else {
+        for check in &report.checks {
+            rows.push(CheckRow {
+                tag: tag.to_string(),
+                status: check.status,
+                rule: check.rule_name.clone(),
+                code: check.code_section.clone(),
+                requirement: check.requirement.clone(),
+                actual: check.actual.clone(),
+                message: check.message.clone(),
+            });
+        }
+    }
 }
 
 /// Render a `ValidationResult` to a standalone SVG compliance report.
@@ -38,32 +65,17 @@ pub fn compliance_report_to_svg(result: &ValidationResult, project_name: &str) -
     // ------------------------------------------------------------------
     let mut rows: Vec<CheckRow> = Vec::new();
     for (wi, report) in result.wall_reports.iter().enumerate() {
-        if report.checks.is_empty() {
-            // No individual checks — still show the wall with its overall status.
-            rows.push(CheckRow {
-                wall_idx: wi,
-                wall_cat: report.element_id.clone(),
-                status: report.overall_status,
-                rule: "—".into(),
-                code: "—".into(),
-                requirement: "—".into(),
-                actual: "—".into(),
-                message: "No checks performed".into(),
-            });
+        // First column: "W{idx}" plus the wall category when present.
+        let tag = if report.element_id.is_empty() || report.element_id == "—" {
+            format!("W{wi}")
         } else {
-            for check in &report.checks {
-                rows.push(CheckRow {
-                    wall_idx: wi,
-                    wall_cat: report.element_id.clone(),
-                    status: check.status,
-                    rule: check.rule_name.clone(),
-                    code: check.code_section.clone(),
-                    requirement: check.requirement.clone(),
-                    actual: check.actual.clone(),
-                    message: check.message.clone(),
-                });
-            }
-        }
+            format!("W{wi} {}", report.element_id)
+        };
+        rows_for(report, &tag, &mut rows);
+    }
+    // Stair checks (OBC 9.8) share the table, tagged by storey + shape.
+    for report in &result.stair_reports {
+        rows_for(report, &report.element_id, &mut rows);
     }
 
     // ------------------------------------------------------------------
@@ -76,12 +88,12 @@ pub fn compliance_report_to_svg(result: &ValidationResult, project_name: &str) -
     const HDR_H: i32 = 36;
 
     let cols: [(&str, i32); 6] = [
-        ("WALL", 70),
-        ("STATUS", 80),
-        ("RULE", 160),
+        ("ELEMENT", 120),
+        ("STATUS", 75),
+        ("RULE", 150),
         ("CODE", 90),
-        ("REQUIREMENT / ACTUAL", 240),
-        ("NOTES", 170),
+        ("REQUIREMENT / ACTUAL", 235),
+        ("NOTES", 150),
     ];
     let table_w: i32 = cols.iter().map(|(_, w)| *w).sum();
     let table_x: i32 = (PAGE_W - table_w) / 2;
@@ -240,13 +252,6 @@ pub fn compliance_report_to_svg(result: &ValidationResult, project_name: &str) -
             ComplianceStatus::DataMissing => "MISSING",
         };
 
-        // WALL column: index + category.
-        let wall_text = if row.wall_cat.is_empty() || row.wall_cat == "—" {
-            format!("W{}", row.wall_idx)
-        } else {
-            format!("W{} {}", row.wall_idx, row.wall_cat)
-        };
-
         // REQUIREMENT / ACTUAL combined.
         let req_act = if row.requirement == "—" && row.actual == "—" {
             "—".into()
@@ -255,7 +260,7 @@ pub fn compliance_report_to_svg(result: &ValidationResult, project_name: &str) -
         };
 
         let cells: [String; 6] = [
-            wall_text,
+            row.tag.clone(),
             status_text.into(),
             row.rule.clone(),
             row.code.clone(),
@@ -393,6 +398,31 @@ mod tests {
         assert!(svg.contains("Thermal Resistance"));
         assert!(svg.contains("OBC 9.36.2.2"));
         assert!(svg.contains("Add continuous insulation"));
+    }
+
+    #[test]
+    fn stair_reports_render_in_the_table() {
+        let mut result = sample_result();
+        let mut stair = ComplianceReport {
+            element_id: "Level 1 (switchback)".into(),
+            element_type: "stair".into(),
+            checks: vec![ComplianceCheck {
+                rule_name: "Riser height".into(),
+                code_section: "OBC 9.8.4.2".into(),
+                status: ComplianceStatus::Pass,
+                requirement: "125–200 mm".into(),
+                actual: "190 mm × 16 risers".into(),
+                message: "OK".into(),
+            }],
+            ..Default::default()
+        };
+        stair.compute_overall_status();
+        result.stair_reports.push(stair);
+
+        let svg = compliance_report_to_svg(&result, "Stair House");
+        assert!(svg.contains("Level 1 (switchback)"), "stair element missing");
+        assert!(svg.contains("OBC 9.8.4.2"), "stair code section missing");
+        assert!(svg.contains("Riser height"));
     }
 
     #[test]

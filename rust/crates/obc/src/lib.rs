@@ -11,6 +11,7 @@ pub mod engine;
 pub mod headers;
 pub mod format;
 pub mod report;
+pub mod stairs;
 pub mod tables;
 pub mod windows;
 pub mod zoning;

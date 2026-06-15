@@ -11,10 +11,13 @@
 use anyhow::Context;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--pdf <dir>] [--pdf-combined <set.pdf>] [--dxf <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--streets <streets.json>] [--footprint <poly.json>] [--obc <library-dir>] [--climate-zone <zone>] [--roof-overhang <mm>] [--project <name>] [--designer <name>] [--bcin <number>] [--bare]";
+const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--pdf <dir>] [--pdf-combined <set.pdf>] [--png <dir>] [--png-width <px>] [--dxf <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--streets <streets.json>] [--footprint <poly.json>] [--obc <library-dir>] [--climate-zone <zone>] [--roof-overhang <mm>] [--project <name>] [--designer <name>] [--bcin <number>] [--bare]";
 
 /// Climate zone fed to OBC thermal compliance when `--climate-zone` isn't passed.
 const DEFAULT_CLIMATE_ZONE: &str = "Zone 6";
+
+/// Longer-edge resolution (px) for `--png` sheets when `--png-width` isn't given.
+const DEFAULT_PNG_WIDTH: u32 = 2200;
 
 /// Longest displayed edge, in CSS px, for a written sheet.
 const DISPLAY_MAX_PX: f32 = 1100.0;
@@ -67,6 +70,45 @@ fn fit_display(svg: &str) -> String {
     format!("{}{}{}", &svg[..start], new_tag, &svg[end..])
 }
 
+/// Every produced sheet as `(name, svg)` in plan-set order. Shared by the
+/// combined-PDF (`--pdf-combined`) and PNG (`--png`) bundles so both stay in
+/// lockstep.
+fn collect_sheets(docs: &qbd::Documentation) -> Vec<(String, String)> {
+    let mut sheets: Vec<(String, String)> = Vec::new();
+    let mut push = |name: &str, svg: &str| {
+        if !svg.is_empty() {
+            sheets.push((name.to_string(), svg.to_string()));
+        }
+    };
+    push("01_site_plan", &docs.site_plan_svg);
+    push("08_foundation_plan", &docs.foundation_plan_svg);
+    if docs.floor_plans.len() <= 1 {
+        push("02_floor_plan", &docs.floor_plan_svg);
+    } else {
+        for (i, (_level, svg)) in docs.floor_plans.iter().enumerate() {
+            let name =
+                if i == 0 { "02_floor_plan".to_string() } else { format!("02_floor_plan_l{}", i + 1) };
+            push(&name, svg);
+        }
+    }
+    push("06_roof_plan", &docs.roof_plan_svg);
+    push("10_framing_plan", &docs.framing_plan_svg);
+    for elev in &docs.elevations {
+        let name = drawing::elevation_sheet_name(elev.direction).replace(".svg", "");
+        push(&name, &elev.svg);
+    }
+    push("04_section_aa", &docs.section_svg);
+    for (i, detail) in docs.wall_details.iter().enumerate() {
+        let name = format!("07_wall_detail_{:02}_{}", i + 1, detail.detail.wall_type_id);
+        push(&name, &detail.svg);
+    }
+    push("11_footing_detail", &docs.footing_detail_svg);
+    push("05_door_schedule", &docs.door_schedule_svg);
+    push("05_window_schedule", &docs.window_schedule_svg);
+    push("09_compliance_report", &docs.compliance_report_svg);
+    sheets
+}
+
 #[allow(clippy::too_many_lines)] // CLI dispatch + bundle emission read top-down.
 #[allow(clippy::format_collect)] // Manifest JSON assembly is one-shot; iterator-format is fine here.
 #[allow(clippy::cast_possible_truncation)] // parcel coords are bounded lot dimensions
@@ -77,6 +119,8 @@ fn main() -> anyhow::Result<()> {
     let mut bundle_dir: Option<PathBuf> = None;
     let mut pdf_dir: Option<PathBuf> = None;
     let mut pdf_combined: Option<PathBuf> = None;
+    let mut png_dir: Option<PathBuf> = None;
+    let mut png_width: u32 = DEFAULT_PNG_WIDTH;
     let mut dxf_dir: Option<PathBuf> = None;
     let mut ifc_out: Option<PathBuf> = None;
     let mut terrain_path: Option<PathBuf> = None;
@@ -112,6 +156,14 @@ fn main() -> anyhow::Result<()> {
             }
             "--pdf-combined" if i + 1 < args.len() => {
                 pdf_combined = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--png" if i + 1 < args.len() => {
+                png_dir = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--png-width" if i + 1 < args.len() => {
+                png_width = args[i + 1].parse().unwrap_or(DEFAULT_PNG_WIDTH).max(1);
                 i += 2;
             }
             "--dxf" if i + 1 < args.len() => {
@@ -593,38 +645,7 @@ fn main() -> anyhow::Result<()> {
 
     // Combined permit set: every sheet as one multi-page PDF, in plan-set order.
     if let Some(out_path) = &pdf_combined {
-        let mut sheets: Vec<(String, String)> = Vec::new();
-        let mut push = |name: &str, svg: &str| {
-            if !svg.is_empty() {
-                sheets.push((name.to_string(), svg.to_string()));
-            }
-        };
-        push("01_site_plan", &docs.site_plan_svg);
-        push("08_foundation_plan", &docs.foundation_plan_svg);
-        if docs.floor_plans.len() <= 1 {
-            push("02_floor_plan", &docs.floor_plan_svg);
-        } else {
-            for (i, (_level, svg)) in docs.floor_plans.iter().enumerate() {
-                let name =
-                    if i == 0 { "02_floor_plan".to_string() } else { format!("02_floor_plan_l{}", i + 1) };
-                push(&name, svg);
-            }
-        }
-        push("06_roof_plan", &docs.roof_plan_svg);
-        push("10_framing_plan", &docs.framing_plan_svg);
-        for elev in &docs.elevations {
-            let name = drawing::elevation_sheet_name(elev.direction).replace(".svg", "");
-            push(&name, &elev.svg);
-        }
-        push("04_section_aa", &docs.section_svg);
-        for (i, detail) in docs.wall_details.iter().enumerate() {
-            let name = format!("07_wall_detail_{:02}_{}", i + 1, detail.detail.wall_type_id);
-            push(&name, &detail.svg);
-        }
-        push("11_footing_detail", &docs.footing_detail_svg);
-        push("05_door_schedule", &docs.door_schedule_svg);
-        push("05_window_schedule", &docs.window_schedule_svg);
-        push("09_compliance_report", &docs.compliance_report_svg);
+        let sheets = collect_sheets(&docs);
 
         let pdf = qbd::svgs_to_pdf(&sheets)
             .with_context(|| "failed to assemble combined permit-set PDF")?;
@@ -641,6 +662,25 @@ fn main() -> anyhow::Result<()> {
             sheets.len(),
             pdf.len()
         );
+    }
+
+    // PNG bundle: each sheet rasterised in-house (resvg + tiny-skia) — no
+    // external rasteriser. Same sheet set + order as the combined PDF.
+    if let Some(dir) = &png_dir {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("failed to create png dir {}", dir.display()))?;
+        let sheets = collect_sheets(&docs);
+        let raster = qbd::Rasterizer::new();
+        for (name, svg) in &sheets {
+            let png = raster
+                .to_png(svg, png_width)
+                .with_context(|| format!("failed to rasterise {name}"))?;
+            let p = dir.join(format!("{name}.png"));
+            std::fs::write(&p, &png)
+                .with_context(|| format!("failed to write {}", p.display()))?;
+            eprintln!("  wrote {} ({} bytes)", p.display(), png.len());
+        }
+        eprintln!("  {} PNG sheet(s) @ {} px", sheets.len(), png_width);
     }
 
     // DXF bundle: floor plan + elevations as editable geometry.

@@ -415,6 +415,59 @@ fn default_level_name() -> String {
     "Level 1".to_string()
 }
 
+/// Stair element (OBC 9.8) — one per storey shaft, carrying the solved
+/// riser/tread geometry and the plan footprint the drawing layer renders into
+/// a stair symbol. A rules-engine annotation like detectors/electrical: the
+/// solver computes it, the drawing reads it, and it round-trips through the
+/// building JSON. Backward-compatible — absent in older JSON (the field
+/// defaults to empty) and every member has a serde default.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SchemaStair {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default = "default_level_name")]
+    pub level_name: String,
+    /// Bay minimum-corner in plan mm. `y` is Z in 3D (the plan convention
+    /// shared with [`RoomBounds`]).
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    /// Bay extent across the run direction (perpendicular), mm.
+    #[serde(default)]
+    pub width: f32,
+    /// Bay extent along the run direction, mm.
+    #[serde(default)]
+    pub depth: f32,
+    /// Ascent direction in plan: `"+y"` (north), `"-y"`, `"+x"`, `"-x"`.
+    /// Empty is treated as `"+y"`.
+    #[serde(default)]
+    pub run_dir: String,
+    #[serde(default)]
+    pub num_risers: u32,
+    #[serde(default)]
+    pub num_treads: u32,
+    /// Rise of each riser, mm.
+    #[serde(default)]
+    pub riser_height: f32,
+    /// Tread run / going, mm.
+    #[serde(default)]
+    pub tread_run: f32,
+    /// Clear width of the stair (one flight), mm.
+    #[serde(default)]
+    pub width_clear: f32,
+    /// Floor-to-floor height this stair spans, mm.
+    #[serde(default)]
+    pub floor_to_floor: f32,
+    /// Flight arrangement: `"straight"` or `"switchback"`. Empty is treated
+    /// as `"straight"`.
+    #[serde(default)]
+    pub shape: String,
+    /// `"up"` (climbs to the storey above) or `"down"`. Empty is `"up"`.
+    #[serde(default)]
+    pub going: String,
+}
+
 /// Level definition (a floor of the building).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SchemaLevel {
@@ -573,6 +626,9 @@ pub struct SchemaDocument {
     /// Header (lintel) callouts over openings — rules-engine annotation.
     #[serde(default)]
     pub headers: Vec<SchemaHeader>,
+    /// Stairs (OBC 9.8) — one per storey shaft. Rules-engine annotation.
+    #[serde(default)]
+    pub stairs: Vec<SchemaStair>,
     /// Lot + zoning for the site plan.
     #[serde(default)]
     pub site: SchemaSite,
@@ -797,6 +853,37 @@ mod tests {
                 serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
             assert_eq!(back.roof_overhang_mm, set);
         }
+    }
+
+    #[test]
+    fn stairs_default_empty_and_round_trip() {
+        // Absent in older JSON → empty, no error.
+        let doc: SchemaDocument = serde_json::from_str(r#"{"width":9000,"depth":7000}"#).unwrap();
+        assert!(doc.stairs.is_empty());
+
+        // A populated stair round-trips verbatim.
+        let stair = SchemaStair {
+            id: "stairs_1".into(),
+            level_name: "Level 1".into(),
+            x: 0.0,
+            y: 0.0,
+            width: 1828.8,
+            depth: 3352.8,
+            run_dir: "+y".into(),
+            num_risers: 16,
+            num_treads: 15,
+            riser_height: 190.5,
+            tread_run: 255.0,
+            width_clear: 864.0,
+            floor_to_floor: 3048.0,
+            shape: "switchback".into(),
+            going: "up".into(),
+        };
+        let d = SchemaDocument { stairs: vec![stair.clone()], ..Default::default() };
+        let back: SchemaDocument =
+            serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert_eq!(back.stairs.len(), 1);
+        assert_eq!(back.stairs[0], stair);
     }
 
     #[test]

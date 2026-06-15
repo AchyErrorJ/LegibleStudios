@@ -576,6 +576,70 @@ fn generate_electrical(floors: &[Floor]) -> Vec<ElectricalOut> {
     out
 }
 
+/// Floor-to-floor height (ft) — matches the 10 ft the `levels` use, so the
+/// riser geometry agrees with the storey elevations.
+const FLOOR_TO_FLOOR_FT: f32 = 10.0;
+/// Central well between the two flights of a switchback (mm). Two flights plus
+/// this well fit across the stair bay; each flight's clear width is the rest,
+/// split in two.
+const SWITCHBACK_WELL_MM: f32 = 100.0;
+/// Side finish/stringer allowance deducted from a straight stair's bay width to
+/// give its clear width (mm, both sides combined).
+const STAIR_SIDE_FINISH_MM: f32 = 80.0;
+
+/// Stair geometry pass (OBC 9.8). Each storey's `stairs` room becomes a
+/// `SchemaStair`: the riser/tread count comes from `obc::stairs` (rules), and
+/// the *shape* (straight vs switchback) is chosen here (strategy) by whether a
+/// straight run fits the bay depth. The drawing layer reads this to render the
+/// plan symbol; the compliance pass reads it to check rise/run/width.
+///
+/// `going` is `"up"` on every storey that climbs to the one above and `"down"`
+/// on the topmost storey's stair (the arrival from below).
+fn generate_stairs(floors: &[Floor]) -> Vec<Value> {
+    let s = FEET_TO_MM;
+    let ff_mm = FLOOR_TO_FLOOR_FT * s;
+    let spec = obc::stairs::solve_stair(ff_mm);
+    let straight_run = spec.total_run_mm();
+    let top_level = floors.iter().map(|f| f.level).max().unwrap_or(1);
+
+    let mut out = Vec::new();
+    for floor in floors {
+        let going = if floor.level == top_level && top_level > 1 { "down" } else { "up" };
+        for r in floor.rooms.iter().filter(|r| r.room_type == "stairs") {
+            let w_mm = r.rect.w * s; // X extent of the bay
+            let d_mm = r.rect.h * s; // Z extent of the bay
+            // Run along the longer axis; the bay's front (low-Z / low-X) is the
+            // bottom of the climb.
+            let (run_dir, across, run_len) =
+                if d_mm >= w_mm { ("+y", w_mm, d_mm) } else { ("+x", d_mm, w_mm) };
+            let shape = if straight_run <= run_len + 1.0 { "straight" } else { "switchback" };
+            let width_clear = if shape == "switchback" {
+                ((across - SWITCHBACK_WELL_MM) * 0.5).max(0.0)
+            } else {
+                (across - STAIR_SIDE_FINISH_MM).max(0.0)
+            };
+            out.push(json!({
+                "id": r.id.clone(),
+                "level_name": format!("Level {}", floor.level),
+                "x": r.rect.x * s,
+                "y": r.rect.y * s,
+                "width": across,
+                "depth": run_len,
+                "run_dir": run_dir,
+                "num_risers": spec.num_risers,
+                "num_treads": spec.num_treads,
+                "riser_height": spec.riser_height_mm,
+                "tread_run": spec.tread_run_mm,
+                "width_clear": width_clear,
+                "floor_to_floor": ff_mm,
+                "shape": shape,
+                "going": going,
+            }));
+        }
+    }
+    out
+}
+
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -761,6 +825,9 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         })
         .collect();
 
+    // Rules-engine annotations: stairs (OBC 9.8 rise/run/width).
+    let stairs_json = generate_stairs(floors);
+
     let total_walls: usize = floors.iter().map(|f| f.walls.len()).sum();
     let total_windows: usize = floors.iter().map(|f| f.windows.len()).sum();
     let total_rooms: usize = floors.iter().map(|f| f.rooms.len()).sum();
@@ -789,6 +856,7 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         "detectors": detectors_json,
         "electrical": electrical_json,
         "headers": headers,
+        "stairs": stairs_json,
         "levels": levels,
         "dimensions": dimensions,
         "rooms": Value::Object(rooms_map),
@@ -808,6 +876,7 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
             "storeys": floors.len(),
             "detectors": detectors.len(),
             "electrical": electrical.len(),
+            "stairs": stairs_json.len(),
             "headers": headers_len,
             "headers_need_review": headers_review,
         },
@@ -1182,6 +1251,58 @@ mod tests {
         // Walls/windows are level-tagged; bedrooms upstairs still get egress.
         assert!(v["walls_batch"].as_array().unwrap().iter().any(|w| w["level_name"] == "Level 2"));
         assert!(v["windows"].as_array().unwrap().iter().any(|w| w["level_name"] == "Level 2"));
+    }
+
+    #[test]
+    fn multi_storey_emits_one_compliant_stair_per_floor() {
+        let v = building_json(&Answers {
+            bedrooms: 4,
+            bathrooms: 3,
+            sqft: 2400.0,
+            garage: "2car".into(),
+            special_rooms: vec![],
+            storeys: 0, // auto → 2 storeys
+            window_intent: "balanced".into(),
+            style: "balanced".into(),
+            ..Answers::default()
+        });
+        let stairs = v["stairs"].as_array().unwrap();
+        assert_eq!(stairs.len(), 2, "one stair per storey");
+
+        // Lower storey climbs up; the top storey shows the way down.
+        let by_level = |lvl: &str| stairs.iter().find(|s| s["level_name"] == json!(lvl)).unwrap();
+        assert_eq!(by_level("Level 1")["going"], json!("up"));
+        assert_eq!(by_level("Level 2")["going"], json!("down"));
+
+        for s in stairs {
+            // 10 ft storey → 16 risers at 190.5 mm, under the 200 mm max.
+            assert_eq!(s["num_risers"], json!(16));
+            assert_eq!(s["num_treads"], json!(15));
+            assert!((s["riser_height"].as_f64().unwrap() - 190.5).abs() < 0.1);
+            assert!(s["riser_height"].as_f64().unwrap() <= 200.0);
+            assert!(s["tread_run"].as_f64().unwrap() >= 255.0);
+            // 6 ft well folds to a switchback whose flights still clear 860 mm.
+            assert_eq!(s["shape"], json!("switchback"));
+            assert!(s["width_clear"].as_f64().unwrap() >= 860.0);
+        }
+        assert_eq!(v["summary"]["stairs"], json!(2));
+    }
+
+    #[test]
+    fn single_storey_emits_no_stairs() {
+        let v = building_json(&Answers {
+            bedrooms: 2,
+            bathrooms: 1,
+            sqft: 1100.0,
+            garage: "none".into(),
+            special_rooms: vec![],
+            storeys: 0, // auto → 1 storey
+            window_intent: "balanced".into(),
+            style: "balanced".into(),
+            ..Answers::default()
+        });
+        assert_eq!(v["storeys"], json!(1));
+        assert!(v["stairs"].as_array().unwrap().is_empty());
     }
 
     #[test]

@@ -25,6 +25,9 @@ ls-obc.workspace = true
 ls-drawing.workspace = true
 svg2pdf = "0.13.0"
 pdf-writer = "0.12"
+# Pure-Rust SVG→PNG rasterisation for in-house plan previews (same crates the
+# desktop head and the PDF path already build). resvg re-exports usvg + tiny-skia.
+resvg = "0.45"
 
 [[bin]]
 name = "qbd_dump"

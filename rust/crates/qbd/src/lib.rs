@@ -13,6 +13,7 @@ pub mod convert;
 pub mod documentation;
 pub mod floor_plan;
 pub mod ifc;
+pub mod raster;
 pub mod schedule;
 pub mod terrain;
 pub mod validation;
@@ -27,6 +28,7 @@ pub use documentation::{
     plans_sheet, svg_to_pdf, svgs_to_pdf,
 };
 pub use floor_plan::generate_floor_plan_with_openings;
+pub use raster::{RasterError, Rasterizer, svg_to_png};
 pub use schedule::{door_entries, window_entries};
 pub use validation::{ValidationResult, validate_layout, validate_wall};
 pub use wall_types::{exterior_2x6_r21, for_category, interior_2x4, wet_2x6};

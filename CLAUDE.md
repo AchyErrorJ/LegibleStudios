@@ -68,8 +68,9 @@ cargo run --release --bin qbd_dump  -- house.json --ifc house.ifc               
 cargo run --release --bin legible   -- house.json                                     # desktop view
 ```
 
-`qbd_dump --help` lists every flag (`--bundle`, `--pdf`, `--dxf`, `--ifc`,
-`--obc <lib>`, `--footprint`, `--designer`, `--bcin`, `--bare`, …).
+`qbd_dump --help` lists every flag (`--bundle`, `--pdf`, `--png` (in-house
+SVG→PNG raster, no Inkscape), `--dxf`, `--ifc`, `--obc <lib>`, `--footprint`,
+`--designer`, `--bcin`, `--bare`, …).
 
 ## Conventions & gotchas
 
