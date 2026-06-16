@@ -589,13 +589,14 @@ const STAIR_SIDE_FINISH_MM: f32 = 80.0;
 
 /// Stair geometry pass (OBC 9.8). Each storey's `stairs` room becomes a
 /// `SchemaStair`: the riser/tread count comes from `obc::stairs` (rules), and
-/// the *shape* (straight vs switchback) is chosen here (strategy) by whether a
-/// straight run fits the bay depth. The drawing layer reads this to render the
-/// plan symbol; the compliance pass reads it to check rise/run/width.
+/// the *shape* is driven by `stair_config` when set, falling back to a fit
+/// heuristic (straight when it fits, else switchback). The drawing layer reads
+/// this to render the plan symbol; the compliance pass reads it to check
+/// rise/run/width.
 ///
 /// `going` is `"up"` on every storey that climbs to the one above and `"down"`
 /// on the topmost storey's stair (the arrival from below).
-fn generate_stairs(floors: &[Floor]) -> Vec<Value> {
+fn generate_stairs(floors: &[Floor], stair_config: &str) -> Vec<Value> {
     let s = FEET_TO_MM;
     let ff_mm = FLOOR_TO_FLOOR_FT * s;
     let spec = obc::stairs::solve_stair(ff_mm);
@@ -612,11 +613,20 @@ fn generate_stairs(floors: &[Floor]) -> Vec<Value> {
             // bottom of the climb.
             let (run_dir, across, run_len) =
                 if d_mm >= w_mm { ("+y", w_mm, d_mm) } else { ("+x", d_mm, w_mm) };
-            let shape = if straight_run <= run_len + 1.0 { "straight" } else { "switchback" };
-            let width_clear = if shape == "switchback" {
-                ((across - SWITCHBACK_WELL_MM) * 0.5).max(0.0)
-            } else {
-                (across - STAIR_SIDE_FINISH_MM).max(0.0)
+            let shape = match stair_config {
+                "switchback" => "switchback",
+                "l_shaped" | "l" | "quarter_turn" => "l_shaped",
+                "straight" => "straight",
+                // Default: pick the simplest shape that fits the bay.
+                _ => if straight_run <= run_len + 1.0 { "straight" } else { "switchback" },
+            };
+            let width_clear = match shape {
+                "switchback" => ((across - SWITCHBACK_WELL_MM) * 0.5).max(0.0),
+                "l_shaped" => {
+                    let ret = crate::l_return_treads(spec.num_treads) as f32 * spec.tread_run_mm;
+                    (across - ret - STAIR_SIDE_FINISH_MM).max(0.0)
+                }
+                _ => (across - STAIR_SIDE_FINISH_MM).max(0.0),
             };
             out.push(json!({
                 "id": r.id.clone(),
@@ -826,7 +836,7 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         .collect();
 
     // Rules-engine annotations: stairs (OBC 9.8 rise/run/width).
-    let stairs_json = generate_stairs(floors);
+    let stairs_json = generate_stairs(floors, &answers.stair_config);
 
     let total_walls: usize = floors.iter().map(|f| f.walls.len()).sum();
     let total_windows: usize = floors.iter().map(|f| f.windows.len()).sum();
@@ -1286,6 +1296,24 @@ mod tests {
             assert!(s["width_clear"].as_f64().unwrap() >= 860.0);
         }
         assert_eq!(v["summary"]["stairs"], json!(2));
+    }
+
+    #[test]
+    fn l_shaped_config_emits_l_shaped_stairs() {
+        let v = building_json(&Answers {
+            bedrooms: 4,
+            bathrooms: 3,
+            sqft: 2400.0,
+            garage: "2car".into(),
+            special_rooms: vec![],
+            storeys: 2,
+            stair_config: "l_shaped".into(),
+            ..Answers::default()
+        });
+        for s in v["stairs"].as_array().unwrap() {
+            assert_eq!(s["shape"], json!("l_shaped"));
+            assert!(s["width_clear"].as_f64().unwrap() >= 860.0);
+        }
     }
 
     #[test]

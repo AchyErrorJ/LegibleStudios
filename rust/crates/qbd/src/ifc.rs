@@ -290,10 +290,10 @@ pub fn to_ifc(doc: &SchemaDocument, project_name: &str, date: &str) -> String {
             .find(|l| l.name == stair.level_name)
             .map_or(0.0, |l| l.elevation);
         let ff = if stair.floor_to_floor > 0.0 { stair.floor_to_floor } else { 3048.0 };
-        let predef = if stair.shape == "switchback" {
-            ".HALF_TURN_STAIR."
-        } else {
-            ".STRAIGHT_RUN_STAIR."
+        let predef = match stair.shape.as_str() {
+            "switchback" => ".HALF_TURN_STAIR.",
+            "l_shaped" | "l" | "quarter_turn" => ".QUARTER_TURN_STAIR.",
+            _ => ".STRAIGHT_RUN_STAIR.",
         };
 
         // IfcStair (assembly; its geometry is the aggregate of its flights).
@@ -636,6 +636,28 @@ mod tests {
         let ifc = to_ifc(&doc, "Test", "2026-06-16");
         assert_eq!(ifc.matches("=IFCSTAIR(").count(), 1);
         assert!(ifc.contains(".STRAIGHT_RUN_STAIR.)"));
+    }
+
+    #[test]
+    fn l_shaped_stair_is_a_quarter_turn_type() {
+        let mut doc = two_storey_doc();
+        doc.stairs.push(archgeometry::SchemaStair {
+            level_name: "Level 1".into(),
+            width: 1765.0,
+            depth: 3960.0,
+            run_dir: "+y".into(),
+            num_risers: 16,
+            num_treads: 15,
+            riser_height: 190.5,
+            tread_run: 255.0,
+            floor_to_floor: 3048.0,
+            shape: "l_shaped".into(),
+            going: "up".into(),
+            ..Default::default()
+        });
+        let ifc = to_ifc(&doc, "Test", "2026-06-16");
+        assert_eq!(ifc.matches("=IFCSTAIR(").count(), 1);
+        assert!(ifc.contains(".QUARTER_TURN_STAIR.)"));
     }
 
     #[test]

@@ -2,10 +2,12 @@
 //!
 //! Renders a stair in the standard plan convention: a run of tread (nosing)
 //! lines across the stair well, a centred direction arrow, and an `UP`/`DN`
-//! label. Two arrangements:
-//! - `straight` — a single run of nosing lines spanning the well; and
+//! label. Three arrangements:
+//! - `straight` — a single run of nosing lines spanning the well;
 //! - `switchback` — a U: two tread columns split by a central well, joined by a
-//!   half-landing, for storeys whose run is too long to fit a straight flight.
+//!   half-landing, for storeys whose run is too long to fit a straight flight; and
+//! - `l_shaped` — a quarter-turn: a main flight plus a short return flight at the
+//!   landing, running perpendicular to the main flight.
 //!
 //! Geometry is built in a run-local frame (`u` along the climb, `v` across the
 //! well) and mapped to plan mm with the floor plan's negated-Y convention baked
@@ -30,7 +32,7 @@ pub struct StairPlan {
     pub run_dir: String,
     pub num_treads: u32,
     pub tread_run: f32,
-    /// `"straight"` or `"switchback"`. Empty → `"straight"`.
+    /// `"straight"`, `"switchback"` or `"l_shaped"`. Empty → `"straight"`.
     pub shape: String,
     /// `"up"` or `"down"`. Empty → `"up"`.
     pub going: String,
@@ -145,6 +147,36 @@ pub fn render_stair_symbol(p: &StairPlan, text_height: f32) -> String {
         // Label on the landing, clear of the treads.
         let lbl = p.pt((landing_near + p.run) * 0.5, p.across * 0.5);
         label(&mut s, lbl, if down { "DN" } else { "UP" }, text_height);
+    } else if p.shape == "l_shaped" {
+        // Quarter-turn: main flight along the run, a short return flight at the
+        // landing running perpendicular (along +v). The return is typically 3
+        // treads; the main flight uses the rest.
+        let return_treads = 3.min(p.num_treads.saturating_sub(1)).max(1);
+        let main_treads = p.num_treads - return_treads;
+        let main_len = (main_treads as f32 * tread).min(p.run);
+        let return_len = (return_treads as f32 * tread).min(p.run - main_len);
+        let flight_clear = (p.across - return_len).max(tread);
+
+        // Main flight nosings, spanning the clear width.
+        for i in 1..=main_treads {
+            let u = (i as f32 * tread).min(main_len);
+            line(&mut s, p.pt(u, 0.0), p.pt(u, flight_clear), TREAD_COLOR, 12.0);
+        }
+        // Landing line across the full width at the top of the main flight.
+        line(&mut s, p.pt(main_len, 0.0), p.pt(main_len, p.across), WELL_COLOR, 16.0);
+        // Return flight nosings perpendicular to the main flight, on the landing.
+        for j in 1..=return_treads {
+            let v = (flight_clear + j as f32 * tread).min(p.across);
+            line(&mut s, p.pt(main_len, v), p.pt(main_len + return_len, v), TREAD_COLOR, 12.0);
+        }
+        // Direction arrow up the main flight.
+        if down {
+            arrow(&mut s, p, main_len, tread * 0.5, flight_clear * 0.5);
+        } else {
+            arrow(&mut s, p, tread * 0.5, main_len, flight_clear * 0.5);
+        }
+        let lbl = p.pt((main_len + p.run) * 0.5, p.across * 0.5);
+        label(&mut s, lbl, if down { "DN" } else { "UP" }, text_height);
     } else {
         // Straight run: nosing lines spanning the full well width.
         let top = (p.num_treads as f32 * tread).min(p.run);
@@ -212,6 +244,22 @@ mod tests {
         let svg = render_stair_symbol(&p, 250.0);
         // 12 nosing lines + 1 arrow shaft = 13 <line>s.
         assert_eq!(svg.matches("<line").count(), 13);
+    }
+
+    #[test]
+    fn l_shaped_draws_main_and_return_flights() {
+        let p = StairPlan {
+            run: 4000.0,
+            num_treads: 15,
+            tread_run: 255.0,
+            shape: "l_shaped".into(),
+            ..switchback()
+        };
+        let svg = render_stair_symbol(&p, 250.0);
+        // Main flight (12 treads) + return flight (3 treads) + landing line + arrow.
+        assert!(svg.matches("<line").count() >= 16, "expected main + return nosings + landing");
+        assert!(svg.contains("UP"));
+        assert!(svg.contains("<polygon"), "direction arrowhead present");
     }
 
     #[test]
