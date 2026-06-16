@@ -12,8 +12,8 @@ use drawing::{
     SitePlan, WallSectionDetail, drawing_info_for, export_to_svg_padded,
     generate_elevation_sheet_svg, generate_footing_detail_svg, generate_foundation_plan_svg,
     generate_framing_plan_svg, generate_obc_notes_block, generate_section_sheet_svg,
-    generate_site_plan_svg, generate_wall_detail, notes_block_size_mm, title_block_box,
-    wall_detail_to_svg, TITLE_BLOCK_H, TITLE_BLOCK_W,
+    generate_site_plan_svg, generate_stair_section_svg, generate_wall_detail, notes_block_size_mm,
+    title_block_box, wall_detail_to_svg, StairSectionSpec, TITLE_BLOCK_H, TITLE_BLOCK_W,
 };
 
 use crate::floor_plan::generate_floor_plan_with_openings;
@@ -64,6 +64,9 @@ pub struct Documentation {
     pub framing_plan_svg: String,
     /// Typical footing detail — section through gravel/footing/wall + rebar.
     pub footing_detail_svg: String,
+    /// Typical stair section — rise/run sawtooth + headroom + handrail.
+    /// Empty when the building has no stairs (single storey).
+    pub stair_section_svg: String,
     /// Code compliance report — tabular wall-by-wall pass/fail summary.
     pub compliance_report_svg: String,
 }
@@ -321,6 +324,22 @@ fn filter_doc_to_level(doc: &SchemaDocument, level: &str) -> SchemaDocument {
 /// Build the raw [`SliceResult`] for a floor plan (walls, openings, hatches).
 /// Used by the DXF export path which needs editable geometry, not annotated
 /// SVG.
+/// Build a typical stair-section spec from the building's stairs, or `None`
+/// when there are none (single-storey). All shafts share the same rise/run, so
+/// one section is representative — take the first stair.
+fn stair_section_for(doc: &SchemaDocument) -> Option<StairSectionSpec> {
+    let st = doc.stairs.first()?;
+    Some(StairSectionSpec {
+        num_risers: st.num_risers,
+        num_treads: st.num_treads,
+        riser_height_mm: if st.riser_height > 0.0 { st.riser_height } else { 190.5 },
+        tread_run_mm: if st.tread_run > 0.0 { st.tread_run } else { 255.0 },
+        floor_to_floor_mm: if st.floor_to_floor > 0.0 { st.floor_to_floor } else { 3048.0 },
+        headroom_min_mm: obc::stairs::MIN_HEADROOM_MM,
+        ..StairSectionSpec::default()
+    })
+}
+
 fn build_floor_plan_slice_result(doc: &SchemaDocument, config: &Config) -> drawing::SliceResult {
     let cut_height = 1219.0;
     generate_floor_plan_with_openings(doc, cut_height, config)
@@ -751,6 +770,13 @@ pub fn generate_documentation_for_project(
             DrawingType::FootingDetail,
             "1:20",
         ),
+        stair_section_svg: stair_section_for(doc).map_or_else(String::new, |spec| {
+            with_fitted_tb(
+                generate_stair_section_svg(&spec, 1.0, 700.0),
+                DrawingType::StairSection,
+                "1:50",
+            )
+        }),
         compliance_report_svg: String::new(), // filled by caller after validation
     }
 }
@@ -1130,6 +1156,13 @@ pub fn drawing_catalog(doc: &SchemaDocument, climate_zone: &str) -> Vec<CatalogD
         svg: generate_footing_detail_svg(&FootingSpec::default(), 1.5, 400.0),
         model_units_per_mm: FOOTING_SCALE,
     });
+    if let Some(spec) = stair_section_for(doc) {
+        out.push(CatalogDrawing {
+            title: "STAIR SECTION".into(),
+            svg: generate_stair_section_svg(&spec, 1.0, 700.0),
+            model_units_per_mm: 1.0,
+        });
+    }
     for (i, wd) in generate_wall_details(doc, &config).into_iter().enumerate() {
         out.push(CatalogDrawing {
             title: format!("WALL DETAIL {}", i + 1),
@@ -1477,6 +1510,16 @@ mod tests {
         // The UP label + an arrowhead polygon land on the floor plan.
         assert!(docs.floor_plan_svg.contains(">UP</text>"), "no UP label");
         assert!(docs.floor_plan_svg.contains("<polygon"), "no direction arrowhead");
+        // And a typical stair section sheet is generated for the storey.
+        assert!(docs.stair_section_svg.contains("STAIR SECTION"), "no stair section sheet");
+        assert!(docs.stair_section_svg.contains("9.8.2.2"), "headroom note missing");
+    }
+
+    #[test]
+    fn no_stair_section_without_stairs() {
+        // Single-storey (no stairs) → no stair-section sheet.
+        let docs = generate_documentation(&rect_room_doc(), "Bungalow");
+        assert!(docs.stair_section_svg.is_empty());
     }
 
     #[test]

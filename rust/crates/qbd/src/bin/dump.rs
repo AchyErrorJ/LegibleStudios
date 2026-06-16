@@ -103,6 +103,7 @@ fn collect_sheets(docs: &qbd::Documentation) -> Vec<(String, String)> {
         push(&name, &detail.svg);
     }
     push("11_footing_detail", &docs.footing_detail_svg);
+    push("12_stair_section", &docs.stair_section_svg);
     push("05_door_schedule", &docs.door_schedule_svg);
     push("05_window_schedule", &docs.window_schedule_svg);
     push("09_compliance_report", &docs.compliance_report_svg);
@@ -532,6 +533,9 @@ fn main() -> anyhow::Result<()> {
         if !docs.footing_detail_svg.is_empty() {
             write_sheet("11_footing_detail.svg", &docs.footing_detail_svg)?;
         }
+        if !docs.stair_section_svg.is_empty() {
+            write_sheet("12_stair_section.svg", &docs.stair_section_svg)?;
+        }
         if !docs.compliance_report_svg.is_empty() {
             write_sheet("09_compliance_report.svg", &docs.compliance_report_svg)?;
         }
@@ -637,6 +641,9 @@ fn main() -> anyhow::Result<()> {
         }
         if !docs.footing_detail_svg.is_empty() {
             write_pdf("11_footing_detail.pdf", &docs.footing_detail_svg)?;
+        }
+        if !docs.stair_section_svg.is_empty() {
+            write_pdf("12_stair_section.pdf", &docs.stair_section_svg)?;
         }
         if !docs.compliance_report_svg.is_empty() {
             write_pdf("09_compliance_report.pdf", &docs.compliance_report_svg)?;

@@ -60,6 +60,7 @@ pub enum DrawingType {
     SectionB,
     FramingPlan,
     FootingDetail,
+    StairSection,
     ComplianceReport,
 }
 
@@ -80,8 +81,9 @@ impl DrawingType {
             DrawingType::SectionA => ("A-301", "SECTION A-A", "9 OF 13"),
             DrawingType::SectionB => ("A-302", "SECTION B-B", "10 OF 13"),
             DrawingType::FramingPlan => ("A-103", "FRAMING PLAN - LEVEL 1", "11 OF 13"),
-            DrawingType::FootingDetail => ("A-501", "TYPICAL FOOTING DETAIL", "12 OF 13"),
-            DrawingType::ComplianceReport => ("A-401", "CODE COMPLIANCE REPORT", "13 OF 13"),
+            DrawingType::FootingDetail => ("A-501", "TYPICAL FOOTING DETAIL", "12 OF 14"),
+            DrawingType::StairSection => ("A-502", "TYPICAL STAIR SECTION", "13 OF 14"),
+            DrawingType::ComplianceReport => ("A-401", "CODE COMPLIANCE REPORT", "14 OF 14"),
         }
     }
 }

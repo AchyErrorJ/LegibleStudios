@@ -32,6 +32,7 @@ pub mod sheet;
 pub mod site_plan;
 pub mod slice;
 pub mod stair;
+pub mod stair_section;
 pub mod slice_plane;
 pub mod svg;
 pub mod title_block;
@@ -83,6 +84,7 @@ pub use sheet::{
 pub use roof::{RoofPlan, RoofType, generate_roof_plan_svg};
 pub use site_plan::{Contour, SitePlan, StreetClass, StreetWay, generate_site_plan_svg};
 pub use stair::{StairPlan, render_stair_symbol};
+pub use stair_section::{StairSectionSpec, generate_stair_section, generate_stair_section_svg};
 pub mod skeleton;
 pub use slice::{
     create_material_hatch, generate_floor_plan, generate_section, slice_box, slice_building,
