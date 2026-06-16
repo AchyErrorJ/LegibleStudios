@@ -10,6 +10,7 @@
 //!               [--style balanced|ranch|colonial|contemporary]
 //!               [--lot WxD (ft)] [--zone R1|R2|R3] [--street "Name"]
 //!               [--roof gable|hip]
+//!               [--stair-config switchback|straight|l_shaped]
 //!     (--storeys 0 = auto: 2 when 3+ bedrooms, else 1)
 
 use solver::{building_json, Answers};
@@ -30,6 +31,7 @@ fn main() {
             "--zone" => a.zone.clone_from(&args[i + 1]),
             "--street" => a.street.clone_from(&args[i + 1]),
             "--roof" => a.roof_type.clone_from(&args[i + 1]),
+            "--stair-config" => a.stair_config.clone_from(&args[i + 1]),
             "--lot" => {
                 // WxD in feet, e.g. --lot 60x120
                 if let Some((w, d)) = args[i + 1].split_once('x') {

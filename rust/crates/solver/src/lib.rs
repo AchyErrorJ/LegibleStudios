@@ -111,6 +111,10 @@ pub struct Answers {
     pub street: String,
     /// Roof type: `"gable"` (default) or `"hip"`.
     pub roof_type: String,
+    /// Stair configuration for multi-storey houses: `"switchback"` (default,
+    /// U / half-turn), `"straight"`, or `"l_shaped"` (quarter-turn). Sizes the
+    /// buildable stair bay the floor is laid out around. Ignored single-storey.
+    pub stair_config: String,
 }
 
 impl Answers {
@@ -142,6 +146,7 @@ impl Default for Answers {
             zone: "R1".into(),
             street: "Street".into(),
             roof_type: "gable".into(),
+            stair_config: "switchback".into(),
         }
     }
 }
@@ -301,6 +306,93 @@ pub fn split_floors(program: &[RoomSpec], floors: u32) -> Vec<Vec<RoomSpec>> {
     upper.insert(0, RoomSpec::new("hallway_2", "hallway", 5.0, 40.0));
     upper.push(RoomSpec::new("stairs_2", "stairs", 4.0, 70.0));
     vec![ground, upper]
+}
+
+/// Floor-to-floor height (ft) for multi-storey layouts. Shared by the stair
+/// geometry here and the level elevations emitted in `emit.rs`.
+pub const FLOOR_TO_FLOOR_FT: f32 = 10.0;
+
+/// Buildable stair geometry for one configuration, in millimetres. The single
+/// source of truth shared by the layout (which reserves `width_mm × depth_mm`
+/// as the bay the floor is built around) and the emitter (which reports the
+/// `shape` + `flight_clear_mm` onto `SchemaStair`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StairBay {
+    /// `"switchback"` | `"straight"` | `"l_shaped"`.
+    pub shape: &'static str,
+    /// Bay extent across the run, mm.
+    pub width_mm: f32,
+    /// Bay extent along the run, mm.
+    pub depth_mm: f32,
+    /// Clear width of a single flight, mm.
+    pub flight_clear_mm: f32,
+    /// Central well between the two flights (switchback), else 0, mm.
+    pub well_mm: f32,
+}
+
+/// Treads in the short return flight of an L (quarter-turn) stair. A shared rule
+/// so the solver footprint and the drawn plan symbol agree on the turn point.
+#[must_use]
+pub fn l_return_treads(num_treads: u32) -> u32 {
+    3.min(num_treads.saturating_sub(1)).max(1)
+}
+
+/// Buildable footprint + flight dimensions for a stair configuration at the
+/// standard floor-to-floor height. Derives the riser/tread count from
+/// [`obc::stairs::solve_stair`] and lays out a genuinely buildable stair: real
+/// ≥860 mm flights, a central well for switchbacks, and a top landing. Unknown
+/// configs default to the switchback.
+#[must_use]
+#[allow(clippy::cast_precision_loss)] // tread counts are small (≈15)
+pub fn stair_bay(config: &str) -> StairBay {
+    const MM_PER_FT: f32 = 304.8;
+    const FLIGHT_CLEAR_MM: f32 = 900.0; // comfortable, above the OBC 860 min
+    const WELL_MM: f32 = 200.0; // open well between switchback flights
+    const FINISH_MM: f32 = 100.0; // stringer/finish allowance (both sides)
+    let spec = obc::stairs::solve_stair(FLOOR_TO_FLOOR_FT * MM_PER_FT);
+    let run = spec.tread_run_mm;
+    let treads = spec.num_treads as f32;
+    let landing = FLIGHT_CLEAR_MM.max(obc::stairs::MIN_WIDTH_MM); // landing ≥ stair width
+
+    match config {
+        "straight" => StairBay {
+            shape: "straight",
+            width_mm: FLIGHT_CLEAR_MM + FINISH_MM,
+            depth_mm: treads * run + landing,
+            flight_clear_mm: FLIGHT_CLEAR_MM,
+            well_mm: 0.0,
+        },
+        "l_shaped" | "l" | "quarter_turn" => {
+            let ret = l_return_treads(spec.num_treads) as f32;
+            let main = treads - ret;
+            StairBay {
+                shape: "l_shaped",
+                width_mm: FLIGHT_CLEAR_MM + ret * run + FINISH_MM,
+                depth_mm: main * run + landing,
+                flight_clear_mm: FLIGHT_CLEAR_MM,
+                well_mm: 0.0,
+            }
+        }
+        // Switchback (default): two flights + a well; depth = longer flight run
+        // plus a half-landing.
+        _ => {
+            let longer = (treads / 2.0).ceil();
+            StairBay {
+                shape: "switchback",
+                width_mm: 2.0 * FLIGHT_CLEAR_MM + WELL_MM + FINISH_MM,
+                depth_mm: longer * run + landing,
+                flight_clear_mm: FLIGHT_CLEAR_MM,
+                well_mm: WELL_MM,
+            }
+        }
+    }
+}
+
+/// Stair-bay footprint in feet `(width, depth)` for the layout.
+#[must_use]
+pub fn stair_bay_ft(config: &str) -> (f32, f32) {
+    let b = stair_bay(config);
+    (b.width_mm / 304.8, b.depth_mm / 304.8)
 }
 
 /// An axis-aligned rectangle (feet), origin at min corner.
@@ -662,15 +754,14 @@ fn layout_suites_in(rect: Rect, suites: &[Suite], program: &[RoomSpec], areas: &
 /// front-left corner bay (identical on every floor that shares the footprint,
 /// so stacked stairs align), then lay the remaining suites out in the two
 /// rectangles around it — a shallow front band and the deep main band.
-fn layout_with_stair(env: Rect, suites: &[Suite], stair_pos: usize, program: &[RoomSpec], areas: &[f32]) -> Vec<PlacedRoom> {
-    // Fixed bay (~6 × 11 ft straight run). Constant + a footprint that's shared
-    // across storeys ⇒ the stair rect is identical on every floor, so the
-    // stacked stairs land exactly on top of each other.
-    const STAIR_W_FT: f32 = 6.0;
-    const STAIR_RUN_FT: f32 = 11.0;
+fn layout_with_stair(env: Rect, suites: &[Suite], stair_pos: usize, program: &[RoomSpec], areas: &[f32], stair_config: &str) -> Vec<PlacedRoom> {
+    // Buildable bay for the chosen configuration. Same footprint on every floor
+    // (shared envelope + config) ⇒ stacked stairs land exactly on top of each
+    // other. Only shrink below buildable if the envelope genuinely can't fit it.
+    let (bay_w, bay_d) = stair_bay_ft(stair_config);
     let stair = &suites[stair_pos];
-    let sw = STAIR_W_FT.min(env.w * 0.4);
-    let run = STAIR_RUN_FT.min(env.h * 0.5);
+    let sw = bay_w.min(env.w * 0.7);
+    let run = bay_d.min(env.h * 0.85);
 
     let mk = |i: usize, r: Rect| PlacedRoom {
         id: program[i].id.clone(),
@@ -774,17 +865,17 @@ fn is_bedroom_floor(program: &[RoomSpec]) -> bool {
 /// as a full-depth bay touching that corridor — so each bedroom opens onto the
 /// hall and reaches an exterior wall for its window. Rooms are seriated so a
 /// closet lands next to its bedroom.
-fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32]) -> Vec<PlacedRoom> {
-    const STAIR_W_FT: f32 = 6.0;
-    const STAIR_RUN_FT: f32 = 11.0;
+fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32], stair_config: &str) -> Vec<PlacedRoom> {
     // Keep the corridor's footprint proportional to the floor and no wider than
     // needed: a full-width corridor's share of the floor is just its depth over
     // the floor depth, so target ~9% but never below a ~3 ft (914 mm) code-min
     // clear width.
     const HALL_AREA_RATIO: f32 = 0.09;
     const MIN_HALL_FT: f32 = 3.3; // ≈ 1.0 m clear width (minimum)
-    let sw = STAIR_W_FT.min(env.w * 0.4);
-    let run = STAIR_RUN_FT.min(env.h * 0.5);
+    // Same buildable bay as the floor below, so the stacked stairs align.
+    let (bay_w, bay_d) = stair_bay_ft(stair_config);
+    let sw = bay_w.min(env.w * 0.7);
+    let run = bay_d.min(env.h * 0.85);
     let hall_d = (HALL_AREA_RATIO * env.h).clamp(MIN_HALL_FT, (env.h - run) * 0.4);
 
     let mk = |i: usize, r: Rect| PlacedRoom {
@@ -862,7 +953,7 @@ fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32]) -> Vec<P
     let (mut fr, mut nr): (Vec<&Suite>, Vec<&Suite>) = (Vec::new(), Vec::new());
     let mut acc = 0.0;
     for s in ordered {
-        if acc < af && fr.len() < 1 {
+        if acc < af && fr.is_empty() {
             acc += suite_total(s, areas);
             fr.push(s);
         } else {
@@ -938,7 +1029,7 @@ fn place_suite_band(
 /// the exterior wall. A floor with a stair pins it to a fixed bay so stacked
 /// stairs align. The entry anchors to the front; a north entry mirrors depth.
 #[must_use]
-pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str) -> Vec<PlacedRoom> {
+pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str, stair_config: &str) -> Vec<PlacedRoom> {
     if program.is_empty() || envelope.area() <= 0.0 {
         return Vec::new();
     }
@@ -947,11 +1038,11 @@ pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str) -> Vec<
     // Dedicated bedroom floor → hall-spine layout (every bedroom opens onto the
     // hall). Otherwise the generic suite layout, stair-aware when there's one.
     let mut placed = if is_bedroom_floor(program) {
-        layout_bedroom_floor(envelope, program, &areas)
+        layout_bedroom_floor(envelope, program, &areas, stair_config)
     } else {
         let suites = group_suites(program);
         match suites.iter().position(|s| program[s.lead].room_type == "stairs") {
-            Some(stair_pos) => layout_with_stair(envelope, &suites, stair_pos, program, &areas),
+            Some(stair_pos) => layout_with_stair(envelope, &suites, stair_pos, program, &areas, stair_config),
             None => layout_suites_in(envelope, &suites, program, &areas, envelope),
         }
     };
@@ -973,6 +1064,7 @@ pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str) -> Vec<
 pub struct SubdivisionRoomSolver {
     pub program: Vec<RoomSpec>,
     pub entry_edge: String,
+    pub stair_config: String,
 }
 
 impl SubdivisionRoomSolver {
@@ -981,6 +1073,7 @@ impl SubdivisionRoomSolver {
         Self {
             program: program_from_answers(a),
             entry_edge: "south".into(),
+            stair_config: a.stair_config.clone(),
         }
     }
 }
@@ -1005,7 +1098,7 @@ impl Solver for SubdivisionRoomSolver {
             }
         };
 
-        let rooms = subdivide(envelope, &self.program, &self.entry_edge);
+        let rooms = subdivide(envelope, &self.program, &self.entry_edge, &self.stair_config);
         let mut next_id = scene.objects.iter().map(|o| o.id.0).max().unwrap_or(0) + 1;
         for r in rooms {
             let obj = Object::new(next_id, "room")
@@ -1099,7 +1192,7 @@ mod tests {
         let p = program_from_answers(&a);
         let (w, d) = auto_size(&p, 0.0);
         let env = Rect { x: 0.0, y: 0.0, w, h: d };
-        let placed = subdivide(env, &p, "south");
+        let placed = subdivide(env, &p, "south", "switchback");
         assert_eq!(placed.len(), p.len(), "every room placed");
         for r in &placed {
             assert!(r.rect.x >= -0.01 && r.rect.y >= -0.01);
@@ -1127,7 +1220,7 @@ mod tests {
         ];
         assert!(is_bedroom_floor(&p), "should be detected as a bedroom floor");
         let env = Rect { x: 0.0, y: 0.0, w: 38.0, h: 27.0 };
-        let placed = subdivide(env, &p, "south");
+        let placed = subdivide(env, &p, "south", "switchback");
         let hall = placed.iter().find(|r| r.room_type == "hallway").expect("hall").rect;
         let abuts = |a: &Rect, b: &Rect| -> bool {
             let vert = ((a.x + a.w - b.x).abs() < 0.6 || (b.x + b.w - a.x).abs() < 0.6)
@@ -1162,7 +1255,7 @@ mod tests {
             let p = program_from_answers(&a);
             let (w, d) = auto_size(&p, sqft);
             let env = Rect { x: 0.0, y: 0.0, w, h: d };
-            let placed = subdivide(env, &p, "south");
+            let placed = subdivide(env, &p, "south", "switchback");
             let touches = |r: &Rect| {
                 r.x <= 0.5 || r.y <= 0.5 || r.x + r.w >= w - 0.5 || r.y + r.h >= d - 0.5
             };
@@ -1195,7 +1288,7 @@ mod tests {
         };
         let p = program_from_answers(&a);
         let (w, d) = auto_size(&p, a.sqft);
-        let placed = subdivide(Rect { x: 0.0, y: 0.0, w, h: d }, &p, "south");
+        let placed = subdivide(Rect { x: 0.0, y: 0.0, w, h: d }, &p, "south", "switchback");
         let rect_of = |id: &str| placed.iter().find(|r| r.id == id).map(|r| r.rect);
         let adjacent = |x: Rect, y: Rect| {
             let e = 0.5;
@@ -1221,7 +1314,7 @@ mod tests {
         let a = Answers::default();
         let p = program_from_answers(&a);
         let env = Rect { x: 0.0, y: 0.0, w: 60.0, h: 40.0 };
-        let placed = subdivide(env, &p, "south");
+        let placed = subdivide(env, &p, "south", "switchback");
         // South entry → public rooms at low Y, private at high Y.
         let public_y: f32 = placed
             .iter()
@@ -1248,5 +1341,94 @@ mod tests {
         // Idempotent.
         solver.solve(&mut scene);
         assert_eq!(scene.objects.iter().filter(|o| o.kind == "room").count(), rooms);
+    }
+
+    #[test]
+    fn solver_honours_stair_config_from_answers() {
+        let a = Answers {
+            bedrooms: 3,
+            bathrooms: 2,
+            sqft: 1800.0,
+            storeys: 2,
+            stair_config: "straight".into(),
+            ..Default::default()
+        };
+        let solver = SubdivisionRoomSolver::from_answers(&a);
+        assert_eq!(solver.stair_config, "straight");
+    }
+
+    #[test]
+    fn stair_bay_geometries_are_buildable_and_obc_compliant() {
+        // 10 ft floor-to-floor.
+        let sw = stair_bay("switchback");
+        assert_eq!(sw.shape, "switchback");
+        assert!(sw.flight_clear_mm >= 860.0, "switchback flight clear {} < 860", sw.flight_clear_mm);
+        assert!(sw.well_mm > 0.0);
+        // A switchback is deeper than wide (two flights run along the depth).
+        assert!(sw.depth_mm > sw.width_mm, "switchback depth {} <= width {}", sw.depth_mm, sw.width_mm);
+
+        let st = stair_bay("straight");
+        assert_eq!(st.shape, "straight");
+        assert!(st.flight_clear_mm >= 860.0);
+        assert_eq!(st.well_mm, 0.0);
+        // A straight run is longer than it is wide.
+        assert!(st.depth_mm > st.width_mm, "straight should be deeper than wide: {} x {}", st.depth_mm, st.width_mm);
+
+        let l = stair_bay("l_shaped");
+        assert_eq!(l.shape, "l_shaped");
+        assert!(l.flight_clear_mm >= 860.0);
+        // L-shaped bay is roughly square-ish and smaller than switchback.
+        assert!(l.width_mm > 0.0 && l.depth_mm > 0.0);
+    }
+
+    #[test]
+    fn straight_stair_layout_reserves_a_buildable_bay() {
+        let a = Answers {
+            bedrooms: 3,
+            bathrooms: 2,
+            sqft: 1800.0,
+            garage: "none".into(),
+            special_rooms: vec![],
+            storeys: 2,
+            stair_config: "straight".into(),
+            ..Default::default()
+        };
+        let p = program_from_answers(&a);
+        let floors = split_floors(&p, 2);
+        let ground = &floors[0];
+        let (w, d) = auto_size(ground, a.sqft / 2.0); // per-floor footprint
+        let placed = subdivide(Rect { x: 0.0, y: 0.0, w, h: d }, ground, "south", "straight");
+        let stairs = placed.iter().find(|r| r.room_type == "stairs").expect("stairs room");
+        // The reserved stair bay is the buildable straight footprint, shrunk only if
+        // the envelope genuinely cannot fit it.
+        let (bay_w, bay_d) = stair_bay_ft("straight");
+        let sw = bay_w.min(w * 0.7);
+        let run = bay_d.min(d * 0.85);
+        assert!((stairs.rect.w - sw).abs() < 0.5, "stairs width {} != expected {}", stairs.rect.w, sw);
+        assert!((stairs.rect.h - run).abs() < 0.5, "stairs depth {} != expected {}", stairs.rect.h, run);
+    }
+
+    #[test]
+    fn multi_storey_stairs_are_stacked_regardless_of_config() {
+        for config in ["switchback", "straight", "l_shaped"] {
+            let a = Answers {
+                bedrooms: 4,
+                bathrooms: 3,
+                sqft: 2400.0,
+                garage: "2car".into(),
+                special_rooms: vec![],
+                storeys: 2,
+                stair_config: config.into(),
+                ..Default::default()
+            };
+            let v = building_json(&a);
+            let rooms = v["rooms"].as_object().unwrap();
+            let s1 = &rooms["stairs_1"]["bounds"];
+            let s2 = &rooms["stairs_2"]["bounds"];
+            for k in ["x", "y", "width", "height"] {
+                let (x, y) = (s1[k].as_f64().unwrap(), s2[k].as_f64().unwrap());
+                assert!((x - y).abs() < 1.0, "{config}: stairs not aligned on {k}: {x} vs {y}");
+            }
+        }
     }
 }
