@@ -263,6 +263,69 @@ pub fn to_ifc(doc: &SchemaDocument, project_name: &str, date: &str) -> String {
         }
     }
 
+    // --- Stairs: one IfcStair per *up* flight. Each physical run appears in the
+    // schema twice — an "up" stair on the lower storey and a "down" stair on the
+    // storey above (same shaft) — so the "down" copies are skipped to avoid
+    // doubling. The IfcStair aggregates a single IfcStairFlight that carries the
+    // riser/tread semantics + a bay-box solid spanning floor-to-floor; the turn
+    // (straight vs switchback) is the IfcStair predefined type. A true two-flight
+    // switchback with a landing slab is a v2 refinement.
+    for stair in &doc.stairs {
+        if stair.going == "down" {
+            continue; // same physical run as the storey-below's "up" stair
+        }
+        // Bay footprint: width is across the run, depth along it.
+        let (bx, bz) = if matches!(stair.run_dir.as_str(), "+x" | "-x") {
+            (stair.depth, stair.width)
+        } else {
+            (stair.width, stair.depth)
+        };
+        if bx < 1.0 || bz < 1.0 {
+            continue;
+        }
+        let (cx, cz) = (stair.x + bx * 0.5, stair.y + bz * 0.5);
+        let base = doc
+            .levels
+            .iter()
+            .find(|l| l.name == stair.level_name)
+            .map_or(0.0, |l| l.elevation);
+        let ff = if stair.floor_to_floor > 0.0 { stair.floor_to_floor } else { 3048.0 };
+        let predef = if stair.shape == "switchback" {
+            ".HALF_TURN_STAIR."
+        } else {
+            ".STRAIGHT_RUN_STAIR."
+        };
+
+        // IfcStair (assembly; its geometry is the aggregate of its flights).
+        let stair_plc = placement_dir(&mut s, Some(bldg_plc), cx, cz, base, 1.0, 0.0);
+        let g = s.guid();
+        let stair_id = s.add(&format!(
+            "IFCSTAIR('{g}',#{owner},'Stair',$,$,#{stair_plc},$,$,{predef})"
+        ));
+
+        // IfcStairFlight with the riser/tread attributes + a bay-box solid.
+        let f_plc = placement_dir(&mut s, Some(bldg_plc), cx, cz, base, 1.0, 0.0);
+        let f_solid = extruded_box(&mut s, bx, bz, ff);
+        let f_shape = shape_rep(&mut s, ctx, f_solid);
+        let f_prod = s.add(&format!("IFCPRODUCTDEFINITIONSHAPE($,$,(#{f_shape}))"));
+        let g = s.guid();
+        let flight_id = s.add(&format!(
+            "IFCSTAIRFLIGHT('{g}',#{owner},'Stair Flight',$,$,#{f_plc},#{f_prod},$,{nr},{nt},{rh:.1},{tl:.1},.STRAIGHT.)",
+            nr = stair.num_risers,
+            nt = stair.num_treads,
+            rh = stair.riser_height,
+            tl = stair.tread_run,
+        ));
+        let g = s.guid();
+        s.add(&format!(
+            "IFCRELAGGREGATES('{g}',#{owner},$,$,#{stair_id},(#{flight_id}))"
+        ));
+
+        // The IfcStair (not its flight) is contained in the storey.
+        let st = storey_of(&stair.level_name);
+        contained[contained_idx(st)].1.push(stair_id);
+    }
+
     // --- Doors + windows: each cuts an IfcOpeningElement that voids its host
     // wall (IfcRelVoidsElement) and is then filled by the door/window
     // (IfcRelFillsElement). Wall-aligned boxes; not spatially contained — the
@@ -512,6 +575,67 @@ mod tests {
         assert_eq!(ifc.matches("=IFCFOOTING(").count(), 1);
         assert!(ifc.contains(".STRIP_FOOTING.)"));
         assert!(ifc.contains("'Strip Footing'"));
+    }
+
+    #[test]
+    fn one_stair_per_up_flight_with_flight_attributes_and_aggregate() {
+        let mut doc = two_storey_doc();
+        // The same shaft appears as an "up" stair on L1 and a "down" stair on L2.
+        doc.stairs.push(archgeometry::SchemaStair {
+            id: "stairs_1".into(),
+            level_name: "Level 1".into(),
+            x: 0.0,
+            y: 0.0,
+            width: 1828.8,
+            depth: 3352.8,
+            run_dir: "+y".into(),
+            num_risers: 16,
+            num_treads: 15,
+            riser_height: 190.5,
+            tread_run: 255.0,
+            width_clear: 864.0,
+            floor_to_floor: 3048.0,
+            shape: "switchback".into(),
+            going: "up".into(),
+        });
+        doc.stairs.push(archgeometry::SchemaStair {
+            level_name: "Level 2".into(),
+            going: "down".into(),
+            ..doc.stairs[0].clone()
+        });
+
+        let ifc = to_ifc(&doc, "Test", "2026-06-16");
+        // Only the "up" flight becomes a physical stair — no doubling.
+        assert_eq!(ifc.matches("=IFCSTAIR(").count(), 1);
+        assert_eq!(ifc.matches("=IFCSTAIRFLIGHT(").count(), 1);
+        // Switchback → half-turn stair; flight carries the riser/tread counts.
+        assert!(ifc.contains(".HALF_TURN_STAIR.)"));
+        assert!(ifc.contains("16,15,190.5,255.0,.STRAIGHT.)"), "flight riser/tread attributes");
+        // The flight is aggregated under its stair (one extra IfcRelAggregates
+        // beyond the 3 spatial ones).
+        assert_eq!(ifc.matches("IFCRELAGGREGATES(").count(), 4);
+    }
+
+    #[test]
+    fn straight_stair_is_a_straight_run_type() {
+        let mut doc = two_storey_doc();
+        doc.stairs.push(archgeometry::SchemaStair {
+            level_name: "Level 1".into(),
+            width: 1100.0,
+            depth: 4200.0,
+            run_dir: "+y".into(),
+            num_risers: 16,
+            num_treads: 15,
+            riser_height: 190.5,
+            tread_run: 255.0,
+            floor_to_floor: 3048.0,
+            shape: "straight".into(),
+            going: "up".into(),
+            ..Default::default()
+        });
+        let ifc = to_ifc(&doc, "Test", "2026-06-16");
+        assert_eq!(ifc.matches("=IFCSTAIR(").count(), 1);
+        assert!(ifc.contains(".STRAIGHT_RUN_STAIR.)"));
     }
 
     #[test]
