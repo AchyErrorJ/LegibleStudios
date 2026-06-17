@@ -495,6 +495,8 @@ pub struct QBDAnswers {
     pub description: String,
     #[serde(default = "default_building_type")]
     pub building_type: String,
+    #[serde(default = "default_mode")]
+    pub mode: String,
     #[serde(default = "default_style")]
     pub style: String,
     #[serde(default = "default_stories")]
@@ -518,6 +520,9 @@ pub struct QBDAnswers {
 fn default_building_type() -> String {
     "residential".to_string()
 }
+fn default_mode() -> String {
+    "part9".to_string()
+}
 fn default_style() -> String {
     "traditional".to_string()
 }
@@ -530,6 +535,7 @@ impl Default for QBDAnswers {
         Self {
             description: String::new(),
             building_type: default_building_type(),
+            mode: default_mode(),
             style: default_style(),
             stories: default_stories(),
             garage: String::new(),

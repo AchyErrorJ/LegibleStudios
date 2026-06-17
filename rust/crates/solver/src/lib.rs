@@ -14,7 +14,14 @@
 //! Not yet ported (next slice): wall/door/dimension emission to the full
 //! `qbd_output.schema.json` (`layout_to_walls/doors/dimensions`).
 
+pub mod catalog;
 pub mod emit;
+pub mod manifest;
+pub mod mode;
+
+pub use catalog::{RoomCatalog, RoomCatalogEntry};
+pub use manifest::{ProgramManifest, ManifestError};
+pub use mode::BuildingMode;
 pub use emit::building_json;
 
 use pk_geom::Transform;
@@ -59,7 +66,7 @@ impl Zone {
 /// share of the footprint (see [`allocate_areas`]) — high-weight rooms
 /// (living, bedrooms) absorb the slack; low-weight rooms (closets, baths,
 /// garage) pin to their minimum.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct RoomSpec {
     pub id: String,
     pub room_type: String,
@@ -87,6 +94,8 @@ impl RoomSpec {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Answers {
+    /// Building code mode: Part 9 residential, Part 3 commercial, or mixed.
+    pub mode: BuildingMode,
     pub bedrooms: u32,
     pub bathrooms: u32,
     pub sqft: f32,
@@ -133,6 +142,7 @@ impl Answers {
 impl Default for Answers {
     fn default() -> Self {
         Self {
+            mode: BuildingMode::Part9,
             bedrooms: 3,
             bathrooms: 2,
             sqft: 1800.0,
@@ -159,6 +169,18 @@ impl Default for Answers {
 /// program can't over- or under-subscribe the envelope.
 #[must_use]
 pub fn program_from_answers(a: &Answers) -> Vec<RoomSpec> {
+    match a.mode {
+        BuildingMode::Part9 => program_from_answers_part9(a),
+        BuildingMode::Part3 | BuildingMode::Mixed => {
+            panic!("Part 3 / mixed buildings require a ProgramManifest; use manifest_to_program or ProgramManifest::to_programs")
+        }
+    }
+}
+
+/// Part 9 residential program from the questionnaire. Kept as the original
+/// implementation so existing tests and the Part 9 path are unchanged.
+#[must_use]
+fn program_from_answers_part9(a: &Answers) -> Vec<RoomSpec> {
     // (id, type, weight, min_area_sqft)
     let mut p = vec![
         RoomSpec::new("entry", "entry", 2.0, 40.0),
@@ -205,6 +227,13 @@ pub fn program_from_answers(a: &Answers) -> Vec<RoomSpec> {
         p.push(RoomSpec::new("pantry", "pantry", 1.0, 25.0));
     }
     p
+}
+
+/// Convert a validated [`ProgramManifest`] to one program per floor. This is the
+/// Part 3 / mixed-use entry point; Part 9 can also use it for bespoke houses.
+#[must_use]
+pub fn manifest_to_programs(manifest: &ProgramManifest) -> Vec<Vec<RoomSpec>> {
+    manifest.to_programs()
 }
 
 /// Floored-proportional area allocation (sqft), aligned with `program`. Each

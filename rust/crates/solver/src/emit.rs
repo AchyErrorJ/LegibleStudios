@@ -898,6 +898,8 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         },
         "roof_type": answers.roof_type,
         "qbd_answers": {
+            "mode": answers.mode.as_str(),
+            "building_type": "residential",
             "bedrooms": answers.bedrooms,
             "bathrooms": answers.bathrooms,
             // archgeometry's QBDAnswers.sqft is i32 — emit an integer (the

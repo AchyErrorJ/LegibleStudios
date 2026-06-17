@@ -4,23 +4,34 @@
 //! Prints the building JSON to stdout.
 //!
 //! Usage:
-//!     qbd_solve [--bedrooms N] [--bathrooms N] [--sqft N]
+//!     qbd_solve [--mode part9|part3|mixed]
+//!               [--bedrooms N] [--bathrooms N] [--sqft N]
 //!               [--garage none|1car|2car|3car] [--storeys 0|1|2]
 //!               [--windows balanced|more_light|privacy|south_bank]
 //!               [--style balanced|ranch|colonial|contemporary]
 //!               [--lot WxD (ft)] [--zone R1|R2|R3] [--street "Name"]
 //!               [--roof gable|hip]
 //!               [--stair-config switchback|straight|l_shaped]
+//!     qbd_solve --manifest <path>
+//!     qbd_solve --catalog <mode>
 //!     (--storeys 0 = auto: 2 when 3+ bedrooms, else 1)
 
-use solver::{building_json, Answers};
+use solver::{building_json, Answers, BuildingMode, ProgramManifest, RoomCatalog};
 
 fn main() {
     let mut a = Answers::default();
+    let mut manifest_path: Option<String> = None;
+    let mut catalog_mode: Option<String> = None;
+
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i + 1 < args.len() {
         match args[i].as_str() {
+            "--mode" => {
+                if let Ok(mode) = args[i + 1].parse::<BuildingMode>() {
+                    a.mode = mode;
+                }
+            }
             "--bedrooms" => a.bedrooms = args[i + 1].parse().unwrap_or(a.bedrooms),
             "--bathrooms" => a.bathrooms = args[i + 1].parse().unwrap_or(a.bathrooms),
             "--sqft" => a.sqft = args[i + 1].parse().unwrap_or(a.sqft),
@@ -39,10 +50,65 @@ fn main() {
                     a.lot_depth_ft = d.parse().unwrap_or(a.lot_depth_ft);
                 }
             }
+            "--manifest" => manifest_path = Some(args[i + 1].clone()),
+            "--catalog" => catalog_mode = Some(args[i + 1].clone()),
             _ => {}
         }
         i += 2;
     }
+
+    if let Some(mode_str) = catalog_mode {
+        let mode = mode_str.parse::<BuildingMode>().unwrap_or(BuildingMode::Part9);
+        let cat = RoomCatalog::for_mode(mode);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mode": mode.as_str(),
+                "room_types": cat.room_types(),
+            })
+            )
+            .unwrap_or_default()
+        );
+        return;
+    }
+
+    if let Some(path) = manifest_path {
+        let contents = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            eprintln!("failed to read manifest {path}: {e}");
+            std::process::exit(1);
+        });
+        let manifest = ProgramManifest::from_json(&contents).unwrap_or_else(|e| {
+            eprintln!("failed to parse manifest: {e}");
+            std::process::exit(1);
+        });
+        if let Err(errors) = manifest.validate() {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({ "success": false, "errors": errors })
+                )
+                .unwrap_or_default()
+            );
+            return;
+        }
+        let programs = manifest.to_programs();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &serde_json::json!({
+                    "success": true,
+                    "mode": manifest.mode.as_str(),
+                    "building_name": manifest.building_name,
+                    "floor_count": programs.len(),
+                    "rooms_per_floor": programs.iter().map(Vec::len).collect::<Vec<_>>(),
+                    "programs": programs,
+                })
+            )
+            .unwrap_or_default()
+        );
+        return;
+    }
+
     let value = building_json(&a);
     println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
 }

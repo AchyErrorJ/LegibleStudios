@@ -1,9 +1,12 @@
 //! HTTP API surface (axum). Replaces the C++ `ipc_server` TCP service.
 //!
-//! Three routes today:
-//! - `GET  /health`  — liveness probe; returns `{"status": "ok", ...}`.
-//! - `POST /solve`   — questionnaire `Answers` JSON → building JSON.
-//! - `POST /draw`    — building JSON → `Bundle { sheets, ifc?, validation? }`.
+//! Routes today:
+//! - `GET  /health`         — liveness probe; returns `{"status": "ok", ...}`.
+//! - `POST /solve`          — questionnaire `Answers` JSON → building JSON.
+//! - `POST /solve_manifest` — programmatic `ProgramManifest` JSON → layout
+//!   preview (validated programs per floor).
+//! - `GET  /catalog`        — room catalog for a mode (`?mode=part3`).
+//! - `POST /draw`           — building JSON → `Bundle { sheets, ifc?, validation? }`.
 //!
 //! The router is built by [`router`] so tests can drive it via
 //! `tower::ServiceExt::oneshot` and the binary in `src/bin/server.rs`
@@ -40,6 +43,10 @@ pub struct DrawRequest {
 /// the caller wants back.
 #[derive(Debug, Default, Deserialize)]
 pub struct DrawQuery {
+    /// Building mode override. Defaults to the mode in the building JSON
+    /// or `part9` if absent.
+    #[serde(default)]
+    pub mode: Option<String>,
     /// Project name baked into every title block. Defaults to `"API Project"`.
     #[serde(default)]
     pub project: Option<String>,
@@ -59,6 +66,14 @@ pub struct DrawQuery {
     /// compliance report can be filled. Same shape as `qbd_dump --obc`.
     #[serde(default)]
     pub obc_dir: Option<PathBuf>,
+}
+
+/// Query parameters for `/catalog`.
+#[derive(Debug, Default, Deserialize)]
+pub struct CatalogQuery {
+    /// `part9` (default), `part3`, or `mixed`.
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 /// Response body for `POST /draw`. `sheets` maps the canonical bundle
@@ -135,11 +150,12 @@ impl IntoResponse for ApiError {
 
 /// Build the axum router. Kept as a free function (not bound to a port) so
 /// tests can drive it directly via `tower::ServiceExt::oneshot`.
-#[must_use]
 pub fn router() -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/solve", post(solve))
+        .route("/solve_manifest", post(solve_manifest))
+        .route("/catalog", get(catalog))
         .route("/draw", post(draw))
 }
 
@@ -157,7 +173,7 @@ async fn health() -> impl IntoResponse {
 
 async fn solve(Json(answers): Json<solver::Answers>) -> Result<Json<serde_json::Value>, ApiError> {
     let value = solver::building_json(&answers);
-    if !value.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if !value.get("success").and_then(serde_json::Value::as_bool).unwrap_or(false) {
         let reason = value
             .get("error")
             .and_then(|v| v.as_str())
@@ -165,6 +181,42 @@ async fn solve(Json(answers): Json<solver::Answers>) -> Result<Json<serde_json::
         return Err(ApiError::BadRequest(reason.to_string()));
     }
     Ok(Json(value))
+}
+
+async fn solve_manifest(
+    Json(manifest): Json<solver::ProgramManifest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    match manifest.validate() {
+        Ok(()) => {
+            let programs: Vec<Vec<solver::RoomSpec>> = manifest.to_programs();
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "mode": manifest.mode.as_str(),
+                "building_name": manifest.building_name,
+                "floor_count": programs.len(),
+                "rooms_per_floor": programs.iter().map(Vec::len).collect::<Vec<_>>(),
+                "programs": programs,
+            })))
+        }
+        Err(errors) => Ok(Json(serde_json::json!({
+            "success": false,
+            "errors": errors,
+        }))),
+    }
+}
+
+async fn catalog(Query(q): Query<CatalogQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let mode = q
+        .mode
+        .as_deref()
+        .unwrap_or("part9")
+        .parse::<solver::BuildingMode>()
+        .map_err(ApiError::BadRequest)?;
+    let cat = solver::RoomCatalog::for_mode(mode);
+    Ok(Json(serde_json::json!({
+        "mode": mode.as_str(),
+        "room_types": cat.room_types(),
+    })))
 }
 
 async fn draw(
@@ -475,5 +527,89 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert!(resp.status().is_client_error(), "got {}", resp.status());
+    }
+
+    #[tokio::test]
+    async fn solve_manifest_validates_part3_program() {
+        let app = router();
+        let manifest = serde_json::json!({
+            "mode": "part3",
+            "building_name": "Office Block",
+            "floors": [
+                {
+                    "level": 1,
+                    "name": "Ground",
+                    "occupancy": "business",
+                    "rooms": [
+                        {"id": "lobby", "room_type": "lobby", "min_area": 200.0},
+                        {"id": "stairs_1", "room_type": "stairs", "min_area": 120.0},
+                        {"id": "office_open", "room_type": "office_open", "min_area": 800.0}
+                    ]
+                }
+            ]
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/solve_manifest")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&manifest).unwrap()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = json_body(resp).await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["mode"], "part3");
+        assert_eq!(body["floor_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn solve_manifest_reports_unknown_room_type() {
+        let app = router();
+        let manifest = serde_json::json!({
+            "mode": "part3",
+            "floors": [
+                {
+                    "level": 1,
+                    "rooms": [
+                        {"id": "r1", "room_type": "bedroom"},
+                        {"id": "stairs_1", "room_type": "stairs"}
+                    ]
+                }
+            ]
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/solve_manifest")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&manifest).unwrap()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = json_body(resp).await;
+        assert_eq!(body["success"], false);
+        let errors = body["errors"].as_array().expect("errors array");
+        assert!(errors.iter().any(|e| e.as_str().unwrap().contains("bedroom")));
+    }
+
+    #[tokio::test]
+    async fn catalog_returns_part3_room_types() {
+        let app = router();
+        let req = Request::builder()
+            .uri("/catalog?mode=part3")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = json_body(resp).await;
+        assert_eq!(body["mode"], "part3");
+        let types: Vec<String> = body["room_types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(types.contains(&"retail".to_string()));
+        assert!(types.contains(&"office_open".to_string()));
+        assert!(!types.contains(&"bedroom".to_string()));
     }
 }
