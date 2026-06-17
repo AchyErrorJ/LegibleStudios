@@ -1,4 +1,4 @@
-# Archengine - Generative CAD for Residential Construction
+# Generative CAD for Residential Construction
 
 Permit-ready drawing generation from simple inputs. No manual drafting required.
 
