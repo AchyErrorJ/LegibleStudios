@@ -14,11 +14,13 @@
 //! Not yet ported (next slice): wall/door/dimension emission to the full
 //! `qbd_output.schema.json` (`layout_to_walls/doors/dimensions`).
 
+pub mod adjacency;
 pub mod catalog;
 pub mod emit;
 pub mod manifest;
 pub mod mode;
 
+pub use adjacency::AdjacencyGraph;
 pub use catalog::{RoomCatalog, RoomCatalogEntry};
 pub use manifest::{ProgramManifest, ManifestError};
 pub use mode::BuildingMode;
@@ -473,46 +475,9 @@ pub struct PlacedRoom {
     pub rect: Rect,
 }
 
-/// Adjacency affinity between two room *types* (0 = unrelated, 1 = strongly
-/// want to share a wall). Symmetric. This is the relationship graph that
-/// drives the layout: high-affinity rooms get seriated next to each other and
-/// therefore land adjacent. Pairs not listed fall back to a small same-zone
-/// bonus so a zone still reads as a cluster.
-#[allow(clippy::unnested_or_patterns, clippy::match_same_arms)] // table reads clearer as explicit pairs
-fn affinity(a: &str, b: &str) -> f32 {
-    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-    match (lo, hi) {
-        // Public core.
-        ("entry", "living") | ("entry", "foyer") | ("foyer", "living") => 0.9,
-        ("dining", "living") => 0.85,
-        ("dining", "kitchen") => 0.95,
-        ("kitchen", "living") => 0.5,
-        ("living", "powder_room") | ("entry", "powder_room") => 0.5,
-        // Service links.
-        ("garage", "mudroom") => 0.95,
-        ("kitchen", "mudroom") => 0.7,
-        ("kitchen", "pantry") => 0.9,
-        ("kitchen", "laundry") | ("laundry", "mudroom") => 0.5,
-        ("entry", "hallway") | ("hallway", "living") => 0.7,
-        // Stairs anchor the circulation core, on every floor.
-        ("entry", "stairs") | ("hallway", "stairs") => 0.85,
-        ("living", "stairs") => 0.4,
-        // Private suite.
-        ("primary_bath", "primary_bedroom") => 0.95,
-        ("primary_bedroom", "walk_in_closet") => 0.9,
-        ("bedroom", "closet") => 0.9,
-        ("bathroom", "bedroom") => 0.6,
-        ("bathroom", "hallway") | ("hallway", "primary_bedroom") => 0.7,
-        ("bedroom", "hallway") => 0.75,
-        _ => {
-            if Zone::of(a) == Zone::of(b) {
-                0.3 // same zone, no specific pairing
-            } else {
-                0.05
-            }
-        }
-    }
-}
+/* Adjacency affinity is now computed by AdjacencyGraph in
+   crate::adjacency. The hardcoded table has been moved there so each
+   BuildingMode can carry its own relationship graph. */
 
 /// Instance-level pairing bonus: a numbered bedroom and the closet sharing its
 /// index (`bedroom_2` ↔ `closet_2`) belong together, beyond the generic
@@ -535,7 +500,7 @@ fn pair_bonus(a: &str, b: &str) -> f32 {
 /// nearest-neighbour walk over the affinity graph, seeded at the entry (so the
 /// order flows entry → public → service → private). Deterministic — ties keep
 /// the lower program index. Returns indices into `program`.
-fn seriate(program: &[RoomSpec]) -> Vec<usize> {
+fn seriate(program: &[RoomSpec], graph: &AdjacencyGraph) -> Vec<usize> {
     let n = program.len();
     if n == 0 {
         return Vec::new();
@@ -561,7 +526,7 @@ fn seriate(program: &[RoomSpec]) -> Vec<usize> {
             if visited[j] {
                 continue;
             }
-            let aff = affinity(&program[last].room_type, &program[j].room_type)
+            let aff = graph.affinity_for_specs(&program[last], &program[j])
                 + pair_bonus(&program[last].id, &program[j].id);
             if aff > best_aff + 1e-6 {
                 best_aff = aff;
@@ -765,13 +730,13 @@ fn suite_total(s: &Suite, areas: &[f32]) -> f32 {
 /// Lay out a set of suites inside `rect`: seriate their leads, slice the rect
 /// among them by area, and split each suite (lead on the exterior). `env` is
 /// the full envelope, used for perimeter bias and exterior-edge tests.
-fn layout_suites_in(rect: Rect, suites: &[Suite], program: &[RoomSpec], areas: &[f32], env: Rect) -> Vec<PlacedRoom> {
+fn layout_suites_in(rect: Rect, suites: &[Suite], program: &[RoomSpec], areas: &[f32], env: Rect, graph: &AdjacencyGraph) -> Vec<PlacedRoom> {
     if suites.is_empty() {
         return Vec::new();
     }
     let lead_specs: Vec<RoomSpec> = suites.iter().map(|s| program[s.lead].clone()).collect();
     let suite_area: Vec<f32> = suites.iter().map(|s| suite_total(s, areas)).collect();
-    let order = seriate(&lead_specs);
+    let order = seriate(&lead_specs, graph);
     let items: Vec<(usize, f32)> = order.iter().map(|&i| (i, suite_area[i])).collect();
     slice_seriated(env, rect, &items, &lead_specs, true)
         .into_iter()
@@ -783,7 +748,7 @@ fn layout_suites_in(rect: Rect, suites: &[Suite], program: &[RoomSpec], areas: &
 /// front-left corner bay (identical on every floor that shares the footprint,
 /// so stacked stairs align), then lay the remaining suites out in the two
 /// rectangles around it — a shallow front band and the deep main band.
-fn layout_with_stair(env: Rect, suites: &[Suite], stair_pos: usize, program: &[RoomSpec], areas: &[f32], stair_config: &str) -> Vec<PlacedRoom> {
+fn layout_with_stair(env: Rect, suites: &[Suite], stair_pos: usize, program: &[RoomSpec], areas: &[f32], stair_config: &str, graph: &AdjacencyGraph) -> Vec<PlacedRoom> {
     // Buildable bay for the chosen configuration. Same footprint on every floor
     // (shared envelope + config) ⇒ stacked stairs land exactly on top of each
     // other. Only shrink below buildable if the envelope genuinely can't fit it.
@@ -827,15 +792,15 @@ fn layout_with_stair(env: Rect, suites: &[Suite], stair_pos: usize, program: &[R
             placed.push(mk(entry.lead, Rect { x: env.x + hw - ew, y: env.y, w: ew, h: run }));
             let fc = Rect { x: env.x + sw, y: env.y, w: (hw - sw - ew).max(0.0), h: run };
             let bk = Rect { x: env.x, y: env.y + run, w: hw, h: env.h - run };
-            let (fcs, bks) = partition_front_back(&others, fc.area(), program, areas);
-            placed.extend(layout_suites_in(fc, &fcs, program, areas, env));
-            placed.extend(layout_suites_in(bk, &bks, program, areas, env));
+            let (fcs, bks) = partition_front_back(&others, fc.area(), program, areas, graph);
+            placed.extend(layout_suites_in(fc, &fcs, program, areas, env, graph));
+            placed.extend(layout_suites_in(bk, &bks, program, areas, env, graph));
         } else {
             let front = Rect { x: env.x + sw, y: env.y, w: hw - sw, h: run };
             let back = Rect { x: env.x, y: env.y + run, w: hw, h: env.h - run };
-            let (fs, bs) = partition_front_back(&others, front.area(), program, areas);
-            placed.extend(layout_suites_in(front, &fs, program, areas, env));
-            placed.extend(layout_suites_in(back, &bs, program, areas, env));
+            let (fs, bs) = partition_front_back(&others, front.area(), program, areas, graph);
+            placed.extend(layout_suites_in(front, &fs, program, areas, env, graph));
+            placed.extend(layout_suites_in(back, &bs, program, areas, env, graph));
         }
         return placed;
     }
@@ -844,9 +809,9 @@ fn layout_with_stair(env: Rect, suites: &[Suite], stair_pos: usize, program: &[R
     // beside the stair and the deep main band behind both.
     let front = Rect { x: env.x + sw, y: env.y, w: env.w - sw, h: run };
     let back = Rect { x: env.x, y: env.y + run, w: env.w, h: env.h - run };
-    let (front_suites, back_suites) = partition_front_back(&others, front.area(), program, areas);
-    placed.extend(layout_suites_in(front, &front_suites, program, areas, env));
-    placed.extend(layout_suites_in(back, &back_suites, program, areas, env));
+    let (front_suites, back_suites) = partition_front_back(&others, front.area(), program, areas, graph);
+    placed.extend(layout_suites_in(front, &front_suites, program, areas, env, graph));
+    placed.extend(layout_suites_in(back, &back_suites, program, areas, env, graph));
     placed
 }
 
@@ -858,9 +823,10 @@ fn partition_front_back(
     front_area: f32,
     program: &[RoomSpec],
     areas: &[f32],
+    graph: &AdjacencyGraph,
 ) -> (Vec<Suite>, Vec<Suite>) {
     let lead_specs: Vec<RoomSpec> = suites.iter().map(|s| program[s.lead].clone()).collect();
-    let order = seriate(&lead_specs);
+    let order = seriate(&lead_specs, graph);
     let (mut front, mut back) = (Vec::new(), Vec::new());
     let mut acc = 0.0;
     for &oi in &order {
@@ -894,7 +860,7 @@ fn is_bedroom_floor(program: &[RoomSpec]) -> bool {
 /// as a full-depth bay touching that corridor — so each bedroom opens onto the
 /// hall and reaches an exterior wall for its window. Rooms are seriated so a
 /// closet lands next to its bedroom.
-fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32], stair_config: &str) -> Vec<PlacedRoom> {
+fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32], stair_config: &str, graph: &AdjacencyGraph) -> Vec<PlacedRoom> {
     // Keep the corridor's footprint proportional to the floor and no wider than
     // needed: a full-width corridor's share of the floor is just its depth over
     // the floor depth, so target ~9% but never below a ~3 ft (914 mm) code-min
@@ -919,7 +885,7 @@ fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32], stair_co
     let (Some(stair_i), Some(hall_i)) = (stair_i, hall_i) else {
         // Shouldn't happen (is_bedroom_floor guards), but fall back safely.
         let suites = group_suites(program);
-        return layout_suites_in(env, &suites, program, areas, env);
+        return layout_suites_in(env, &suites, program, areas, env, graph);
     };
 
     let mut placed = Vec::new();
@@ -973,7 +939,7 @@ fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32], stair_co
         }
     }
     let lead_specs: Vec<RoomSpec> = suites.iter().map(|s| program[s.lead].clone()).collect();
-    let order = seriate(&lead_specs);
+    let order = seriate(&lead_specs, graph);
     let ordered: Vec<&Suite> = order.iter().map(|&o| &suites[o]).collect();
 
     // Assign whole suites to the front band (up to its area) or the north band,
@@ -1058,7 +1024,7 @@ fn place_suite_band(
 /// the exterior wall. A floor with a stair pins it to a fixed bay so stacked
 /// stairs align. The entry anchors to the front; a north entry mirrors depth.
 #[must_use]
-pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str, stair_config: &str) -> Vec<PlacedRoom> {
+pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str, stair_config: &str, graph: &AdjacencyGraph) -> Vec<PlacedRoom> {
     if program.is_empty() || envelope.area() <= 0.0 {
         return Vec::new();
     }
@@ -1067,12 +1033,12 @@ pub fn subdivide(envelope: Rect, program: &[RoomSpec], entry_edge: &str, stair_c
     // Dedicated bedroom floor → hall-spine layout (every bedroom opens onto the
     // hall). Otherwise the generic suite layout, stair-aware when there's one.
     let mut placed = if is_bedroom_floor(program) {
-        layout_bedroom_floor(envelope, program, &areas, stair_config)
+        layout_bedroom_floor(envelope, program, &areas, stair_config, graph)
     } else {
         let suites = group_suites(program);
         match suites.iter().position(|s| program[s.lead].room_type == "stairs") {
-            Some(stair_pos) => layout_with_stair(envelope, &suites, stair_pos, program, &areas, stair_config),
-            None => layout_suites_in(envelope, &suites, program, &areas, envelope),
+            Some(stair_pos) => layout_with_stair(envelope, &suites, stair_pos, program, &areas, stair_config, graph),
+            None => layout_suites_in(envelope, &suites, program, &areas, envelope, graph),
         }
     };
 
@@ -1094,6 +1060,7 @@ pub struct SubdivisionRoomSolver {
     pub program: Vec<RoomSpec>,
     pub entry_edge: String,
     pub stair_config: String,
+    pub graph: AdjacencyGraph,
 }
 
 impl SubdivisionRoomSolver {
@@ -1103,6 +1070,7 @@ impl SubdivisionRoomSolver {
             program: program_from_answers(a),
             entry_edge: "south".into(),
             stair_config: a.stair_config.clone(),
+            graph: AdjacencyGraph::new_for_mode(a.mode),
         }
     }
 }
@@ -1127,7 +1095,7 @@ impl Solver for SubdivisionRoomSolver {
             }
         };
 
-        let rooms = subdivide(envelope, &self.program, &self.entry_edge, &self.stair_config);
+        let rooms = subdivide(envelope, &self.program, &self.entry_edge, &self.stair_config, &self.graph);
         let mut next_id = scene.objects.iter().map(|o| o.id.0).max().unwrap_or(0) + 1;
         for r in rooms {
             let obj = Object::new(next_id, "room")
@@ -1171,6 +1139,77 @@ mod tests {
         }
         // 3 bedrooms → primary + bedroom_2 + bedroom_3.
         assert_eq!(p.iter().filter(|r| r.room_type.contains("bedroom")).count(), 3);
+    }
+
+    #[test]
+    fn part9_seriation_keeps_public_cluster_at_the_front() {
+        let a = Answers {
+            bedrooms: 3,
+            bathrooms: 2,
+            sqft: 1800.0,
+            garage: "none".into(),
+            special_rooms: vec![],
+            storeys: 1,
+            window_intent: "balanced".into(),
+            style: "balanced".into(),
+            ..Answers::default()
+        };
+        let p = program_from_answers(&a);
+        let graph = AdjacencyGraph::new_for_mode(BuildingMode::Part9);
+        let order = seriate(&p, &graph);
+        let ordered_ids: Vec<&str> = order.iter().map(|&i| p[i].id.as_str()).collect();
+        // The public core must lead, anchored by the entry.
+        assert_eq!(ordered_ids[0], "entry", "entry must seed the order");
+        let public_set: std::collections::HashSet<&str> =
+            ["entry", "living", "dining", "kitchen"].into_iter().collect();
+        let public_in_first_four: usize = ordered_ids
+            .iter()
+            .take(4)
+            .filter(|id| public_set.contains(*id))
+            .count();
+        assert!(
+            public_in_first_four >= 3,
+            "public cluster should dominate the front of the order: {ordered_ids:?}"
+        );
+        // Dining and kitchen should be adjacent in the order (high affinity).
+        let dining_pos = ordered_ids.iter().position(|id| *id == "dining").unwrap();
+        let kitchen_pos = ordered_ids.iter().position(|id| *id == "kitchen").unwrap();
+        assert!(
+            (dining_pos as isize - kitchen_pos as isize).abs() <= 1,
+            "dining and kitchen should be contiguous: {ordered_ids:?}"
+        );
+    }
+
+    #[test]
+    fn part3_seriation_clusters_lobby_retail_and_corridor() {
+        let p = vec![
+            RoomSpec::new("lobby", "lobby", 8.0, 200.0),
+            RoomSpec::new("retail", "retail", 25.0, 800.0),
+            RoomSpec::new("corridor", "corridor", 6.0, 120.0),
+            RoomSpec::new("office_open", "office_open", 18.0, 600.0),
+            RoomSpec::new("stairs_1", "stairs", 5.0, 120.0),
+        ];
+        let graph = AdjacencyGraph::new_for_mode(BuildingMode::Part3);
+        let order = seriate(&p, &graph);
+        let ordered_ids: Vec<&str> = order.iter().map(|&i| p[i].id.as_str()).collect();
+        // Stairs seed the circulation core so stacked stairs align across floors.
+        assert_eq!(ordered_ids[0], "stairs_1", "stairs must seed the Part 3 order");
+        // Lobby, retail and corridor should cluster early and be contiguous.
+        let lobby_pos = ordered_ids.iter().position(|id| *id == "lobby").unwrap();
+        let retail_pos = ordered_ids.iter().position(|id| *id == "retail").unwrap();
+        let corridor_pos = ordered_ids.iter().position(|id| *id == "corridor").unwrap();
+        assert!(
+            lobby_pos <= 3 && retail_pos <= 3 && corridor_pos <= 3,
+            "lobby, retail and corridor should cluster near the stairs: {ordered_ids:?}"
+        );
+        assert!(
+            (retail_pos as isize - corridor_pos as isize).abs() <= 1,
+            "retail and corridor should be contiguous: {ordered_ids:?}"
+        );
+        assert!(
+            (lobby_pos as isize - retail_pos as isize).abs() <= 1,
+            "lobby and retail should be contiguous: {ordered_ids:?}"
+        );
     }
 
     #[test]
@@ -1221,7 +1260,7 @@ mod tests {
         let p = program_from_answers(&a);
         let (w, d) = auto_size(&p, 0.0);
         let env = Rect { x: 0.0, y: 0.0, w, h: d };
-        let placed = subdivide(env, &p, "south", "switchback");
+        let placed = subdivide(env, &p, "south", "switchback", &AdjacencyGraph::new_for_mode(BuildingMode::Part9));
         assert_eq!(placed.len(), p.len(), "every room placed");
         for r in &placed {
             assert!(r.rect.x >= -0.01 && r.rect.y >= -0.01);
@@ -1249,7 +1288,7 @@ mod tests {
         ];
         assert!(is_bedroom_floor(&p), "should be detected as a bedroom floor");
         let env = Rect { x: 0.0, y: 0.0, w: 38.0, h: 27.0 };
-        let placed = subdivide(env, &p, "south", "switchback");
+        let placed = subdivide(env, &p, "south", "switchback", &AdjacencyGraph::new_for_mode(BuildingMode::Part9));
         let hall = placed.iter().find(|r| r.room_type == "hallway").expect("hall").rect;
         let abuts = |a: &Rect, b: &Rect| -> bool {
             let vert = ((a.x + a.w - b.x).abs() < 0.6 || (b.x + b.w - a.x).abs() < 0.6)
@@ -1284,7 +1323,7 @@ mod tests {
             let p = program_from_answers(&a);
             let (w, d) = auto_size(&p, sqft);
             let env = Rect { x: 0.0, y: 0.0, w, h: d };
-            let placed = subdivide(env, &p, "south", "switchback");
+            let placed = subdivide(env, &p, "south", "switchback", &AdjacencyGraph::new_for_mode(BuildingMode::Part9));
             let touches = |r: &Rect| {
                 r.x <= 0.5 || r.y <= 0.5 || r.x + r.w >= w - 0.5 || r.y + r.h >= d - 0.5
             };
@@ -1317,7 +1356,7 @@ mod tests {
         };
         let p = program_from_answers(&a);
         let (w, d) = auto_size(&p, a.sqft);
-        let placed = subdivide(Rect { x: 0.0, y: 0.0, w, h: d }, &p, "south", "switchback");
+        let placed = subdivide(Rect { x: 0.0, y: 0.0, w, h: d }, &p, "south", "switchback", &AdjacencyGraph::new_for_mode(BuildingMode::Part9));
         let rect_of = |id: &str| placed.iter().find(|r| r.id == id).map(|r| r.rect);
         let adjacent = |x: Rect, y: Rect| {
             let e = 0.5;
@@ -1343,7 +1382,7 @@ mod tests {
         let a = Answers::default();
         let p = program_from_answers(&a);
         let env = Rect { x: 0.0, y: 0.0, w: 60.0, h: 40.0 };
-        let placed = subdivide(env, &p, "south", "switchback");
+        let placed = subdivide(env, &p, "south", "switchback", &AdjacencyGraph::new_for_mode(BuildingMode::Part9));
         // South entry → public rooms at low Y, private at high Y.
         let public_y: f32 = placed
             .iter()
@@ -1426,7 +1465,7 @@ mod tests {
         let floors = split_floors(&p, 2);
         let ground = &floors[0];
         let (w, d) = auto_size(ground, a.sqft / 2.0); // per-floor footprint
-        let placed = subdivide(Rect { x: 0.0, y: 0.0, w, h: d }, ground, "south", "straight");
+        let placed = subdivide(Rect { x: 0.0, y: 0.0, w, h: d }, ground, "south", "straight", &AdjacencyGraph::new_for_mode(BuildingMode::Part9));
         let stairs = placed.iter().find(|r| r.room_type == "stairs").expect("stairs room");
         // The reserved stair bay is the buildable straight footprint, shrunk only if
         // the envelope genuinely cannot fit it.

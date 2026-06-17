@@ -10,8 +10,8 @@
 //! Python in the loop.
 
 use crate::{
-    footprint_for, program_from_answers, shape_envelope, split_floors, subdivide, Answers,
-    PlacedRoom, Rect, Zone,
+    footprint_for, program_from_answers, shape_envelope, split_floors, subdivide, AdjacencyGraph,
+    Answers, PlacedRoom, Rect, Zone,
 };
 use serde_json::{json, Value};
 
@@ -63,11 +63,12 @@ pub fn building_json(answers: &Answers) -> Value {
     let (w, d) = shape_envelope(footprint);
     let envelope = Rect { x: 0.0, y: 0.0, w, h: d };
 
+    let graph = AdjacencyGraph::new_for_mode(answers.mode);
     let floors: Vec<Floor> = programs
         .iter()
         .enumerate()
         .map(|(i, pgm)| {
-            let rooms = subdivide(envelope, pgm, "south", &answers.stair_config);
+            let rooms = subdivide(envelope, pgm, "south", &answers.stair_config, &graph);
             let is_ground = i == 0;
             let walls = generate_walls(&rooms, envelope, is_ground);
             let windows = generate_windows(&rooms, envelope, &answers.window_intent, &answers.style);
@@ -1057,7 +1058,7 @@ mod tests {
             RoomSpec::new("bath_2", "bathroom", 1.0, 45.0),
         ];
         let env = Rect { x: 0.0, y: 0.0, w: 38.0, h: 27.0 };
-        let placed = subdivide(env, &p, "south", "switchback");
+        let placed = subdivide(env, &p, "south", "switchback", &AdjacencyGraph::new_for_mode(crate::BuildingMode::Part9));
         let walls = generate_walls(&placed, env, /* is_ground */ false);
         let kind = |id: &str| {
             placed.iter().find(|r| r.id == id).map_or("", |r| r.room_type.as_str()).to_string()
