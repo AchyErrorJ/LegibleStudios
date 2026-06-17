@@ -17,14 +17,18 @@
 pub mod adjacency;
 pub mod catalog;
 pub mod emit;
+pub mod floors;
+pub mod layout;
 pub mod manifest;
 pub mod mode;
 
 pub use adjacency::AdjacencyGraph;
 pub use catalog::{RoomCatalog, RoomCatalogEntry};
+pub use floors::{FloorPlanInput, FloorStrategy, plan_floors};
+pub use layout::layout_floor;
 pub use manifest::{ProgramManifest, ManifestError};
 pub use mode::BuildingMode;
-pub use emit::building_json;
+pub use emit::{building_json, building_json_from_manifest};
 
 use pk_geom::Transform;
 use pk_object::{Constraint, Object, Scene, Solver};

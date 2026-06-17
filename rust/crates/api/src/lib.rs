@@ -188,15 +188,11 @@ async fn solve_manifest(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     match manifest.validate() {
         Ok(()) => {
-            let programs: Vec<Vec<solver::RoomSpec>> = manifest.to_programs();
-            Ok(Json(serde_json::json!({
-                "success": true,
-                "mode": manifest.mode.as_str(),
-                "building_name": manifest.building_name,
-                "floor_count": programs.len(),
-                "rooms_per_floor": programs.iter().map(Vec::len).collect::<Vec<_>>(),
-                "programs": programs,
-            })))
+            let value = solver::building_json_from_manifest(&manifest);
+            if !value.get("success").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+                return Err(ApiError::BadRequest("manifest solver failed".into()));
+            }
+            Ok(Json(value))
         }
         Err(errors) => Ok(Json(serde_json::json!({
             "success": false,
@@ -542,6 +538,7 @@ mod tests {
                     "occupancy": "business",
                     "rooms": [
                         {"id": "lobby", "room_type": "lobby", "min_area": 200.0},
+                        {"id": "corridor", "room_type": "corridor", "min_area": 150.0},
                         {"id": "stairs_1", "room_type": "stairs", "min_area": 120.0},
                         {"id": "office_open", "room_type": "office_open", "min_area": 800.0}
                     ]
@@ -558,8 +555,9 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = json_body(resp).await;
         assert_eq!(body["success"], true);
-        assert_eq!(body["mode"], "part3");
-        assert_eq!(body["floor_count"], 1);
+        assert_eq!(body["qbd_answers"]["mode"], "part3");
+        assert!(body["walls_batch"].as_array().unwrap().len() >= 4);
+        assert!(body["rooms"].as_object().unwrap().contains_key("office_open"));
     }
 
     #[tokio::test]

@@ -10,8 +10,8 @@
 //! Python in the loop.
 
 use crate::{
-    footprint_for, program_from_answers, shape_envelope, split_floors, subdivide, AdjacencyGraph,
-    Answers, PlacedRoom, Rect, Zone,
+    footprint_for, layout_floor, plan_floors, program_from_answers, shape_envelope, split_floors,
+    subdivide, AdjacencyGraph, Answers, PlacedRoom, Rect, Zone,
 };
 use serde_json::{json, Value};
 
@@ -77,6 +77,42 @@ pub fn building_json(answers: &Answers) -> Value {
         .collect();
 
     to_json(answers, envelope, &floors)
+}
+
+/// Manifest-driven pipeline: ProgramManifest → per-floor plan inputs → layout
+/// strategies → walls/doors/windows → schema-valid building JSON. This is the
+/// Part 3 / mixed-use entry point; it intentionally skips residential-only
+/// annotations (smoke/CO detectors, electrical spacing) for non-Part 9 floors.
+#[must_use]
+pub fn building_json_from_manifest(manifest: &crate::ProgramManifest) -> Value {
+    let plans = plan_floors(manifest);
+    let envelope = plans.first().map_or(
+        Rect { x: 0.0, y: 0.0, w: 40.0, h: 40.0 },
+        |p| p.envelope,
+    );
+    let graph = AdjacencyGraph::new_for_mode(manifest.mode).with_manifest(manifest);
+
+    let floors: Vec<Floor> = plans
+        .iter()
+        .map(|plan| {
+            let rooms = layout_floor(plan, &graph);
+            let is_ground = plan.level == 1;
+            let walls = generate_walls(&rooms, plan.envelope, is_ground);
+            // Part 3 windows: use a balanced intent and contemporary style by
+            // default; egress rules are deferred to the Part 3 rules engine.
+            let window_intent = "balanced";
+            let style = "contemporary";
+            let windows = generate_windows(&rooms, plan.envelope, window_intent, style);
+            Floor {
+                level: plan.level,
+                rooms,
+                walls,
+                windows,
+            }
+        })
+        .collect();
+
+    to_json_manifest(manifest, envelope, &floors)
 }
 
 /// Perimeter (exterior) + interior partition walls. On the ground floor, an
@@ -912,8 +948,222 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
     })
 }
 
+/// Simplified JSON assembly for manifest-driven (Part 3 / mixed) buildings.
+/// Reuses the wall/door/window/room conversion but omits residential-only
+/// detector/electrical/header annotations.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::too_many_lines
+)]
+fn to_json_manifest(manifest: &crate::ProgramManifest, env: Rect, floors: &[Floor]) -> Value {
+    let s = FEET_TO_MM;
+    let p3 = |x: f32, y: f32| json!([x * s, 0.0, y * s]);
+
+    let mut walls_batch: Vec<Value> = Vec::new();
+    let mut doors: Vec<Value> = Vec::new();
+    let mut windows_json: Vec<Value> = Vec::new();
+    let mut rooms_map = serde_json::Map::new();
+    let mut wall_offset = 0usize;
+
+    for floor in floors {
+        let level_name = format!("Level {}", floor.level);
+
+        for (i, w) in floor.walls.iter().enumerate() {
+            walls_batch.push(json!({
+                "start": p3(w.start.0, w.start.1),
+                "end": p3(w.end.0, w.end.1),
+                "height": WALL_HEIGHT_FT * s,
+                "wall_type": if w.category == "exterior" { "ext_2x6_r21" } else { "int_2x4" },
+                "category": w.category,
+                "level_name": level_name,
+                "rooms": [w.room1.clone(), w.room2.clone()],
+                "wall_index": wall_offset + i,
+            }));
+        }
+
+        for (wi, w) in floor.walls.iter().enumerate() {
+            for o in &w.openings {
+                let (mx, my) = ((o.start.0 + o.end.0) * 0.5, (o.start.1 + o.end.1) * 0.5);
+                let (cx, cy) = (mx * s, my * s);
+                let width = ((o.end.0 - o.start.0).powi(2) + (o.end.1 - o.start.1).powi(2)).sqrt() * s;
+                let offset = ((mx - w.start.0).powi(2) + (my - w.start.1).powi(2)).sqrt() * s;
+                doors.push(json!({
+                    "x": cx, "y": cy, "width": width, "type": "door",
+                    "height": DOOR_HEIGHT_FT * s, "wall_index": wall_offset + wi, "offset": offset,
+                }));
+            }
+        }
+
+        for w in &floor.windows {
+            windows_json.push(json!({
+                "wall_index": wall_offset + w.wall_index,
+                "offset": w.offset,
+                "width": w.width,
+                "height": w.height,
+                "sill_height": w.sill,
+                "type": w.win_type,
+                "room": w.room,
+                "level_name": level_name,
+            }));
+        }
+
+        for r in &floor.rooms {
+            let zone = match r.zone {
+                Zone::Public => "public",
+                Zone::Circulation => "circulation",
+                Zone::Service => "service",
+                Zone::Private => "private",
+            };
+            rooms_map.insert(
+                r.id.clone(),
+                json!({
+                    "name": title_case(&r.id),
+                    "level": level_name,
+                    "bounds": { "x": r.rect.x * s, "y": r.rect.y * s, "width": r.rect.w * s, "height": r.rect.h * s },
+                    "area": r.rect.area() * s * s,
+                    "center": { "x": (r.rect.x + r.rect.w * 0.5) * s, "y": (r.rect.y + r.rect.h * 0.5) * s },
+                    "room_type": r.room_type,
+                    "zone": zone,
+                }),
+            );
+        }
+
+        wall_offset += floor.walls.len();
+    }
+
+    let levels_v: Vec<Value> = (0..floors.len())
+        .map(|i| {
+            json!({
+                "id": format!("level_{}", i + 1),
+                "name": format!("Level {}", i + 1),
+                "elevation": i as f32 * 10.0 * s,
+                "floor_to_floor_height": 10.0 * s,
+            })
+        })
+        .collect();
+    let levels = Value::Array(levels_v);
+
+    let dimensions = json!([
+        {
+            "id": "dim_overall_w", "type": "linear",
+            "start_point": p3(env.x, env.y), "end_point": p3(env.x + env.w, env.y),
+            "value": env.w * s, "unit": "mm", "label": "Overall Width", "level": "Level 1",
+        },
+        {
+            "id": "dim_overall_d", "type": "linear",
+            "start_point": p3(env.x, env.y), "end_point": p3(env.x, env.y + env.h),
+            "value": env.h * s, "unit": "mm", "label": "Overall Depth", "level": "Level 1",
+        },
+    ]);
+
+    // Minimal stairs: one per floor that has a stair room.
+    let stairs_json: Vec<Value> = floors
+        .iter()
+        .filter(|f| f.rooms.iter().any(|r| r.room_type == "stairs"))
+        .map(|f| {
+            let stair = f.rooms.iter().find(|r| r.room_type == "stairs").unwrap();
+            json!({
+                "id": format!("stairs_{}", f.level),
+                "level_name": format!("Level {}", f.level),
+                "room": stair.id,
+                "x": stair.rect.x * s,
+                "y": stair.rect.y * s,
+                "width": stair.rect.w * s,
+                "depth": stair.rect.h * s,
+                "shape": "switchback",
+                "num_risers": 18,
+                "num_treads": 17,
+                "riser_height": 177.8,
+                "tread_run": 254.0,
+                "width_clear": 900.0,
+                "floor_to_floor": 3048.0,
+                "going": "up",
+            })
+        })
+        .collect();
+
+    let total_walls: usize = floors.iter().map(|f| f.walls.len()).sum();
+    let total_windows: usize = floors.iter().map(|f| f.windows.len()).sum();
+    let total_rooms: usize = floors.iter().map(|f| f.rooms.len()).sum();
+    let total_doors: usize = floors.iter().map(|f| doors_count(&f.walls)).sum();
+    let ext = walls_batch.iter().filter(|w| w["category"] == "exterior").count();
+    let int = total_walls - ext;
+    let storeys = floors.len() as f32;
+    let total_sqft = env.w * env.h * storeys;
+
+    json!({
+        "success": true,
+        "building_id": building_id_manifest(manifest),
+        "width": env.w * s,
+        "depth": env.h * s,
+        "sqft": total_sqft,
+        "storeys": floors.len(),
+        "output_format": "archengine",
+        "unit": "mm",
+        "creative_mode": false,
+        "walls_batch": walls_batch,
+        "doors": doors,
+        "windows": windows_json,
+        "egress_warnings": [],
+        "detectors": [],
+        "electrical": [],
+        "headers": [],
+        "stairs": stairs_json,
+        "levels": levels,
+        "dimensions": dimensions,
+        "rooms": Value::Object(rooms_map),
+        "is_complete": true,
+        "unplaced_rooms": [],
+        "score": 1.0,
+        "summary": {
+            "total_walls": total_walls,
+            "exterior_walls": ext,
+            "interior_walls": int,
+            "wet_walls": 0,
+            "doors": total_doors,
+            "windows": total_windows,
+            "egress_violations": 0,
+            "rooms_placed": total_rooms,
+            "rooms_requested": total_rooms,
+            "storeys": floors.len(),
+            "detectors": 0,
+            "electrical": 0,
+            "stairs": stairs_json.len(),
+            "headers": 0,
+            "headers_need_review": 0,
+        },
+        "site": {
+            "lot_width_ft": 50.0,
+            "lot_depth_ft": 100.0,
+            "zone": "R1",
+            "street": "Street",
+        },
+        "roof_type": "gable",
+        "qbd_answers": {
+            "mode": manifest.mode.as_str(),
+            "building_type": if manifest.mode == crate::BuildingMode::Part9 { "residential" } else { "commercial" },
+            "bedrooms": 0,
+            "bathrooms": 0,
+            "sqft": total_sqft as i32,
+            "garage": "none",
+        },
+    })
+}
+
 fn doors_count(walls: &[Wall]) -> usize {
     walls.iter().map(|w| w.openings.len()).sum()
+}
+
+/// Deterministic 8-hex id from a manifest (FNV-1a).
+fn building_id_manifest(manifest: &crate::ProgramManifest) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in manifest.building_name.bytes().chain(manifest.mode.as_str().bytes()) {
+        h ^= u64::from(byte);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{:08x}", (h & 0xffff_ffff) as u32)
 }
 
 /// Deterministic 8-hex id from the answers (FNV-1a), so output is stable.
@@ -969,6 +1219,90 @@ mod tests {
             for k in ["name", "bounds", "area", "center", "level"] {
                 assert!(r.get(k).is_some(), "room missing {k}");
             }
+        }
+    }
+
+    #[test]
+    fn building_json_from_manifest_is_schema_shaped() {
+        let manifest = crate::ProgramManifest::from_json(
+            r#"{
+                "mode": "part3",
+                "building_name": "Office Block",
+                "sqft": 4000,
+                "floors": [
+                    {
+                        "level": 1,
+                        "name": "Ground",
+                        "occupancy": "business",
+                        "rooms": [
+                            {"id": "lobby", "room_type": "lobby", "min_area": 200},
+                            {"id": "corridor", "room_type": "corridor", "min_area": 150},
+                            {"id": "stairs_1", "room_type": "stairs", "min_area": 120},
+                            {"id": "office_open", "room_type": "office_open", "min_area": 1200},
+                            {"id": "washroom_1", "room_type": "washroom", "min_area": 80}
+                        ]
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+        let v = building_json_from_manifest(&manifest);
+        assert_eq!(v["success"], json!(true));
+        assert_eq!(v["unit"], json!("mm"));
+        assert_eq!(v["qbd_answers"]["mode"], json!("part3"));
+        let walls = v["walls_batch"].as_array().unwrap();
+        assert!(walls.len() >= 4);
+        let rooms = v["rooms"].as_object().unwrap();
+        assert!(rooms.len() >= 4);
+        assert!(rooms.contains_key("office_open"));
+        assert!(rooms.contains_key("corridor"));
+        assert!(rooms.contains_key("stairs_1"));
+    }
+
+    #[test]
+    fn mixed_building_aligns_stairs_across_floors() {
+        let manifest = crate::ProgramManifest::from_json(
+            r#"{
+                "mode": "mixed",
+                "building_name": "Mixed Podium",
+                "sqft": 6000,
+                "floors": [
+                    {
+                        "level": 1,
+                        "name": "Retail",
+                        "occupancy": "mercantile",
+                        "rooms": [
+                            {"id": "retail_1", "room_type": "retail", "min_area": 1500},
+                            {"id": "lobby", "room_type": "lobby", "min_area": 150},
+                            {"id": "stairs_1", "room_type": "stairs", "min_area": 120},
+                            {"id": "washroom_1", "room_type": "washroom", "min_area": 80}
+                        ]
+                    },
+                    {
+                        "level": 2,
+                        "name": "Residential",
+                        "occupancy": "residential",
+                        "rooms": [
+                            {"id": "living", "room_type": "living", "min_area": 250},
+                            {"id": "bedroom_2", "room_type": "bedroom", "min_area": 120},
+                            {"id": "stairs_2", "room_type": "stairs", "min_area": 120}
+                        ]
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+        let v = building_json_from_manifest(&manifest);
+        assert_eq!(v["success"], json!(true));
+        assert_eq!(v["storeys"], 2);
+        let rooms = v["rooms"].as_object().unwrap();
+        assert!(rooms.contains_key("retail_1"));
+        assert!(rooms.contains_key("living"));
+        let s1 = &rooms["stairs_1"]["bounds"];
+        let s2 = &rooms["stairs_2"]["bounds"];
+        for k in ["x", "y", "width", "height"] {
+            let (a, b) = (s1[k].as_f64().unwrap(), s2[k].as_f64().unwrap());
+            assert!((a - b).abs() < 1.0, "stairs not aligned on {k}: {a} vs {b}");
         }
     }
 

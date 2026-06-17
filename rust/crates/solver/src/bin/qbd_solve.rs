@@ -16,7 +16,7 @@
 //!     qbd_solve --catalog <mode>
 //!     (--storeys 0 = auto: 2 when 3+ bedrooms, else 1)
 
-use solver::{building_json, Answers, BuildingMode, ProgramManifest, RoomCatalog};
+use solver::{building_json, building_json_from_manifest, Answers, BuildingMode, ProgramManifest, RoomCatalog};
 
 fn main() {
     let mut a = Answers::default();
@@ -91,21 +91,8 @@ fn main() {
             );
             return;
         }
-        let programs = manifest.to_programs();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(
-                &serde_json::json!({
-                    "success": true,
-                    "mode": manifest.mode.as_str(),
-                    "building_name": manifest.building_name,
-                    "floor_count": programs.len(),
-                    "rooms_per_floor": programs.iter().map(Vec::len).collect::<Vec<_>>(),
-                    "programs": programs,
-                })
-            )
-            .unwrap_or_default()
-        );
+        let value = building_json_from_manifest(&manifest);
+        println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
         return;
     }
 
