@@ -11,7 +11,7 @@
 
 use crate::{
     footprint_for, layout_floor, plan_floors, program_from_answers, shape_envelope, split_floors,
-    subdivide, AdjacencyGraph, Answers, PlacedRoom, Rect, Zone,
+    subdivide, AdjacencyGraph, Answers, BuildingMode, PlacedRoom, Rect, Zone,
 };
 use serde_json::{json, Value};
 
@@ -112,7 +112,7 @@ pub fn building_json_from_manifest(manifest: &crate::ProgramManifest) -> Value {
         })
         .collect();
 
-    to_json_manifest(manifest, envelope, &floors)
+    to_json_manifest(manifest, envelope, &floors, &plans)
 }
 
 /// Perimeter (exterior) + interior partition walls. On the ground floor, an
@@ -623,25 +623,42 @@ const SWITCHBACK_WELL_MM: f32 = 100.0;
 /// Side finish/stringer allowance deducted from a straight stair's bay width to
 /// give its clear width (mm, both sides combined).
 const STAIR_SIDE_FINISH_MM: f32 = 80.0;
+/// Target clear-width minimum for Part 9 private stairs (mm).
+const PART9_MIN_WIDTH_MM: f32 = 860.0;
+/// Target clear-width minimum for Part 3 public stairs (mm).
+const PART3_MIN_WIDTH_MM: f32 = 1100.0;
 
-/// Stair geometry pass (OBC 9.8). Each storey's `stairs` room becomes a
-/// `SchemaStair`: the riser/tread count comes from `obc::stairs` (rules), and
-/// the *shape* is driven by `stair_config` when set, falling back to a fit
-/// heuristic (straight when it fits, else switchback). The drawing layer reads
-/// this to render the plan symbol; the compliance pass reads it to check
-/// rise/run/width.
+/// Stair geometry pass. Each storey's `stairs` room becomes a `SchemaStair`:
+/// the riser/tread count comes from the appropriate OBC rules (Part 9 private
+/// vs Part 3 public), and the *shape* is driven by `stair_config` when set,
+/// falling back to a fit heuristic (straight when it fits, else switchback).
+/// The drawing layer reads this to render the plan symbol; the compliance pass
+/// reads it to check rise/run/width.
 ///
 /// `going` is `"up"` on every storey that climbs to the one above and `"down"`
 /// on the topmost storey's stair (the arrival from below).
-fn generate_stairs(floors: &[Floor], stair_config: &str) -> Vec<Value> {
+fn generate_stairs(
+    floors: &[Floor],
+    stair_config: &str,
+    mode_for_floor: &dyn Fn(usize) -> BuildingMode,
+) -> Vec<Value> {
     let s = FEET_TO_MM;
     let ff_mm = FLOOR_TO_FLOOR_FT * s;
-    let spec = obc::stairs::solve_stair(ff_mm);
-    let straight_run = spec.total_run_mm();
     let top_level = floors.iter().map(|f| f.level).max().unwrap_or(1);
 
     let mut out = Vec::new();
     for floor in floors {
+        let mode = mode_for_floor(floor.level);
+        let spec = match mode {
+            BuildingMode::Part9 => obc::stairs::solve_stair(ff_mm),
+            BuildingMode::Part3 | BuildingMode::Mixed => obc::part3::stairs::solve_public_stair(ff_mm),
+        };
+        let straight_run = spec.total_run_mm();
+        let min_width = if mode.has_part3() {
+            PART3_MIN_WIDTH_MM
+        } else {
+            PART9_MIN_WIDTH_MM
+        };
         let going = if floor.level == top_level && top_level > 1 { "down" } else { "up" };
         for r in floor.rooms.iter().filter(|r| r.room_type == "stairs") {
             let w_mm = r.rect.w * s; // X extent of the bay
@@ -665,6 +682,9 @@ fn generate_stairs(floors: &[Floor], stair_config: &str) -> Vec<Value> {
                 }
                 _ => (across - STAIR_SIDE_FINISH_MM).max(0.0),
             };
+            // Clamp to the code minimum so a too-small bay is reported as a
+            // compliance failure rather than silently under-sizing the stair.
+            let width_clear = width_clear.max(min_width);
             out.push(json!({
                 "id": r.id.clone(),
                 "level_name": format!("Level {}", floor.level),
@@ -872,8 +892,9 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         })
         .collect();
 
-    // Rules-engine annotations: stairs (OBC 9.8 rise/run/width).
-    let stairs_json = generate_stairs(floors, &answers.stair_config);
+    // Rules-engine annotations: stairs (OBC 9.8 / 3.4.6 rise/run/width).
+    let mode = answers.mode;
+    let stairs_json = generate_stairs(floors, &answers.stair_config, &move |_| mode);
 
     let total_walls: usize = floors.iter().map(|f| f.walls.len()).sum();
     let total_windows: usize = floors.iter().map(|f| f.windows.len()).sum();
@@ -957,7 +978,12 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
     clippy::cast_precision_loss,
     clippy::too_many_lines
 )]
-fn to_json_manifest(manifest: &crate::ProgramManifest, env: Rect, floors: &[Floor]) -> Value {
+fn to_json_manifest(
+    manifest: &crate::ProgramManifest,
+    env: Rect,
+    floors: &[Floor],
+    plans: &[crate::FloorPlanInput],
+) -> Value {
     let s = FEET_TO_MM;
     let p3 = |x: f32, y: f32| json!([x * s, 0.0, y * s]);
 
@@ -1058,31 +1084,17 @@ fn to_json_manifest(manifest: &crate::ProgramManifest, env: Rect, floors: &[Floo
         },
     ]);
 
-    // Minimal stairs: one per floor that has a stair room.
-    let stairs_json: Vec<Value> = floors
+    // Rules-engine annotations: stairs (OBC 9.8 / 3.4.6 rise/run/width).
+    // Manifest-driven buildings default to a switchback public stair; the
+    // questionnaire path lets the user pick the configuration.
+    let stair_config = "switchback";
+    let mode_by_level: std::collections::HashMap<usize, BuildingMode> = plans
         .iter()
-        .filter(|f| f.rooms.iter().any(|r| r.room_type == "stairs"))
-        .map(|f| {
-            let stair = f.rooms.iter().find(|r| r.room_type == "stairs").unwrap();
-            json!({
-                "id": format!("stairs_{}", f.level),
-                "level_name": format!("Level {}", f.level),
-                "room": stair.id,
-                "x": stair.rect.x * s,
-                "y": stair.rect.y * s,
-                "width": stair.rect.w * s,
-                "depth": stair.rect.h * s,
-                "shape": "switchback",
-                "num_risers": 18,
-                "num_treads": 17,
-                "riser_height": 177.8,
-                "tread_run": 254.0,
-                "width_clear": 900.0,
-                "floor_to_floor": 3048.0,
-                "going": "up",
-            })
-        })
+        .map(|p| (p.level, p.mode))
         .collect();
+    let stairs_json = generate_stairs(floors, stair_config, &|level| {
+        mode_by_level.get(&level).copied().unwrap_or(manifest.mode)
+    });
 
     let total_walls: usize = floors.iter().map(|f| f.walls.len()).sum();
     let total_windows: usize = floors.iter().map(|f| f.windows.len()).sum();
@@ -1304,6 +1316,102 @@ mod tests {
             let (a, b) = (s1[k].as_f64().unwrap(), s2[k].as_f64().unwrap());
             assert!((a - b).abs() < 1.0, "stairs not aligned on {k}: {a} vs {b}");
         }
+    }
+
+    #[test]
+    fn part3_manifest_emits_public_stair_dimensions() {
+        let manifest = crate::ProgramManifest::from_json(
+            r#"{
+                "mode": "part3",
+                "building_name": "Office Block",
+                "sqft": 4000,
+                "floors": [
+                    {
+                        "level": 1,
+                        "name": "Ground",
+                        "occupancy": "business",
+                        "rooms": [
+                            {"id": "lobby", "room_type": "lobby", "min_area": 200},
+                            {"id": "corridor", "room_type": "corridor", "min_area": 150},
+                            {"id": "stairs_1", "room_type": "stairs", "min_area": 120},
+                            {"id": "office_open", "room_type": "office_open", "min_area": 1200},
+                            {"id": "washroom_1", "room_type": "washroom", "min_area": 80}
+                        ]
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+        let v = building_json_from_manifest(&manifest);
+        let stairs = v["stairs"].as_array().unwrap();
+        assert_eq!(stairs.len(), 1);
+        let stair = &stairs[0];
+        let width_clear = stair["width_clear"].as_f64().unwrap() as f32;
+        let tread_run = stair["tread_run"].as_f64().unwrap() as f32;
+        let riser_height = stair["riser_height"].as_f64().unwrap() as f32;
+        assert!(
+            width_clear >= obc::part3::stairs::PUBLIC_MIN_WIDTH_MM,
+            "public stair width_clear {width_clear} mm is below {} mm",
+            obc::part3::stairs::PUBLIC_MIN_WIDTH_MM
+        );
+        assert!(
+            tread_run >= obc::part3::stairs::PUBLIC_MIN_TREAD_MM,
+            "public stair tread_run {tread_run} mm is below {} mm",
+            obc::part3::stairs::PUBLIC_MIN_TREAD_MM
+        );
+        assert!(
+            riser_height <= obc::part3::stairs::PUBLIC_MAX_RISER_MM,
+            "public stair riser_height {riser_height} mm exceeds {} mm",
+            obc::part3::stairs::PUBLIC_MAX_RISER_MM
+        );
+    }
+
+    #[test]
+    fn mixed_building_part3_floor_has_public_stairs_and_part9_floor_private() {
+        let manifest = crate::ProgramManifest::from_json(
+            r#"{
+                "mode": "mixed",
+                "building_name": "Mixed Podium",
+                "sqft": 6000,
+                "floors": [
+                    {
+                        "level": 1,
+                        "name": "Retail",
+                        "occupancy": "mercantile",
+                        "rooms": [
+                            {"id": "retail_1", "room_type": "retail", "min_area": 1500},
+                            {"id": "lobby", "room_type": "lobby", "min_area": 150},
+                            {"id": "stairs_1", "room_type": "stairs", "min_area": 120},
+                            {"id": "washroom_1", "room_type": "washroom", "min_area": 80}
+                        ]
+                    },
+                    {
+                        "level": 2,
+                        "name": "Residential",
+                        "occupancy": "residential",
+                        "rooms": [
+                            {"id": "living", "room_type": "living", "min_area": 250},
+                            {"id": "bedroom_2", "room_type": "bedroom", "min_area": 120},
+                            {"id": "stairs_2", "room_type": "stairs", "min_area": 120}
+                        ]
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+        let v = building_json_from_manifest(&manifest);
+        let stairs = v["stairs"].as_array().unwrap();
+        assert_eq!(stairs.len(), 2);
+        let s1_tread = stairs[0]["tread_run"].as_f64().unwrap() as f32;
+        let s2_tread = stairs[1]["tread_run"].as_f64().unwrap() as f32;
+        assert!(
+            s1_tread >= obc::part3::stairs::PUBLIC_MIN_TREAD_MM,
+            "Level 1 (Part 3) tread should be public: {s1_tread}"
+        );
+        assert!(
+            s2_tread < obc::part3::stairs::PUBLIC_MIN_TREAD_MM,
+            "Level 2 (Part 9) tread should be private: {s2_tread}"
+        );
     }
 
     #[test]

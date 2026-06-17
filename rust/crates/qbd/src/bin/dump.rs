@@ -436,13 +436,27 @@ fn main() -> anyhow::Result<()> {
         engine
             .initialize(lib)
             .with_context(|| format!("failed to initialize OBC from {}", lib.display()))?;
-        let v = qbd::validate_layout(&engine, &doc, &climate_zone);
+        let mut part3_engine = obc::Part3Engine::new();
+        let part3_ok = part3_engine.initialize(lib).is_ok();
+        let v = if part3_ok {
+            qbd::validate_layout_with_part3(&engine, Some(&part3_engine), &doc, &climate_zone)
+        } else {
+            qbd::validate_layout(&engine, &doc, &climate_zone)
+        };
+        let part3_label = if v.part3_reports.is_empty() {
+            "n/a"
+        } else if v.part3_reports.iter().all(obc::ComplianceReport::passes) {
+            "PASS"
+        } else {
+            "FAIL"
+        };
         eprintln!(
-            "  obc: {}/{} walls passed, thermal {} ({})",
+            "  obc: {}/{} walls passed, thermal {} ({}), part3 {}",
             v.walls_passed,
             v.walls_checked,
             if v.thermal_compliance { "PASS" } else { "FAIL" },
             climate_zone,
+            part3_label,
         );
         Some(v)
     } else {

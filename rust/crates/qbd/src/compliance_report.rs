@@ -77,6 +77,10 @@ pub fn compliance_report_to_svg(result: &ValidationResult, project_name: &str) -
     for report in &result.stair_reports {
         rows_for(report, &report.element_id, &mut rows);
     }
+    // Part 3 checks (area/height, egress, fire separation, public stairs).
+    for report in &result.part3_reports {
+        rows_for(report, &report.element_id, &mut rows);
+    }
 
     // ------------------------------------------------------------------
     // Layout constants (px, portrait page).

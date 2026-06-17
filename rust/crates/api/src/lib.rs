@@ -231,7 +231,14 @@ async fn draw(
         engine
             .initialize(dir)
             .map_err(|e| ApiError::Internal(format!("OBC init: {e}")))?;
-        Some(qbd::validate_layout(&engine, &doc, "Zone 6"))
+        let mut part3_engine = obc::Part3Engine::new();
+        let part3_ok = part3_engine.initialize(dir).is_ok();
+        let v = if part3_ok {
+            qbd::validate_layout_with_part3(&engine, Some(&part3_engine), &doc, "Zone 6")
+        } else {
+            qbd::validate_layout(&engine, &doc, "Zone 6")
+        };
+        Some(v)
     } else {
         None
     };

@@ -30,5 +30,5 @@ pub use documentation::{
 pub use floor_plan::generate_floor_plan_with_openings;
 pub use raster::{RasterError, Rasterizer, svg_to_png};
 pub use schedule::{door_entries, window_entries};
-pub use validation::{ValidationResult, validate_layout, validate_wall};
+pub use validation::{ValidationResult, validate_layout, validate_layout_with_part3, validate_wall};
 pub use wall_types::{exterior_2x6_r21, for_category, interior_2x4, wet_2x6};

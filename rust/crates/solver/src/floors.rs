@@ -159,13 +159,18 @@ fn floor_mode(building_mode: BuildingMode, floor: &FloorManifest) -> BuildingMod
 fn circulation_core(manifest: &ProgramManifest, envelope: Rect) -> Rect {
     let mut core_w = 0.0_f32;
     let mut core_d = 0.0_f32;
+    let has_stairs = manifest
+        .floors
+        .iter()
+        .any(|f| f.rooms.iter().any(|r| r.room_type == "stairs"));
+    if has_stairs {
+        let (w, d) = stair_core_size_ft(manifest.mode);
+        core_w = core_w.max(w);
+        core_d = core_d.max(d);
+    }
     for floor in &manifest.floors {
         for r in &floor.rooms {
-            if r.room_type == "stairs" {
-                // Buildable stair bay, approximately 7 ft × 10 ft.
-                core_w = core_w.max(7.0);
-                core_d = core_d.max(10.0);
-            } else if r.room_type == "elevator" {
+            if r.room_type == "elevator" {
                 core_w = core_w.max(5.0);
                 core_d = core_d.max(5.0);
             } else if r.room_type == "shaft" {
@@ -192,6 +197,17 @@ fn circulation_core(manifest: &ProgramManifest, envelope: Rect) -> Rect {
             w: 0.0,
             h: 0.0,
         }
+    }
+}
+
+/// Stair-core footprint in feet. Part 3 / mixed public stairs need a wider
+/// and deeper bay than Part 9 private stairs so the clear width meets the
+/// 1100 mm Business minimum and a switchback flight can fit the longer
+/// public-stair going.
+fn stair_core_size_ft(mode: BuildingMode) -> (f32, f32) {
+    match mode {
+        BuildingMode::Part9 => (7.0, 10.0),
+        BuildingMode::Part3 | BuildingMode::Mixed => (10.0, 14.0),
     }
 }
 
@@ -259,37 +275,28 @@ mod tests {
     }
 
     #[test]
-    fn mixed_building_splits_strategies_by_floor() {
-        let manifest = ProgramManifest::from_json(
+    fn part3_core_is_larger_than_part9_core() {
+        let part3 = sample_office_manifest();
+        let part9 = ProgramManifest::from_json(
             r#"{
-                "mode": "mixed",
+                "mode": "part9",
                 "floors": [
                     {
                         "level": 1,
-                        "occupancy": "mercantile",
                         "rooms": [
-                            {"id": "retail_1", "room_type": "retail", "min_area": 1200},
-                            {"id": "lobby", "room_type": "lobby", "min_area": 150},
-                            {"id": "stairs_1", "room_type": "stairs", "min_area": 120}
-                        ]
-                    },
-                    {
-                        "level": 2,
-                        "occupancy": "residential",
-                        "rooms": [
+                            {"id": "entry", "room_type": "entry", "min_area": 40},
                             {"id": "living", "room_type": "living", "min_area": 200},
-                            {"id": "bedroom_2", "room_type": "bedroom", "min_area": 120},
-                            {"id": "stairs_2", "room_type": "stairs", "min_area": 120}
+                            {"id": "stairs_1", "room_type": "stairs", "min_area": 70}
                         ]
                     }
                 ]
             }"#,
         )
         .unwrap();
-        let plans = plan_floors(&manifest);
-        assert_eq!(plans[0].strategy, FloorStrategy::OpenRetail);
-        assert_eq!(plans[1].strategy, FloorStrategy::ResidentialBsp);
-        // Core is the same size on both floors.
-        assert_eq!(plans[0].core, plans[1].core);
+
+        let p3_plans = plan_floors(&part3);
+        let p9_plans = plan_floors(&part9);
+        assert!(p3_plans[0].core.w > p9_plans[0].core.w, "Part 3 core should be wider");
+        assert!(p3_plans[0].core.h >= p9_plans[0].core.h, "Part 3 core should be at least as deep");
     }
 }

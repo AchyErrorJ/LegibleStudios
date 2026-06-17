@@ -8,8 +8,9 @@
 pub mod detectors;
 pub mod electrical;
 pub mod engine;
-pub mod headers;
 pub mod format;
+pub mod headers;
+pub mod part3;
 pub mod report;
 pub mod stairs;
 pub mod tables;
@@ -18,6 +19,7 @@ pub mod zoning;
 
 pub use engine::{InitError, OBCEngine, sb12_minimum_r};
 pub use format::{cpp_float, cpp_int};
+pub use part3::{FloorInput, Part3Engine, RoomInput};
 pub use report::{ComplianceCheck, ComplianceReport, ComplianceStatus};
 pub use tables::{
     HeaderEntry, SpanEntry, SpanTable, StudEntry, StudTable, load_header_tables_from_json,
