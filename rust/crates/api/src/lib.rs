@@ -597,6 +597,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn solve_manifest_apartment_returns_building_json() {
+        let app = router();
+        let manifest = serde_json::json!({
+            "mode": "part3",
+            "building_name": "Mid-Rise Apartments",
+            "sqft": 6000.0,
+            "floors": [
+                {
+                    "level": 1,
+                    "name": "Level 1",
+                    "rooms": [
+                        {"id": "corridor", "room_type": "corridor", "min_area": 200.0},
+                        {"id": "stairs_1", "room_type": "stairs", "min_area": 120.0},
+                        {"id": "stairs_2", "room_type": "stairs", "min_area": 120.0},
+                        {"id": "elevator_1", "room_type": "elevator", "min_area": 25.0},
+                        {"id": "u1_living", "room_type": "one_bedroom", "min_area": 500.0, "unit": "u1"},
+                        {"id": "u1_bath", "room_type": "washroom", "min_area": 80.0, "unit": "u1"},
+                        {"id": "u2_living", "room_type": "one_bedroom", "min_area": 500.0, "unit": "u2"},
+                        {"id": "u2_bath", "room_type": "washroom", "min_area": 80.0, "unit": "u2"},
+                        {"id": "common", "room_type": "common_room", "min_area": 300.0}
+                    ]
+                }
+            ]
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/solve_manifest")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&manifest).unwrap()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let building = json_body(resp).await;
+        assert_eq!(building["success"], true);
+        assert!(building["walls_batch"].as_array().unwrap().len() >= 4);
+
+        // Feed the manifest building into /draw and confirm sheets come back.
+        let draw_req = Request::builder()
+            .method("POST")
+            .uri("/draw?project=Apartments")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&building).unwrap()))
+            .unwrap();
+        let draw_resp = app.oneshot(draw_req).await.unwrap();
+        assert_eq!(draw_resp.status(), StatusCode::OK);
+        let bundle = json_body(draw_resp).await;
+        let sheets = bundle["sheets"].as_object().unwrap();
+        assert!(sheets.contains_key("02_floor_plan.svg"));
+    }
+
+    #[tokio::test]
     async fn catalog_returns_part3_room_types() {
         let app = router();
         let req = Request::builder()

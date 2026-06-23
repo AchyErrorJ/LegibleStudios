@@ -21,6 +21,7 @@ pub mod floors;
 pub mod layout;
 pub mod manifest;
 pub mod mode;
+pub mod templates;
 
 pub use adjacency::AdjacencyGraph;
 pub use catalog::{RoomCatalog, RoomCatalogEntry};
@@ -28,10 +29,20 @@ pub use floors::{FloorPlanInput, FloorStrategy, plan_floors};
 pub use layout::layout_floor;
 pub use manifest::{ProgramManifest, ManifestError};
 pub use mode::BuildingMode;
+pub use templates::BuildingTemplate;
 pub use emit::{building_json, building_json_from_manifest};
 
 use pk_geom::Transform;
 use pk_object::{Constraint, Object, Scene, Solver};
+
+/// Errors returned by the public solver API.
+#[derive(Debug, thiserror::Error)]
+pub enum SolverError {
+    /// The questionnaire (`Answers`) path only supports Part 9 residential.
+    /// Part 3 and mixed-mode buildings must be supplied as a [`ProgramManifest`].
+    #[error("Part 3 / mixed-mode buildings require a ProgramManifest; use a BuildingTemplate or provide a manifest")]
+    AnswersNotSupportedForMode,
+}
 
 /// Functional zone a room belongs to. Drives the top-level partition
 /// (public near the entry, private at the back).
@@ -47,12 +58,14 @@ impl Zone {
     #[must_use]
     pub fn of(room_type: &str) -> Zone {
         match room_type {
-            "entry" | "living" | "great_room" | "dining" | "kitchen" | "office" | "foyer" => {
+            "entry" | "living" | "great_room" | "dining" | "kitchen" | "office" | "foyer"
+            | "common_room" | "dining_hall" | "lounge" | "fitness_room" => {
                 Zone::Public
             }
-            "hallway" | "corridor" | "stairs" => Zone::Circulation,
-            "mudroom" | "pantry" | "mechanical" | "laundry" | "garage" => Zone::Service,
-            _ => Zone::Private, // bedrooms, baths, closets, powder room
+            "hallway" | "corridor" | "stairs" | "elevator" | "shaft" => Zone::Circulation,
+            "mudroom" | "pantry" | "mechanical" | "laundry" | "garage" | "mail_room"
+            | "storage_locker" | "laundry_room" | "management_office" => Zone::Service,
+            _ => Zone::Private, // bedrooms, baths, closets, powder room, studio, etc.
         }
     }
 
@@ -78,6 +91,10 @@ pub struct RoomSpec {
     pub room_type: String,
     pub weight: f32,
     pub min_area: f32,
+    /// Optional dwelling-unit id; used by multi-unit residential layouts to
+    /// keep unit rooms together.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
 }
 
 impl RoomSpec {
@@ -87,6 +104,7 @@ impl RoomSpec {
             room_type: room_type.into(),
             weight,
             min_area,
+            unit: None,
         }
     }
     #[must_use]
@@ -173,13 +191,14 @@ impl Default for Answers {
 /// baths, garage, laundry) stay near their minimum. Final areas come from
 /// [`allocate_areas`] over the chosen footprint — no fraction summing, so the
 /// program can't over- or under-subscribe the envelope.
-#[must_use]
-pub fn program_from_answers(a: &Answers) -> Vec<RoomSpec> {
+///
+/// **Note:** this path is Part 9 only. Part 3 and mixed-mode buildings must
+/// be supplied via [`ProgramManifest`] (see [`BuildingTemplate`] and
+/// [`building_json_from_manifest`]).
+pub fn program_from_answers(a: &Answers) -> Result<Vec<RoomSpec>, SolverError> {
     match a.mode {
-        BuildingMode::Part9 => program_from_answers_part9(a),
-        BuildingMode::Part3 | BuildingMode::Mixed => {
-            panic!("Part 3 / mixed buildings require a ProgramManifest; use manifest_to_program or ProgramManifest::to_programs")
-        }
+        BuildingMode::Part9 => Ok(program_from_answers_part9(a)),
+        BuildingMode::Part3 | BuildingMode::Mixed => Err(SolverError::AnswersNotSupportedForMode),
     }
 }
 
@@ -477,6 +496,8 @@ pub struct PlacedRoom {
     pub room_type: String,
     pub zone: Zone,
     pub rect: Rect,
+    /// Optional dwelling-unit id for multi-unit residential layouts.
+    pub unit: Option<String>,
 }
 
 /* Adjacency affinity is now computed by AdjacencyGraph in
@@ -675,6 +696,7 @@ fn place_suite(rect: Rect, suite: &Suite, program: &[RoomSpec], areas: &[f32], e
         room_type: program[i].room_type.clone(),
         zone: program[i].zone(),
         rect: r,
+        unit: program[i].unit.clone(),
     };
     if suite.inboard.is_empty() {
         return vec![mk(suite.lead, rect)];
@@ -766,6 +788,7 @@ fn layout_with_stair(env: Rect, suites: &[Suite], stair_pos: usize, program: &[R
         room_type: program[i].room_type.clone(),
         zone: program[i].zone(),
         rect: r,
+        unit: program[i].unit.clone(),
     };
     let stair_rect = Rect { x: env.x, y: env.y, w: sw, h: run };
     let mut placed = vec![mk(stair.lead, stair_rect)];
@@ -882,6 +905,7 @@ fn layout_bedroom_floor(env: Rect, program: &[RoomSpec], areas: &[f32], stair_co
         room_type: program[i].room_type.clone(),
         zone: program[i].zone(),
         rect: r,
+        unit: program[i].unit.clone(),
     };
     let pos = |t: &str| program.iter().position(|r| r.room_type == t);
     let stair_i = pos("stairs");
@@ -1071,7 +1095,8 @@ impl SubdivisionRoomSolver {
     #[must_use]
     pub fn from_answers(a: &Answers) -> Self {
         Self {
-            program: program_from_answers(a),
+            program: program_from_answers(a)
+                .expect("SubdivisionRoomSolver::from_answers requires Part 9 answers; use a manifest for Part 3 / mixed mode"),
             entry_edge: "south".into(),
             stair_config: a.stair_config.clone(),
             graph: AdjacencyGraph::new_for_mode(a.mode),
@@ -1132,7 +1157,7 @@ mod tests {
             style: "balanced".into(),
             ..Answers::default()
         };
-        let p = program_from_answers(&a);
+        let p = program_from_answers(&a).unwrap();
         let ids: Vec<&str> = p.iter().map(|r| r.id.as_str()).collect();
         for want in [
             "entry", "living", "kitchen", "dining", "hallway",
@@ -1143,6 +1168,35 @@ mod tests {
         }
         // 3 bedrooms → primary + bedroom_2 + bedroom_3.
         assert_eq!(p.iter().filter(|r| r.room_type.contains("bedroom")).count(), 3);
+    }
+
+    #[test]
+    fn program_from_answers_rejects_part3_and_mixed() {
+        for mode in [BuildingMode::Part3, BuildingMode::Mixed] {
+            let a = Answers {
+                mode,
+                ..Answers::default()
+            };
+            let err = program_from_answers(&a).expect_err("Part 3 / mixed must use a manifest");
+            assert!(
+                matches!(err, SolverError::AnswersNotSupportedForMode),
+                "expected AnswersNotSupportedForMode, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn building_json_reports_error_for_part3_answers() {
+        let a = Answers {
+            mode: BuildingMode::Part3,
+            ..Answers::default()
+        };
+        let value = building_json(&a);
+        assert_eq!(value["success"].as_bool(), Some(false));
+        assert!(
+            value["error"].as_str().unwrap_or("").contains("ProgramManifest"),
+            "error should direct user to ProgramManifest"
+        );
     }
 
     #[test]
@@ -1158,7 +1212,7 @@ mod tests {
             style: "balanced".into(),
             ..Answers::default()
         };
-        let p = program_from_answers(&a);
+        let p = program_from_answers(&a).unwrap();
         let graph = AdjacencyGraph::new_for_mode(BuildingMode::Part9);
         let order = seriate(&p, &graph);
         let ordered_ids: Vec<&str> = order.iter().map(|&i| p[i].id.as_str()).collect();
@@ -1222,14 +1276,14 @@ mod tests {
             garage: "2car".into(),
             ..Answers::default()
         };
-        let p = program_from_answers(&a);
+        let p = program_from_answers(&a).unwrap();
         assert!(p.iter().any(|r| r.id == "garage" && (r.min_area - 440.0).abs() < 1.0));
         assert!(p.iter().any(|r| r.id == "mudroom"));
     }
 
     #[test]
     fn auto_size_uses_requested_footprint_without_overhead() {
-        let p = program_from_answers(&Answers::default());
+        let p = program_from_answers(&Answers::default()).unwrap();
         let min_total: f32 = p.iter().map(|r| r.min_area).sum();
         // A request above the program minimum IS the footprint — no overhead.
         let (w, d) = auto_size(&p, 1800.0);
@@ -1244,7 +1298,7 @@ mod tests {
 
     #[test]
     fn allocate_areas_floors_small_rooms_and_sums_to_footprint() {
-        let p = program_from_answers(&Answers::default());
+        let p = program_from_answers(&Answers::default()).unwrap();
         let areas = allocate_areas(&p, 1800.0);
         assert_eq!(areas.len(), p.len());
         // Tiles the whole footprint.
@@ -1261,7 +1315,7 @@ mod tests {
     #[test]
     fn subdivide_places_every_room_inside_the_envelope() {
         let a = Answers::default();
-        let p = program_from_answers(&a);
+        let p = program_from_answers(&a).unwrap();
         let (w, d) = auto_size(&p, 0.0);
         let env = Rect { x: 0.0, y: 0.0, w, h: d };
         let placed = subdivide(env, &p, "south", "switchback", &AdjacencyGraph::new_for_mode(BuildingMode::Part9));
@@ -1324,7 +1378,7 @@ mod tests {
                 style: "balanced".into(),
                 ..Answers::default()
             };
-            let p = program_from_answers(&a);
+            let p = program_from_answers(&a).unwrap();
             let (w, d) = auto_size(&p, sqft);
             let env = Rect { x: 0.0, y: 0.0, w, h: d };
             let placed = subdivide(env, &p, "south", "switchback", &AdjacencyGraph::new_for_mode(BuildingMode::Part9));
@@ -1358,7 +1412,7 @@ mod tests {
             style: "balanced".into(),
             ..Answers::default()
         };
-        let p = program_from_answers(&a);
+        let p = program_from_answers(&a).unwrap();
         let (w, d) = auto_size(&p, a.sqft);
         let placed = subdivide(Rect { x: 0.0, y: 0.0, w, h: d }, &p, "south", "switchback", &AdjacencyGraph::new_for_mode(BuildingMode::Part9));
         let rect_of = |id: &str| placed.iter().find(|r| r.id == id).map(|r| r.rect);
@@ -1384,7 +1438,7 @@ mod tests {
     #[test]
     fn public_zone_sits_at_the_entry_edge_south() {
         let a = Answers::default();
-        let p = program_from_answers(&a);
+        let p = program_from_answers(&a).unwrap();
         let env = Rect { x: 0.0, y: 0.0, w: 60.0, h: 40.0 };
         let placed = subdivide(env, &p, "south", "switchback", &AdjacencyGraph::new_for_mode(BuildingMode::Part9));
         // South entry → public rooms at low Y, private at high Y.
@@ -1465,7 +1519,7 @@ mod tests {
             stair_config: "straight".into(),
             ..Default::default()
         };
-        let p = program_from_answers(&a);
+        let p = program_from_answers(&a).unwrap();
         let floors = split_floors(&p, 2);
         let ground = &floors[0];
         let (w, d) = auto_size(ground, a.sqft / 2.0); // per-floor footprint

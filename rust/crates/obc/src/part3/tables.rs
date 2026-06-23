@@ -54,6 +54,9 @@ impl MajorOccupancy {
 pub struct AreaHeightLimit {
     pub occupancy: MajorOccupancy,
     pub sprinklered: bool,
+    /// True when this row represents an alternative-solution compliance path
+    /// (e.g. mid-rise residential beyond the as-of-right table limits).
+    pub alternative_solution: bool,
     /// Maximum building area per storey, m².
     pub max_area_per_storey_m2: f32,
     /// Maximum building height, m.
@@ -97,6 +100,8 @@ struct WireAreaHeightEntry {
     occupancy: String,
     #[serde(default)]
     sprinklered: bool,
+    #[serde(default)]
+    alternative_solution: bool,
     max_area_per_storey_m2: f32,
     max_height_m: f32,
     max_storeys: u32,
@@ -149,16 +154,17 @@ struct WireFireSeparationFile {
 
 pub fn load_area_height_limits_from_json(
     json_str: &str,
-) -> Result<HashMap<(MajorOccupancy, bool), AreaHeightLimit>, serde_json::Error> {
+) -> Result<HashMap<(MajorOccupancy, bool, bool), AreaHeightLimit>, serde_json::Error> {
     let wire: WireAreaHeightFile = serde_json::from_str(json_str)?;
     let mut out = HashMap::new();
     for e in wire.entries {
         if let Some(occ) = MajorOccupancy::from_str(&e.occupancy) {
             out.insert(
-                (occ, e.sprinklered),
+                (occ, e.sprinklered, e.alternative_solution),
                 AreaHeightLimit {
                     occupancy: occ,
                     sprinklered: e.sprinklered,
+                    alternative_solution: e.alternative_solution,
                     max_area_per_storey_m2: e.max_area_per_storey_m2,
                     max_height_m: e.max_height_m,
                     max_storeys: e.max_storeys,
@@ -250,9 +256,9 @@ mod tests {
             ]
         }"#;
         let map = load_area_height_limits_from_json(json).unwrap();
-        let unsprinklered = map.get(&(MajorOccupancy::Business, false)).unwrap();
+        let unsprinklered = map.get(&(MajorOccupancy::Business, false, false)).unwrap();
         assert_eq!(unsprinklered.max_storeys, 6);
-        let sprinklered = map.get(&(MajorOccupancy::Business, true)).unwrap();
+        let sprinklered = map.get(&(MajorOccupancy::Business, true, false)).unwrap();
         assert_eq!(sprinklered.max_storeys, 12);
     }
 

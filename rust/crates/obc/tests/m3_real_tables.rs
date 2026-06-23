@@ -12,7 +12,6 @@ use std::path::PathBuf;
 fn library_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("test-data")
         .join("OBC_Library")
 }
 
@@ -20,7 +19,7 @@ fn initialised_engine() -> OBCEngine {
     let mut engine = OBCEngine::new();
     engine
         .initialize(&library_path())
-        .expect("OBC tables must load from test-data");
+        .expect("OBC tables must load from OBC_Library");
     assert!(engine.is_initialized());
     engine
 }

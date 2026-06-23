@@ -79,6 +79,52 @@ impl ProgramManifest {
             }
         }
 
+        // Unit validation: a unit id may only appear on one floor and should
+        // contain at least one sleeping / living room.
+        let mut unit_to_floor: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut unit_has_dwelling_room: std::collections::HashMap<String, bool> =
+            std::collections::HashMap::new();
+        for (fi, floor) in self.floors.iter().enumerate() {
+            for room in &floor.rooms {
+                if let Some(unit) = &room.unit {
+                    if unit.is_empty() {
+                        errors.push(format!("floor {} room '{}' has empty unit id", fi, room.id));
+                        continue;
+                    }
+                    if let Some(prev_floor) = unit_to_floor.get(unit) {
+                        if *prev_floor != fi {
+                            errors.push(format!(
+                                "unit '{}' appears on floor {} and floor {}; units must stay on one floor",
+                                unit, prev_floor + 1, fi + 1
+                            ));
+                        }
+                    } else {
+                        unit_to_floor.insert(unit.clone(), fi);
+                    }
+                    let is_dwelling = matches!(
+                        room.room_type.as_str(),
+                        "studio"
+                            | "one_bedroom"
+                            | "two_bedroom"
+                            | "three_bedroom"
+                            | "suite"
+                            | "bedroom"
+                            | "primary_bedroom"
+                            | "living"
+                    );
+                    *unit_has_dwelling_room.entry(unit.clone()).or_insert(false) |= is_dwelling;
+                }
+            }
+        }
+        for (unit, has_dwelling) in &unit_has_dwelling_room {
+            if !has_dwelling {
+                errors.push(format!(
+                    "unit '{}' does not contain a bedroom or living room",
+                    unit
+                ));
+            }
+        }
+
         // Mode-specific required rooms.
         match self.mode {
             BuildingMode::Part9 => {
@@ -123,6 +169,7 @@ impl ProgramManifest {
                             room_type: r.room_type.clone(),
                             weight: r.weight.unwrap_or(default_weight),
                             min_area: r.min_area.unwrap_or(default_min_area),
+                            unit: r.unit.clone(),
                         }
                     })
                     .collect()
@@ -157,7 +204,7 @@ impl Default for FloorManifest {
 }
 
 /// One room in a manifest.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RoomManifest {
     /// Unique id across the whole building.
     pub id: String,
@@ -173,6 +220,10 @@ pub struct RoomManifest {
     /// If true, the solver should try to place this room on an exterior wall.
     #[serde(default)]
     pub needs_exterior: Option<bool>,
+    /// Optional dwelling-unit id. Rooms sharing a unit id are treated as one
+    /// apartment / suite for layout and code checks.
+    #[serde(default)]
+    pub unit: Option<String>,
 }
 
 /// Explicit adjacency override between two room ids or room types.
@@ -285,5 +336,73 @@ mod tests {
         let lobby = programs[0].iter().find(|r| r.id == "lobby").unwrap();
         assert_eq!(lobby.min_area, 200.0);
         assert_eq!(lobby.weight, 8.0);
+    }
+
+    #[test]
+    fn validation_accepts_valid_unit() {
+        let json = r#"{
+            "mode": "part3",
+            "floors": [
+                {
+                    "level": 1,
+                    "rooms": [
+                        {"id": "corridor", "room_type": "corridor"},
+                        {"id": "stairs_1", "room_type": "stairs"},
+                        {"id": "u1_living", "room_type": "one_bedroom", "unit": "u1"},
+                        {"id": "u1_bath", "room_type": "washroom", "unit": "u1"}
+                    ]
+                }
+            ]
+        }"#;
+        let m = ProgramManifest::from_json(json).unwrap();
+        assert!(m.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_unit_spanning_floors() {
+        let json = r#"{
+            "mode": "part3",
+            "floors": [
+                {
+                    "level": 1,
+                    "rooms": [
+                        {"id": "corridor", "room_type": "corridor"},
+                        {"id": "stairs_1", "room_type": "stairs"},
+                        {"id": "u1_living", "room_type": "one_bedroom", "unit": "u1"}
+                    ]
+                },
+                {
+                    "level": 2,
+                    "rooms": [
+                        {"id": "corridor", "room_type": "corridor"},
+                        {"id": "stairs_1", "room_type": "stairs"},
+                        {"id": "u1_bed", "room_type": "one_bedroom", "unit": "u1"}
+                    ]
+                }
+            ]
+        }"#;
+        let m = ProgramManifest::from_json(json).unwrap();
+        let err = m.validate().unwrap_err();
+        assert!(err.iter().any(|e| e.contains("u1") && e.contains("floor")));
+    }
+
+    #[test]
+    fn validation_rejects_unit_without_dwelling_room() {
+        let json = r#"{
+            "mode": "part3",
+            "floors": [
+                {
+                    "level": 1,
+                    "rooms": [
+                        {"id": "corridor", "room_type": "corridor"},
+                        {"id": "stairs_1", "room_type": "stairs"},
+                        {"id": "u1_bath", "room_type": "washroom", "unit": "u1"}
+                    ]
+                }
+            ]
+        }"#;
+        let m = ProgramManifest::from_json(json).unwrap();
+        let err = m.validate().unwrap_err();
+        assert!(err.iter().any(|e| e.contains("u1") && e.contains("bedroom")));
     }
 }

@@ -35,6 +35,41 @@ pub struct Elevation {
     pub dxf: Vec<u8>,
 }
 
+/// Options controlling which sheets are produced in the documentation bundle.
+///
+/// The defaults produce the full permit set; callers can opt out of sheets
+/// that are deferred to other consultants (e.g. the framing plan, which is
+/// typically engineered separately).
+#[derive(Debug, Clone)]
+pub struct DocumentationOptions {
+    /// Include the framing-plan sheet. Default: `true`.
+    pub include_framing_plan: bool,
+}
+
+impl Default for DocumentationOptions {
+    fn default() -> Self {
+        Self {
+            include_framing_plan: true,
+        }
+    }
+}
+
+impl DocumentationOptions {
+    /// Full permit set.
+    #[must_use]
+    pub fn all() -> Self {
+        Self::default()
+    }
+
+    /// Omit sheets typically produced by the structural engineer.
+    #[must_use]
+    pub fn without_engineer_sheets() -> Self {
+        Self {
+            include_framing_plan: false,
+        }
+    }
+}
+
 /// Permit-set bundle. Carries the floor-plan SVG plus the surrounding
 /// permit-set sheets (site plan, elevations, section, wall details) for
 /// the parts the Rust pipeline ports today.
@@ -631,6 +666,17 @@ pub fn generate_documentation(
     doc: &SchemaDocument,
     project_name: impl Into<String>,
 ) -> Documentation {
+    generate_documentation_with_options(doc, project_name, DocumentationOptions::default())
+}
+
+/// Variant of [`generate_documentation`] with full sheet-selection control.
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn generate_documentation_with_options(
+    doc: &SchemaDocument,
+    project_name: impl Into<String>,
+    options: DocumentationOptions,
+) -> Documentation {
     let project_name: String = project_name.into();
     let project = ProjectInfo {
         name: project_name,
@@ -638,7 +684,7 @@ pub fn generate_documentation(
         solver: "QBD Layout".into(),
         ..Default::default()
     };
-    generate_documentation_for_project(doc, project)
+    generate_documentation_for_project_with_options(doc, project, options)
 }
 
 /// Variant of [`generate_documentation`] that takes the full
@@ -649,6 +695,18 @@ pub fn generate_documentation(
 pub fn generate_documentation_for_project(
     doc: &SchemaDocument,
     project: ProjectInfo,
+) -> Documentation {
+    generate_documentation_for_project_with_options(doc, project, DocumentationOptions::default())
+}
+
+/// Variant of [`generate_documentation_for_project`] with full sheet-selection
+/// control.
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn generate_documentation_for_project_with_options(
+    doc: &SchemaDocument,
+    project: ProjectInfo,
+    options: DocumentationOptions,
 ) -> Documentation {
     let config = Config::with_defaults();
     let project_name = project.name.clone();
@@ -723,6 +781,16 @@ pub fn generate_documentation_for_project(
         drawing::export_to_dxf(&slice).unwrap_or_default()
     };
 
+    let framing_plan_svg = if options.include_framing_plan {
+        with_tb(
+            generate_framing_plan_svg(doc, &JoistSpec::default(), "Level 1", FP_SCALE, FP_PAD),
+            DrawingType::FramingPlan,
+            "1:100",
+        )
+    } else {
+        String::new()
+    };
+
     Documentation {
         project_name: project_name.clone(),
         generated_date: date.clone(),
@@ -758,11 +826,7 @@ pub fn generate_documentation_for_project(
             DrawingType::FoundationPlan,
             "1:100",
         ),
-        framing_plan_svg: with_tb(
-            generate_framing_plan_svg(doc, &JoistSpec::default(), "Level 1", FP_SCALE, FP_PAD),
-            DrawingType::FramingPlan,
-            "1:100",
-        ),
+        framing_plan_svg,
         footing_detail_svg: with_fitted_tb(
             // 1.5× viewport scale + a healthy pad makes the rebar dots and
             // callout text legible at sheet scale.
@@ -816,6 +880,24 @@ pub fn generate_documentation_with_validation_for_project(
         let report_svg = crate::compliance_report::compliance_report_to_svg(validation, &docs.project_name);
         // Same consistent sheet frame + title block as every other sheet.
         // Reuse the caller's ProjectInfo so the designer/BCIN appear here too.
+        let info = drawing_info_for(DrawingType::ComplianceReport, "—", &docs.generated_date);
+        docs.compliance_report_svg = inject_sheet_titleblock(&report_svg, &project, &info, false);
+    }
+    docs
+}
+
+/// Variant of [`generate_documentation_with_validation_for_project`] with
+/// full sheet-selection control.
+#[must_use]
+pub fn generate_documentation_with_validation_and_options(
+    doc: &SchemaDocument,
+    project: ProjectInfo,
+    validation: &crate::ValidationResult,
+    options: DocumentationOptions,
+) -> Documentation {
+    let mut docs = generate_documentation_for_project_with_options(doc, project.clone(), options);
+    if !validation.wall_reports.is_empty() {
+        let report_svg = crate::compliance_report::compliance_report_to_svg(validation, &docs.project_name);
         let info = drawing_info_for(DrawingType::ComplianceReport, "—", &docs.generated_date);
         docs.compliance_report_svg = inject_sheet_titleblock(&report_svg, &project, &info, false);
     }

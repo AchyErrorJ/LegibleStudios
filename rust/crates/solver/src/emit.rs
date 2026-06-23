@@ -49,7 +49,15 @@ struct Floor {
 /// floors share one (stacked) footprint sized to the largest floor's program.
 #[must_use]
 pub fn building_json(answers: &Answers) -> Value {
-    let program = program_from_answers(answers);
+    let program = match program_from_answers(answers) {
+        Ok(p) => p,
+        Err(e) => {
+            return json!({
+                "success": false,
+                "error": e.to_string(),
+            });
+        }
+    };
     let floors_n = answers.floor_count();
     let programs = split_floors(&program, floors_n);
     #[allow(clippy::cast_precision_loss)]
@@ -285,16 +293,16 @@ fn generate_walls(rooms: &[PlacedRoom], env: Rect, is_ground: bool) -> Vec<Wall>
 /// to the bedroom. Bedrooms never door to each other.
 fn door_between(a: &str, b: &str) -> bool {
     fn circ(t: &str) -> bool {
-        matches!(t, "hallway" | "stairs" | "entry" | "foyer" | "mudroom" | "landing")
+        matches!(t, "hallway" | "corridor" | "stairs" | "entry" | "foyer" | "mudroom" | "landing")
     }
     let closet = |t: &str| t.contains("closet");
     let bedroom = |t: &str| t.contains("bedroom");
     let connect = |a: &str, b: &str| -> bool {
         if a == "stairs" {
-            return matches!(b, "hallway" | "landing" | "foyer"); // stairs reach only the hall
+            return matches!(b, "hallway" | "corridor" | "landing" | "foyer"); // stairs reach the hall/corridor
         }
         if circ(a) {
-            return !closet(b) && b != "primary_bath"; // hall → bedroom/bath/stair
+            return !closet(b) && b != "primary_bath"; // hall/corridor → bedroom/bath/stair
         }
         if closet(a) {
             return bedroom(b); // a closet opens only to its bedroom, never the
@@ -639,11 +647,11 @@ const PART3_MIN_WIDTH_MM: f32 = 1100.0;
 /// on the topmost storey's stair (the arrival from below).
 fn generate_stairs(
     floors: &[Floor],
+    ff_mm: f32,
     stair_config: &str,
     mode_for_floor: &dyn Fn(usize) -> BuildingMode,
 ) -> Vec<Value> {
     let s = FEET_TO_MM;
-    let ff_mm = FLOOR_TO_FLOOR_FT * s;
     let top_level = floors.iter().map(|f| f.level).max().unwrap_or(1);
 
     let mut out = Vec::new();
@@ -814,17 +822,22 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
                 Zone::Service => "service",
                 Zone::Private => "private",
             };
+            let mut room_json = json!({
+                "id": r.id,
+                "name": title_case(&r.id),
+                "level": level_name,
+                "bounds": { "x": r.rect.x * s, "y": r.rect.y * s, "width": r.rect.w * s, "height": r.rect.h * s },
+                "area": r.rect.area() * s * s,
+                "center": { "x": (r.rect.x + r.rect.w * 0.5) * s, "y": (r.rect.y + r.rect.h * 0.5) * s },
+                "room_type": r.room_type,
+                "zone": zone,
+            });
+            if let Some(unit) = &r.unit {
+                room_json["unit"] = json!(unit);
+            }
             rooms_map.insert(
                 r.id.clone(),
-                json!({
-                    "name": title_case(&r.id),
-                    "level": level_name,
-                    "bounds": { "x": r.rect.x * s, "y": r.rect.y * s, "width": r.rect.w * s, "height": r.rect.h * s },
-                    "area": r.rect.area() * s * s,
-                    "center": { "x": (r.rect.x + r.rect.w * 0.5) * s, "y": (r.rect.y + r.rect.h * 0.5) * s },
-                    "room_type": r.room_type,
-                    "zone": zone,
-                }),
+                room_json,
             );
         }
 
@@ -894,7 +907,10 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
 
     // Rules-engine annotations: stairs (OBC 9.8 / 3.4.6 rise/run/width).
     let mode = answers.mode;
-    let stairs_json = generate_stairs(floors, &answers.stair_config, &move |_| mode);
+    let ff_mm = FLOOR_TO_FLOOR_FT * s;
+    let stairs_json = generate_stairs(floors, ff_mm, &answers.stair_config, &move |_| mode);
+
+    let circulation_graph = build_circulation_graph(floors);
 
     let total_walls: usize = floors.iter().map(|f| f.walls.len()).sum();
     let total_windows: usize = floors.iter().map(|f| f.windows.len()).sum();
@@ -927,6 +943,7 @@ fn to_json(answers: &Answers, env: Rect, floors: &[Floor]) -> Value {
         "stairs": stairs_json,
         "levels": levels,
         "dimensions": dimensions,
+        "circulation_graph": circulation_graph,
         "rooms": Value::Object(rooms_map),
         "is_complete": true,
         "unplaced_rooms": [],
@@ -1042,31 +1059,43 @@ fn to_json_manifest(
                 Zone::Service => "service",
                 Zone::Private => "private",
             };
+            let mut room_json = json!({
+                "id": r.id,
+                "name": title_case(&r.id),
+                "level": level_name,
+                "bounds": { "x": r.rect.x * s, "y": r.rect.y * s, "width": r.rect.w * s, "height": r.rect.h * s },
+                "area": r.rect.area() * s * s,
+                "center": { "x": (r.rect.x + r.rect.w * 0.5) * s, "y": (r.rect.y + r.rect.h * 0.5) * s },
+                "room_type": r.room_type,
+                "zone": zone,
+            });
+            if let Some(unit) = &r.unit {
+                room_json["unit"] = json!(unit);
+            }
             rooms_map.insert(
                 r.id.clone(),
-                json!({
-                    "name": title_case(&r.id),
-                    "level": level_name,
-                    "bounds": { "x": r.rect.x * s, "y": r.rect.y * s, "width": r.rect.w * s, "height": r.rect.h * s },
-                    "area": r.rect.area() * s * s,
-                    "center": { "x": (r.rect.x + r.rect.w * 0.5) * s, "y": (r.rect.y + r.rect.h * 0.5) * s },
-                    "room_type": r.room_type,
-                    "zone": zone,
-                }),
+                room_json,
             );
         }
 
         wall_offset += floor.walls.len();
     }
 
+    let floor_to_floor_mm = manifest.floor_to_floor_ft * s;
+
     let levels_v: Vec<Value> = (0..floors.len())
         .map(|i| {
-            json!({
+            let occ = plans.get(i).and_then(|p| p.occupancy.clone());
+            let mut lvl = json!({
                 "id": format!("level_{}", i + 1),
                 "name": format!("Level {}", i + 1),
-                "elevation": i as f32 * 10.0 * s,
-                "floor_to_floor_height": 10.0 * s,
-            })
+                "elevation": i as f32 * floor_to_floor_mm,
+                "floor_to_floor_height": floor_to_floor_mm,
+            });
+            if let Some(o) = occ {
+                lvl["occupancy"] = json!(o);
+            }
+            lvl
         })
         .collect();
     let levels = Value::Array(levels_v);
@@ -1088,13 +1117,10 @@ fn to_json_manifest(
     // Manifest-driven buildings default to a switchback public stair; the
     // questionnaire path lets the user pick the configuration.
     let stair_config = "switchback";
-    let mode_by_level: std::collections::HashMap<usize, BuildingMode> = plans
-        .iter()
-        .map(|p| (p.level, p.mode))
-        .collect();
-    let stairs_json = generate_stairs(floors, stair_config, &|level| {
-        mode_by_level.get(&level).copied().unwrap_or(manifest.mode)
-    });
+    let stair_mode = manifest.mode;
+    let stairs_json = generate_stairs(floors, floor_to_floor_mm, stair_config, &|_| stair_mode);
+
+    let circulation_graph = build_circulation_graph(floors);
 
     let total_walls: usize = floors.iter().map(|f| f.walls.len()).sum();
     let total_windows: usize = floors.iter().map(|f| f.windows.len()).sum();
@@ -1125,6 +1151,7 @@ fn to_json_manifest(
         "stairs": stairs_json,
         "levels": levels,
         "dimensions": dimensions,
+        "circulation_graph": circulation_graph,
         "rooms": Value::Object(rooms_map),
         "is_complete": true,
         "unplaced_rooms": [],
@@ -1166,6 +1193,68 @@ fn to_json_manifest(
 
 fn doors_count(walls: &[Wall]) -> usize {
     walls.iter().map(|w| w.openings.len()).sum()
+}
+
+/// Build a minimal circulation graph from the placed rooms. Nodes are placed at
+/// stair/elevator centroids and corridor centroids; vertical edges connect the
+/// same stair/elevator shaft across consecutive floors. This is the seed of the
+/// path-of-travel graph — future work will add door nodes and wall-following
+/// corridor centerlines.
+fn build_circulation_graph(floors: &[Floor]) -> Value {
+    let s = FEET_TO_MM;
+    let mut nodes: Vec<Value> = Vec::new();
+    let mut edges: Vec<Value> = Vec::new();
+    let mut shaft_nodes: std::collections::HashMap<String, Vec<(String, usize)>> =
+        std::collections::HashMap::new();
+
+    for floor in floors {
+        let level_name = format!("Level {}", floor.level);
+        for room in &floor.rooms {
+            let cx = (room.rect.x + room.rect.w * 0.5) * s;
+            let cy = (room.rect.y + room.rect.h * 0.5) * s;
+            let sanitized_id = room.id.replace(' ', "_");
+            let node_id = format!("{}_{}", sanitized_id, floor.level);
+            match room.room_type.as_str() {
+                "stairs" | "elevator" => {
+                    nodes.push(json!({
+                        "id": node_id.clone(),
+                        "kind": room.room_type,
+                        "level": level_name,
+                        "x": cx,
+                        "y": cy,
+                    }));
+                    shaft_nodes
+                        .entry(room.id.clone())
+                        .or_default()
+                        .push((node_id, floor.level));
+                }
+                "corridor" | "hallway" => {
+                    nodes.push(json!({
+                        "id": node_id.clone(),
+                        "kind": "corridor",
+                        "level": level_name,
+                        "x": cx,
+                        "y": cy,
+                    }));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Vertical shaft edges: connect the same stair/elevator on consecutive floors.
+    for (_shaft_id, mut levels) in shaft_nodes {
+        levels.sort_by(|a, b| a.1.cmp(&b.1));
+        for pair in levels.windows(2) {
+            edges.push(json!({
+                "from": pair[0].0,
+                "to": pair[1].0,
+                "kind": "vertical_shaft",
+            }));
+        }
+    }
+
+    json!({ "nodes": nodes, "edges": edges })
 }
 
 /// Deterministic 8-hex id from a manifest (FNV-1a).
@@ -1402,16 +1491,13 @@ mod tests {
         let v = building_json_from_manifest(&manifest);
         let stairs = v["stairs"].as_array().unwrap();
         assert_eq!(stairs.len(), 2);
-        let s1_tread = stairs[0]["tread_run"].as_f64().unwrap() as f32;
-        let s2_tread = stairs[1]["tread_run"].as_f64().unwrap() as f32;
-        assert!(
-            s1_tread >= obc::part3::stairs::PUBLIC_MIN_TREAD_MM,
-            "Level 1 (Part 3) tread should be public: {s1_tread}"
-        );
-        assert!(
-            s2_tread < obc::part3::stairs::PUBLIC_MIN_TREAD_MM,
-            "Level 2 (Part 9) tread should be private: {s2_tread}"
-        );
+        for s in stairs {
+            let tread = s["tread_run"].as_f64().unwrap() as f32;
+            assert!(
+                tread >= obc::part3::stairs::PUBLIC_MIN_TREAD_MM,
+                "shared stairs in a mixed building must be public: {tread}"
+            );
+        }
     }
 
     #[test]

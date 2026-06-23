@@ -5,7 +5,7 @@
 //! fire separation, and public stair dimensions.
 
 use crate::part3::{
-    egress::{FloorEgress, RoomEgress},
+    egress::{FloorEgress, RoomEgress, StairEgress},
     occupancy::{FloorSummary, check_area_height_limits, dominant_occupancy},
     stairs::StairInput,
     tables::{
@@ -41,7 +41,7 @@ pub enum InitError {
 pub struct Part3Engine {
     library_path: String,
     initialized: bool,
-    area_height_limits: HashMap<(MajorOccupancy, bool), AreaHeightLimit>,
+    area_height_limits: HashMap<(MajorOccupancy, bool, bool), AreaHeightLimit>,
     travel_distance_limits: HashMap<MajorOccupancy, TravelDistanceLimit>,
     stair_requirements: HashMap<MajorOccupancy, StairRequirement>,
     fire_separations: Vec<FireSeparation>,
@@ -121,16 +121,23 @@ impl Part3Engine {
         &self,
         floors: &[FloorInput],
         sprinklered: bool,
+        alternative_solution: bool,
     ) -> ComplianceReport {
         let mut checks = Vec::new();
+
+        let floor_occupancy = |f: &FloorInput| -> MajorOccupancy {
+            f.occupancy.unwrap_or_else(|| {
+                dominant_occupancy(
+                    &f.rooms.iter().map(|r| (r.room_type.clone(), r.area_m2)).collect::<Vec<_>>()
+                )
+            })
+        };
 
         let area_height_floors: Vec<FloorSummary> = floors
             .iter()
             .map(|f| FloorSummary {
                 level: f.level,
-                occupancy: dominant_occupancy(
-                    &f.rooms.iter().map(|r| (r.room_type.clone(), r.area_m2)).collect::<Vec<_>>()
-                ),
+                occupancy: floor_occupancy(f),
                 area_m2: f.area_m2,
                 height_m: f.height_m,
                 storey_count: floors.len() as u32,
@@ -140,30 +147,45 @@ impl Part3Engine {
             &self.area_height_limits,
             &area_height_floors,
             sprinklered,
+            alternative_solution,
         ));
 
         let egress_floors: Vec<FloorEgress> = floors
             .iter()
             .map(|f| FloorEgress {
                 level: f.level,
-                occupancy: dominant_occupancy(
-                    &f.rooms.iter().map(|r| (r.room_type.clone(), r.area_m2)).collect::<Vec<_>>()
-                ),
+                occupancy: floor_occupancy(f),
                 rooms: f
                     .rooms
                     .iter()
                     .map(|r| RoomEgress {
                         id: r.id.clone(),
                         room_type: r.room_type.clone(),
+                        area_m2: r.area_m2,
+                        unit: r.unit.clone(),
                         center_m: r.center_m,
                     })
                     .collect(),
-                stairs: f.stair_centroids.clone(),
+                edges: f.edges.clone(),
+                stairs: f
+                    .stairs
+                    .iter()
+                    .zip(f.stair_centroids.iter())
+                    .map(|(s, &c)| StairEgress {
+                        id: s.id.clone(),
+                        centroid_m: c,
+                        width_clear_mm: s.width_clear_mm,
+                    })
+                    .collect(),
             })
             .collect();
         checks.extend(crate::part3::egress::check_travel_distance(
             &self.travel_distance_limits,
             &egress_floors,
+        ));
+        checks.extend(crate::part3::egress::check_exit_count(&egress_floors,
+        ));
+        checks.extend(crate::part3::egress::check_exit_width(&egress_floors,
         ));
 
         let floor_occupancies: Vec<(usize, MajorOccupancy)> = area_height_floors
@@ -175,10 +197,38 @@ impl Part3Engine {
             &floor_occupancies,
         ));
 
+        let all_elevators: Vec<(f32, f32)> = floors
+            .iter()
+            .flat_map(|f| f.elevators.clone())
+            .collect();
+        checks.extend(crate::part3::elevators::check_elevators(
+            floors.len(),
+            &all_elevators,
+        ));
+
+        // Suite / dwelling-unit separation for residential floors.
+        let suite_floors: Vec<crate::part3::suite_separation::FloorInput> = floors
+            .iter()
+            .map(|f| crate::part3::suite_separation::FloorInput {
+                level: f.level,
+                occupancy: floor_occupancy(f),
+                rooms: f
+                    .rooms
+                    .iter()
+                    .map(|r| crate::part3::suite_separation::RoomInput {
+                        id: r.id.clone(),
+                        room_type: r.room_type.clone(),
+                        unit: r.unit.clone(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        checks.extend(crate::part3::suite_separation::check_suite_separation(
+            &suite_floors,
+        ));
+
         for floor in floors {
-            let occ = dominant_occupancy(
-                &floor.rooms.iter().map(|r| (r.room_type.clone(), r.area_m2)).collect::<Vec<_>>()
-            );
+            let occ = floor_occupancy(floor);
             checks.extend(crate::part3::stairs::check_public_stairs(
                 &self.stair_requirements,
                 &floor.stairs,
@@ -203,8 +253,14 @@ pub struct FloorInput {
     pub area_m2: f32,
     pub height_m: f32,
     pub rooms: Vec<RoomInput>,
+    /// Navigable room-to-room edges (doors) on this floor.
+    pub edges: Vec<crate::part3::egress::RoomEdge>,
     pub stair_centroids: Vec<(f32, f32)>,
     pub stairs: Vec<StairInput>,
+    pub elevators: Vec<(f32, f32)>,
+    /// Optional explicit major occupancy for the floor. When present it
+    /// overrides the room-type heuristic in `dominant_occupancy`.
+    pub occupancy: Option<crate::part3::tables::MajorOccupancy>,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +269,8 @@ pub struct RoomInput {
     pub room_type: String,
     pub area_m2: f32,
     pub center_m: (f32, f32),
+    /// Optional dwelling-unit id for suite-separation checks.
+    pub unit: Option<String>,
 }
 
 enum TableKind {
@@ -261,20 +319,34 @@ mod tests {
 
         let floors = vec![FloorInput {
             level: 1,
-            area_m2: 2000.0,
+            area_m2: 450.0,
             height_m: 12.0,
             rooms: vec![
                 RoomInput {
                     id: "lobby".into(),
                     room_type: "lobby".into(),
-                    area_m2: 200.0,
+                    area_m2: 50.0,
                     center_m: (5.0, 5.0),
+                    unit: None,
                 },
                 RoomInput {
                     id: "office".into(),
                     room_type: "office_open".into(),
-                    area_m2: 1500.0,
+                    area_m2: 200.0,
                     center_m: (20.0, 15.0),
+                    unit: None,
+                },
+            ],
+            edges: vec![
+                crate::part3::egress::RoomEdge {
+                    room_a: "lobby".into(),
+                    room_b: "stairs_1".into(),
+                    distance_m: 7.07,
+                },
+                crate::part3::egress::RoomEdge {
+                    room_a: "office".into(),
+                    room_b: "stairs_1".into(),
+                    distance_m: 11.18,
                 },
             ],
             stair_centroids: vec![(10.0, 10.0)],
@@ -284,8 +356,10 @@ mod tests {
                 riser_height_mm: 175.0,
                 tread_run_mm: 280.0,
             }],
+            elevators: vec![(12.0, 12.0)],
+            occupancy: None,
         }];
-        let report = engine.validate(&floors, false);
+        let report = engine.validate(&floors, false, false);
         assert!(!report.checks.is_empty());
         assert!(report.passes(), "small office should pass Part 3 limits");
     }

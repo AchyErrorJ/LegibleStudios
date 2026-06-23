@@ -159,6 +159,30 @@ fn part3_catalog() -> Vec<RoomCatalogEntry> {
             .with_occupancy("business"),
         RoomCatalogEntry::new("entry", Zone::Public, 2.0, 40.0, &[BuildingMode::Part3])
             .with_occupancy("business"),
+        RoomCatalogEntry::new("lounge", Zone::Public, 10.0, 150.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("study", Zone::Public, 6.0, 100.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        // Apartment / residential dwelling units
+        RoomCatalogEntry::new("studio", Zone::Private, 8.0, 350.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("one_bedroom", Zone::Private, 10.0, 500.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("two_bedroom", Zone::Private, 12.0, 700.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("three_bedroom", Zone::Private, 14.0, 900.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("suite", Zone::Private, 9.0, 400.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        // Residential common / amenity spaces
+        RoomCatalogEntry::new("common_room", Zone::Public, 7.0, 300.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("dining_hall", Zone::Public, 8.0, 400.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("fitness_room", Zone::Public, 5.0, 250.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("mail_room", Zone::Service, 2.0, 80.0, &[BuildingMode::Part3])
+            .with_occupancy("business"),
         // Business / office
         RoomCatalogEntry::new("office_open", Zone::Public, 18.0, 600.0, &[BuildingMode::Part3])
             .with_occupancy("business"),
@@ -188,6 +212,22 @@ fn part3_catalog() -> Vec<RoomCatalogEntry> {
         RoomCatalogEntry::new("parking", Zone::Service, 15.0, 800.0, &[BuildingMode::Part3])
             .with_occupancy("parking"),
         RoomCatalogEntry::new("janitor", Zone::Service, 1.0, 20.0, &[BuildingMode::Part3]),
+        // Residential service / support
+        RoomCatalogEntry::new("storage_locker", Zone::Service, 1.0, 25.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("laundry_room", Zone::Service, 3.0, 100.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("management_office", Zone::Service, 4.0, 120.0, &[BuildingMode::Part3])
+            .with_occupancy("business"),
+        // Dorm / college-residence rooms
+        RoomCatalogEntry::new("dorm_single", Zone::Private, 6.0, 120.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("dorm_double", Zone::Private, 8.0, 180.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("shared_washroom", Zone::Service, 4.0, 120.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
+        RoomCatalogEntry::new("study_lounge", Zone::Public, 6.0, 250.0, &[BuildingMode::Part3])
+            .with_occupancy("residential"),
     ]
 }
 
@@ -234,11 +274,35 @@ mod tests {
     }
 
     #[test]
+    fn part3_has_apartment_types() {
+        let cat = RoomCatalog::for_mode(BuildingMode::Part3);
+        assert!(cat.contains("studio"));
+        assert!(cat.contains("one_bedroom"));
+        assert!(cat.contains("two_bedroom"));
+        assert!(cat.contains("suite"));
+        assert!(cat.contains("common_room"));
+        assert!(cat.contains("dining_hall"));
+        assert!(cat.contains("storage_locker"));
+        assert!(cat.contains("laundry_room"));
+    }
+
+    #[test]
     fn mixed_has_both() {
         let cat = RoomCatalog::for_mode(BuildingMode::Mixed);
         assert!(cat.contains("bedroom"));
         assert!(cat.contains("retail"));
         assert!(cat.contains("elevator"));
+        assert!(cat.contains("studio"));
+        assert!(cat.contains("common_room"));
+    }
+
+    #[test]
+    fn part3_has_dorm_rooms() {
+        let cat = RoomCatalog::for_mode(BuildingMode::Part3);
+        assert!(cat.contains("dorm_single"));
+        assert!(cat.contains("dorm_double"));
+        assert!(cat.contains("shared_washroom"));
+        assert!(cat.contains("study_lounge"));
     }
 
     #[test]

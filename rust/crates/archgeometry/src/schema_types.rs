@@ -409,6 +409,9 @@ pub struct SchemaRoom {
     pub is_pinned: bool,
     #[serde(default)]
     pub locked_properties: Vec<String>,
+    /// Optional dwelling-unit id. Backward-compatible — absent in older JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
 }
 
 fn default_level_name() -> String {
@@ -476,6 +479,10 @@ pub struct SchemaLevel {
     pub elevation: f32,
     #[serde(default = "default_wall_height")]
     pub height: f32,
+    /// Optional major occupancy for the floor. When present, Part 3 checks use
+    /// this instead of inferring occupancy from room types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupancy: Option<String>,
 }
 
 impl Default for SchemaLevel {
@@ -484,6 +491,7 @@ impl Default for SchemaLevel {
             name: String::new(),
             elevation: 0.0,
             height: default_wall_height(),
+            occupancy: None,
         }
     }
 }

@@ -2,6 +2,7 @@
   "entries": [
     {"occupancy": "residential", "sprinklered": false, "max_area_per_storey_m2": 600, "max_height_m": 10, "max_storeys": 3},
     {"occupancy": "residential", "sprinklered": true, "max_area_per_storey_m2": 1200, "max_height_m": 18, "max_storeys": 4},
+    {"occupancy": "residential", "sprinklered": true, "alternative_solution": true, "max_area_per_storey_m2": 2000, "max_height_m": 22, "max_storeys": 6},
     {"occupancy": "business", "sprinklered": false, "max_area_per_storey_m2": 6000, "max_height_m": 36, "max_storeys": 6},
     {"occupancy": "business", "sprinklered": true, "max_area_per_storey_m2": 12000, "max_height_m": 60, "max_storeys": 12},
     {"occupancy": "assembly", "sprinklered": false, "max_area_per_storey_m2": 3000, "max_height_m": 18, "max_storeys": 2},

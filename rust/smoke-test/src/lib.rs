@@ -18,11 +18,10 @@ fn elapsed(start: Instant) -> String {
 }
 
 fn library_path() -> PathBuf {
-    // CARGO_MANIFEST_DIR is rust/smoke-test/; tables live two levels up in rust/test-data/
+    // CARGO_MANIFEST_DIR is rust/smoke-test/; tables live two levels up in rust/OBC_Library
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
-        .join("test-data")
         .join("OBC_Library")
 }
 
@@ -332,4 +331,177 @@ fn smoke_pdf_conversion_for_every_sheet() {
         println!("  {name:20} PDF {} bytes", pdf.len());
     }
     println!("  TOTAL PDFs: {} sheets, {} bytes", sheets.len(), total_bytes);
+}
+
+// ---------------------------------------------------------------------------
+// Part 3 / mixed-mode smoke tests
+// ---------------------------------------------------------------------------
+
+fn stage_solve_manifest(manifest: &solver::ProgramManifest) -> serde_json::Value {
+    let t0 = Instant::now();
+    let value = solver::building_json_from_manifest(manifest);
+    println!(
+        "  [solver] building_id={} mode={} storeys={} walls={} ({})",
+        value["building_id"].as_str().unwrap_or("?"),
+        value["qbd_answers"]["mode"].as_str().unwrap_or("?"),
+        value["storeys"].as_u64().unwrap_or(0),
+        value["summary"]["total_walls"].as_u64().unwrap_or(0),
+        elapsed(t0)
+    );
+    value
+}
+
+fn stage_validate_part3(doc: &archgeometry::SchemaDocument) -> qbd::ValidationResult {
+    let t0 = Instant::now();
+    let mut obc = obc::OBCEngine::new();
+    obc.initialize(&library_path()).expect("OBC Part 9 tables must load");
+    let mut part3 = obc::Part3Engine::new();
+    part3
+        .initialize(&library_path())
+        .expect("OBC Part 3 tables must load");
+    let result = qbd::validate_layout_with_part3(&obc,
+        Some(&part3),
+        doc,
+        "Zone 6",
+    );
+    let p3_summary = if result.part3_reports.is_empty() {
+        "no Part 3 report".into()
+    } else {
+        format!(
+            "{} Part 3 report(s), {}",
+            result.part3_reports.len(),
+            if result.part3_reports.iter().all(|r| r.passes()) {
+                "PASS"
+            } else {
+                "FAIL"
+            }
+        )
+    };
+    println!(
+        "  [obc]    walls={}/{} passed thermal={} {} ({})",
+        result.walls_passed,
+        result.walls_checked,
+        if result.thermal_compliance { "PASS" } else { "FAIL" },
+        p3_summary,
+        elapsed(t0)
+    );
+    result
+}
+
+fn part3_report_has_category(result: &qbd::ValidationResult, needle: &str) -> bool {
+    result.part3_reports.iter().any(|report| {
+        report
+            .checks
+            .iter()
+            .any(|check| check.code_section.contains(needle) || check.rule_name.contains(needle))
+    })
+}
+
+#[test]
+fn smoke_part3_small_office() {
+    println!("\n=== smoke_part3_small_office ===");
+    let t_total = Instant::now();
+
+    let manifest = solver::BuildingTemplate::SmallOffice {
+        storeys: 2,
+        sqft: 6000.0,
+    }
+    .manifest();
+    let value = stage_solve_manifest(&manifest);
+    assert_eq!(value["qbd_answers"]["mode"].as_str(), Some("part3"));
+
+    let doc = stage_parse(&value);
+    let validation = stage_validate_part3(&doc);
+
+    assert!(
+        !validation.part3_reports.is_empty(),
+        "Part 3 report must be generated"
+    );
+    assert!(
+        part3_report_has_category(&validation, "3.2.2.1"),
+        "Part 3 area/height checks expected"
+    );
+    assert!(
+        part3_report_has_category(&validation, "3.4.2.5"),
+        "Part 3 egress travel-distance checks expected"
+    );
+    assert!(
+        part3_report_has_category(&validation, "3.4.6"),
+        "Part 3 public-stair checks expected"
+    );
+    assert!(
+        validation.overall_pass,
+        "small office should pass Part 3 validation"
+    );
+
+    println!("  TOTAL    {}", elapsed(t_total));
+}
+
+#[test]
+fn smoke_part3_mixed_use_podium() {
+    println!("\n=== smoke_part3_mixed_use_podium ===");
+    let t_total = Instant::now();
+
+    let manifest = solver::BuildingTemplate::MixedUsePodium {
+        retail_sqft: 3000.0,
+        residential_floors: 2,
+    }
+    .manifest();
+    let value = stage_solve_manifest(&manifest);
+    assert_eq!(value["qbd_answers"]["mode"].as_str(), Some("mixed"));
+
+    let doc = stage_parse(&value);
+    let validation = stage_validate_part3(&doc);
+
+    assert!(
+        !validation.part3_reports.is_empty(),
+        "Part 3 report must be generated for mixed mode"
+    );
+    assert!(
+        part3_report_has_category(&validation, "3.2.2.1"),
+        "Part 3 area/height checks expected"
+    );
+    assert!(
+        part3_report_has_category(&validation, "3.4.2.5"),
+        "Part 3 egress checks expected"
+    );
+    assert!(
+        validation.overall_pass,
+        "mixed-use podium should pass Part 3 validation"
+    );
+
+    println!("  TOTAL    {}", elapsed(t_total));
+}
+
+#[test]
+fn smoke_part3_college_residence() {
+    println!("\n=== smoke_part3_college_residence ===");
+    let t_total = Instant::now();
+
+    let manifest = solver::BuildingTemplate::CollegeResidence {
+        floors: 3,
+        rooms_per_floor: 10,
+        sqft: 15_000.0,
+    }
+    .manifest();
+    let value = stage_solve_manifest(&manifest);
+    assert_eq!(value["qbd_answers"]["mode"].as_str(), Some("part3"));
+
+    let doc = stage_parse(&value);
+    let validation = stage_validate_part3(&doc);
+
+    assert!(
+        !validation.part3_reports.is_empty(),
+        "Part 3 report must be generated for college residence"
+    );
+    assert!(
+        part3_report_has_category(&validation, "3.4.2.5"),
+        "Part 3 egress checks expected for dorm floors"
+    );
+    assert!(
+        validation.overall_pass,
+        "college residence should pass Part 3 validation"
+    );
+
+    println!("  TOTAL    {}", elapsed(t_total));
 }

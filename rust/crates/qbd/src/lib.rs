@@ -11,6 +11,7 @@
 pub mod compliance_report;
 pub mod convert;
 pub mod documentation;
+pub mod egress_feedback;
 pub mod floor_plan;
 pub mod ifc;
 pub mod raster;
@@ -22,11 +23,14 @@ pub mod wall_types;
 pub use compliance_report::compliance_report_to_svg;
 pub use convert::{layout_to_building, wall_type_for_wall, walls_to_parametric};
 pub use documentation::{
-    CatalogDrawing, Documentation, PdfError, drawing_catalog, floor_plan_sheet,
-    generate_documentation, generate_documentation_for_project,
-    generate_documentation_with_validation, generate_documentation_with_validation_for_project,
-    plans_sheet, svg_to_pdf, svgs_to_pdf,
+    CatalogDrawing, Documentation, DocumentationOptions, PdfError, drawing_catalog,
+    floor_plan_sheet, generate_documentation, generate_documentation_for_project,
+    generate_documentation_for_project_with_options, generate_documentation_with_options,
+    generate_documentation_with_validation, generate_documentation_with_validation_and_options,
+    generate_documentation_with_validation_for_project, plans_sheet, svg_to_pdf,
+    svgs_to_pdf,
 };
+pub use egress_feedback::{EgressFix, EgressIssue, analyze};
 pub use floor_plan::generate_floor_plan_with_openings;
 pub use raster::{RasterError, Rasterizer, svg_to_png};
 pub use schedule::{door_entries, window_entries};

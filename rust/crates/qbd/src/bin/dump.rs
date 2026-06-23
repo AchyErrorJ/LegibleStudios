@@ -11,7 +11,7 @@
 use anyhow::Context;
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--pdf <dir>] [--pdf-combined <set.pdf>] [--png <dir>] [--png-width <px>] [--dxf <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--streets <streets.json>] [--footprint <poly.json>] [--obc <library-dir>] [--climate-zone <zone>] [--roof-overhang <mm>] [--project <name>] [--designer <name>] [--bcin <number>] [--bare]";
+const USAGE: &str = "usage: qbd_dump <building.json> [--out <floor_plan.svg>] [--bundle <dir>] [--pdf <dir>] [--pdf-combined <set.pdf>] [--png <dir>] [--png-width <px>] [--dxf <dir>] [--ifc <out.ifc>] [--terrain <terrain.json>] [--parcel <parcel.json>] [--streets <streets.json>] [--footprint <poly.json>] [--obc <library-dir>] [--climate-zone <zone>] [--roof-overhang <mm>] [--project <name>] [--designer <name>] [--bcin <number>] [--egress-feedback <json_path>] [--no-framing-plan] [--bare]";
 
 /// Climate zone fed to OBC thermal compliance when `--climate-zone` isn't passed.
 const DEFAULT_CLIMATE_ZONE: &str = "Zone 6";
@@ -134,11 +134,18 @@ fn main() -> anyhow::Result<()> {
     let mut project = String::from("QBD Project");
     let mut designer = String::new();
     let mut bcin = String::new();
+    // `--no-framing-plan`: omit the structural framing-plan sheet. Engineers
+    // typically produce this; the flag lets the permit set stay architectural.
+    let mut no_framing_plan = false;
     // `--bare`: emit just the slicer's raw floor-plan SVG (no dimensions,
     // no title block, no room labels). The m5_cpp_diff oracle relies on
     // this — the C++ QBDInterface doesn't add annotations, so a fair
     // byte-comparison must strip Rust's annotation overlay.
     let mut bare = false;
+
+    // `--egress-feedback <json_path>`: analyze egress and write suggested fixes
+    // as JSON instead of generating drawings.
+    let mut egress_feedback: Option<PathBuf> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -215,9 +222,17 @@ fn main() -> anyhow::Result<()> {
                 bcin.clone_from(&args[i + 1]);
                 i += 2;
             }
+            "--no-framing-plan" => {
+                no_framing_plan = true;
+                i += 1;
+            }
             "--bare" => {
                 bare = true;
                 i += 1;
+            }
+            "--egress-feedback" if i + 1 < args.len() => {
+                egress_feedback = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
             }
             "-h" | "--help" => {
                 eprintln!("{USAGE}");
@@ -236,6 +251,22 @@ fn main() -> anyhow::Result<()> {
 
     let mut doc = archgeometry::parse_file(&path)
         .with_context(|| format!("failed to parse {}", path.display()))?;
+
+    // `--egress-feedback <json_path>`: analyze the schema for OBC 3.4 egress
+    // problems and emit actionable fixes as JSON.
+    if let Some(out_path) = egress_feedback {
+        let fixes = qbd::analyze(&doc);
+        let json = serde_json::to_string_pretty(&fixes)
+            .context("failed to serialize egress feedback")?;
+        std::fs::write(&out_path, json)
+            .with_context(|| format!("failed to write {}", out_path.display()))?;
+        eprintln!(
+            "  egress feedback: {} fix(es) written to {}",
+            fixes.len(),
+            out_path.display()
+        );
+        return Ok(());
+    }
 
     // `--roof-overhang <mm>` overrides the building's eave overhang (the schema
     // default is 400 mm); it drives the elevation/section roof projection and
@@ -473,9 +504,21 @@ fn main() -> anyhow::Result<()> {
         climate_zone: climate_zone.clone(),
         ..Default::default()
     };
+    let doc_options = qbd::DocumentationOptions {
+        include_framing_plan: !no_framing_plan,
+    };
     let docs = match &validation {
-        Some(v) => qbd::generate_documentation_with_validation_for_project(&doc, project_info, v),
-        None => qbd::generate_documentation_for_project(&doc, project_info),
+        Some(v) => qbd::generate_documentation_with_validation_and_options(
+            &doc,
+            project_info,
+            v,
+            doc_options,
+        ),
+        None => qbd::generate_documentation_for_project_with_options(
+            &doc,
+            project_info,
+            doc_options,
+        ),
     };
 
     if let Some(dir) = &bundle_dir {
