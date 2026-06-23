@@ -14,7 +14,8 @@ pub fn occupancy_from_room_type(room_type: &str) -> MajorOccupancy {
         | "walk_in_closet" | "laundry" | "mudroom" | "garage"
         | "studio" | "one_bedroom" | "two_bedroom" | "three_bedroom"
         | "suite" | "common_room" | "dining_hall" | "lounge"
-        | "fitness_room" | "storage_locker" | "laundry_room" => {
+        | "fitness_room" | "storage_locker" | "laundry_room"
+        | "dorm_single" | "dorm_double" | "shared_washroom" | "study_lounge" => {
             MajorOccupancy::Residential
         }
         "retail" | "restaurant" => MajorOccupancy::Mercantile,

@@ -246,6 +246,7 @@ pub fn schema_document_to_part3_floors(doc: &SchemaDocument) -> Option<Vec<obc::
             room_type: room.room_type.clone(),
             area_m2,
             center_m,
+            major_occupancy: None,
             unit: room.unit.clone(),
         });
     }
@@ -440,6 +441,37 @@ pub fn schema_document_to_part3_floors(doc: &SchemaDocument) -> Option<Vec<obc::
         }
     }
 
+    // Build physical wall adjacencies per level for horizontal fire-separation
+    // checks. Unlike the egress door graph, this includes all shared walls,
+    // with or without doors.
+    let mut wall_adjacencies_by_level: HashMap<usize, Vec<(String, String)>> = HashMap::new();
+    for wall in &doc.walls {
+        if wall.rooms[0].is_empty() || wall.rooms[1].is_empty() {
+            continue;
+        }
+        let level_a = match room_level.get(wall.rooms[0].as_str()) {
+            Some(&l) => l,
+            None => continue,
+        };
+        let level_b = match room_level.get(wall.rooms[1].as_str()) {
+            Some(&l) => l,
+            None => continue,
+        };
+        if level_a != level_b {
+            continue;
+        }
+        // Normalize so (a,b) and (b,a) deduplicate.
+        let pair = if wall.rooms[0] <= wall.rooms[1] {
+            (wall.rooms[0].clone(), wall.rooms[1].clone())
+        } else {
+            (wall.rooms[1].clone(), wall.rooms[0].clone())
+        };
+        let level_adjs = wall_adjacencies_by_level.entry(level_a).or_default();
+        if !level_adjs.contains(&pair) {
+            level_adjs.push(pair);
+        }
+    }
+
     let mut floors: Vec<FloorInput> = rooms_by_level
         .into_iter()
         .map(|(level, rooms)| {
@@ -459,6 +491,9 @@ pub fn schema_document_to_part3_floors(doc: &SchemaDocument) -> Option<Vec<obc::
                 height_m,
                 rooms,
                 edges: edges_by_level.remove(&level).unwrap_or_default(),
+                wall_adjacencies: wall_adjacencies_by_level
+                    .remove(&level)
+                    .unwrap_or_default(),
                 stair_centroids: stair_centroids_by_level.remove(&level).unwrap_or_default(),
                 stairs: stairs_by_level.remove(&level).unwrap_or_default(),
                 elevators: elevators_by_level.remove(&level).unwrap_or_default(),
@@ -675,5 +710,95 @@ mod tests {
         assert!(r.overall_pass);
         let summary = r.summary();
         assert!(summary.contains("Part 3 checks:"));
+    }
+
+    #[test]
+    fn part3_mixed_occupancy_floor_triggers_horizontal_fire_separation() {
+        let obc = OBCEngine::new();
+        let mut part3 = obc::Part3Engine::new();
+        let dir: std::path::PathBuf = [
+            env!("CARGO_MANIFEST_DIR"),
+            "..",
+            "..",
+            "OBC_Library",
+        ]
+        .iter()
+        .collect();
+        if part3.initialize(&dir).is_err() {
+            return; // OBC_Library not present in this test environment
+        }
+
+        let mut rooms = std::collections::HashMap::new();
+        rooms.insert(
+            "retail".into(),
+            archgeometry::SchemaRoom {
+                id: "retail".into(),
+                room_type: "retail".into(),
+                bounds: archgeometry::RoomBounds {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10_000.0,
+                    height: 10_000.0,
+                },
+                area: 100_000_000.0,
+                center: glam::Vec2::new(5_000.0, 5_000.0),
+                level: "Level 1".into(),
+                ..Default::default()
+            },
+        );
+        rooms.insert(
+            "office".into(),
+            archgeometry::SchemaRoom {
+                id: "office".into(),
+                room_type: "office_open".into(),
+                bounds: archgeometry::RoomBounds {
+                    x: 10_000.0,
+                    y: 0.0,
+                    width: 10_000.0,
+                    height: 10_000.0,
+                },
+                area: 100_000_000.0,
+                center: glam::Vec2::new(15_000.0, 5_000.0),
+                level: "Level 1".into(),
+                ..Default::default()
+            },
+        );
+
+        let mut doc = SchemaDocument {
+            building_id: "part3-mixed-floor".into(),
+            walls: vec![SchemaWall {
+                start: Vec3::new(10_000.0, 0.0, 0.0),
+                end: Vec3::new(10_000.0, 0.0, 10_000.0),
+                height: 2700.0,
+                category: "interior".into(),
+                rooms: ["retail".into(), "office".into()],
+                level_name: "Level 1".into(),
+                ..Default::default()
+            }],
+            doors: vec![],
+            stairs: vec![],
+            levels: vec![archgeometry::SchemaLevel {
+                name: "Level 1".into(),
+                elevation: 0.0,
+                height: 2700.0,
+                ..Default::default()
+            }],
+            rooms,
+            ..Default::default()
+        };
+        doc.qbd_answers.mode = "part3".into();
+
+        let r = validate_layout_with_part3(&obc, Some(&part3), &doc, "Zone 6");
+        assert!(!r.part3_reports.is_empty(), "Part 3 report should be present");
+        let has_horizontal = r.part3_reports.iter().any(|report| {
+            report
+                .checks
+                .iter()
+                .any(|c| c.rule_name.contains("horizontal fire separation"))
+        });
+        assert!(
+            has_horizontal,
+            "retail + office on same floor should trigger a horizontal fire-separation check"
+        );
     }
 }

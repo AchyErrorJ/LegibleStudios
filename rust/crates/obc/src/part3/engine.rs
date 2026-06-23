@@ -196,6 +196,12 @@ impl Part3Engine {
             &self.fire_separations,
             &floor_occupancies,
         ));
+        for floor in floors {
+            checks.extend(crate::part3::fire_separation::check_horizontal_fire_separations(
+                &self.fire_separations,
+                floor,
+            ));
+        }
 
         let all_elevators: Vec<(f32, f32)> = floors
             .iter()
@@ -255,6 +261,9 @@ pub struct FloorInput {
     pub rooms: Vec<RoomInput>,
     /// Navigable room-to-room edges (doors) on this floor.
     pub edges: Vec<crate::part3::egress::RoomEdge>,
+    /// Physical wall adjacencies on this floor, regardless of whether the
+    /// wall has a door. Used for horizontal fire-separation checks.
+    pub wall_adjacencies: Vec<(String, String)>,
     pub stair_centroids: Vec<(f32, f32)>,
     pub stairs: Vec<StairInput>,
     pub elevators: Vec<(f32, f32)>,
@@ -269,6 +278,9 @@ pub struct RoomInput {
     pub room_type: String,
     pub area_m2: f32,
     pub center_m: (f32, f32),
+    /// Optional explicit major occupancy. When absent, the engine resolves
+    /// it from `room_type` via `occupancy_from_room_type`.
+    pub major_occupancy: Option<crate::part3::tables::MajorOccupancy>,
     /// Optional dwelling-unit id for suite-separation checks.
     pub unit: Option<String>,
 }
@@ -327,6 +339,7 @@ mod tests {
                     room_type: "lobby".into(),
                     area_m2: 50.0,
                     center_m: (5.0, 5.0),
+                    major_occupancy: None,
                     unit: None,
                 },
                 RoomInput {
@@ -334,6 +347,7 @@ mod tests {
                     room_type: "office_open".into(),
                     area_m2: 200.0,
                     center_m: (20.0, 15.0),
+                    major_occupancy: None,
                     unit: None,
                 },
             ],
@@ -349,6 +363,7 @@ mod tests {
                     distance_m: 11.18,
                 },
             ],
+            wall_adjacencies: vec![],
             stair_centroids: vec![(10.0, 10.0)],
             stairs: vec![crate::part3::StairInput {
                 id: "stairs_1".into(),
@@ -362,5 +377,55 @@ mod tests {
         let report = engine.validate(&floors, false, false);
         assert!(!report.checks.is_empty());
         assert!(report.passes(), "small office should pass Part 3 limits");
+    }
+
+    #[test]
+    fn horizontal_fire_separation_between_mixed_occupancies() {
+        let mut engine = Part3Engine::new();
+        let dir: PathBuf = [
+            env!("CARGO_MANIFEST_DIR"),
+            "..",
+            "..",
+            "OBC_Library",
+        ]
+        .iter()
+        .collect();
+        engine.initialize(&dir).expect("OBC_Library/part3 should load");
+
+        let floors = vec![FloorInput {
+            level: 1,
+            area_m2: 450.0,
+            height_m: 4.0,
+            rooms: vec![
+                RoomInput {
+                    id: "retail".into(),
+                    room_type: "retail".into(),
+                    area_m2: 200.0,
+                    center_m: (5.0, 5.0),
+                    major_occupancy: None,
+                    unit: None,
+                },
+                RoomInput {
+                    id: "office".into(),
+                    room_type: "office_open".into(),
+                    area_m2: 200.0,
+                    center_m: (15.0, 5.0),
+                    major_occupancy: None,
+                    unit: None,
+                },
+            ],
+            edges: vec![],
+            wall_adjacencies: vec![("office".into(), "retail".into())],
+            stair_centroids: vec![],
+            stairs: vec![],
+            elevators: vec![],
+            occupancy: None,
+        }];
+        let report = engine.validate(&floors, false, false);
+        let horizontal = report
+            .checks
+            .iter()
+            .any(|c| c.rule_name.contains("horizontal fire separation"));
+        assert!(horizontal, "mixed-occupancy floor should trigger horizontal fire-separation check");
     }
 }
