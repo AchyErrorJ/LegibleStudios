@@ -472,6 +472,49 @@ pub fn schema_document_to_part3_floors(doc: &SchemaDocument) -> Option<Vec<obc::
         }
     }
 
+    // Identify ground-floor (Level 1) exit-discharge targets: rooms with a door
+    // on an exterior wall, plus lobby/vestibule/entry rooms.
+    let mut discharge_targets_by_level: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut exterior_door_rooms = std::collections::HashSet::new();
+    for door in &doc.doors {
+        let wall_index = door.wall_index as usize;
+        let wall = match doc.walls.get(wall_index) {
+            Some(w) => w,
+            None => continue,
+        };
+        if wall.category != "exterior" {
+            continue;
+        }
+        for room_id in &wall.rooms {
+            if room_id.is_empty() {
+                continue;
+            }
+            if let Some(&level_num) = room_level.get(room_id.as_str()) {
+                if level_num == 1 {
+                    exterior_door_rooms.insert(room_id.clone());
+                }
+            }
+        }
+    }
+    for (room_id, room) in doc.rooms.iter() {
+        if matches!(
+            room.room_type.as_str(),
+            "lobby" | "vestibule" | "entry"
+        ) {
+            if let Some(&level_num) = room_level.get(room_id.as_str()) {
+                if level_num == 1 {
+                    exterior_door_rooms.insert(room_id.clone());
+                }
+            }
+        }
+    }
+    if !exterior_door_rooms.is_empty() {
+        discharge_targets_by_level.insert(
+            1,
+            exterior_door_rooms.into_iter().collect(),
+        );
+    }
+
     let mut floors: Vec<FloorInput> = rooms_by_level
         .into_iter()
         .map(|(level, rooms)| {
@@ -492,6 +535,9 @@ pub fn schema_document_to_part3_floors(doc: &SchemaDocument) -> Option<Vec<obc::
                 rooms,
                 edges: edges_by_level.remove(&level).unwrap_or_default(),
                 wall_adjacencies: wall_adjacencies_by_level
+                    .remove(&level)
+                    .unwrap_or_default(),
+                discharge_targets: discharge_targets_by_level
                     .remove(&level)
                     .unwrap_or_default(),
                 stair_centroids: stair_centroids_by_level.remove(&level).unwrap_or_default(),
@@ -659,19 +705,36 @@ mod tests {
 
         let mut doc = SchemaDocument {
             building_id: "part3-office".into(),
-            walls: vec![SchemaWall {
-                start: Vec3::new(5_000.0, 0.0, 0.0),
-                end: Vec3::new(5_000.0, 0.0, 20_000.0),
-                height: 2700.0,
-                category: "interior".into(),
-                rooms: ["lobby".into(), "office".into()],
-                level_name: "Level 1".into(),
-                ..Default::default()
-            }],
-            doors: vec![archgeometry::SchemaDoor {
-                wall_index: 0,
-                ..Default::default()
-            }],
+            walls: vec![
+                SchemaWall {
+                    start: Vec3::new(5_000.0, 0.0, 0.0),
+                    end: Vec3::new(5_000.0, 0.0, 20_000.0),
+                    height: 2700.0,
+                    category: "interior".into(),
+                    rooms: ["lobby".into(), "office".into()],
+                    level_name: "Level 1".into(),
+                    ..Default::default()
+                },
+                SchemaWall {
+                    start: Vec3::new(0.0, 0.0, 0.0),
+                    end: Vec3::new(0.0, 0.0, 5_000.0),
+                    height: 2700.0,
+                    category: "exterior".into(),
+                    rooms: ["lobby".into(), "".into()],
+                    level_name: "Level 1".into(),
+                    ..Default::default()
+                },
+            ],
+            doors: vec![
+                archgeometry::SchemaDoor {
+                    wall_index: 0,
+                    ..Default::default()
+                },
+                archgeometry::SchemaDoor {
+                    wall_index: 1,
+                    ..Default::default()
+                },
+            ],
             stairs: vec![archgeometry::SchemaStair {
                 id: "stairs_1".into(),
                 level_name: "Level 1".into(),
@@ -708,6 +771,16 @@ mod tests {
             r.part3_reports[0].checks
         );
         assert!(r.overall_pass);
+        let has_exit_discharge = r.part3_reports.iter().any(|report| {
+            report
+                .checks
+                .iter()
+                .any(|c| c.rule_name.contains("exit discharge"))
+        });
+        assert!(
+            has_exit_discharge,
+            "ground-floor stair with exterior-door lobby should have an exit-discharge check"
+        );
         let summary = r.summary();
         assert!(summary.contains("Part 3 checks:"));
     }

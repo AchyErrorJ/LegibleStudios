@@ -83,6 +83,7 @@ fn analyze_floor(floor: &obc::part3::FloorInput) -> Vec<EgressFix> {
                 width_clear_mm: s.width_clear_mm,
             })
             .collect(),
+        discharge_targets: floor.discharge_targets.clone(),
     };
 
     let mut fixes = Vec::new();

@@ -177,6 +177,7 @@ impl Part3Engine {
                         width_clear_mm: s.width_clear_mm,
                     })
                     .collect(),
+                discharge_targets: f.discharge_targets.clone(),
             })
             .collect();
         checks.extend(crate::part3::egress::check_travel_distance(
@@ -186,6 +187,8 @@ impl Part3Engine {
         checks.extend(crate::part3::egress::check_exit_count(&egress_floors,
         ));
         checks.extend(crate::part3::egress::check_exit_width(&egress_floors,
+        ));
+        checks.extend(crate::part3::egress::check_exit_discharge(&egress_floors,
         ));
 
         let floor_occupancies: Vec<(usize, MajorOccupancy)> = area_height_floors
@@ -264,6 +267,8 @@ pub struct FloorInput {
     /// Physical wall adjacencies on this floor, regardless of whether the
     /// wall has a door. Used for horizontal fire-separation checks.
     pub wall_adjacencies: Vec<(String, String)>,
+    /// Ground-floor room IDs that are acceptable exit-discharge targets.
+    pub discharge_targets: Vec<String>,
     pub stair_centroids: Vec<(f32, f32)>,
     pub stairs: Vec<StairInput>,
     pub elevators: Vec<(f32, f32)>,
@@ -364,6 +369,7 @@ mod tests {
                 },
             ],
             wall_adjacencies: vec![],
+            discharge_targets: vec!["lobby".into()],
             stair_centroids: vec![(10.0, 10.0)],
             stairs: vec![crate::part3::StairInput {
                 id: "stairs_1".into(),
@@ -416,6 +422,7 @@ mod tests {
             ],
             edges: vec![],
             wall_adjacencies: vec![("office".into(), "retail".into())],
+            discharge_targets: vec![],
             stair_centroids: vec![],
             stairs: vec![],
             elevators: vec![],
@@ -427,5 +434,58 @@ mod tests {
             .iter()
             .any(|c| c.rule_name.contains("horizontal fire separation"));
         assert!(horizontal, "mixed-occupancy floor should trigger horizontal fire-separation check");
+    }
+
+    #[test]
+    fn exit_discharge_for_ground_floor_stair() {
+        let mut engine = Part3Engine::new();
+        let dir: PathBuf = [
+            env!("CARGO_MANIFEST_DIR"),
+            "..",
+            "..",
+            "OBC_Library",
+        ]
+        .iter()
+        .collect();
+        engine.initialize(&dir).expect("OBC_Library/part3 should load");
+
+        let floors = vec![FloorInput {
+            level: 1,
+            area_m2: 450.0,
+            height_m: 4.0,
+            rooms: vec![
+                RoomInput {
+                    id: "lobby".into(),
+                    room_type: "lobby".into(),
+                    area_m2: 50.0,
+                    center_m: (5.0, 5.0),
+                    major_occupancy: None,
+                    unit: None,
+                },
+            ],
+            edges: vec![crate::part3::egress::RoomEdge {
+                room_a: "stairs_1".into(),
+                room_b: "lobby".into(),
+                distance_m: 2.0,
+            }],
+            wall_adjacencies: vec![],
+            discharge_targets: vec!["lobby".into()],
+            stair_centroids: vec![(10.0, 10.0)],
+            stairs: vec![crate::part3::StairInput {
+                id: "stairs_1".into(),
+                width_clear_mm: 1200.0,
+                riser_height_mm: 175.0,
+                tread_run_mm: 280.0,
+            }],
+            elevators: vec![],
+            occupancy: None,
+        }];
+        let report = engine.validate(&floors, false, false);
+        let discharge = report
+            .checks
+            .iter()
+            .any(|c| c.rule_name.contains("exit discharge"));
+        assert!(discharge, "ground-floor stair should trigger exit-discharge check");
+        assert!(report.passes(), "lobby-connected stair should pass exit discharge");
     }
 }

@@ -165,6 +165,57 @@ pub fn check_exit_width(floors: &[FloorEgress]) -> Vec<ComplianceCheck> {
     out
 }
 
+/// Verify that every ground-floor stair discharges to an acceptable target
+/// (lobby, vestibule, entry, or a room with a door on an exterior wall).
+/// Upper floors are skipped because the model does not yet represent vertical
+/// stair shafts.
+#[must_use]
+pub fn check_exit_discharge(floors: &[FloorEgress]) -> Vec<ComplianceCheck> {
+    let mut out = Vec::new();
+    for floor in floors {
+        if floor.level != 1 {
+            continue;
+        }
+        if floor.discharge_targets.is_empty() {
+            out.push(ComplianceCheck {
+                rule_name: format!("OBC 3.4.2 exit discharge — Level {}", floor.level),
+                code_section: "OBC 3.4.2".into(),
+                status: ComplianceStatus::Fail,
+                actual: "no discharge targets identified".into(),
+                requirement: "ground-floor stairs must discharge to exterior, lobby, vestibule, or entry".into(),
+                message: "No ground-floor room has an exterior door and no lobby/vestibule/entry room was found.".into(),
+            });
+            continue;
+        }
+        let targets: Vec<&str> = floor
+            .discharge_targets
+            .iter()
+            .map(String::as_str)
+            .collect();
+        for stair in &floor.stairs {
+            let pass = shortest_path_to_any(&stair.id,&targets, &floor.edges)
+                .is_some();
+            out.push(ComplianceCheck {
+                rule_name: format!("OBC 3.4.2 exit discharge — {}", stair.id),
+                code_section: "OBC 3.4.2".into(),
+                status: if pass {
+                    ComplianceStatus::Pass
+                } else {
+                    ComplianceStatus::Fail
+                },
+                actual: if pass {
+                    "stair reaches discharge target".into()
+                } else {
+                    "stair cannot reach any discharge target".into()
+                },
+                requirement: "discharge to exterior, lobby, vestibule, or entry".into(),
+                message: String::new(),
+            });
+        }
+    }
+    out
+}
+
 fn distance(a: (f32, f32), b: (f32, f32)) -> f32 {
     ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
 }
@@ -268,6 +319,9 @@ pub struct FloorEgress {
     pub edges: Vec<RoomEdge>,
     /// Exit stairs on this floor, used for travel distance, count, and width.
     pub stairs: Vec<StairEgress>,
+    /// Ground-floor room IDs that are acceptable exit-discharge targets
+    /// (lobby, vestibule, entry, or any room with a door on an exterior wall).
+    pub discharge_targets: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -325,6 +379,7 @@ mod tests {
                 room_b: "stairs_1".into(),
                 distance_m: 2.0,
             }],
+            discharge_targets: vec![],
             stairs: vec![StairEgress {
                 id: "stairs_1".into(),
                 centroid_m: (12.0, 5.0),
@@ -351,6 +406,7 @@ mod tests {
             occupancy: MajorOccupancy::Residential,
             rooms,
             edges: vec![],
+            discharge_targets: vec![],
             stairs: vec![StairEgress {
                 id: "stairs_1".into(),
                 centroid_m: (0.0, 0.0),
@@ -361,6 +417,7 @@ mod tests {
         assert_eq!(checks[0].status, ComplianceStatus::Fail);
 
         let floor_two_stairs = FloorEgress {
+            discharge_targets: vec![],
             stairs: vec![
                 StairEgress {
                     id: "stairs_1".into(),
@@ -397,6 +454,7 @@ mod tests {
             occupancy: MajorOccupancy::Residential,
             rooms,
             edges: vec![],
+            discharge_targets: vec![],
             stairs: vec![StairEgress {
                 id: "stairs_1".into(),
                 centroid_m: (0.0, 0.0),
@@ -452,6 +510,7 @@ mod tests {
                     distance_m: 2.0,
                 },
             ],
+            discharge_targets: vec![],
             stairs: vec![StairEgress {
                 id: "stairs_1".into(),
                 centroid_m: (30.0, 0.0),
@@ -487,6 +546,7 @@ mod tests {
                 center_m: (10.0, 5.0),
             }],
             edges: vec![],
+            discharge_targets: vec![],
             stairs: vec![StairEgress {
                 id: "stairs_1".into(),
                 centroid_m: (12.0, 5.0),
@@ -537,9 +597,101 @@ mod tests {
                     distance_m: 30.0,
                 },
             ],
+            discharge_targets: vec![],
             stairs: vec![],
         };
         let checks = check_travel_distance(&limits, &[floor]);
+        assert_eq!(checks[0].status, ComplianceStatus::Fail);
+    }
+
+    #[test]
+    fn exit_discharge_passes_when_stair_reaches_lobby() {
+        let floor = FloorEgress {
+            level: 1,
+            occupancy: MajorOccupancy::Business,
+            rooms: vec![RoomEgress {
+                id: "lobby".into(),
+                room_type: "lobby".into(),
+                area_m2: 50.0,
+                unit: None,
+                center_m: (0.0, 0.0),
+            }],
+            edges: vec![RoomEdge {
+                room_a: "stairs_1".into(),
+                room_b: "lobby".into(),
+                distance_m: 2.0,
+            }],
+            discharge_targets: vec!["lobby".into()],
+            stairs: vec![StairEgress {
+                id: "stairs_1".into(),
+                centroid_m: (5.0, 0.0),
+                width_clear_mm: 1200.0,
+            }],
+        };
+        let checks = check_exit_discharge(&[floor]);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].status, ComplianceStatus::Pass);
+    }
+
+    #[test]
+    fn exit_discharge_fails_when_stair_isolated() {
+        let floor = FloorEgress {
+            level: 1,
+            occupancy: MajorOccupancy::Business,
+            rooms: vec![RoomEgress {
+                id: "lobby".into(),
+                room_type: "lobby".into(),
+                area_m2: 50.0,
+                unit: None,
+                center_m: (0.0, 0.0),
+            }],
+            edges: vec![],
+            discharge_targets: vec!["lobby".into()],
+            stairs: vec![StairEgress {
+                id: "stairs_1".into(),
+                centroid_m: (5.0, 0.0),
+                width_clear_mm: 1200.0,
+            }],
+        };
+        let checks = check_exit_discharge(&[floor]);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].status, ComplianceStatus::Fail);
+    }
+
+    #[test]
+    fn exit_discharge_skips_upper_floors() {
+        let floor = FloorEgress {
+            level: 2,
+            occupancy: MajorOccupancy::Business,
+            rooms: vec![],
+            edges: vec![],
+            discharge_targets: vec![],
+            stairs: vec![StairEgress {
+                id: "stairs_1".into(),
+                centroid_m: (0.0, 0.0),
+                width_clear_mm: 1200.0,
+            }],
+        };
+        let checks = check_exit_discharge(&[floor]);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn exit_discharge_fails_when_no_targets() {
+        let floor = FloorEgress {
+            level: 1,
+            occupancy: MajorOccupancy::Business,
+            rooms: vec![],
+            edges: vec![],
+            discharge_targets: vec![],
+            stairs: vec![StairEgress {
+                id: "stairs_1".into(),
+                centroid_m: (0.0, 0.0),
+                width_clear_mm: 1200.0,
+            }],
+        };
+        let checks = check_exit_discharge(&[floor]);
+        assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].status, ComplianceStatus::Fail);
     }
 }
