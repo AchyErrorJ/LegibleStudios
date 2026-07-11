@@ -72,3 +72,22 @@ MapWidgetLib/
 
 # Smoke test artifacts (regenerated each run)
 smoke_test_output/
+
+# Agent / harness generated design artifacts
+rust/out/
+rust/benchmark/
+rust/review_pkg/
+rust/review_set/
+review_set/
+rust/college_a/
+rust/college_b/
+rust/college_c/
+rust/college_a.json
+rust/college_b.json
+rust/college_c.json
+rust/stress_bundle/
+rust/stress_sheets/
+rust/stress_house.json
+rust/stress.ifc
+rust/stress_out
+rust/stress_*.log

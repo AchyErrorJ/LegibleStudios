@@ -19,6 +19,7 @@ workspace = true
 
 [dependencies]
 ls-qbd.workspace = true
+ls-agent.workspace = true
 ls-solver.workspace = true
 ls-archgeometry.workspace = true
 ls-obc.workspace = true

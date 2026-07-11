@@ -156,6 +156,11 @@ pub fn router() -> Router {
         .route("/solve", post(solve))
         .route("/solve_manifest", post(solve_manifest))
         .route("/catalog", get(catalog))
+        .route("/validate", post(validate))
+        .route("/suggest_fixes", post(suggest_fixes))
+        .route("/apply_patch", post(apply_patch))
+        .route("/iterate", post(iterate))
+        .route("/export_bundle", post(export_bundle))
         .route("/draw", post(draw))
 }
 
@@ -213,6 +218,45 @@ async fn catalog(Query(q): Query<CatalogQuery>) -> Result<Json<serde_json::Value
         "mode": mode.as_str(),
         "room_types": cat.room_types(),
     })))
+}
+
+async fn validate(
+    Json(req): Json<agent::ValidateRequest>,
+) -> Result<Json<agent::ValidateResponse>, ApiError> {
+    agent::validate(&req).map(Json).map_err(agent_error)
+}
+
+async fn suggest_fixes(
+    Json(req): Json<agent::SuggestFixesRequest>,
+) -> Result<Json<agent::SuggestFixesResponse>, ApiError> {
+    agent::suggest_fixes(&req).map(Json).map_err(agent_error)
+}
+
+async fn apply_patch(
+    Json(req): Json<agent::ApplyPatchRequest>,
+) -> Result<Json<agent::ApplyPatchResponse>, ApiError> {
+    agent::apply_patch(&req).map(Json).map_err(agent_error)
+}
+
+async fn iterate(
+    Json(req): Json<agent::IterateRequest>,
+) -> Result<Json<agent::IterateResponse>, ApiError> {
+    agent::iterate(&req).map(Json).map_err(agent_error)
+}
+
+async fn export_bundle(
+    Json(req): Json<agent::ExportBundleRequest>,
+) -> Result<Json<agent::ExportBundleResponse>, ApiError> {
+    agent::export_bundle(&req).map(Json).map_err(agent_error)
+}
+
+fn agent_error(err: agent::AgentError) -> ApiError {
+    match err {
+        agent::AgentError::SchemaParse(e)
+        | agent::AgentError::Solver(e)
+        | agent::AgentError::Patch(e) => ApiError::BadRequest(e),
+        agent::AgentError::ObcInit(e) | agent::AgentError::Export(e) => ApiError::Internal(e),
+    }
 }
 
 async fn draw(

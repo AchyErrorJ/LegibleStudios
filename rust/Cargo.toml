@@ -11,7 +11,9 @@ members = [
     "crates/obc",
     "crates/drawing",
     "crates/qbd",
+    "crates/agent",
     "crates/api",
+    "crates/mcp",
     "crates/project-migrate",
     "crates/app",
     "crates/catalog",
@@ -63,7 +65,9 @@ ls-geometry-loader = { path = "crates/geometry-loader" }
 ls-obc = { path = "crates/obc" }
 ls-drawing = { path = "crates/drawing" }
 ls-qbd = { path = "crates/qbd" }
+ls-agent = { path = "crates/agent" }
 ls-api = { path = "crates/api" }
+ls-mcp = { path = "crates/mcp" }
 ls-catalog = { path = "crates/catalog" }
 ls-solver = { path = "crates/solver" }
 ls-site = { path = "crates/site" }

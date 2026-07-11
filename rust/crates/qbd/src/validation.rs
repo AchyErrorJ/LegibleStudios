@@ -6,11 +6,12 @@
 
 use archgeometry::{SchemaDocument, SchemaWall};
 use obc::{ComplianceReport, OBCEngine};
+use serde::{Deserialize, Serialize};
 
 use crate::wall_types;
 
 /// Aggregated validation result. Mirrors the C++ `QBDValidationResult`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ValidationResult {
     pub overall_pass: bool,
     pub wall_reports: Vec<ComplianceReport>,

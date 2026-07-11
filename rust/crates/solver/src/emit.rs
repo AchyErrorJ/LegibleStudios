@@ -1243,7 +1243,9 @@ fn build_circulation_graph(floors: &[Floor]) -> Value {
     }
 
     // Vertical shaft edges: connect the same stair/elevator on consecutive floors.
-    for (_shaft_id, mut levels) in shaft_nodes {
+    let mut shaft_levels: Vec<_> = shaft_nodes.into_iter().collect();
+    shaft_levels.sort_by(|a, b| a.0.cmp(&b.0));
+    for (_shaft_id, mut levels) in shaft_levels {
         levels.sort_by(|a, b| a.1.cmp(&b.1));
         for pair in levels.windows(2) {
             edges.push(json!({
